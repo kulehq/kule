@@ -12,6 +12,9 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, IoContext, Result};
 use crate::task::Task;
@@ -63,6 +66,18 @@ pub struct Sandbox {
     writable: Vec<PathBuf>,
     hidden: Vec<PathBuf>,
     network: Network,
+    /// Marks this sandbox's refusals where the platform reports them.
+    tag: String,
+}
+
+/// One operation the sandbox refused.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Denial {
+    /// The name of the process that tried.
+    pub process: String,
+    /// What it tried, in the platform's words (`file-write-create`, …).
+    pub operation: String,
+    pub path: String,
 }
 
 impl Sandbox {
@@ -70,13 +85,25 @@ impl Sandbox {
     /// hidden, network allowed.
     pub fn new(task: &Task) -> Result<Sandbox> {
         let tmp = task.tmp()?;
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos());
         Ok(Sandbox {
             copy: real(&task.copy())?,
             tmp: real(&tmp)?,
             writable: Vec::new(),
             hidden: Vec::new(),
             network: Network::Allow,
+            tag: format!("kule-{}-{nanos:x}", task.id()),
         })
+    }
+
+    /// What the sandbox refused the commands it ran within the last
+    /// `window`. `None` where the platform does not report refusals to an
+    /// unprivileged process (Linux); the command still sees each refusal as
+    /// an error.
+    pub fn denials(&self, window: Duration) -> Result<Option<Vec<Denial>>> {
+        self.platform_denials(window)
     }
 
     /// [`Sandbox::new`] plus the defaults for the user's home directory:
@@ -192,13 +219,15 @@ impl Sandbox {
 
     /// Paths travel as `-D` parameters, never inside the profile text, so no
     /// path can change the profile's meaning. Later rules win, so the hidden
-    /// paths come last and override any allowance.
+    /// paths come last and override any allowance. Every deny carries this
+    /// sandbox's tag, so its refusals can be told apart in the system log.
     fn seatbelt_profile(&self) -> (String, Vec<(String, &Path)>) {
+        let tag = format!("(with message \"{}\")", self.tag);
         let mut params = Vec::new();
-        let mut text = String::from(
+        let mut text = format!(
             "(version 1)\n\
              (allow default)\n\
-             (deny file-write*)\n\
+             (deny file-write* {tag})\n\
              (allow file-write*\n  \
                (literal \"/dev/null\") (literal \"/dev/zero\") (literal \"/dev/dtracehelper\")\n  \
                (regex #\"^/dev/tty\") (regex #\"^/dev/fd/\")",
@@ -211,24 +240,73 @@ impl Sandbox {
         match self.network {
             Network::Allow => {}
             Network::Deny => {
-                text.push_str(
-                    "(deny network-outbound (remote ip))\n(deny network-bind (local ip))\n",
-                );
+                text.push_str(&format!(
+                    "(deny network-outbound (remote ip) {tag})\n(deny network-bind (local ip) {tag})\n"
+                ));
             }
             Network::Proxy(port) => {
                 text.push_str(&format!(
-                    "(deny network-outbound (remote ip))\n(allow network-outbound (remote ip \"localhost:{port}\"))\n"
+                    "(deny network-outbound (remote ip) {tag})\n(allow network-outbound (remote ip \"localhost:{port}\"))\n"
                 ));
             }
         }
         for (i, path) in self.hidden.iter().enumerate() {
             text.push_str(&format!(
-                "(deny file-read* file-write* (subpath (param \"H{i}\")))\n"
+                "(deny file-read* file-write* (subpath (param \"H{i}\")) {tag})\n"
             ));
             params.push((format!("H{i}"), path.as_path()));
         }
         (text, params)
     }
+
+    fn platform_denials(&self, window: Duration) -> Result<Option<Vec<Denial>>> {
+        let seconds = window.as_secs() + 2;
+        let predicate = format!(
+            "sender == \"Sandbox\" AND eventMessage CONTAINS \"{}\"",
+            self.tag
+        );
+        let log = Path::new("/usr/bin/log");
+        let out = Command::new(log)
+            .args([
+                "show",
+                "--last",
+                &format!("{seconds}s"),
+                "--style",
+                "ndjson",
+            ])
+            .args(["--predicate", &predicate])
+            .output()
+            .at(log)?;
+        let mut denials = Vec::new();
+        for line in String::from_utf8_lossy(&out.stdout).lines() {
+            let Ok(entry) = serde_json::from_str::<serde_json::Value>(line) else {
+                continue;
+            };
+            let Some(denial) = entry["eventMessage"].as_str().and_then(parse_denial) else {
+                continue;
+            };
+            if !denials.contains(&denial) {
+                denials.push(denial);
+            }
+        }
+        Ok(Some(denials))
+    }
+}
+
+/// `Sandbox: bash(89964) deny(1) file-write-create /some/path` (and the tag
+/// on the next line).
+#[cfg(target_os = "macos")]
+fn parse_denial(message: &str) -> Option<Denial> {
+    let line = message.lines().next()?.strip_prefix("Sandbox: ")?;
+    let (process, rest) = line.split_once('(')?;
+    let (_, rest) = rest.split_once(") deny(")?;
+    let (_, rest) = rest.split_once(") ")?;
+    let (operation, path) = rest.split_once(' ').unwrap_or((rest, ""));
+    Some(Denial {
+        process: process.to_owned(),
+        operation: operation.to_owned(),
+        path: path.to_owned(),
+    })
 }
 
 #[cfg(target_os = "linux")]
@@ -343,6 +421,13 @@ fn carve(roots: Vec<PathBuf>, hidden: &Path) -> Vec<PathBuf> {
         out.extend(carve(children, hidden));
     }
     out
+}
+
+#[cfg(not(target_os = "macos"))]
+impl Sandbox {
+    fn platform_denials(&self, _window: Duration) -> Result<Option<Vec<Denial>>> {
+        Ok(None)
+    }
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]

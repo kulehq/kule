@@ -217,3 +217,53 @@ fn network_can_be_shut() {
     let out = sh(&shut, &connect_script(port));
     assert!(!ok(&out), "denied connection went through");
 }
+
+/// macOS reports each refusal to the system log, tagged per sandbox; Linux
+/// has no unprivileged way to read Landlock's refusals and says so.
+#[test]
+fn refusals_are_reported_where_the_platform_allows() {
+    let s = Setup::new();
+    let secrets = s.outside().join("secrets");
+    fs::create_dir(&secrets).unwrap();
+    fs::write(secrets.join("token"), "t\n").unwrap();
+    let mut sandbox = s.sandbox();
+    sandbox.hide(&secrets).unwrap();
+    let bystander = s.sandbox();
+
+    let evil = s.outside().join("evil.txt");
+    let script = format!(
+        "echo x > '{}'; cat '{}/token'",
+        evil.display(),
+        secrets.display()
+    );
+    assert!(!ok(&sh(&sandbox, &script)));
+
+    let window = std::time::Duration::from_secs(60);
+    if !cfg!(target_os = "macos") {
+        assert_eq!(sandbox.denials(window).unwrap(), None);
+        return;
+    }
+    let wanted = |d: &kule_engine::Denial, op: &str, path: &Path| {
+        d.operation.starts_with(op) && Path::new(&d.path) == path
+    };
+    let token = secrets.join("token");
+    let mut denials = Vec::new();
+    for _ in 0..20 {
+        denials = sandbox.denials(window).unwrap().unwrap();
+        if denials.iter().any(|d| wanted(d, "file-write", &evil))
+            && denials.iter().any(|d| wanted(d, "file-read", &token))
+        {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(250));
+    }
+    assert!(
+        denials.iter().any(|d| wanted(d, "file-write", &evil)),
+        "{denials:?}"
+    );
+    assert!(
+        denials.iter().any(|d| wanted(d, "file-read", &token)),
+        "{denials:?}"
+    );
+    assert_eq!(bystander.denials(window).unwrap(), Some(Vec::new()));
+}

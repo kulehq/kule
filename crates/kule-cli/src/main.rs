@@ -1,11 +1,14 @@
+use std::fs::OpenOptions;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
+use std::time::Instant;
 
 use anyhow::{Context, Result, anyhow};
 use clap::{Parser, Subcommand};
 use kule_engine::{
-    Change, Connection, DEFAULT_POLICY, Effect, EffectSet, Error, GitSummary, Kind, Network,
-    Policy, Proxy, RefChange, Ruling, Sandbox, Task, Verdict, connections,
+    Change, Connection, DEFAULT_POLICY, Denial, Effect, EffectSet, Error, GitSummary, Kind,
+    Network, Policy, Proxy, RefChange, Ruling, Sandbox, Task, Verdict, connections,
 };
 
 /// Kule engine: run commands in a sandbox on a copy-on-write copy of a
@@ -122,6 +125,8 @@ fn run() -> Result<ExitCode> {
         } => {
             let task = Task::open(&home, &task)?;
             let logged_before = connections(&task)?.len();
+            let started = Instant::now();
+            let mut used = None;
             let mut child = if no_sandbox {
                 eprintln!("kule: running without the sandbox");
                 let mut child = Command::new(&command[0]);
@@ -144,7 +149,9 @@ fn run() -> Result<ExitCode> {
                     Network::Proxy(Proxy::start(&task, load_policy(&home, &task)?)?.port())
                 };
                 sandbox.set_network(network);
-                sandbox.command(&command[0], &command[1..])?
+                let child = sandbox.command(&command[0], &command[1..])?;
+                used = Some(sandbox);
+                child
             };
             let status = child
                 .env("KULE_TASK", task.id())
@@ -152,6 +159,17 @@ fn run() -> Result<ExitCode> {
                 .with_context(|| format!("could not run {}", command[0]))?;
             print_set(&task.effects()?);
             print_connections(&connections(&task)?[logged_before..]);
+            if let Some(sandbox) = used
+                && let Some(denials) = sandbox.denials(started.elapsed())?
+            {
+                record_denials(&task, &denials)?;
+                for d in &denials {
+                    println!(
+                        "sandbox: refused {} {} ({})",
+                        d.operation, d.path, d.process
+                    );
+                }
+            }
             return Ok(match status.code() {
                 Some(0) => ExitCode::SUCCESS,
                 Some(code) => ExitCode::from(code.clamp(1, 255) as u8),
@@ -220,6 +238,23 @@ fn load_policy(home: &Path, task: &Task) -> Result<Policy> {
         Some(&home.join("policy.cedar")),
         task.workspace(),
     )?)
+}
+
+/// Appends the sandbox's refusals to the task's `sandbox.jsonl`.
+fn record_denials(task: &Task, denials: &[Denial]) -> Result<()> {
+    if denials.is_empty() {
+        return Ok(());
+    }
+    let path = task.copy().with_file_name("sandbox.jsonl");
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .with_context(|| format!("could not open {}", path.display()))?;
+    for denial in denials {
+        writeln!(file, "{}", serde_json::to_string(denial)?)?;
+    }
+    Ok(())
 }
 
 /// The connections a command made, grouped by host, port and outcome.
