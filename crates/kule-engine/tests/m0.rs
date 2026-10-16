@@ -913,3 +913,22 @@ fn a_removed_task_goes_to_the_trash_then_off_the_disk() {
     // Nothing to do is not an error.
     Task::empty_trash(&home).unwrap();
 }
+
+/// A workspace moved away is not rebuilt out of the task's changes.
+#[test]
+fn commit_and_undo_refuse_when_the_workspace_is_gone() {
+    let s = Setup::new();
+    write(&s.copy().join("new.txt"), "x");
+    let moved = s.work().with_extension("moved");
+    fs::rename(s.work(), &moved).unwrap();
+    assert!(!s.task.workspace_exists());
+    for refused in [s.task.commit().map(|_| ()), s.task.undo().map(|_| ())] {
+        match refused {
+            Err(Error::Invalid(m)) => assert!(m.contains("is gone"), "{m}"),
+            other => panic!("expected a refusal, got {other:?}"),
+        }
+    }
+    assert!(!s.work().exists());
+    assert!(s.copy().join("new.txt").exists());
+    fs::rename(&moved, s.work()).unwrap();
+}

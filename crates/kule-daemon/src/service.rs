@@ -47,6 +47,9 @@ pub struct TaskView {
     pub waiting: usize,
     /// How long a question waits before it is refused.
     pub approval_timeout_secs: u64,
+    /// The workspace was moved or deleted: commit and undo are refused.
+    #[serde(default)]
+    pub workspace_gone: bool,
 }
 
 /// The task's uncommitted work, ignored paths marked, and what the policy
@@ -466,6 +469,7 @@ impl Service {
                 .filter(|q| q.task == id)
                 .count(),
             approval_timeout_secs: task.approval_timeout().map_err(text)?.as_secs(),
+            workspace_gone: !task.workspace_exists(),
         })
     }
 

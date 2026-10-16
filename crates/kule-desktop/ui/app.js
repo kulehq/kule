@@ -116,6 +116,7 @@ const questionsOf = (id) => state.questions.filter((q) => q.task === id);
 function taskChip(task) {
   if (questionsOf(task.id).length) return h("span", { class: "chip ask" }, "waiting for you");
   if (task.running) return h("span", { class: "chip running" }, "working");
+  if (task.workspace_gone) return h("span", { class: "chip deny" }, "workspace gone");
   if (task.verdict) return h("span", { class: `chip ${task.verdict}` }, VERDICT[task.verdict].chip);
   return null;
 }
@@ -168,6 +169,9 @@ function renderTask() {
   if (task.running) {
     chip.classList.add("running");
     chip.textContent = "agent at work";
+  } else if (task.workspace_gone) {
+    chip.classList.add("deny");
+    chip.textContent = "workspace moved or deleted · commit and undo refused";
   } else if (task.verdict) {
     chip.classList.add(task.verdict);
     chip.textContent = `${plural(task.changes, "change")} · ${VERDICT[task.verdict].chip}`;

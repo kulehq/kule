@@ -230,6 +230,7 @@ impl Task {
         check: impl FnOnce(&EffectSet) -> Result<()>,
     ) -> Result<Option<Checkpoint>> {
         let _lock = self.lock()?;
+        self.workspace_in_place()?;
         let mut baseline = self.load_baseline()?;
         let set = self.commit_set(&baseline, include_ignored)?;
         if set.is_empty() {
@@ -350,6 +351,7 @@ impl Task {
     /// the commit left it.
     pub fn undo(&self) -> Result<Option<Checkpoint>> {
         let _lock = self.lock()?;
+        self.workspace_in_place()?;
         let mut baseline = self.load_baseline()?;
         let pending = effects::compute(&self.copy(), self.workspace(), &baseline)?;
         if !pending.to_commit(false).is_empty() {
@@ -516,6 +518,24 @@ impl Task {
     /// The task's commits, oldest first, undone ones included.
     pub fn checkpoints(&self) -> Result<Vec<Checkpoint>> {
         self.store().all()
+    }
+
+    /// Whether the workspace is still a directory where the task was made.
+    pub fn workspace_exists(&self) -> bool {
+        fs::symlink_metadata(self.workspace()).is_ok_and(|m| m.is_dir())
+    }
+
+    /// Refuses when the workspace was moved or deleted: a commit would
+    /// otherwise build a new directory there out of the changes alone.
+    fn workspace_in_place(&self) -> Result<()> {
+        if self.workspace_exists() {
+            return Ok(());
+        }
+        Err(Error::Invalid(format!(
+            "the workspace {} is gone (moved or deleted outside Kule); nothing was applied, \
+             and the task's changes are still in its copy",
+            self.workspace().display()
+        )))
     }
 
     /// Deletes the task and its copy. The workspace is not touched. The task

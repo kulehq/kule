@@ -337,6 +337,12 @@ fn run() -> Result<ExitCode> {
                 let both = serde_json::json!({ "effects": set, "ruling": ruling });
                 println!("{}", serde_json::to_string_pretty(&both)?);
             } else {
+                if !task.workspace_exists() {
+                    println!(
+                        "workspace {} is gone (moved or deleted); commit and undo are refused",
+                        task.workspace().display()
+                    );
+                }
                 print_set(&set);
                 if !committed.is_empty() {
                     print_ruling(&ruling);
