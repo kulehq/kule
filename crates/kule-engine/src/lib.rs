@@ -21,6 +21,7 @@ mod effects;
 mod error;
 mod fsops;
 mod git;
+mod ignore;
 mod manifest;
 mod network;
 mod policy;

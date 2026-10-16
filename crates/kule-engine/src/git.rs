@@ -91,7 +91,7 @@ pub(crate) fn read(root: &Path) -> Result<Option<GitState>> {
 
 /// Opens without reading global or system configuration: what Kule sees must
 /// not depend on who runs it, and nothing configured there may run.
-fn open(root: &Path) -> Result<gix::Repository> {
+pub(crate) fn open(root: &Path) -> Result<gix::Repository> {
     gix::open_opts(root, gix::open::Options::isolated()).map_err(|e| Error::Git {
         path: root.to_path_buf(),
         message: e.to_string(),

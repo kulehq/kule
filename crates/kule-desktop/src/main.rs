@@ -43,13 +43,13 @@ fn create_task(kule: Kule<'_>, workspace: PathBuf) -> Result<TaskView> {
 }
 
 #[tauri::command(async)]
-fn review(kule: Kule<'_>, task: String) -> Result<Review> {
-    kule.review(&task)
+fn review(kule: Kule<'_>, task: String, include_ignored: bool) -> Result<Review> {
+    kule.review(&task, include_ignored)
 }
 
 #[tauri::command(async)]
-fn commit(kule: Kule<'_>, task: String, approve: bool) -> Result<Commit> {
-    kule.commit(&task, approve)
+fn commit(kule: Kule<'_>, task: String, approve: bool, include_ignored: bool) -> Result<Commit> {
+    kule.commit(&task, approve, include_ignored)
 }
 
 #[tauri::command(async)]

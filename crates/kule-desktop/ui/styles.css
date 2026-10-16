@@ -631,6 +631,24 @@ select:focus-visible {
   color: var(--deny);
 }
 
+.ignored-group {
+  margin-top: 14px;
+}
+
+.ignored-group summary {
+  margin: 0 0 6px;
+  cursor: pointer;
+}
+
+.check {
+  display: flex;
+  margin: 4px 0 8px;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
 .held-mark {
   color: var(--ask);
   font-family: var(--sans);

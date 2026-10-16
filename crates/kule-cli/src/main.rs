@@ -85,6 +85,10 @@ enum Cmd {
         /// Approve the changes the policy puts to a person.
         #[arg(long)]
         approve: bool,
+        /// Also take the paths the workspace's .gitignore excludes, which
+        /// otherwise stay in the copy. The policy judges them too.
+        #[arg(long)]
+        include_ignored: bool,
     },
     /// Print the built-in policy. Save it as <KULE_HOME>/policy.cedar to
     /// replace it; a repository adds forbid rules in .kule/policy.cedar.
@@ -242,7 +246,7 @@ fn run() -> Result<ExitCode> {
                     );
                 }
             }
-            print_ruling(&load_policy(&home, &task)?.judge(&task.effects()?));
+            print_ruling(&load_policy(&home, &task)?.judge(&task.effects()?.to_commit(false)));
         }
         Cmd::Steps { task } => {
             for step in Task::open(&home, &task)?.steps()? {
@@ -261,21 +265,27 @@ fn run() -> Result<ExitCode> {
         Cmd::Status { task, json } => {
             let task = Task::open(&home, &task)?;
             let set = task.effects()?;
-            let ruling = load_policy(&home, &task)?.judge(&set);
+            // On what a plain commit would take: ignored paths stay behind.
+            let committed = set.to_commit(false);
+            let ruling = load_policy(&home, &task)?.judge(&committed);
             if json {
                 let both = serde_json::json!({ "effects": set, "ruling": ruling });
                 println!("{}", serde_json::to_string_pretty(&both)?);
             } else {
                 print_set(&set);
-                if !set.is_empty() {
+                if !committed.is_empty() {
                     print_ruling(&ruling);
                 }
             }
         }
-        Cmd::Commit { task, approve } => {
+        Cmd::Commit {
+            task,
+            approve,
+            include_ignored,
+        } => {
             let task = Task::open(&home, &task)?;
             let policy = load_policy(&home, &task)?;
-            match task.commit_if(policy.gate(approve)) {
+            match task.commit_with(include_ignored, policy.gate(approve)) {
                 Ok(Some(cp)) => println!(
                     "committed {} changes · checkpoint {}",
                     cp.effects.len(),
@@ -424,7 +434,21 @@ fn print_ruling(ruling: &Ruling) {
 /// Files one per line; `.git` as what it means, not as object file names.
 fn print_set(set: &EffectSet) {
     const SHOWN: usize = 40;
-    let files: Vec<&Effect> = set.files().collect();
+    let files: Vec<&Effect> = set.files().filter(|e| !e.ignored).collect();
+    let ignored: Vec<&Effect> = set.ignored().collect();
+    if !ignored.is_empty() {
+        println!(
+            "{} ignored by the workspace, staying in the copy (commit --include-ignored takes them):",
+            ignored.len()
+        );
+        for effect in ignored.iter().take(10) {
+            let slash = if effect.kind == Kind::Dir { "/" } else { "" };
+            println!("  · {}{slash}", effect.path);
+        }
+        if ignored.len() > 10 {
+            println!("  … {} more", ignored.len() - 10);
+        }
+    }
     if files.is_empty() && set.git.is_none() {
         println!("no changes");
         return;

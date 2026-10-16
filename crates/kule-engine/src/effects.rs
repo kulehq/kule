@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use crate::error::Result;
 use crate::fsops::same_bytes;
 use crate::git::{self, GitSummary};
+use crate::ignore;
 use crate::manifest::{Baseline, Entry, Kind, Stamp, scan};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -23,6 +24,10 @@ pub struct Effect {
     pub change: Change,
     /// The entry's type now, or before it was deleted.
     pub kind: Kind,
+    /// The workspace's ignore rules exclude the path: a commit leaves it in
+    /// the copy unless asked to take it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub ignored: bool,
 }
 
 impl Effect {
@@ -61,6 +66,24 @@ impl EffectSet {
     pub fn files(&self) -> impl Iterator<Item = &Effect> {
         self.effects.iter().filter(|e| !e.in_git())
     }
+
+    /// The effects on paths the workspace ignores.
+    pub fn ignored(&self) -> impl Iterator<Item = &Effect> {
+        self.effects.iter().filter(|e| e.ignored)
+    }
+
+    /// What a commit takes: everything, or everything but the ignored paths.
+    pub fn to_commit(&self, include_ignored: bool) -> EffectSet {
+        EffectSet {
+            effects: self
+                .effects
+                .iter()
+                .filter(|e| include_ignored || !e.ignored)
+                .cloned()
+                .collect(),
+            git: self.git.clone(),
+        }
+    }
 }
 
 pub(crate) fn compute(copy: &Path, work: &Path, baseline: &Baseline) -> Result<EffectSet> {
@@ -72,6 +95,7 @@ pub(crate) fn compute(copy: &Path, work: &Path, baseline: &Baseline) -> Result<E
                 path: path.clone(),
                 change: Change::Deleted,
                 kind: entry.copy.kind,
+                ignored: false,
             }),
             Some(stamp)
                 if !entry.copy.unchanged(stamp) && differs(copy, work, path, entry, stamp)? =>
@@ -80,6 +104,7 @@ pub(crate) fn compute(copy: &Path, work: &Path, baseline: &Baseline) -> Result<E
                     path: path.clone(),
                     change: Change::Modified,
                     kind: stamp.kind,
+                    ignored: false,
                 })
             }
             Some(_) => {}
@@ -91,10 +116,12 @@ pub(crate) fn compute(copy: &Path, work: &Path, baseline: &Baseline) -> Result<E
                 path: path.clone(),
                 change: Change::Created,
                 kind: stamp.kind,
+                ignored: false,
             });
         }
     }
     effects.sort_by(|a, b| a.path.cmp(&b.path));
+    ignore::mark(work, &mut effects)?;
     let git = git::summarize(copy, baseline.git.as_ref(), &effects)?;
     Ok(EffectSet { effects, git })
 }

@@ -82,6 +82,8 @@ const state = {
   agents: [],
   /** Live stream per task: what the window saw since it opened. */
   streams: new Map(),
+  /** Tasks whose next commit also takes the paths the workspace ignores. */
+  includeIgnored: new Set(),
 };
 
 const currentTask = () => state.tasks.find((t) => t.id === state.current);
@@ -100,9 +102,9 @@ function taskChip(task) {
 }
 
 function taskItem(task) {
-  const sub = task.changes
-    ? `${plural(task.changes, "change")} · ${task.id}`
-    : `no changes · ${task.id}`;
+  const parts = [task.changes ? plural(task.changes, "change") : "no changes"];
+  if (task.ignored) parts.push(`${task.ignored} ignored`);
+  const sub = `${parts.join(", ")} · ${task.id}`;
   return h(
     "li",
     {},
@@ -149,7 +151,9 @@ function renderTask() {
     chip.classList.add(task.verdict);
     chip.textContent = `${plural(task.changes, "change")} · ${VERDICT[task.verdict].chip}`;
   } else {
-    chip.textContent = "in sync with the workspace";
+    chip.textContent = task.ignored
+      ? `in sync · ${task.ignored} ignored in the copy`
+      : "in sync with the workspace";
   }
 
   const count = $("review-count");
@@ -340,25 +344,35 @@ let reviewToken = 0;
 
 async function loadReview(id) {
   const token = ++reviewToken;
+  const include = state.includeIgnored.has(id);
   let review;
   try {
-    review = await call("review", { task: id });
+    review = await call("review", { task: id, includeIgnored: include });
   } catch (err) {
     fail(err);
     return;
   }
   if (token !== reviewToken || id !== state.current) return;
   const task = currentTask();
-  const files = review.effects.effects.filter((e) => !inGit(e.path));
-  const empty = files.length === 0 && !review.effects.git;
+  const outside = review.effects.effects.filter((e) => !inGit(e.path));
+  const files = outside.filter((e) => !e.ignored);
+  const ignored = outside.filter((e) => e.ignored);
+  const taken = include ? outside : files;
+  const empty = taken.length === 0 && !review.effects.git;
 
   const ruling = $("ruling");
   const holding = review.ruling.judgements.filter((j) => j.verdict !== "allow");
   ruling.className = `ruling ${empty ? "" : review.ruling.verdict}`;
   if (empty) {
     ruling.replaceChildren(
-      h("p", { class: "ruling-title" }, "Nothing to review"),
-      h("p", { class: "muted" }, "The copy holds what the workspace holds.")
+      h("p", { class: "ruling-title" }, "Nothing to commit"),
+      h(
+        "p",
+        { class: "muted" },
+        ignored.length
+          ? `${plural(ignored.length, "change")} to ignored paths stay in the copy.`
+          : "The copy holds what the workspace holds."
+      )
     );
   } else {
     ruling.replaceChildren(
@@ -371,7 +385,7 @@ async function loadReview(id) {
               h("li", {}, `${j.subject} · ${VERDICT[j.verdict].chip} `, h("span", { class: "rules" }, `(${j.rules.join(", ")})`))
             )
           )
-        : h("p", { class: "muted" }, `${plural(files.length, "file")} changed; the policy lets all of it through.`)
+        : h("p", { class: "muted" }, `${plural(taken.length, "file")} changed; the policy lets all of it through.`)
     );
   }
 
@@ -379,12 +393,14 @@ async function loadReview(id) {
   const actions = [];
   if (!empty) {
     if (review.ruling.verdict === "allow") {
-      actions.push(h("button", { class: "button primary", type: "button", disabled: busy, onclick: () => commit(id, false) }, "Commit to workspace"));
+      actions.push(h("button", { class: "button primary", type: "button", disabled: busy, onclick: () => commit(id, false, include) }, "Commit to workspace"));
     } else if (review.ruling.verdict === "ask") {
       actions.push(
-        h("button", { class: "button ask", type: "button", disabled: busy, onclick: () => commit(id, true) }, "Approve and commit")
+        h("button", { class: "button ask", type: "button", disabled: busy, onclick: () => commit(id, true, include) }, "Approve and commit")
       );
     }
+  }
+  if (!empty || ignored.length) {
     actions.push(armed("Roll back", "Click again to throw the changes away", busy, () => rollback(id)));
   }
   $("review-actions").replaceChildren(...actions);
@@ -395,8 +411,47 @@ async function loadReview(id) {
     ...filesGroup("Created", byChange("created"), held),
     ...filesGroup("Modified", byChange("modified"), held),
     ...filesGroup("Deleted", byChange("deleted"), held),
-    ...gitGroup(review.effects.git)
+    ...gitGroup(review.effects.git),
+    ...ignoredGroup(id, ignored, include, held)
   );
+}
+
+/**
+ * Paths the workspace's .gitignore excludes: build output, caches, secrets.
+ * They stay in the copy unless the person asks for them.
+ */
+function ignoredGroup(id, ignored, include, held) {
+  if (ignored.length === 0) return [];
+  const toggle = h("input", {
+    type: "checkbox",
+    checked: include,
+    onchange: () => {
+      if (toggle.checked) state.includeIgnored.add(id);
+      else state.includeIgnored.delete(id);
+      loadReview(id);
+    },
+  });
+  return [
+    h(
+      "details",
+      { class: "ignored-group", open: include },
+      h("summary", { class: "group-title" }, `Ignored by the workspace · ${ignored.length} ${include ? "included" : "stay in the copy"}`),
+      h("label", { class: "check" }, toggle, "Also commit these"),
+      h(
+        "ul",
+        { class: "files" },
+        ignored.map((e) =>
+          h(
+            "li",
+            {},
+            h("span", { class: `change ${e.change}` }, CHANGE_MARK[e.change]),
+            h("span", {}, e.kind === "dir" ? `${e.path}/` : e.path),
+            include && held.get(e.path) ? h("span", { class: "held-mark" }, VERDICT[held.get(e.path)].chip) : null
+          )
+        )
+      )
+    ),
+  ];
 }
 
 /** A button for an action that cannot be taken back: the first click arms it. */
@@ -419,9 +474,10 @@ function armed(label, armedLabel, disabled, action) {
   return button;
 }
 
-async function commit(id, approve) {
+async function commit(id, approve, includeIgnored) {
   try {
-    const result = await call("commit", { task: id, approve });
+    const result = await call("commit", { task: id, approve, includeIgnored });
+    state.includeIgnored.delete(id);
     if (result.outcome === "applied") toast(`Committed ${plural(result.changes, "change")} · checkpoint ${result.checkpoint}`);
     else if (result.outcome === "nothing") toast("Nothing to commit");
     else toast(`Not committed: ${VERDICT[result.ruling.verdict].title.toLowerCase()}`, "error");

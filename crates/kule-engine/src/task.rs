@@ -159,7 +159,8 @@ impl Task {
     /// Applies the copy's changes to the workspace, after saving what they
     /// replace in a checkpoint. Refuses with [`Error::Conflict`] when the
     /// workspace changed under any of the affected paths since the last sync.
-    /// No policy is consulted; see [`Task::commit_if`].
+    /// No policy is consulted; see [`Task::commit_if`]. Paths the workspace
+    /// ignores stay in the copy; see [`Task::commit_with`].
     pub fn commit(&self) -> Result<Option<Checkpoint>> {
         self.commit_if(|_| Ok(()))
     }
@@ -171,9 +172,20 @@ impl Task {
         &self,
         check: impl FnOnce(&EffectSet) -> Result<()>,
     ) -> Result<Option<Checkpoint>> {
+        self.commit_with(false, check)
+    }
+
+    /// [`Task::commit_if`], taking the paths the workspace ignores too when
+    /// `include_ignored` is set.
+    pub fn commit_with(
+        &self,
+        include_ignored: bool,
+        check: impl FnOnce(&EffectSet) -> Result<()>,
+    ) -> Result<Option<Checkpoint>> {
         let _lock = self.lock()?;
         let mut baseline = self.load_baseline()?;
-        let set = effects::compute(&self.copy(), self.workspace(), &baseline)?;
+        let set =
+            effects::compute(&self.copy(), self.workspace(), &baseline)?.to_commit(include_ignored);
         if set.is_empty() {
             return Ok(None);
         }
@@ -230,11 +242,13 @@ impl Task {
 
     /// Reverts the newest applied commit in the workspace and the copy.
     /// Repeating it walks further back. The copy must have no uncommitted
-    /// changes, and the workspace must still look as the commit left it.
+    /// changes, ignored paths aside, and the workspace must still look as
+    /// the commit left it.
     pub fn undo(&self) -> Result<Option<Checkpoint>> {
         let _lock = self.lock()?;
         let mut baseline = self.load_baseline()?;
-        if !effects::compute(&self.copy(), self.workspace(), &baseline)?.is_empty() {
+        let pending = effects::compute(&self.copy(), self.workspace(), &baseline)?;
+        if !pending.to_commit(false).is_empty() {
             return Err(Error::Invalid(
                 "the task has uncommitted changes; commit or roll them back before undo".into(),
             ));
@@ -254,6 +268,19 @@ impl Task {
             .collect();
         let mut paths: Vec<String> = reverted.iter().map(|e| e.path.clone()).collect();
         paths.sort();
+        // Undo brings these paths back into the copy too, which would throw
+        // away the copy's own uncommitted change to an ignored one.
+        let under = |p: &str, q: &str| p == q || p.starts_with(&format!("{q}/"));
+        if let Some(clash) = pending
+            .ignored()
+            .find(|e| paths.iter().any(|p| under(&e.path, p) || under(p, &e.path)))
+        {
+            return Err(Error::Invalid(format!(
+                "the task has an uncommitted change to {}, which undo would overwrite; \
+                 commit it or roll it back first",
+                clash.path
+            )));
+        }
 
         let work_git = git::read(self.workspace())?;
         let mut conflicts = Vec::new();

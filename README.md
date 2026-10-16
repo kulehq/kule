@@ -135,6 +135,11 @@ own state and login; every tool call becomes a step (`kule steps $TASK`).
 cargo run -p kule-desktop   # Linux needs libwebkit2gtk-4.1-dev
 ```
 
+Paths the workspace's `.gitignore` excludes (build output, caches, `.env`)
+stay in the copy: a commit leaves them behind unless asked
+(`kule commit --include-ignored`, or *Also commit these* in the app). The
+rules come from the workspace, never from the copy.
+
 ## Not yet
 
 - Linux: Landlock reports refusals only to the audit log, so they are not

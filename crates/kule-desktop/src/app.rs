@@ -35,14 +35,18 @@ pub struct TaskView {
     pub id: String,
     pub workspace: PathBuf,
     pub created_unix: u64,
-    /// Uncommitted changes, `.git` internals included.
+    /// Uncommitted changes a commit would take, `.git` internals included.
     pub changes: usize,
-    /// What the policy says about them; `None` when there are none.
+    /// Uncommitted changes to paths the workspace ignores, which stay in
+    /// the copy unless a commit asks for them.
+    pub ignored: usize,
+    /// What the policy says about `changes`; `None` when there are none.
     pub verdict: Option<Verdict>,
     pub running: bool,
 }
 
-/// The task's uncommitted work and what the policy says about it.
+/// The task's uncommitted work, ignored paths marked, and what the policy
+/// says about the part a commit would take.
 #[derive(Debug, Clone, Serialize)]
 pub struct Review {
     pub effects: EffectSet,
@@ -127,19 +131,23 @@ impl App {
         self.view(task.id())
     }
 
-    pub fn review(&self, id: &str) -> Result<Review> {
+    /// The ruling covers the ignored paths only with `include_ignored`.
+    pub fn review(&self, id: &str, include_ignored: bool) -> Result<Review> {
         let task = self.open(id)?;
         let effects = task.effects().map_err(text)?;
-        let ruling = self.policy(&task)?.judge(&effects);
+        let ruling = self
+            .policy(&task)?
+            .judge(&effects.to_commit(include_ignored));
         Ok(Review { effects, ruling })
     }
 
     /// Commits what the policy lets through; with `approve`, also what it
-    /// puts to a person. Denied changes never pass.
-    pub fn commit(&self, id: &str, approve: bool) -> Result<Commit> {
+    /// puts to a person. Denied changes never pass. Ignored paths stay in
+    /// the copy unless `include_ignored`.
+    pub fn commit(&self, id: &str, approve: bool, include_ignored: bool) -> Result<Commit> {
         let task = self.idle(id)?;
         let policy = self.policy(&task)?;
-        match task.commit_if(policy.gate(approve)) {
+        match task.commit_with(include_ignored, policy.gate(approve)) {
             Ok(Some(checkpoint)) => Ok(Commit::Applied {
                 checkpoint: checkpoint.id,
                 changes: checkpoint.effects.len(),
@@ -245,13 +253,15 @@ impl App {
 
     fn view(&self, id: &str) -> Result<TaskView> {
         let task = self.open(id)?;
-        let effects = task.effects().map_err(text)?;
+        let all = task.effects().map_err(text)?;
+        let effects = all.to_commit(false);
         let verdict = (!effects.is_empty()).then(|| self.policy(&task).map(|p| p.judge(&effects)));
         Ok(TaskView {
             id: task.id().to_owned(),
             workspace: task.workspace().to_owned(),
             created_unix: task.info().created_unix,
             changes: effects.effects.len(),
+            ignored: all.ignored().count(),
             verdict: verdict.transpose()?.map(|r| r.verdict),
             running: self.running.lock().unwrap().contains(id),
         })
@@ -336,26 +346,29 @@ mod tests {
         let (id, copy) = s.task();
         fs::write(copy.join("a.txt"), "edited\n").unwrap();
         assert!(matches!(
-            s.app.commit(&id, false).unwrap(),
+            s.app.commit(&id, false, false).unwrap(),
             Commit::Applied {
                 checkpoint: 1,
                 changes: 1
             }
         ));
-        assert!(matches!(s.app.commit(&id, false).unwrap(), Commit::Nothing));
+        assert!(matches!(
+            s.app.commit(&id, false, false).unwrap(),
+            Commit::Nothing
+        ));
 
         fs::write(copy.join("Cargo.toml"), "[package]\n").unwrap();
-        match s.app.commit(&id, false).unwrap() {
+        match s.app.commit(&id, false, false).unwrap() {
             Commit::Held { ruling } => assert_eq!(ruling.verdict, Verdict::Ask),
             other => panic!("expected the change to be held, got {other:?}"),
         }
         assert!(!s.ws.path().join("Cargo.toml").exists());
-        let review = s.app.review(&id).unwrap();
+        let review = s.app.review(&id, false).unwrap();
         assert_eq!(review.ruling.verdict, Verdict::Ask);
         assert_eq!(review.effects.effects.len(), 1);
 
         assert!(matches!(
-            s.app.commit(&id, true).unwrap(),
+            s.app.commit(&id, true, false).unwrap(),
             Commit::Applied { checkpoint: 2, .. }
         ));
         assert!(s.ws.path().join("Cargo.toml").exists());
@@ -372,7 +385,7 @@ mod tests {
         .unwrap();
         let (id, copy) = s.task();
         fs::write(copy.join("secret.txt"), "x\n").unwrap();
-        match s.app.commit(&id, true).unwrap() {
+        match s.app.commit(&id, true, false).unwrap() {
             Commit::Held { ruling } => assert_eq!(ruling.verdict, Verdict::Deny),
             other => panic!("expected the change to be denied, got {other:?}"),
         }
@@ -396,7 +409,7 @@ mod tests {
         assert_eq!(timeline.steps.len(), 1);
         assert!(timeline.checkpoints.is_empty());
 
-        s.app.commit(&id, false).unwrap();
+        s.app.commit(&id, false, false).unwrap();
         let timeline = s.app.timeline(&id).unwrap();
         assert!(timeline.steps.is_empty());
         assert_eq!(timeline.checkpoints.len(), 1);
@@ -415,7 +428,7 @@ mod tests {
         let (id, copy) = s.task();
         fs::write(copy.join("a.txt"), "agent\n").unwrap();
         fs::write(s.ws.path().join("a.txt"), "human, a longer line\n").unwrap();
-        let e = s.app.commit(&id, false).unwrap_err();
+        let e = s.app.commit(&id, false, false).unwrap_err();
         assert!(e.contains("changed outside Kule at a.txt"), "{e}");
     }
 
@@ -428,7 +441,7 @@ mod tests {
 
         assert!(s.app.tasks().unwrap()[0].running);
         for refused in [
-            s.app.commit(&id, true).map(|_| ()),
+            s.app.commit(&id, true, false).map(|_| ()),
             s.app.rollback(&id).map(|_| ()),
             s.app.undo(&id).map(|_| ()),
             s.app.remove(&id),
@@ -450,5 +463,52 @@ mod tests {
         let e = s.app.start_run(&id, "nobody", "hi", |_| {}).unwrap_err();
         assert_eq!(e, "no agent nobody");
         assert!(!s.app.running.lock().unwrap().contains(&id));
+    }
+
+    #[test]
+    fn ignored_paths_are_counted_apart_and_committed_only_on_request() {
+        let s = Setup::new();
+        fs::write(s.ws.path().join(".gitignore"), ".env\n").unwrap();
+        let git = |args: &[&str]| {
+            let ok = std::process::Command::new("git")
+                .args(["-c", "user.name=Test", "-c", "user.email=test@example.com"])
+                .args(["-c", "commit.gpgsign=false"])
+                .args(args)
+                .current_dir(s.ws.path())
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("GIT_CONFIG_NOSYSTEM", "1")
+                .status()
+                .unwrap()
+                .success();
+            assert!(ok, "git {args:?}");
+        };
+        git(&["init", "-q"]);
+        git(&["add", "."]);
+        git(&["commit", "-q", "-m", "start"]);
+        let (id, copy) = s.task();
+        fs::write(copy.join(".env"), "SECRET=1\n").unwrap();
+
+        let view = s.app.tasks().unwrap().remove(0);
+        assert_eq!((view.changes, view.ignored, view.verdict), (0, 1, None));
+        assert!(
+            s.app
+                .review(&id, false)
+                .unwrap()
+                .ruling
+                .judgements
+                .is_empty()
+        );
+        assert_eq!(s.app.review(&id, true).unwrap().ruling.judgements.len(), 1);
+
+        assert!(matches!(
+            s.app.commit(&id, false, false).unwrap(),
+            Commit::Nothing
+        ));
+        assert!(!s.ws.path().join(".env").exists());
+        assert!(matches!(
+            s.app.commit(&id, false, true).unwrap(),
+            Commit::Applied { changes: 1, .. }
+        ));
+        assert!(s.ws.path().join(".env").exists());
     }
 }
