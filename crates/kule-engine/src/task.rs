@@ -148,13 +148,25 @@ impl Task {
     /// Applies the copy's changes to the workspace, after saving what they
     /// replace in a checkpoint. Refuses with [`Error::Conflict`] when the
     /// workspace changed under any of the affected paths since the last sync.
+    /// No policy is consulted; see [`Task::commit_if`].
     pub fn commit(&self) -> Result<Option<Checkpoint>> {
+        self.commit_if(|_| Ok(()))
+    }
+
+    /// [`Task::commit`] behind a gate: `check` sees the exact effect set
+    /// about to be applied, under the task's lock, and can refuse it. Nothing
+    /// can slip in between the check and the commit.
+    pub fn commit_if(
+        &self,
+        check: impl FnOnce(&EffectSet) -> Result<()>,
+    ) -> Result<Option<Checkpoint>> {
         let _lock = self.lock()?;
         let mut baseline = self.load_baseline()?;
         let set = effects::compute(&self.copy(), self.workspace(), &baseline)?;
         if set.is_empty() {
             return Ok(None);
         }
+        check(&set)?;
         let work_git = git::read(self.workspace())?;
         let mut conflicts = Vec::new();
         for effect in &set.effects {

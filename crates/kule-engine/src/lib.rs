@@ -21,6 +21,7 @@ mod error;
 mod fsops;
 mod git;
 mod manifest;
+mod policy;
 mod sandbox;
 mod task;
 
@@ -29,5 +30,6 @@ pub use effects::{Change, Effect, EffectSet};
 pub use error::{Error, Result};
 pub use git::{GitState, GitSummary, RefChange};
 pub use manifest::Kind;
+pub use policy::{DEFAULT_POLICY, Judgement, Policy, REPO_POLICY, Ruling, Verdict};
 pub use sandbox::{Network, Sandbox};
 pub use task::{Task, TaskInfo};

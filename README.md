@@ -51,12 +51,40 @@ git: config changed (it can make the next git command run code)
 git: hook pre-commit changed (it runs on the next matching git command)
 ```
 
+## M1, step 2: the sandbox
+
+`kule exec` runs commands in the operating system's sandbox (Seatbelt on
+macOS, Landlock on Linux). They may write only to the task's copy, its own
+`TMPDIR` and package caches; credentials such as `~/.ssh`, `~/.aws` and
+`~/.npmrc` cannot be read; `--no-network` shuts TCP. If the sandbox cannot be
+set up, the command does not run. `--allow-write`, `--hide` and
+`--no-sandbox` adjust it.
+
+## M1, step 3: policy
+
+Every change is judged by a Cedar policy before it reaches the workspace:
+it passes on its own, waits for approval, or is denied.
+
+```
+policy: waits for approval
+  Cargo.toml · waits for approval (manifests-and-lockfiles)
+```
+
+`kule commit` applies what passes, `kule commit --approve` also what waits,
+and nothing that is denied (a new git hook, for example). `kule policy`
+prints the built-in rules: source edits and fast-forward branch moves pass;
+manifests, lockfiles, CI and editor configuration, git config, history
+rewrites and mass deletes wait; git hooks are denied. Save your own as
+`~/.kule/policy.cedar` to replace them. A repository can add `forbid` rules
+in `.kule/policy.cedar`; they are read from the real workspace, never from
+the copy an agent edits.
+
 ## Not yet
 
-- **No sandbox.** A command run with `kule exec` can still write outside the
-  copy. Sandboxing (Seatbelt, bubblewrap/Landlock) is M1.
-- No policy yet: hook and config changes are reported but still committed
-  (Cedar policy is M1). No network proxy, no approval inbox, no desktop app.
+- No network proxy yet: the network is either open or shut. Per-host rules
+  come with the proxy (the last step of M1).
+- Denied sandbox attempts are not recorded yet; the command sees the error.
+- No approval inbox and no desktop app (M2, M3).
 
 ## License
 

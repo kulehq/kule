@@ -1,10 +1,11 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
 use anyhow::{Context, Result, anyhow};
 use clap::{Parser, Subcommand};
 use kule_engine::{
-    Change, Effect, EffectSet, Error, GitSummary, Kind, Network, RefChange, Sandbox, Task,
+    Change, DEFAULT_POLICY, Effect, EffectSet, Error, GitSummary, Kind, Network, Policy, RefChange,
+    Ruling, Sandbox, Task, Verdict,
 };
 
 /// Kule engine: run commands in a sandbox on a copy-on-write copy of a
@@ -47,14 +48,24 @@ enum Cmd {
         #[arg(last = true, required = true)]
         command: Vec<String>,
     },
-    /// Show the task's uncommitted changes.
+    /// Show the task's uncommitted changes and what the policy says about them.
     Status {
         task: String,
         #[arg(long)]
         json: bool,
     },
     /// Apply the task's changes to the workspace, keeping a checkpoint.
-    Commit { task: String },
+    /// The policy decides: changes that wait for a person need --approve,
+    /// denied ones never pass.
+    Commit {
+        task: String,
+        /// Approve the changes the policy puts to a person.
+        #[arg(long)]
+        approve: bool,
+    },
+    /// Print the built-in policy. Save it as <KULE_HOME>/policy.cedar to
+    /// replace it; a repository adds forbid rules in .kule/policy.cedar.
+    Policy,
     /// Throw the task's uncommitted changes away.
     Rollback { task: String },
     /// Revert the task's newest commit in the workspace and the copy.
@@ -134,21 +145,44 @@ fn run() -> Result<ExitCode> {
             });
         }
         Cmd::Status { task, json } => {
-            let set = Task::open(&home, &task)?.effects()?;
+            let task = Task::open(&home, &task)?;
+            let set = task.effects()?;
+            let ruling = load_policy(&home, &task)?.judge(&set);
             if json {
-                println!("{}", serde_json::to_string_pretty(&set)?);
+                let both = serde_json::json!({ "effects": set, "ruling": ruling });
+                println!("{}", serde_json::to_string_pretty(&both)?);
             } else {
                 print_set(&set);
+                if !set.is_empty() {
+                    print_ruling(&ruling);
+                }
             }
         }
-        Cmd::Commit { task } => match Task::open(&home, &task)?.commit()? {
-            Some(cp) => println!(
-                "committed {} changes · checkpoint {}",
-                cp.effects.len(),
-                cp.id
-            ),
-            None => println!("nothing to commit"),
-        },
+        Cmd::Commit { task, approve } => {
+            let task = Task::open(&home, &task)?;
+            let policy = load_policy(&home, &task)?;
+            match task.commit_if(policy.gate(approve)) {
+                Ok(Some(cp)) => println!(
+                    "committed {} changes · checkpoint {}",
+                    cp.effects.len(),
+                    cp.id
+                ),
+                Ok(None) => println!("nothing to commit"),
+                Err(Error::Held(ruling)) => {
+                    print_ruling(&ruling);
+                    if ruling.verdict == Verdict::Ask {
+                        eprintln!(
+                            "kule: not committed; rerun with --approve to approve the changes above"
+                        );
+                    } else {
+                        eprintln!("kule: not committed; the policy denies the changes above");
+                    }
+                    return Ok(ExitCode::from(3));
+                }
+                Err(e) => return Err(e.into()),
+            }
+        }
+        Cmd::Policy => print!("{DEFAULT_POLICY}"),
         Cmd::Rollback { task } => {
             let set = Task::open(&home, &task)?.rollback()?;
             println!("rolled back {} changes", set.effects.len());
@@ -163,6 +197,32 @@ fn run() -> Result<ExitCode> {
         }
     }
     Ok(ExitCode::SUCCESS)
+}
+
+/// The user's policy from `<home>/policy.cedar` (or the built-in one), plus
+/// the forbid rules of the task's real workspace.
+fn load_policy(home: &Path, task: &Task) -> Result<Policy> {
+    Ok(Policy::load(
+        Some(&home.join("policy.cedar")),
+        task.workspace(),
+    )?)
+}
+
+fn print_ruling(ruling: &Ruling) {
+    let word = |v: Verdict| match v {
+        Verdict::Allow => "passes on its own",
+        Verdict::Ask => "waits for approval",
+        Verdict::Deny => "denied",
+    };
+    println!("policy: {}", word(ruling.verdict));
+    for judgement in ruling.holding() {
+        println!(
+            "  {} · {} ({})",
+            judgement.subject,
+            word(judgement.verdict),
+            judgement.rules.join(", ")
+        );
+    }
 }
 
 /// Files one per line; `.git` as what it means, not as object file names.
