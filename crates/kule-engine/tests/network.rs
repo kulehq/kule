@@ -1,0 +1,196 @@
+//! M1, step 4: the network goes through the task's proxy, which asks the
+//! policy about every connection and logs it. Real sockets, a local upstream,
+//! no outside network.
+
+use std::fs;
+use std::io::Write;
+use std::net::TcpListener;
+use std::process::Output;
+
+use kule_engine::{DEFAULT_POLICY, Network, Policy, Proxy, Sandbox, Task, Verdict, connections};
+use tempfile::TempDir;
+
+/// The built-in policy, plus loopback for the tests' upstream.
+fn policy() -> Policy {
+    let local = r#"
+@id("test-upstream")
+permit (principal, action == Kule::Action::"auto", resource)
+when { resource.kind == "net.connect" && resource.host == "127.0.0.1" };
+@id("test-lan")
+permit (principal, action == Kule::Action::"auto", resource)
+when { resource.kind == "net.connect" && resource.host == "192.168.1.1" };
+"#;
+    Policy::from_texts(&format!("{DEFAULT_POLICY}\n{local}"), None).unwrap()
+}
+
+struct Setup {
+    _home: TempDir,
+    _ws: TempDir,
+    task: Task,
+    sandbox: Sandbox,
+}
+
+impl Setup {
+    fn new() -> Self {
+        let home = TempDir::new().unwrap();
+        let ws = TempDir::new().unwrap();
+        fs::write(ws.path().join("README.md"), "hello\n").unwrap();
+        let task = Task::create(home.path(), ws.path()).unwrap();
+        let proxy = Proxy::start(&task, policy()).unwrap();
+        let mut sandbox = Sandbox::new(&task).unwrap();
+        sandbox.set_network(Network::Proxy(proxy.port()));
+        Setup {
+            _home: home,
+            _ws: ws,
+            task,
+            sandbox,
+        }
+    }
+
+    fn python(&self, script: &str) -> Output {
+        self.sandbox
+            .command("python3", &["-c".to_owned(), script.to_owned()])
+            .unwrap()
+            .output()
+            .unwrap()
+    }
+
+    /// Asks the proxy named in HTTPS_PROXY for a tunnel to `target` and
+    /// prints whatever comes back.
+    fn connect_via_proxy(&self, target: &str) -> String {
+        let script = format!(
+            r#"
+import os, socket
+port = int(os.environ["HTTPS_PROXY"].rsplit(":", 1)[1])
+s = socket.create_connection(("127.0.0.1", port), timeout=5)
+s.sendall(b"CONNECT {target} HTTP/1.1\r\nHost: {target}\r\n\r\n")
+data = b""
+while True:
+    chunk = s.recv(4096)
+    if not chunk:
+        break
+    data += chunk
+print(data.decode())
+"#
+        );
+        let out = self.python(&script);
+        assert!(out.status.success(), "{out:?}");
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    }
+
+    /// The log entries for `host`, once the proxy has written them.
+    fn logged(&self, host: &str, n: usize) -> Vec<kule_engine::Connection> {
+        for _ in 0..300 {
+            let seen: Vec<_> = connections(&self.task)
+                .unwrap()
+                .into_iter()
+                .filter(|c| c.host == host)
+                .collect();
+            if seen.len() >= n {
+                return seen;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        panic!("{host} not logged: {:?}", connections(&self.task).unwrap());
+    }
+}
+
+fn upstream() -> u16 {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let _ = stream.unwrap().write_all(b"hello from upstream\n");
+        }
+    });
+    port
+}
+
+#[test]
+fn an_allowed_host_is_reached_through_the_proxy_and_logged() {
+    let s = Setup::new();
+    let up = upstream();
+    let reply = s.connect_via_proxy(&format!("127.0.0.1:{up}"));
+    assert!(reply.contains("200 Connection established"), "{reply}");
+    assert!(reply.contains("hello from upstream"), "{reply}");
+
+    let log = s.logged("127.0.0.1", 1);
+    assert_eq!(log[0].port, up);
+    assert_eq!(log[0].verdict, Verdict::Allow);
+    assert_eq!(log[0].rules, ["test-upstream"]);
+    assert_eq!(log[0].outcome, "tunneled");
+}
+
+#[test]
+fn a_host_the_policy_does_not_let_through_is_refused_and_logged() {
+    let s = Setup::new();
+    let reply = s.connect_via_proxy("exfiltrate.example:443");
+    assert!(reply.contains("403"), "{reply}");
+    assert!(reply.contains("waits for approval"), "{reply}");
+
+    let log = s.logged("exfiltrate.example", 1);
+    assert_eq!(log[0].verdict, Verdict::Ask);
+    assert_eq!(log[0].outcome, "refused");
+}
+
+#[test]
+fn the_lan_stays_out_of_reach_even_when_the_policy_allows_it() {
+    let s = Setup::new();
+    let reply = s.connect_via_proxy("192.168.1.1:443");
+    assert!(reply.contains("403"), "{reply}");
+    let log = s.logged("192.168.1.1", 1);
+    assert_eq!(log[0].verdict, Verdict::Allow);
+    assert_eq!(log[0].outcome, "private");
+}
+
+#[test]
+fn connections_around_the_proxy_are_blocked() {
+    let s = Setup::new();
+    let up = upstream();
+    let out = s.python(&format!(
+        "import socket; socket.create_connection((\"127.0.0.1\", {up}), timeout=5)"
+    ));
+    assert!(!out.status.success(), "a direct connection went through");
+    assert!(connections(&s.task).unwrap().is_empty());
+}
+
+#[test]
+fn commands_find_the_proxy_in_the_usual_variables() {
+    let s = Setup::new();
+    let out = s.python(
+        "import os; print(os.environ['HTTPS_PROXY'], os.environ['http_proxy'], os.environ.get('NO_PROXY'))",
+    );
+    let text = String::from_utf8_lossy(&out.stdout);
+    let parts: Vec<&str> = text.split_whitespace().collect();
+    assert!(parts[0].starts_with("http://127.0.0.1:"), "{text}");
+    assert_eq!(parts[0], parts[1]);
+    assert_eq!(parts[2], "None");
+}
+
+#[test]
+fn the_default_policy_lets_registries_and_model_apis_through_only() {
+    let policy = Policy::builtin();
+    for host in [
+        "registry.npmjs.org",
+        "index.crates.io",
+        "api.nuget.org",
+        "api.anthropic.com",
+    ] {
+        assert_eq!(
+            policy.judge_connection(host, 443).verdict,
+            Verdict::Allow,
+            "{host}"
+        );
+    }
+    assert_eq!(
+        policy.judge_connection("registry.npmjs.org", 80).verdict,
+        Verdict::Ask
+    );
+    for host in ["github.com", "pastebin.com", "127.0.0.1"] {
+        assert_eq!(
+            policy.judge_connection(host, 443).verdict,
+            Verdict::Ask,
+            "{host}"
+        );
+    }
+}

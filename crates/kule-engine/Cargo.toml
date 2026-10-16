@@ -12,6 +12,7 @@ blake3.workspace = true
 cedar-policy.workspace = true
 filetime.workspace = true
 gix.workspace = true
+lonca-net = { path = "../lonca-net" }
 reflink-copy.workspace = true
 serde.workspace = true
 serde_json.workspace = true

@@ -131,6 +131,14 @@ impl Policy {
         }
     }
 
+    /// Judges a network connection a command asks the proxy for. It happens
+    /// now, so nobody can be asked yet: the caller lets through only
+    /// [`Verdict::Allow`].
+    pub fn judge_connection(&self, host: &str, port: u16) -> Judgement {
+        let subject = Subject::connection(host, port);
+        self.judge_one(format!("{host}:{port}"), &subject, 0, 0)
+    }
+
     /// Judges everything the effect set does.
     pub fn judge(&self, set: &EffectSet) -> Ruling {
         let deletes = set.files().filter(|e| e.change == Change::Deleted).count();
@@ -285,6 +293,7 @@ struct Answer {
 
 /// What a policy sees of one effect, as attributes of `Kule::Effect`. Every
 /// attribute is always present, so rules can test any of them.
+#[derive(Default)]
 struct Subject {
     kind: &'static str,
     path: String,
@@ -292,6 +301,8 @@ struct Subject {
     ref_name: String,
     fast_forward: bool,
     commits: i64,
+    host: String,
+    port: i64,
 }
 
 impl Subject {
@@ -300,9 +311,7 @@ impl Subject {
             kind,
             path: path.to_owned(),
             change: change_name(change),
-            ref_name: String::new(),
-            fast_forward: false,
-            commits: 0,
+            ..Subject::default()
         }
     }
 
@@ -311,16 +320,13 @@ impl Subject {
             kind,
             path: path.to_owned(),
             change: "modified",
-            ref_name: String::new(),
-            fast_forward: false,
-            commits: 0,
+            ..Subject::default()
         }
     }
 
     fn git_ref(change: &RefChange) -> Subject {
         Subject {
             kind: "git.ref",
-            path: String::new(),
             change: match (&change.old, &change.new) {
                 (None, _) => "created",
                 (_, None) => "deleted",
@@ -329,6 +335,17 @@ impl Subject {
             ref_name: change.name.clone(),
             fast_forward: change.fast_forward == Some(true),
             commits: change.commits.map_or(0, |n| n as i64),
+            ..Subject::default()
+        }
+    }
+
+    fn connection(host: &str, port: u16) -> Subject {
+        Subject {
+            kind: "net.connect",
+            change: "created",
+            host: host.to_owned(),
+            port: i64::from(port),
+            ..Subject::default()
         }
     }
 
@@ -360,6 +377,11 @@ impl Subject {
                 "commits".into(),
                 RestrictedExpression::new_long(self.commits),
             ),
+            (
+                "host".into(),
+                RestrictedExpression::new_string(self.host.clone()),
+            ),
+            ("port".into(), RestrictedExpression::new_long(self.port)),
         ])
     }
 }

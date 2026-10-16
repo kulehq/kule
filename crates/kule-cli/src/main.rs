@@ -4,8 +4,8 @@ use std::process::{Command, ExitCode};
 use anyhow::{Context, Result, anyhow};
 use clap::{Parser, Subcommand};
 use kule_engine::{
-    Change, DEFAULT_POLICY, Effect, EffectSet, Error, GitSummary, Kind, Network, Policy, RefChange,
-    Ruling, Sandbox, Task, Verdict,
+    Change, Connection, DEFAULT_POLICY, Effect, EffectSet, Error, GitSummary, Kind, Network,
+    Policy, Proxy, RefChange, Ruling, Sandbox, Task, Verdict, connections,
 };
 
 /// Kule engine: run commands in a sandbox on a copy-on-write copy of a
@@ -31,6 +31,8 @@ enum Cmd {
     /// Run a command inside the task's copy, in the sandbox, then show what
     /// it changed. The sandbox lets it write only to the copy, the task's
     /// TMPDIR and package caches, and hides credentials (~/.ssh, ~/.aws, …).
+    /// Its network goes through the task's proxy, which lets through what
+    /// the policy allows and logs every connection.
     Exec {
         task: String,
         /// Also let the command write under PATH (repeatable).
@@ -40,8 +42,11 @@ enum Cmd {
         #[arg(long, value_name = "PATH")]
         hide: Vec<PathBuf>,
         /// Shut TCP networking for the command, localhost included.
-        #[arg(long)]
+        #[arg(long, conflicts_with = "open_network")]
         no_network: bool,
+        /// Let the command connect anywhere, bypassing the proxy and policy.
+        #[arg(long)]
+        open_network: bool,
         /// Run without the sandbox: the command can write anywhere you can.
         #[arg(long)]
         no_sandbox: bool,
@@ -111,10 +116,12 @@ fn run() -> Result<ExitCode> {
             allow_write,
             hide,
             no_network,
+            open_network,
             no_sandbox,
             command,
         } => {
             let task = Task::open(&home, &task)?;
+            let logged_before = connections(&task)?.len();
             let mut child = if no_sandbox {
                 eprintln!("kule: running without the sandbox");
                 let mut child = Command::new(&command[0]);
@@ -128,9 +135,15 @@ fn run() -> Result<ExitCode> {
                 for path in &hide {
                     sandbox.hide(path)?;
                 }
-                if no_network {
-                    sandbox.set_network(Network::Deny);
-                }
+                let network = if no_network {
+                    Network::Deny
+                } else if open_network {
+                    eprintln!("kule: network open, bypassing the proxy and the policy");
+                    Network::Allow
+                } else {
+                    Network::Proxy(Proxy::start(&task, load_policy(&home, &task)?)?.port())
+                };
+                sandbox.set_network(network);
                 sandbox.command(&command[0], &command[1..])?
             };
             let status = child
@@ -138,6 +151,7 @@ fn run() -> Result<ExitCode> {
                 .status()
                 .with_context(|| format!("could not run {}", command[0]))?;
             print_set(&task.effects()?);
+            print_connections(&connections(&task)?[logged_before..]);
             return Ok(match status.code() {
                 Some(0) => ExitCode::SUCCESS,
                 Some(code) => ExitCode::from(code.clamp(1, 255) as u8),
@@ -206,6 +220,37 @@ fn load_policy(home: &Path, task: &Task) -> Result<Policy> {
         Some(&home.join("policy.cedar")),
         task.workspace(),
     )?)
+}
+
+/// The connections a command made, grouped by host, port and outcome.
+fn print_connections(log: &[Connection]) {
+    let mut seen: Vec<(&Connection, usize)> = Vec::new();
+    for c in log {
+        match seen.iter_mut().find(|(s, _)| {
+            (&s.host, s.port, s.verdict, &s.outcome) == (&c.host, c.port, c.verdict, &c.outcome)
+        }) {
+            Some((_, n)) => *n += 1,
+            None => seen.push((c, 1)),
+        }
+    }
+    for (c, n) in seen {
+        let times = if n > 1 {
+            format!(" ×{n}")
+        } else {
+            String::new()
+        };
+        let what = match c.verdict {
+            Verdict::Allow => c.outcome.clone(),
+            Verdict::Ask => "refused, waits for approval".to_owned(),
+            Verdict::Deny => "refused, denied".to_owned(),
+        };
+        println!(
+            "net: {}:{}{times} · {what} ({})",
+            c.host,
+            c.port,
+            c.rules.join(", ")
+        );
+    }
 }
 
 fn print_ruling(ruling: &Ruling) {

@@ -115,6 +115,11 @@ impl Task {
         Ok(infos)
     }
 
+    /// The task's own directory: state, checkpoints, logs and the copy.
+    pub(crate) fn dir(&self) -> &Path {
+        &self.dir
+    }
+
     pub fn info(&self) -> &TaskInfo {
         &self.info
     }

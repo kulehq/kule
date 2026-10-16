@@ -10,7 +10,12 @@
 //   ref           reference name for git.ref, e.g. "refs/heads/main"
 //   fast_forward  for git.ref: the new value keeps the old one in its history
 //   commits       for git.ref: commits added
+//   host, port    for net.connect: where a command wants to connect
 // Context: deletes (files deleted in the transaction), files (files changed).
+//
+// Network connections (kind "net.connect") are judged while the command
+// waits, so for now only "auto" lets one through; one that would wait for a
+// person is refused.
 
 // Anything may be put to a person unless a forbid says otherwise.
 @id("ask-by-default")
@@ -65,6 +70,30 @@ when { resource.kind == "git.ref" && resource.change == "modified" && resource.f
 @id("branch-created")
 permit (principal, action == Kule::Action::"auto", resource)
 when { resource.kind == "git.ref" && resource.change == "created" };
+
+// Network: package registries and model APIs over HTTPS. Anything else, git
+// hosts included (a push cannot be told apart from a fetch inside TLS),
+// waits for a person.
+@id("package-registries")
+permit (principal, action == Kule::Action::"auto", resource)
+when {
+  resource.kind == "net.connect" && resource.port == 443 &&
+  [
+    "registry.npmjs.org", "registry.yarnpkg.com",
+    "crates.io", "index.crates.io", "static.crates.io", "static.rust-lang.org",
+    "api.nuget.org", "globalcdn.nuget.org",
+    "pypi.org", "files.pythonhosted.org",
+    "proxy.golang.org", "sum.golang.org",
+    "rubygems.org", "repo.maven.apache.org", "repo1.maven.org"
+  ].contains(resource.host)
+};
+
+@id("model-apis")
+permit (principal, action == Kule::Action::"auto", resource)
+when {
+  resource.kind == "net.connect" && resource.port == 443 &&
+  ["api.anthropic.com", "api.openai.com", "generativelanguage.googleapis.com"].contains(resource.host)
+};
 
 // Hooks run on the next git command, as the person who runs it.
 @id("git-hooks")

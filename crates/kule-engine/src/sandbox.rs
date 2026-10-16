@@ -50,6 +50,10 @@ pub enum Network {
     Allow,
     /// No TCP connections or listeners, localhost included.
     Deny,
+    /// TCP connections only to the task's proxy on this loopback port; the
+    /// proxy variables point there. Local listeners stay allowed. Landlock
+    /// matches the port only, not the address.
+    Proxy(u16),
 }
 
 #[derive(Debug, Clone)]
@@ -127,6 +131,20 @@ impl Sandbox {
     pub fn command(&self, program: &str, args: &[String]) -> Result<Command> {
         let mut command = self.platform_command(program, args)?;
         command.current_dir(&self.copy).env("TMPDIR", &self.tmp);
+        if let Network::Proxy(port) = self.network {
+            let url = format!("http://127.0.0.1:{port}");
+            for var in [
+                "HTTP_PROXY",
+                "HTTPS_PROXY",
+                "ALL_PROXY",
+                "http_proxy",
+                "https_proxy",
+                "all_proxy",
+            ] {
+                command.env(var, &url);
+            }
+            command.env_remove("NO_PROXY").env_remove("no_proxy");
+        }
         Ok(command)
     }
 }
@@ -190,8 +208,18 @@ impl Sandbox {
             params.push((format!("W{i}"), path));
         }
         text.push_str(")\n");
-        if self.network == Network::Deny {
-            text.push_str("(deny network-outbound (remote ip))\n(deny network-bind (local ip))\n");
+        match self.network {
+            Network::Allow => {}
+            Network::Deny => {
+                text.push_str(
+                    "(deny network-outbound (remote ip))\n(deny network-bind (local ip))\n",
+                );
+            }
+            Network::Proxy(port) => {
+                text.push_str(&format!(
+                    "(deny network-outbound (remote ip))\n(allow network-outbound (remote ip \"localhost:{port}\"))\n"
+                ));
+            }
         }
         for (i, path) in self.hidden.iter().enumerate() {
             text.push_str(&format!(
@@ -248,10 +276,15 @@ impl Sandbox {
             .set_compatibility(CompatLevel::HardRequirement)
             .handle_access(AccessFs::from_all(abi))
             .map_err(|e| fail(&e))?;
-        if self.network == Network::Deny {
-            ruleset = ruleset
-                .handle_access(AccessNet::BindTcp | AccessNet::ConnectTcp)
-                .map_err(|e| fail(&e))?;
+        // TCP rules need ABI 4 (Linux 6.7); HardRequirement makes an older
+        // kernel refuse instead of leaving the network open.
+        let net = match self.network {
+            Network::Allow => None,
+            Network::Deny => Some(AccessNet::BindTcp | AccessNet::ConnectTcp),
+            Network::Proxy(_) => Some(AccessNet::ConnectTcp.into()),
+        };
+        if let Some(net) = net {
+            ruleset = ruleset.handle_access(net).map_err(|e| fail(&e))?;
         }
         let carve_all = |roots: Vec<PathBuf>| {
             self.hidden
@@ -272,7 +305,7 @@ impl Sandbox {
             "/dev/ptmx",
             "/dev/pts",
         ];
-        ruleset
+        let mut created = ruleset
             .create()
             .map_err(|e| fail(&e))?
             .set_compatibility(CompatLevel::BestEffort)
@@ -281,7 +314,13 @@ impl Sandbox {
             .add_rules(path_beneath_rules(devices, AccessFs::from_all(abi)))
             .map_err(|e| fail(&e))?
             .add_rules(path_beneath_rules(&writable, AccessFs::from_all(abi)))
-            .map_err(|e| fail(&e))
+            .map_err(|e| fail(&e))?;
+        if let Network::Proxy(port) = self.network {
+            created = created
+                .add_rule(landlock::NetPort::new(port, AccessNet::ConnectTcp))
+                .map_err(|e| fail(&e))?;
+        }
+        Ok(created)
     }
 }
 
