@@ -1,33 +1,70 @@
-//! Kule's desktop app: the window around [`app::App`].
+//! Kule's desktop app: a window onto the Kule daemon. The daemon owns the
+//! tasks and the agents' runs, so closing the window stops nothing; the app
+//! starts the daemon when none is running.
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-mod app;
 mod terminal;
 
-use std::path::PathBuf;
-use std::sync::Arc;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
 
+use kule_daemon::{
+    Call, Client, Commit, Notice, Question, Result, Review, RunEvent, TaskView, Timeline,
+    default_home, spawn_daemon,
+};
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 use tauri::{AppHandle, Emitter, State};
 use tauri_plugin_dialog::DialogExt;
 
-use app::{App, Commit, Result, Review, RunEvent, TaskView, Timeline};
-use kule_engine::Question;
+/// How the window reaches the daemon.
+struct Kule {
+    home: PathBuf,
+    client: Client,
+}
 
-type Kule<'a> = State<'a, Arc<App>>;
+impl Kule {
+    /// Makes a call, starting the daemon first if it went away.
+    fn call<T: DeserializeOwned>(&self, call: Call) -> Result<T> {
+        if !self.client.is_running() {
+            self.start()?;
+        }
+        self.client.call(call)
+    }
 
-// Commands run off the main thread (`async`): scanning a large copy takes a
-// while, and the window must not freeze meanwhile.
+    fn start(&self) -> Result<()> {
+        self.client
+            .ensure_running(|| spawn_daemon(&kule_program(), &self.home))
+    }
+}
+
+/// The `kule` program that runs the daemon: `KULE_BIN`, else the one next
+/// to this app, else `kule` on the path.
+fn kule_program() -> PathBuf {
+    if let Some(bin) = std::env::var_os("KULE_BIN") {
+        return PathBuf::from(bin);
+    }
+    std::env::current_exe()
+        .ok()
+        .and_then(|exe| Some(exe.parent()?.join("kule")))
+        .filter(|beside| beside.is_file())
+        .unwrap_or_else(|| PathBuf::from("kule"))
+}
+
+type K<'a> = State<'a, Kule>;
+
+// Commands run off the main thread (`async`): a call can wait on a scan of
+// a large copy, and the window must not freeze meanwhile.
 
 #[tauri::command(async)]
-fn agents(kule: Kule<'_>) -> Vec<&'static str> {
-    kule.agents()
+fn agents(kule: K<'_>) -> Result<Vec<String>> {
+    kule.call(Call::Agents)
 }
 
 #[tauri::command(async)]
-fn tasks(kule: Kule<'_>) -> Result<Vec<TaskView>> {
-    kule.tasks()
+fn tasks(kule: K<'_>) -> Result<Vec<TaskView>> {
+    kule.call(Call::Tasks)
 }
 
 #[tauri::command(async)]
@@ -40,58 +77,81 @@ fn pick_workspace(app: AppHandle) -> Option<PathBuf> {
 }
 
 #[tauri::command(async)]
-fn create_task(kule: Kule<'_>, workspace: PathBuf) -> Result<TaskView> {
-    kule.create(&workspace)
+fn create_task(kule: K<'_>, workspace: PathBuf) -> Result<TaskView> {
+    kule.call(Call::CreateTask { workspace })
 }
 
 #[tauri::command(async)]
-fn review(kule: Kule<'_>, task: String, include_ignored: bool) -> Result<Review> {
-    kule.review(&task, include_ignored)
+fn review(kule: K<'_>, task: String, include_ignored: bool) -> Result<Review> {
+    kule.call(Call::Review {
+        task,
+        include_ignored,
+    })
 }
 
 #[tauri::command(async)]
-fn commit(kule: Kule<'_>, task: String, approve: bool, include_ignored: bool) -> Result<Commit> {
-    kule.commit(&task, approve, include_ignored)
+fn commit(kule: K<'_>, task: String, approve: bool, include_ignored: bool) -> Result<Commit> {
+    kule.call(Call::Commit {
+        task,
+        approve,
+        include_ignored,
+    })
 }
 
 #[tauri::command(async)]
-fn rollback(kule: Kule<'_>, task: String) -> Result<usize> {
-    kule.rollback(&task)
+fn rollback(kule: K<'_>, task: String) -> Result<usize> {
+    kule.call(Call::Rollback { task })
 }
 
 #[tauri::command(async)]
-fn undo(kule: Kule<'_>, task: String) -> Result<Option<u32>> {
-    kule.undo(&task)
+fn undo(kule: K<'_>, task: String) -> Result<Option<u32>> {
+    kule.call(Call::Undo { task })
 }
 
 #[tauri::command(async)]
-fn timeline(kule: Kule<'_>, task: String) -> Result<Timeline> {
-    kule.timeline(&task)
+fn timeline(kule: K<'_>, task: String) -> Result<Timeline> {
+    kule.call(Call::Timeline { task })
 }
 
 #[tauri::command(async)]
-fn remove_task(kule: Kule<'_>, task: String) -> Result<()> {
-    kule.remove(&task)
+fn remove_task(kule: K<'_>, task: String) -> Result<()> {
+    kule.call(Call::RemoveTask { task })
 }
 
 #[tauri::command(async)]
-fn open_terminal(kule: Kule<'_>, task: String) -> Result<()> {
-    terminal::open(&kule.copy_of(&task)?)
+fn open_terminal(kule: K<'_>, task: String) -> Result<()> {
+    let copy: PathBuf = kule.call(Call::CopyOf { task })?;
+    terminal::open(&copy)
 }
 
 #[tauri::command(async)]
-fn questions(kule: Kule<'_>) -> Vec<Question> {
-    kule.questions()
+fn questions(kule: K<'_>) -> Result<Vec<Question>> {
+    kule.call(Call::Questions)
 }
 
 #[tauri::command(async)]
-fn answer(kule: Kule<'_>, id: u64, approve: bool) -> Result<()> {
-    kule.answer(id, approve)
+fn answer(kule: K<'_>, id: u64, approve: bool) -> Result<()> {
+    kule.call(Call::Answer { id, approve })
 }
 
 #[tauri::command(async)]
-fn set_approval_timeout(kule: Kule<'_>, task: String, minutes: u64) -> Result<TaskView> {
-    kule.set_approval_timeout(&task, minutes)
+fn set_approval_timeout(kule: K<'_>, task: String, minutes: u64) -> Result<TaskView> {
+    kule.call(Call::SetApprovalTimeout { task, minutes })
+}
+
+#[tauri::command(async)]
+fn start_run(kule: K<'_>, task: String, agent: String, prompt: String) -> Result<()> {
+    kule.call(Call::StartRun {
+        task,
+        agent,
+        prompt,
+    })
+}
+
+/// The task's latest run events, for a window that opened after they came.
+#[tauri::command(async)]
+fn stream(kule: K<'_>, task: String) -> Result<Vec<RunEvent>> {
+    kule.call(Call::Stream { task })
 }
 
 /// One event of a run, for the window's `run` listener.
@@ -101,44 +161,48 @@ struct RunMessage {
     event: RunEvent,
 }
 
-#[tauri::command(async)]
-fn start_run(
-    app: AppHandle,
-    kule: Kule<'_>,
-    task: String,
-    agent: String,
-    prompt: String,
-) -> Result<()> {
-    let id = task.clone();
-    kule.start_run(&task, &agent, &prompt, move |event| {
-        let _ = app.emit(
-            "run",
-            RunMessage {
-                task: id.clone(),
-                event,
-            },
-        );
-    })
+/// Passes the daemon's notices on to the window for as long as the app
+/// runs, starting the daemon again if it goes away.
+fn relay(app: AppHandle, home: &Path) {
+    let kule = Kule {
+        home: home.to_owned(),
+        client: Client::new(home),
+    };
+    loop {
+        if kule.start().is_ok() {
+            let _ = kule.client.subscribe(|notice| match notice {
+                Notice::Run { task, event } => {
+                    let _ = app.emit("run", RunMessage { task, event });
+                }
+                Notice::Questions { waiting } => {
+                    let _ = app.emit("questions", waiting);
+                }
+            });
+        }
+        std::thread::sleep(Duration::from_secs(1));
+    }
 }
 
 fn main() {
-    let home = match App::default_home() {
+    let home = match default_home() {
         Ok(home) => home,
         Err(e) => {
             eprintln!("kule-desktop: {e}");
             std::process::exit(2);
         }
     };
-    let kule = Arc::new(App::new(home));
-    let asked = Arc::clone(&kule);
+    let kule = Kule {
+        home: home.clone(),
+        client: Client::new(&home),
+    };
+    if let Err(e) = kule.start() {
+        eprintln!("kule-desktop: {e}");
+    }
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .setup(move |app| {
-            // Questions arrive from proxy threads; the window hears each change.
             let handle = app.handle().clone();
-            asked.on_questions(move |waiting| {
-                let _ = handle.emit("questions", waiting);
-            });
+            std::thread::spawn(move || relay(handle, &home));
             Ok(())
         })
         .manage(kule)
@@ -158,6 +222,7 @@ fn main() {
             answer,
             set_approval_timeout,
             start_run,
+            stream,
         ])
         .run(tauri::generate_context!())
         .expect("the window could not start");

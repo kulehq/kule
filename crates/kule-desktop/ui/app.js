@@ -87,6 +87,9 @@ const state = {
   includeIgnored: new Set(),
   /** Questions agents are waiting on, from every task. */
   questions: [],
+  /** Tasks whose stream came from the daemon, and those on their way. */
+  loaded: new Set(),
+  loading: new Set(),
 };
 
 const currentTask = () => state.tasks.find((t) => t.id === state.current);
@@ -178,6 +181,7 @@ function renderTask() {
   renderComposer(task);
   renderQuestions();
   renderStream(task.id);
+  loadStream(task.id);
   if (state.tab === "review") loadReview(task.id);
   if (state.tab === "timeline") loadTimeline(task.id);
 }
@@ -351,8 +355,11 @@ function absorb(id, event) {
   }
 }
 
-async function onRun({ task, event }) {
-  if (event.type === "agent") {
+/** Folds one run event into the task's stream. */
+function fold(task, event) {
+  if (event.type === "prompt") {
+    streamOf(task).push({ kind: "prompt", text: event.text });
+  } else if (event.type === "agent") {
     absorb(task, event.event);
   } else if (event.type === "finished") {
     const refused = event.denials.length ? ` · the sandbox refused ${plural(event.denials.length, "operation")}` : "";
@@ -361,9 +368,34 @@ async function onRun({ task, event }) {
       error: Boolean(event.error),
       text: event.error ? `The run failed: ${event.error}` : `Done. Review the changes before they reach the workspace${refused}.`,
     });
-    await refresh();
   }
+}
+
+async function onRun({ task, event }) {
+  // A stream not loaded yet comes whole from the daemon when it is opened.
+  if (state.loaded.has(task)) fold(task, event);
+  if (event.type === "prompt" || event.type === "finished") await refresh();
   if (task === state.current) renderStream(task);
+}
+
+/**
+ * Loads a task's stream from the daemon, which keeps it while the window
+ * is closed, so reopening the app shows what the agent did meanwhile.
+ */
+async function loadStream(id) {
+  if (state.loaded.has(id) || state.loading.has(id)) return;
+  state.loading.add(id);
+  try {
+    const events = await call("stream", { task: id });
+    state.streams.set(id, []);
+    for (const event of events) fold(id, event);
+    state.loaded.add(id);
+  } catch (err) {
+    fail(err);
+  } finally {
+    state.loading.delete(id);
+  }
+  if (id === state.current) renderStream(id);
 }
 
 async function submitPrompt(e) {
@@ -373,7 +405,6 @@ async function submitPrompt(e) {
   if (!task || !prompt) return;
   try {
     await call("start_run", { task: task.id, agent: $("agent").value, prompt });
-    streamOf(task.id).push({ kind: "prompt", text: prompt });
     $("prompt").value = "";
     await refresh();
   } catch (err) {
@@ -752,6 +783,7 @@ async function removeTask() {
   try {
     await call("remove_task", { task: task.id });
     state.streams.delete(task.id);
+    state.loaded.delete(task.id);
     state.current = null;
     toast(`Deleted task ${task.id}; the workspace was not touched`);
   } catch (err) {

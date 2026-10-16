@@ -135,6 +135,13 @@ own state and login; every tool call becomes a step (`kule steps $TASK`).
 cargo run -p kule-desktop   # Linux needs libwebkit2gtk-4.1-dev
 ```
 
+The app is a window onto the Kule daemon (`kule daemon`), which it starts
+when none is running. The daemon owns the tasks, the agents' runs and the
+questions they wait on, so closing the window stops nothing, and reopening
+it shows what happened meanwhile. It listens on `<home>/kuled.sock`, which
+only its owner can open (checked by peer credentials too), runs once per
+home, and exits after ten idle minutes.
+
 Paths the workspace's `.gitignore` excludes (build output, caches, `.env`)
 stay in the copy: a commit leaves them behind unless asked
 (`kule commit --include-ignored`, or *Also commit these* in the app). The

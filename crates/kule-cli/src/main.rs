@@ -102,6 +102,14 @@ enum Cmd {
     Undo { task: String },
     /// Delete a task and its copy. The workspace is not touched.
     Rm { task: String },
+    /// Run the Kule daemon in the foreground: it owns agent runs and the
+    /// questions they wait on, for the app. The app starts it when needed.
+    Daemon {
+        /// Exit after this many seconds with no client, no agent at work
+        /// and no question waiting.
+        #[arg(long, default_value_t = 600)]
+        idle_secs: u64,
+    },
 }
 
 fn main() -> ExitCode {
@@ -337,6 +345,11 @@ fn run() -> Result<ExitCode> {
             Some(cp) => println!("undid checkpoint {} ({} changes)", cp.id, cp.effects.len()),
             None => println!("nothing to undo"),
         },
+        Cmd::Daemon { idle_secs } => {
+            eprintln!("kule: daemon for {}", home.display());
+            kule_daemon::run(&home, std::time::Duration::from_secs(idle_secs))
+                .with_context(|| format!("daemon for {}", home.display()))?;
+        }
         Cmd::Rm { task } => {
             Task::open(&home, &task)?.remove()?;
             println!("removed task {task}");

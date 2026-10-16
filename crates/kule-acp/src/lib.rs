@@ -25,12 +25,12 @@ use agent_client_protocol::schema::v1::{
 use agent_client_protocol::{Agent, ByteStreams, ConnectionTo};
 use futures::channel::mpsc::UnboundedSender;
 use kule_engine::{Step, Task};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 pub use profile::{Launch, PROFILES, Profile, profile};
 
 /// Something the agent did, as the person watching sees it.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Event {
     /// A piece of the agent's answer.

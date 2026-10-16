@@ -3074,6 +3074,7 @@ dependencies = [
  "clap",
  "futures",
  "kule-acp",
+ "kule-daemon",
  "kule-engine",
  "serde_json",
  "tokio",
@@ -3094,19 +3095,29 @@ dependencies = [
 ]
 
 [[package]]
-name = "kule-desktop"
+name = "kule-daemon"
 version = "0.0.1"
 dependencies = [
  "futures",
  "kule-acp",
  "kule-engine",
+ "libc",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
+name = "kule-desktop"
+version = "0.0.1"
+dependencies = [
+ "kule-daemon",
  "serde",
  "serde_json",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
- "tempfile",
- "tokio",
 ]
 
 [[package]]

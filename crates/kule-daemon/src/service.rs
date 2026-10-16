@@ -1,10 +1,10 @@
-//! What the desktop app does, apart from its window. Tauri's commands are
-//! thin wrappers around [`App`], so its tests run on real tasks without one.
-//!
-//! The engine runs in this process for now; a daemon takes it over later.
+//! What the daemon does for its clients: tasks, reviews, commits, agent runs
+//! and the questions they wait on. The server only carries calls to it over
+//! the socket, so its tests run on real tasks without one.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
+use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -13,9 +13,9 @@ use kule_engine::{
     Approvals, Checkpoint, Connection, Denial, EffectSet, Error, Policy, Proxy, Question, Ruling,
     Step, Task, Verdict, connections, denials, record_denials,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
-/// Errors reach the window as text.
+/// Errors reach clients as text.
 pub type Result<T> = std::result::Result<T, String>;
 
 fn text(e: Error) -> String {
@@ -30,7 +30,7 @@ fn text(e: Error) -> String {
 }
 
 /// A task as the task list shows it.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskView {
     pub id: String,
     pub workspace: PathBuf,
@@ -51,13 +51,13 @@ pub struct TaskView {
 
 /// The task's uncommitted work, ignored paths marked, and what the policy
 /// says about the part a commit would take.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Review {
     pub effects: EffectSet,
     pub ruling: Ruling,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "outcome", rename_all = "snake_case")]
 pub enum Commit {
     Applied {
@@ -72,7 +72,7 @@ pub enum Commit {
 }
 
 /// What happened in the task, newest work last.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Timeline {
     /// The uncommitted work, one step per tool call.
     pub steps: Vec<Step>,
@@ -81,10 +81,15 @@ pub struct Timeline {
     pub denials: Vec<Denial>,
 }
 
-/// What a run reports to the window.
-#[derive(Debug, Clone, Serialize)]
+/// What a run reports.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum RunEvent {
+    /// What the person asked; the first event of a run.
+    Prompt {
+        text: String,
+        agent: String,
+    },
     Agent {
         event: kule_acp::Event,
     },
@@ -95,26 +100,94 @@ pub enum RunEvent {
     },
 }
 
-pub struct App {
+/// What subscribers hear as it happens.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum Notice {
+    Run {
+        task: String,
+        event: RunEvent,
+    },
+    /// Every question waiting now, after any change.
+    Questions {
+        waiting: Vec<Question>,
+    },
+}
+
+/// How many events of a task's runs are kept for a window that opens later.
+const KEPT_EVENTS: usize = 2000;
+
+type Subscribers = Arc<Mutex<Vec<Sender<Notice>>>>;
+
+pub struct Service {
     home: PathBuf,
     /// Tasks with an agent at work: one agent per task at a time.
     running: Mutex<HashSet<String>>,
     /// Questions agents are waiting on, from every task.
     approvals: Approvals,
+    subscribers: Subscribers,
+    /// The latest events of each task's runs, oldest first.
+    streams: Mutex<HashMap<String, VecDeque<RunEvent>>>,
 }
 
-impl App {
-    pub fn new(home: PathBuf) -> App {
-        App {
+impl Service {
+    pub fn new(home: PathBuf) -> Service {
+        let approvals = Approvals::new();
+        let subscribers = Subscribers::default();
+        let heard = Arc::clone(&subscribers);
+        approvals.on_change(move |waiting| notify(&heard, Notice::Questions { waiting }));
+        Service {
             home,
             running: Mutex::new(HashSet::new()),
-            approvals: Approvals::new(),
+            approvals,
+            subscribers,
+            streams: Mutex::new(HashMap::new()),
         }
     }
 
-    /// Calls `listener` with every waiting question whenever they change.
-    pub fn on_questions(&self, listener: impl Fn(Vec<Question>) + Send + Sync + 'static) {
-        self.approvals.on_change(listener);
+    /// Notices from now on, until the receiver is dropped.
+    pub fn subscribe(&self) -> Receiver<Notice> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.subscribers.lock().unwrap().push(tx);
+        rx
+    }
+
+    /// The task's latest run events, oldest first.
+    pub fn stream(&self, id: &str) -> Vec<RunEvent> {
+        self.streams
+            .lock()
+            .unwrap()
+            .get(id)
+            .map(|events| events.iter().cloned().collect())
+            .unwrap_or_default()
+    }
+
+    /// Whether anything is going on: an agent at work or a question waiting.
+    pub fn busy(&self) -> bool {
+        !self.running.lock().unwrap().is_empty() || !self.approvals.waiting().is_empty()
+    }
+
+    fn emit(&self, task: &str, event: RunEvent) {
+        {
+            let mut streams = self.streams.lock().unwrap();
+            let kept = streams.entry(task.to_owned()).or_default();
+            if kept.len() == KEPT_EVENTS {
+                kept.pop_front();
+            }
+            kept.push_back(event.clone());
+        }
+        notify(
+            &self.subscribers,
+            Notice::Run {
+                task: task.to_owned(),
+                event,
+            },
+        );
+    }
+
+    /// Where the service's proxies put their questions.
+    pub fn approvals(&self) -> &Approvals {
+        &self.approvals
     }
 
     pub fn questions(&self) -> Vec<Question> {
@@ -137,16 +210,6 @@ impl App {
         task.set_approval_timeout(Duration::from_secs(minutes.saturating_mul(60)))
             .map_err(text)?;
         self.view(id)
-    }
-
-    /// `KULE_HOME`, else `~/.kule`.
-    pub fn default_home() -> Result<PathBuf> {
-        if let Some(home) = std::env::var_os("KULE_HOME") {
-            return Ok(PathBuf::from(home));
-        }
-        std::env::var_os("HOME")
-            .map(|h| PathBuf::from(h).join(".kule"))
-            .ok_or_else(|| "HOME is not set; set KULE_HOME".to_owned())
     }
 
     pub fn agents(&self) -> Vec<&'static str> {
@@ -221,44 +284,45 @@ impl App {
 
     /// Deletes the task and its copy; the workspace is not touched.
     pub fn remove(&self, id: &str) -> Result<()> {
-        self.idle(id)?.remove().map_err(text)
+        self.idle(id)?.remove().map_err(text)?;
+        self.streams.lock().unwrap().remove(id);
+        Ok(())
     }
 
-    /// Gives `agent` the prompt in the background. `emit` gets the agent's
-    /// events as they come and [`RunEvent::Finished`] last, also when the
-    /// agent could not start.
-    pub fn start_run(
-        self: &Arc<Self>,
-        id: &str,
-        agent: &str,
-        prompt: &str,
-        emit: impl Fn(RunEvent) + Send + Sync + 'static,
-    ) -> Result<()> {
+    /// Gives `agent` the prompt in the background. Subscribers hear the
+    /// prompt, the agent's events as they come and [`RunEvent::Finished`]
+    /// last, also when the agent could not start.
+    pub fn start_run(self: &Arc<Self>, id: &str, agent: &str, prompt: &str) -> Result<()> {
         let profile = kule_acp::profile(agent).ok_or_else(|| format!("no agent {agent}"))?;
         let task = self.open(id)?;
         if !self.running.lock().unwrap().insert(id.to_owned()) {
             return Err(format!("an agent is already at work in task {id}"));
         }
-        let (app, prompt) = (Arc::clone(self), prompt.to_owned());
+        self.emit(
+            id,
+            RunEvent::Prompt {
+                text: prompt.to_owned(),
+                agent: agent.to_owned(),
+            },
+        );
+        let (service, prompt) = (Arc::clone(self), prompt.to_owned());
         std::thread::spawn(move || {
-            let emit = Arc::new(emit);
-            let (error, denials) = match app.run(&task, profile, &prompt, Arc::clone(&emit)) {
+            let (error, denials) = match service.run(&task, profile, &prompt) {
                 Ok(denials) => (None, denials),
                 Err(e) => (Some(e), Vec::new()),
             };
-            app.running.lock().unwrap().remove(task.id());
-            emit(RunEvent::Finished { error, denials });
+            service.running.lock().unwrap().remove(task.id());
+            service.emit(task.id(), RunEvent::Finished { error, denials });
         });
         Ok(())
     }
 
     /// One run, start to end; returns what the sandbox refused.
     fn run(
-        &self,
+        self: &Arc<Self>,
         task: &Task,
         profile: &'static kule_acp::Profile,
         prompt: &str,
-        emit: Arc<impl Fn(RunEvent) + Send + Sync + 'static>,
     ) -> Result<Vec<Denial>> {
         let started = Instant::now();
         // Serves this run only, with the policy as it is now; dropped when
@@ -269,9 +333,10 @@ impl App {
         let launch = profile.launch(task, &proxy).map_err(text)?;
         let (tx, mut rx) = futures::channel::mpsc::unbounded();
         let runtime = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
+        let (service, id) = (Arc::clone(self), task.id().to_owned());
         let forward = runtime.spawn(async move {
             while let Some(event) = rx.next().await {
-                emit(RunEvent::Agent { event });
+                service.emit(&id, RunEvent::Agent { event });
             }
         });
         let outcome = runtime.block_on(kule_acp::run(task, launch.command, prompt, tx));
@@ -335,6 +400,14 @@ impl App {
     }
 }
 
+/// Sends `notice` to every subscriber, forgetting the ones that left.
+fn notify(subscribers: &Subscribers, notice: Notice) {
+    subscribers
+        .lock()
+        .unwrap()
+        .retain(|tx| tx.send(notice.clone()).is_ok());
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -347,14 +420,14 @@ mod tests {
     struct Setup {
         _home: TempDir,
         ws: TempDir,
-        app: Arc<App>,
+        app: Arc<Service>,
     }
 
     impl Setup {
         fn new() -> Setup {
             let (home, ws) = (TempDir::new().unwrap(), TempDir::new().unwrap());
             fs::write(ws.path().join("a.txt"), "a\n").unwrap();
-            let app = Arc::new(App::new(home.path().to_owned()));
+            let app = Arc::new(Service::new(home.path().to_owned()));
             Setup {
                 _home: home,
                 ws,
@@ -492,7 +565,7 @@ mod tests {
             s.app.rollback(&id).map(|_| ()),
             s.app.undo(&id).map(|_| ()),
             s.app.remove(&id),
-            s.app.start_run(&id, "claude-code", "hi", |_| {}),
+            s.app.start_run(&id, "claude-code", "hi"),
         ] {
             assert!(refused.unwrap_err().contains("at work"));
         }
@@ -507,7 +580,7 @@ mod tests {
     fn an_unknown_agent_is_refused_before_anything_starts() {
         let s = Setup::new();
         let (id, _) = s.task();
-        let e = s.app.start_run(&id, "nobody", "hi", |_| {}).unwrap_err();
+        let e = s.app.start_run(&id, "nobody", "hi").unwrap_err();
         assert_eq!(e, "no agent nobody");
         assert!(!s.app.running.lock().unwrap().contains(&id));
     }
