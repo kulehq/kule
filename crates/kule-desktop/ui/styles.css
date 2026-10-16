@@ -5,7 +5,7 @@
   --border: #dde1e7;
   --text: #1b1f27;
   --muted: #5f6878;
-  --faint: #8a93a3;
+  --faint: #687080;
   --accent: #2563eb;
   --accent-text: #ffffff;
   --accent-soft: #e3ecfd;
@@ -29,7 +29,7 @@
     --border: #2a303b;
     --text: #e6e9ef;
     --muted: #9aa3b2;
-    --faint: #6b7483;
+    --faint: #8d96a5;
     --accent: #4f8cff;
     --accent-text: #0b1020;
     --accent-soft: #1b2a47;
@@ -432,6 +432,8 @@ select:focus-visible {
 .event {
   display: flex;
   max-width: 760px;
+  min-width: 0;
+  overflow-wrap: anywhere;
   align-items: baseline;
   gap: 8px;
   color: var(--muted);
@@ -609,6 +611,7 @@ select:focus-visible {
 }
 
 .holding li {
+  overflow-wrap: anywhere;
   font-size: 13px;
 }
 

@@ -11,8 +11,14 @@ const backend = window.__TAURI__
       invoke: (cmd, args) => window.__TAURI__.core.invoke(cmd, args),
       onRun: (handler) => window.__TAURI__.event.listen("run", (e) => handler(e.payload)),
       onQuestions: (handler) => window.__TAURI__.event.listen("questions", (e) => handler(e.payload)),
+      onDaemon: (handler) => window.__TAURI__.event.listen("daemon", () => handler()),
     }
   : window.kuleMock;
+
+if (!backend) {
+  document.body.textContent = "Kule's window runs inside the Kule app.";
+  throw new Error("no Kule backend");
+}
 
 const call = (cmd, args) => backend.invoke(cmd, args);
 
@@ -90,6 +96,10 @@ const state = {
   /** Tasks whose stream came from the daemon, and those on their way. */
   loaded: new Set(),
   loading: new Set(),
+  /** The last event folded into each loaded stream, by the daemon's order. */
+  lastSeq: new Map(),
+  /** Live events that came while their task's stream was loading. */
+  buffered: new Map(),
 };
 
 const currentTask = () => state.tasks.find((t) => t.id === state.current);
@@ -200,6 +210,10 @@ function renderComposer(task) {
 
 // --- Questions -------------------------------------------------------------
 
+function clock(unix) {
+  return new Date(unix * 1000).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+}
+
 function left(deadline) {
   const secs = Math.max(0, deadline - Math.floor(Date.now() / 1000));
   const m = Math.floor(secs / 60);
@@ -214,7 +228,7 @@ function renderQuestions() {
     ? questionsOf(task.id).map((q) =>
         h(
           "div",
-          { class: "question", role: "alert" },
+          { class: "question" },
           h(
             "div",
             { class: "question-text" },
@@ -222,16 +236,24 @@ function renderQuestions() {
             h(
               "p",
               { class: "muted" },
-              `No rule lets it pass on its own (${q.rules.join(", ")}). Unanswered, it is refused in `,
-              h("span", { class: "countdown", "data-deadline": q.deadline_unix }, left(q.deadline_unix)),
-              " and the agent goes on without it."
+              `No rule lets it pass on its own (${q.rules.join(", ")}). Unanswered, it is refused at ${clock(q.deadline_unix)} (in `,
+              h("span", { class: "countdown", "aria-hidden": "true", "data-deadline": q.deadline_unix }, left(q.deadline_unix)),
+              ") and the agent goes on without it."
             )
           ),
           h(
             "div",
             { class: "question-actions" },
-            h("button", { class: "button ask", type: "button", onclick: () => answer(q.id, true) }, "Approve"),
-            h("button", { class: "button ghost danger", type: "button", onclick: () => answer(q.id, false) }, "Deny")
+            h(
+              "button",
+              { class: "button ask", type: "button", "aria-label": `Approve ${q.host}:${q.port}`, onclick: (e) => inFlight(e.currentTarget, () => answer(q.id, true)) },
+              "Approve"
+            ),
+            h(
+              "button",
+              { class: "button ghost danger", type: "button", "aria-label": `Deny ${q.host}:${q.port}`, onclick: (e) => inFlight(e.currentTarget, () => answer(q.id, false)) },
+              "Deny"
+            )
           )
         )
       )
@@ -371,9 +393,18 @@ function fold(task, event) {
   }
 }
 
-async function onRun({ task, event }) {
-  // A stream not loaded yet comes whole from the daemon when it is opened.
-  if (state.loaded.has(task)) fold(task, event);
+async function onRun({ task, seq, event }) {
+  if (state.loaded.has(task)) {
+    // Already in the loaded stream: the daemon sent it before the load.
+    if (seq > (state.lastSeq.get(task) || 0)) {
+      fold(task, event);
+      state.lastSeq.set(task, seq);
+    }
+  } else if (state.loading.has(task)) {
+    // Held until the load returns, then folded if it was not in it.
+    if (!state.buffered.has(task)) state.buffered.set(task, []);
+    state.buffered.get(task).push({ seq, event });
+  }
   if (event.type === "prompt" || event.type === "finished") await refresh();
   if (task === state.current) renderStream(task);
 }
@@ -388,14 +419,38 @@ async function loadStream(id) {
   try {
     const events = await call("stream", { task: id });
     state.streams.set(id, []);
-    for (const event of events) fold(id, event);
+    let last = 0;
+    for (const { seq, event } of events) {
+      fold(id, event);
+      last = Math.max(last, seq);
+    }
+    for (const { seq, event } of state.buffered.get(id) || []) {
+      if (seq > last) {
+        fold(id, event);
+        last = seq;
+      }
+    }
+    state.lastSeq.set(id, last);
     state.loaded.add(id);
   } catch (err) {
     fail(err);
   } finally {
     state.loading.delete(id);
+    state.buffered.delete(id);
   }
   if (id === state.current) renderStream(id);
+}
+
+/** The daemon came (back): what the window holds may be stale. */
+async function onDaemon() {
+  state.loaded.clear();
+  state.lastSeq.clear();
+  try {
+    state.questions = await call("questions");
+  } catch (err) {
+    fail(err);
+  }
+  await refresh();
 }
 
 async function submitPrompt(e) {
@@ -507,10 +562,10 @@ async function loadReview(id) {
   const actions = [];
   if (!empty) {
     if (review.ruling.verdict === "allow") {
-      actions.push(h("button", { class: "button primary", type: "button", disabled: busy, onclick: () => commit(id, false, include, review.digest) }, "Commit to workspace"));
+      actions.push(h("button", { class: "button primary", type: "button", disabled: busy, onclick: (e) => inFlight(e.currentTarget, () => commit(id, false, include, review.digest)) }, "Commit to workspace"));
     } else if (review.ruling.verdict === "ask") {
       actions.push(
-        h("button", { class: "button ask", type: "button", disabled: busy, onclick: () => commit(id, true, include, review.digest) }, "Approve and commit")
+        h("button", { class: "button ask", type: "button", disabled: busy, onclick: (e) => inFlight(e.currentTarget, () => commit(id, true, include, review.digest)) }, "Approve and commit")
       );
     }
   }
@@ -572,26 +627,43 @@ function ignoredGroup(id, ignored, include, held) {
 function armed(label, armedLabel, disabled, action) {
   const button = h("button", { class: "button ghost danger", type: "button", disabled }, label);
   let timer = null;
-  button.addEventListener("click", () => {
+  const disarm = () => {
+    clearTimeout(timer);
+    button.classList.remove("armed");
+    button.textContent = label;
+  };
+  button.disarm = disarm;
+  button.addEventListener("click", async () => {
+    if (button.disabled) return;
     if (button.classList.contains("armed")) {
-      clearTimeout(timer);
-      action();
+      // Fires once: disarmed and held off until the call is done, so a
+      // second click never acts on the next task or the commit before.
+      disarm();
+      await inFlight(button, action);
       return;
     }
     button.classList.add("armed");
-    button.textContent = armedLabel;
-    timer = setTimeout(() => {
-      button.classList.remove("armed");
-      button.textContent = label;
-    }, 4000);
+    button.textContent = typeof armedLabel === "function" ? armedLabel() : armedLabel;
+    timer = setTimeout(disarm, 4000);
   });
   return button;
+}
+
+/** Runs `action` with `button` disabled, so a double click acts once. */
+async function inFlight(button, action) {
+  const was = button.disabled;
+  button.disabled = true;
+  try {
+    await action();
+  } finally {
+    button.disabled = was;
+  }
 }
 
 async function commit(id, approve, includeIgnored, reviewed) {
   try {
     const result = await call("commit", { task: id, approve, includeIgnored, reviewed });
-    state.includeIgnored.delete(id);
+    if (result.outcome === "applied") state.includeIgnored.delete(id);
     if (result.outcome === "applied") toast(`Committed ${plural(result.changes, "change")} · checkpoint ${result.checkpoint}`);
     else if (result.outcome === "nothing") toast("Nothing to commit");
     else toast(`Not committed: ${VERDICT[result.ruling.verdict].title.toLowerCase()}`, "error");
@@ -612,6 +684,15 @@ async function rollback(id) {
 }
 
 // --- Timeline --------------------------------------------------------------
+
+/** Undo of the newest commit: held off while an agent works or the copy
+ * has uncommitted changes, which undo would refuse anyway. */
+function undoButton(id, checkpoint, task) {
+  const pending = task && task.changes > 0;
+  const button = armed("Undo", `Click again to undo commit ${checkpoint}`, Boolean(task && (task.running || pending)), () => undo(id));
+  if (pending) button.title = "Commit or roll back the uncommitted changes first";
+  return button;
+}
 
 let timelineToken = 0;
 
@@ -648,7 +729,7 @@ async function loadTimeline(id) {
         h("span", { class: "entry-dot" }),
         h("span", { class: "entry-title" }, title),
         cp === newestApplied
-          ? armed("Undo", "Click again to undo this commit", task && task.running, () => undo(id))
+          ? undoButton(id, cp.id, task)
           : h("span"),
         h("div", { class: "entry-body" }, body.map((line) => h("div", {}, line)))
       )
@@ -728,9 +809,15 @@ async function undo(id) {
 
 // --- Tasks -----------------------------------------------------------------
 
+let refreshToken = 0;
+
 async function refresh() {
+  const token = ++refreshToken;
   try {
-    state.tasks = await call("tasks");
+    const tasks = await call("tasks");
+    // A refresh that started later has already drawn a newer list.
+    if (token !== refreshToken) return;
+    state.tasks = tasks;
   } catch (err) {
     fail(err);
   }
@@ -741,9 +828,24 @@ async function refresh() {
 }
 
 function select(id) {
+  if (id !== state.current) {
+    $("remove-task").disarm?.();
+    clearPanels();
+  }
   state.current = id;
   renderSidebar();
   renderTask();
+}
+
+/** Empties Review and Timeline until the new task's load returns, so no
+ * button of the task before stays live meanwhile. */
+function clearPanels() {
+  const loading = () => h("p", { class: "muted" }, "Loading…");
+  $("ruling").className = "ruling";
+  $("ruling").replaceChildren(loading());
+  $("review-actions").replaceChildren();
+  $("effects").replaceChildren();
+  $("timeline").replaceChildren(loading());
 }
 
 async function newTask() {
@@ -808,7 +910,15 @@ async function start() {
       renderTask();
     });
   }
-  const remove = armed("Delete task", "Click again to delete the task", false, removeTask);
+  const remove = armed(
+    "Delete task",
+    () => {
+      const task = currentTask();
+      return task ? `Click again to delete ${baseName(task.workspace)} (${task.id})` : "Click again to delete";
+    },
+    false,
+    removeTask
+  );
   remove.id = "remove-task";
   $("remove-task").replaceWith(remove);
 
@@ -821,6 +931,13 @@ async function start() {
 
   await backend.onRun(onRun);
   await backend.onQuestions(onQuestions);
+  if (backend.onDaemon) await backend.onDaemon(onDaemon);
+  // Changes made outside the window (a terminal in the copy, the CLI) show
+  // when the person comes back to it.
+  window.addEventListener("focus", () => refresh());
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") refresh();
+  });
   try {
     state.questions = await call("questions");
   } catch (err) {

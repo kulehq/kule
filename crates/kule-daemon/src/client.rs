@@ -138,15 +138,21 @@ pub fn spawn_daemon(kule: &Path, home: &Path) -> io::Result<()> {
         .create(true)
         .append(true)
         .open(home.join("kuled.log"))?;
-    Command::new(kule)
+    let mut command = Command::new(kule);
+    command
         .arg("daemon")
         .env("KULE_HOME", home)
         .stdin(Stdio::null())
         .stdout(log.try_clone()?)
-        .stderr(log)
-        // Its own process group: signals meant for the caller's do not
-        // reach it.
-        .process_group(0)
-        .spawn()
-        .map(|_| ())
+        .stderr(log);
+    // A session of its own: no controlling terminal to be reached through,
+    // and no signal meant for the caller's.
+    // SAFETY: setsid is async-signal-safe and touches only the child.
+    unsafe {
+        command.pre_exec(|| {
+            libc::setsid();
+            Ok(())
+        });
+    }
+    command.spawn().map(|_| ())
 }

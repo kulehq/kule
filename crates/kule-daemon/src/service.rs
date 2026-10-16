@@ -107,20 +107,28 @@ pub enum RunEvent {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Notice {
+    /// `seq` grows with every event, across tasks: a window that loads a
+    /// task's [`Service::stream`] drops what it already has.
     Run {
         task: String,
+        seq: u64,
         event: RunEvent,
     },
     /// Every question waiting now, after any change.
-    Questions {
-        waiting: Vec<Question>,
-    },
+    Questions { waiting: Vec<Question> },
 }
 
 /// How many events of a task's runs are kept for a window that opens later.
 const KEPT_EVENTS: usize = 2000;
 
 type Subscribers = Arc<Mutex<Vec<Sender<Notice>>>>;
+
+/// A kept run event and its place in the order of all events.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Sequenced {
+    pub seq: u64,
+    pub event: RunEvent,
+}
 
 pub struct Service {
     home: PathBuf,
@@ -130,7 +138,8 @@ pub struct Service {
     approvals: Approvals,
     subscribers: Subscribers,
     /// The latest events of each task's runs, oldest first.
-    streams: Mutex<HashMap<String, VecDeque<RunEvent>>>,
+    streams: Mutex<HashMap<String, VecDeque<Sequenced>>>,
+    next_seq: std::sync::atomic::AtomicU64,
 }
 
 impl Service {
@@ -145,6 +154,7 @@ impl Service {
             approvals,
             subscribers,
             streams: Mutex::new(HashMap::new()),
+            next_seq: std::sync::atomic::AtomicU64::new(1),
         }
     }
 
@@ -156,7 +166,7 @@ impl Service {
     }
 
     /// The task's latest run events, oldest first.
-    pub fn stream(&self, id: &str) -> Vec<RunEvent> {
+    pub fn stream(&self, id: &str) -> Vec<Sequenced> {
         self.streams
             .lock()
             .unwrap()
@@ -171,18 +181,47 @@ impl Service {
     }
 
     fn emit(&self, task: &str, event: RunEvent) {
-        {
-            let mut streams = self.streams.lock().unwrap();
-            let kept = streams.entry(task.to_owned()).or_default();
+        // Under the lock: the order of `seq` is the order subscribers hear.
+        let mut streams = self.streams.lock().unwrap();
+        let seq = self
+            .next_seq
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let kept = streams.entry(task.to_owned()).or_default();
+        // An answer arrives in many small chunks; kept as one, the prompt
+        // stays in reach of a window that opens later.
+        let merged = match (kept.back_mut(), &event) {
+            (
+                Some(Sequenced {
+                    seq: last,
+                    event:
+                        RunEvent::Agent {
+                            event: kule_acp::Event::Message { text: kept_text },
+                        },
+                }),
+                RunEvent::Agent {
+                    event: kule_acp::Event::Message { text },
+                },
+            ) => {
+                kept_text.push_str(text);
+                *last = seq;
+                true
+            }
+            _ => false,
+        };
+        if !merged {
             if kept.len() == KEPT_EVENTS {
                 kept.pop_front();
             }
-            kept.push_back(event.clone());
+            kept.push_back(Sequenced {
+                seq,
+                event: event.clone(),
+            });
         }
         notify(
             &self.subscribers,
             Notice::Run {
                 task: task.to_owned(),
+                seq,
                 event,
             },
         );

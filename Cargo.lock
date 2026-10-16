@@ -3213,6 +3213,7 @@ name = "kule-desktop"
 version = "0.0.1"
 dependencies = [
  "kule-daemon",
+ "libc",
  "serde",
  "serde_json",
  "tauri",

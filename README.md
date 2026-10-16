@@ -5,7 +5,9 @@ approve and steer. Every command an agent runs is a transaction in a
 copy-on-write copy of the workspace, and what reaches the real workspace is
 decided by the effects the command had, not by its text.
 
-**Status:** M0 and M1 done (engine, git, sandbox, policy, proxy). macOS and Linux.
+**Status:** M0–M3 done: engine, git, sandbox, policy, proxy, agents over ACP
+(Claude Code, Codex, Gemini), the desktop app and its daemon, live approvals,
+checkpoints on Lonca with a signed history. macOS and Linux.
 
 ## M0: transactions on a copy-on-write copy
 

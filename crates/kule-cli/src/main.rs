@@ -61,8 +61,11 @@ enum Cmd {
         /// Let the command connect anywhere, bypassing the proxy and policy.
         #[arg(long)]
         open_network: bool,
-        /// Run without the sandbox: the command can write anywhere you can.
-        #[arg(long)]
+        /// Run without the sandbox: the command can write anywhere you can,
+        /// and reach any host; the sandbox's options mean nothing then.
+        #[arg(long, conflicts_with_all = [
+            "allow_write", "hide", "reveal", "pass_env", "no_network", "open_network",
+        ])]
         no_sandbox: bool,
         #[arg(last = true, required = true)]
         command: Vec<String>,

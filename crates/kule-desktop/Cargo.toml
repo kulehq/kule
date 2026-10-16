@@ -17,6 +17,7 @@ tauri-build = { version = "2.7.3", features = [] }
 
 [dependencies]
 kule-daemon = { version = "0.0.1", path = "../kule-daemon" }
+libc = "0.2.190"
 serde.workspace = true
 serde_json.workspace = true
 tauri = { version = "2.12.4", features = [] }

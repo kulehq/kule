@@ -10,8 +10,8 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use kule_daemon::{
-    Call, Client, Commit, Notice, Question, Result, Review, RunEvent, TaskView, Timeline,
-    default_home, spawn_daemon,
+    Call, Client, Commit, Hello, Notice, PROTOCOL, Question, Result, Review, RunEvent, Sequenced,
+    TaskView, Timeline, default_home,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -33,23 +33,48 @@ impl Kule {
         self.client.call(call)
     }
 
+    /// Starts the daemon unless one of this protocol answers. The app runs
+    /// its own binary as the daemon (`kule-desktop daemon`), so the two never
+    /// come from different builds.
     fn start(&self) -> Result<()> {
-        self.client
-            .ensure_running(|| spawn_daemon(&kule_program(), &self.home))
+        self.client.ensure_running(|| spawn_self(&self.home))?;
+        match self.client.call::<Hello>(Call::Hello) {
+            Ok(hello) if hello.protocol == PROTOCOL => Ok(()),
+            Ok(hello) => Err(format!(
+                "the Kule daemon speaks protocol {} ({}), this app {PROTOCOL}",
+                hello.protocol, hello.version
+            )),
+            Err(e) => Err(e),
+        }
     }
 }
 
-/// The `kule` program that runs the daemon: `KULE_BIN`, else the one next
-/// to this app, else `kule` on the path.
-fn kule_program() -> PathBuf {
-    if let Some(bin) = std::env::var_os("KULE_BIN") {
-        return PathBuf::from(bin);
+/// Starts this program as the daemon for `home`, detached from the app so it
+/// outlives it; its output goes to `kuled.log` in `home`.
+fn spawn_self(home: &Path) -> std::io::Result<()> {
+    use std::os::unix::process::CommandExt;
+    std::fs::create_dir_all(home)?;
+    let log = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(home.join("kuled.log"))?;
+    let mut command = std::process::Command::new(std::env::current_exe()?);
+    command
+        .arg("daemon")
+        .env("KULE_HOME", home)
+        .stdin(std::process::Stdio::null())
+        .stdout(log.try_clone()?)
+        .stderr(log);
+    // A session of its own: no terminal to be reached through, and no signal
+    // meant for the app's.
+    // SAFETY: setsid is async-signal-safe and touches only the child.
+    unsafe {
+        command.pre_exec(|| {
+            libc::setsid();
+            Ok(())
+        });
     }
-    std::env::current_exe()
-        .ok()
-        .and_then(|exe| Some(exe.parent()?.join("kule")))
-        .filter(|beside| beside.is_file())
-        .unwrap_or_else(|| PathBuf::from("kule"))
+    command.spawn().map(|_| ())
 }
 
 type K<'a> = State<'a, Kule>;
@@ -157,7 +182,7 @@ fn start_run(kule: K<'_>, task: String, agent: String, prompt: String) -> Result
 
 /// The task's latest run events, for a window that opened after they came.
 #[tauri::command(async)]
-fn stream(kule: K<'_>, task: String) -> Result<Vec<RunEvent>> {
+fn stream(kule: K<'_>, task: String) -> Result<Vec<Sequenced>> {
     kule.call(Call::Stream { task })
 }
 
@@ -165,6 +190,7 @@ fn stream(kule: K<'_>, task: String) -> Result<Vec<RunEvent>> {
 #[derive(Clone, Serialize)]
 struct RunMessage {
     task: String,
+    seq: u64,
     event: RunEvent,
 }
 
@@ -177,9 +203,12 @@ fn relay(app: AppHandle, home: &Path) {
     };
     loop {
         if kule.start().is_ok() {
+            // Connected (again): the window reloads what it shows, since it
+            // may have missed notices while the daemon was away.
+            let _ = app.emit("daemon", ());
             let _ = kule.client.subscribe(|notice| match notice {
-                Notice::Run { task, event } => {
-                    let _ = app.emit("run", RunMessage { task, event });
+                Notice::Run { task, seq, event } => {
+                    let _ = app.emit("run", RunMessage { task, seq, event });
                 }
                 Notice::Questions { waiting } => {
                     let _ = app.emit("questions", waiting);
@@ -198,6 +227,14 @@ fn main() {
             std::process::exit(2);
         }
     };
+    if std::env::args().nth(1).as_deref() == Some("daemon") {
+        eprintln!("kule-desktop: daemon for {}", home.display());
+        if let Err(e) = kule_daemon::run(&home, Duration::from_secs(600)) {
+            eprintln!("kule-desktop: daemon: {e}");
+            std::process::exit(2);
+        }
+        return;
+    }
     let kule = Kule {
         home: home.clone(),
         client: Client::new(&home),
