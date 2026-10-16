@@ -213,6 +213,9 @@ fn relay(app: AppHandle, home: &Path) {
                 Notice::Questions { waiting } => {
                     let _ = app.emit("questions", waiting);
                 }
+                Notice::Tasks => {
+                    let _ = app.emit("tasks", ());
+                }
             });
         }
         std::thread::sleep(Duration::from_secs(1));

@@ -12,6 +12,7 @@ const backend = window.__TAURI__
       onRun: (handler) => window.__TAURI__.event.listen("run", (e) => handler(e.payload)),
       onQuestions: (handler) => window.__TAURI__.event.listen("questions", (e) => handler(e.payload)),
       onDaemon: (handler) => window.__TAURI__.event.listen("daemon", () => handler()),
+      onTasks: (handler) => window.__TAURI__.event.listen("tasks", () => handler()),
     }
   : window.kuleMock;
 
@@ -136,7 +137,7 @@ function taskChip(task) {
 }
 
 function taskItem(task, list) {
-  const parts = [task.changes ? plural(task.changes, "change") : "no changes"];
+  const parts = [task.scanning ? "checking…" : task.changes ? plural(task.changes, "change") : "no changes"];
   if (task.ignored) parts.push(`${task.ignored} ignored`);
   const sub = `${parts.join(", ")} · ${task.id}`;
   return h(
@@ -187,6 +188,8 @@ function renderTask() {
   } else if (task.workspace_gone) {
     chip.classList.add("deny");
     chip.textContent = "workspace moved or deleted · commit and undo refused";
+  } else if (task.scanning) {
+    chip.textContent = "checking the copy…";
   } else if (task.verdict) {
     chip.classList.add(task.verdict);
     chip.textContent = `${plural(task.changes, "change")} · ${VERDICT[task.verdict].chip}`;
@@ -970,6 +973,8 @@ async function start() {
   await backend.onRun(onRun);
   await backend.onQuestions(onQuestions);
   if (backend.onDaemon) await backend.onDaemon(onDaemon);
+  // A task's numbers came back from a scan in the background.
+  if (backend.onTasks) await backend.onTasks(() => refresh());
   // Changes made outside the window (a terminal in the copy, the CLI) show
   // when the person comes back to it.
   window.addEventListener("focus", () => refresh());

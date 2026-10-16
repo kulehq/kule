@@ -50,7 +50,36 @@ pub struct TaskView {
     /// The workspace was moved or deleted: commit and undo are refused.
     #[serde(default)]
     pub workspace_gone: bool,
+    /// The copy has not been looked at yet: `changes`, `ignored` and
+    /// `verdict` are not known. A [`Notice::Tasks`] follows when they are.
+    #[serde(default)]
+    pub scanning: bool,
 }
+
+/// The part of a task's view that takes a walk through its copy.
+#[derive(Debug, Clone, Default, PartialEq)]
+struct Scan {
+    changes: usize,
+    ignored: usize,
+    verdict: Option<Verdict>,
+    workspace_gone: bool,
+}
+
+/// A task's last scan, and whether a newer one is under way.
+struct Cached {
+    /// `None` before the first scan, or when the last one failed.
+    scan: Option<Scan>,
+    /// When the last scan started.
+    at: Instant,
+    scanning: bool,
+    /// The last scan could not read the task (being removed, damaged).
+    failed: bool,
+}
+
+/// How long a scan answers the task list before it is made again. A large
+/// copy takes seconds to walk; the list answers at once with the last scan
+/// and a fresh one follows as a notice.
+const FRESH: Duration = Duration::from_secs(2);
 
 /// The task's uncommitted work, ignored paths marked, and what the policy
 /// says about the part a commit would take.
@@ -119,6 +148,9 @@ pub enum Notice {
     },
     /// Every question waiting now, after any change.
     Questions { waiting: Vec<Question> },
+    /// A task's changes, ignored paths or verdict are not what the task
+    /// list last said: ask for it again.
+    Tasks,
 }
 
 /// How many events of a task's runs are kept for a window that opens later.
@@ -143,6 +175,8 @@ pub struct Service {
     /// The latest events of each task's runs, oldest first.
     streams: Mutex<HashMap<String, VecDeque<Sequenced>>>,
     next_seq: std::sync::atomic::AtomicU64,
+    /// Each task's last scan, for the task list.
+    scans: Mutex<HashMap<String, Cached>>,
 }
 
 impl Service {
@@ -158,6 +192,7 @@ impl Service {
             subscribers,
             streams: Mutex::new(HashMap::new()),
             next_seq: std::sync::atomic::AtomicU64::new(1),
+            scans: Mutex::new(HashMap::new()),
         }
     }
 
@@ -262,15 +297,97 @@ impl Service {
     }
 
     /// Every task, newest first.
-    pub fn tasks(&self) -> Result<Vec<TaskView>> {
+    /// Every task, newest first, from each one's last scan; scans older
+    /// than [`FRESH`] are made again in the background.
+    pub fn tasks(self: &Arc<Self>) -> Result<Vec<TaskView>> {
         let mut infos = Task::list(&self.home).map_err(text)?;
         infos.sort_by(|a, b| (b.created_unix, &b.id).cmp(&(a.created_unix, &a.id)));
         // One task that cannot be read (being removed, damaged) does not
         // hide the others.
         Ok(infos
             .iter()
-            .filter_map(|info| self.view(&info.id).ok())
+            .filter_map(|info| {
+                let scan = self.last_scan(&info.id).ok()?;
+                self.assemble(&info.id, scan).ok()
+            })
             .collect())
+    }
+
+    /// The task's last scan, starting a new one in the background when it
+    /// is old or there is none; an error when the last one failed.
+    fn last_scan(self: &Arc<Self>, id: &str) -> std::result::Result<Option<Scan>, ()> {
+        let mut scans = self.scans.lock().unwrap();
+        let cached = scans.entry(id.to_owned()).or_insert(Cached {
+            scan: None,
+            at: Instant::now(),
+            scanning: false,
+            failed: false,
+        });
+        let unscanned = cached.scan.is_none() && !cached.failed;
+        if !cached.scanning && (unscanned || cached.at.elapsed() >= FRESH) {
+            cached.scanning = true;
+            let (service, id) = (Arc::clone(self), id.to_owned());
+            std::thread::spawn(move || {
+                let before = service
+                    .scans
+                    .lock()
+                    .unwrap()
+                    .get(&id)
+                    .map(|c| (c.scan.clone(), c.failed));
+                let _ = service.rescan(&id);
+                let after = service
+                    .scans
+                    .lock()
+                    .unwrap()
+                    .get(&id)
+                    .map(|c| (c.scan.clone(), c.failed));
+                if after != before {
+                    notify(&service.subscribers, Notice::Tasks);
+                }
+            });
+        }
+        if cached.failed {
+            return Err(());
+        }
+        Ok(cached.scan.clone())
+    }
+
+    /// Walks the task's copy now and keeps what it found.
+    fn rescan(&self, id: &str) -> Result<Scan> {
+        let started = Instant::now();
+        let outcome = self.open(id).and_then(|task| self.scan(&task));
+        let mut scans = self.scans.lock().unwrap();
+        // A scan that started later (after a commit, say) and finished
+        // first knows better.
+        if let Some(newer) = scans
+            .get_mut(id)
+            .filter(|c| (c.scan.is_some() || c.failed) && c.at > started)
+        {
+            newer.scanning = false;
+            return outcome;
+        }
+        scans.insert(
+            id.to_owned(),
+            Cached {
+                scan: outcome.as_ref().ok().cloned(),
+                at: started,
+                scanning: false,
+                failed: outcome.is_err(),
+            },
+        );
+        outcome
+    }
+
+    fn scan(&self, task: &Task) -> Result<Scan> {
+        let all = task.effects().map_err(text)?;
+        let effects = all.to_commit(false);
+        let verdict = (!effects.is_empty()).then(|| self.policy(task).map(|p| p.judge(&effects)));
+        Ok(Scan {
+            changes: effects.effects.len(),
+            ignored: all.ignored().count(),
+            verdict: verdict.transpose()?.map(|r| r.verdict),
+            workspace_gone: !task.workspace_exists(),
+        })
     }
 
     pub fn create(&self, workspace: &Path) -> Result<TaskView> {
@@ -313,7 +430,9 @@ impl Service {
             }
             gate(set)
         };
-        match task.commit_with(include_ignored, check) {
+        let outcome = task.commit_with(include_ignored, check);
+        let _ = self.rescan(id);
+        match outcome {
             Ok(Some(checkpoint)) => Ok(Commit::Applied {
                 checkpoint: checkpoint.id,
                 changes: checkpoint.effects.len(),
@@ -326,14 +445,16 @@ impl Service {
 
     /// Throws the uncommitted work away; returns how many changes it held.
     pub fn rollback(&self, id: &str) -> Result<usize> {
-        let set = self.idle(id)?.rollback().map_err(text)?;
-        Ok(set.effects.len())
+        let set = self.idle(id)?.rollback();
+        let _ = self.rescan(id);
+        Ok(set.map_err(text)?.effects.len())
     }
 
     /// Reverts the newest commit; returns its checkpoint, if there was one.
     pub fn undo(&self, id: &str) -> Result<Option<u32>> {
-        let undone = self.idle(id)?.undo().map_err(text)?;
-        Ok(undone.map(|c| c.id))
+        let undone = self.idle(id)?.undo();
+        let _ = self.rescan(id);
+        Ok(undone.map_err(text)?.map(|c| c.id))
     }
 
     pub fn timeline(&self, id: &str) -> Result<Timeline> {
@@ -360,6 +481,7 @@ impl Service {
     pub fn remove(&self, id: &str) -> Result<()> {
         self.idle(id)?.remove().map_err(text)?;
         self.streams.lock().unwrap().remove(id);
+        self.scans.lock().unwrap().remove(id);
         let home = self.home.clone();
         std::thread::spawn(move || {
             if let Err(e) = Task::empty_trash(&home) {
@@ -401,6 +523,8 @@ impl Service {
             };
             drop(at_work);
             service.running.lock().unwrap().remove(task.id());
+            // Before the window hears the run is over and asks again.
+            let _ = service.rescan(task.id());
             service.emit(task.id(), RunEvent::Finished { error, denials });
         });
         Ok(())
@@ -449,18 +573,25 @@ impl Service {
         Ok(refused)
     }
 
+    /// The task's view from a scan made now.
     fn view(&self, id: &str) -> Result<TaskView> {
+        let scan = self.rescan(id)?;
+        self.assemble(id, Some(scan))
+    }
+
+    /// The task's view: `scan` for what takes a walk through the copy, the
+    /// rest as it is now.
+    fn assemble(&self, id: &str, scan: Option<Scan>) -> Result<TaskView> {
         let task = self.open(id)?;
-        let all = task.effects().map_err(text)?;
-        let effects = all.to_commit(false);
-        let verdict = (!effects.is_empty()).then(|| self.policy(&task).map(|p| p.judge(&effects)));
+        let scanning = scan.is_none();
+        let scan = scan.unwrap_or_default();
         Ok(TaskView {
             id: task.id().to_owned(),
             workspace: task.workspace().to_owned(),
             created_unix: task.info().created_unix,
-            changes: effects.effects.len(),
-            ignored: all.ignored().count(),
-            verdict: verdict.transpose()?.map(|r| r.verdict),
+            changes: scan.changes,
+            ignored: scan.ignored,
+            verdict: scan.verdict,
             running: self.running.lock().unwrap().contains(id),
             waiting: self
                 .approvals
@@ -469,7 +600,8 @@ impl Service {
                 .filter(|q| q.task == id)
                 .count(),
             approval_timeout_secs: task.approval_timeout().map_err(text)?.as_secs(),
-            workspace_gone: !task.workspace_exists(),
+            workspace_gone: scan.workspace_gone,
+            scanning,
         })
     }
 
@@ -534,6 +666,63 @@ mod tests {
             let copy = Task::open(&self.app.home, &view.id).unwrap().copy();
             (view.id, copy)
         }
+
+        /// Ages every scan past [`FRESH`] so the list makes them again.
+        fn age_scans(&self) {
+            for cached in self.app.scans.lock().unwrap().values_mut() {
+                cached.at = cached.at.checked_sub(FRESH).unwrap();
+            }
+        }
+
+        /// The task list once the scans it starts are done, as after a
+        /// change made outside the daemon (a terminal in the copy).
+        fn settled(&self) -> Vec<TaskView> {
+            self.age_scans();
+            self.app.tasks().unwrap();
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while self.app.scans.lock().unwrap().values().any(|c| c.scanning) {
+                assert!(Instant::now() < deadline, "a scan never ended");
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            self.app.tasks().unwrap()
+        }
+    }
+
+    /// A large copy takes seconds to walk: the list answers at once from
+    /// the last scan, and says when a fresh one finds something else.
+    #[test]
+    fn the_list_answers_from_the_last_scan_and_tells_when_it_changes() {
+        let s = Setup::new();
+        let (id, copy) = s.task();
+        let notices = s.app.subscribe();
+        fs::write(copy.join("b.txt"), "b\n").unwrap();
+
+        // Scanned just now, at creation: not again yet.
+        assert_eq!(s.app.tasks().unwrap()[0].changes, 0);
+        s.age_scans();
+        assert_eq!(
+            s.app.tasks().unwrap()[0].changes,
+            0,
+            "answered from the last scan"
+        );
+        let heard = notices.recv_timeout(Duration::from_secs(10)).unwrap();
+        assert!(matches!(heard, Notice::Tasks), "{heard:?}");
+        assert_eq!(s.app.tasks().unwrap()[0].changes, 1);
+
+        // Kule's own changes show at once.
+        s.app.rollback(&id).unwrap();
+        assert_eq!(s.app.tasks().unwrap()[0].changes, 0);
+    }
+
+    /// A task never scanned yet is listed at once, marked as such.
+    #[test]
+    fn a_task_not_scanned_yet_is_listed_as_scanning() {
+        let s = Setup::new();
+        let (id, _) = s.task();
+        s.app.scans.lock().unwrap().clear();
+        let view = s.app.tasks().unwrap().remove(0);
+        assert_eq!((view.id.as_str(), view.scanning), (id.as_str(), true));
+        assert!(!s.settled()[0].scanning);
     }
 
     #[test]
@@ -545,7 +734,7 @@ mod tests {
         fs::write(copy.join("Cargo.toml"), "[package]\n").unwrap();
 
         // Both were made within a second, which is all creation times tell.
-        let tasks = s.app.tasks().unwrap();
+        let tasks = s.settled();
         assert!(tasks.is_sorted_by_key(|t| std::cmp::Reverse(t.created_unix)));
         let get = |id: &str| tasks.iter().find(|t| t.id == id).unwrap();
         assert_eq!((get(&second).changes, get(&second).verdict), (0, None));
@@ -702,7 +891,7 @@ mod tests {
         let (id, copy) = s.task();
         fs::write(copy.join(".env"), "SECRET=1\n").unwrap();
 
-        let view = s.app.tasks().unwrap().remove(0);
+        let view = s.settled().remove(0);
         assert_eq!((view.changes, view.ignored, view.verdict), (0, 1, None));
         assert!(
             s.app
@@ -824,7 +1013,7 @@ mod tests {
             ),
         )
         .unwrap();
-        let ids: Vec<String> = s.app.tasks().unwrap().into_iter().map(|t| t.id).collect();
+        let ids: Vec<String> = s.settled().into_iter().map(|t| t.id).collect();
         assert_eq!(ids, [good]);
     }
 }
