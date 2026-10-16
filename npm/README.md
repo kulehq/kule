@@ -1,4 +1,4 @@
-# kule
+# @kulehq/kule
 
 Kule is a control room for coding agents. Agents do the work; people watch,
 approve and steer. Every command an agent runs is a transaction in a
