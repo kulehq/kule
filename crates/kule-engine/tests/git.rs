@@ -1,0 +1,270 @@
+//! M1, step 1: `.git` judged by what it means. Repositories are made and
+//! changed by the real `git`, the way a person or an agent would.
+
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+use kule_engine::{Error, Task};
+use tempfile::TempDir;
+
+fn git(dir: &Path, args: &[&str]) -> String {
+    let out = Command::new("git")
+        .args(["-c", "user.name=Test", "-c", "user.email=test@example.com"])
+        .args([
+            "-c",
+            "commit.gpgsign=false",
+            "-c",
+            "init.defaultBranch=main",
+        ])
+        .args(args)
+        .current_dir(dir)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "git {args:?}: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8(out.stdout).unwrap().trim().to_owned()
+}
+
+fn head(dir: &Path) -> String {
+    git(dir, &["rev-parse", "HEAD"])
+}
+
+fn write(path: &Path, text: &str) {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).unwrap();
+    }
+    fs::write(path, text).unwrap();
+}
+
+/// Moves a file's mtime without changing its bytes, so the next `git status`
+/// has to re-check it and rewrites the index with fresh stat data.
+fn touch_later(path: &Path, seconds: i64) {
+    let meta = fs::metadata(path).unwrap();
+    let mtime = filetime::FileTime::from_last_modification_time(&meta);
+    let later = filetime::FileTime::from_unix_time(mtime.unix_seconds() + seconds, 0);
+    filetime::set_file_mtime(path, later).unwrap();
+}
+
+struct Repo {
+    _home: TempDir,
+    _ws: TempDir,
+    task: Task,
+}
+
+impl Repo {
+    fn new() -> Self {
+        let home = TempDir::new().unwrap();
+        let ws = TempDir::new().unwrap();
+        let root = ws.path();
+        git(root, &["init", "-q"]);
+        write(&root.join("README.md"), "hello\n");
+        write(&root.join("src/main.rs"), "fn main() {}\n");
+        write(&root.join("notes.txt"), "notes\n");
+        git(root, &["add", "-A"]);
+        git(root, &["commit", "-qm", "initial"]);
+        let task = Task::create(home.path(), root).unwrap();
+        Repo {
+            _home: home,
+            _ws: ws,
+            task,
+        }
+    }
+
+    fn work(&self) -> PathBuf {
+        self.task.workspace().to_path_buf()
+    }
+
+    fn copy(&self) -> PathBuf {
+        self.task.copy()
+    }
+
+    /// The agent edits a file and commits it in the copy.
+    fn agent_commits(&self, text: &str) {
+        write(&self.copy().join("src/main.rs"), text);
+        git(&self.copy(), &["commit", "-qam", "agent change"]);
+    }
+
+    /// A person looks at the workspace: `git status` after a file's stat
+    /// data moved, which rewrites `.git/index` without changing its entries.
+    fn human_runs_git_status(&self, file: &str, seconds: i64) {
+        let index = self.work().join(".git/index");
+        let before = fs::read(&index).unwrap();
+        touch_later(&self.work().join(file), seconds);
+        git(&self.work(), &["status", "--porcelain"]);
+        assert_ne!(
+            fs::read(&index).unwrap(),
+            before,
+            "the index must really be rewritten"
+        );
+    }
+}
+
+#[test]
+fn git_status_in_the_workspace_blocks_neither_commit_nor_undo() {
+    let r = Repo::new();
+    let original = head(&r.work());
+    r.agent_commits("fn main() { println!(\"agent\"); }\n");
+
+    r.human_runs_git_status("notes.txt", 10);
+    r.task.commit().unwrap().expect("a checkpoint");
+    assert_eq!(head(&r.work()), head(&r.copy()));
+    assert_ne!(head(&r.work()), original);
+
+    r.human_runs_git_status("notes.txt", 20);
+    r.task.undo().unwrap().expect("an undone checkpoint");
+    assert_eq!(head(&r.work()), original);
+    assert_eq!(
+        fs::read_to_string(r.work().join("src/main.rs")).unwrap(),
+        "fn main() {}\n"
+    );
+    git(&r.work(), &["fsck", "--no-progress"]);
+}
+
+#[test]
+fn a_human_commit_on_the_same_branch_is_a_conflict() {
+    let r = Repo::new();
+    r.agent_commits("fn main() { /* agent */ }\n");
+    write(&r.work().join("notes.txt"), "human notes\n");
+    git(&r.work(), &["commit", "-qam", "human change"]);
+    let human = head(&r.work());
+
+    match r.task.commit() {
+        Err(Error::Conflict(paths)) => {
+            assert!(
+                paths.contains(&".git/refs/heads/main".to_owned()),
+                "{paths:?}"
+            )
+        }
+        other => panic!("expected a conflict, got {other:?}"),
+    }
+    assert_eq!(head(&r.work()), human);
+}
+
+#[test]
+fn a_human_branch_elsewhere_is_not_a_conflict() {
+    let r = Repo::new();
+    r.agent_commits("fn main() { /* agent */ }\n");
+    git(&r.work(), &["branch", "human-idea"]);
+    let base = head(&r.work());
+
+    r.task.commit().unwrap().expect("a checkpoint");
+    assert_eq!(head(&r.work()), head(&r.copy()));
+    assert_eq!(git(&r.work(), &["rev-parse", "human-idea"]), base);
+}
+
+/// `git pack-refs` moves every branch into `packed-refs` and deletes the loose
+/// files. The values stay the same, so the agent's update to `main` still
+/// applies.
+#[test]
+fn git_pack_refs_in_the_workspace_is_not_a_conflict() {
+    let r = Repo::new();
+    r.agent_commits("fn main() { /* agent */ }\n");
+    git(&r.work(), &["pack-refs", "--all"]);
+    assert!(!r.work().join(".git/refs/heads/main").exists());
+
+    r.task.commit().unwrap().expect("a checkpoint");
+    assert_eq!(head(&r.work()), head(&r.copy()));
+    git(&r.work(), &["fsck", "--no-progress"]);
+}
+
+/// Switching to another branch and back rewrites `HEAD` with the same value
+/// and appends to the logs: nothing the agent's commit depends on.
+#[test]
+fn switching_branches_and_back_is_not_a_conflict() {
+    let r = Repo::new();
+    r.agent_commits("fn main() { /* agent */ }\n");
+    git(&r.work(), &["switch", "-q", "-c", "look-around"]);
+    git(&r.work(), &["switch", "-q", "main"]);
+
+    r.task.commit().unwrap().expect("a checkpoint");
+    assert_eq!(head(&r.work()), head(&r.copy()));
+}
+
+#[test]
+fn the_summary_reads_like_a_commit_log() {
+    let r = Repo::new();
+    let original = head(&r.copy());
+    r.agent_commits("fn main() { /* one */ }\n");
+    r.agent_commits("fn main() { /* two */ }\n");
+
+    let summary = r.task.effects().unwrap().git.expect("a git summary");
+    let main = summary
+        .refs
+        .iter()
+        .find(|c| c.name == "refs/heads/main")
+        .expect("main moved");
+    assert_eq!(main.old.as_deref(), Some(original.as_str()));
+    assert_eq!(main.new.as_deref(), Some(head(&r.copy()).as_str()));
+    assert_eq!(main.fast_forward, Some(true));
+    assert_eq!(main.commits, Some(2));
+    assert!(summary.index);
+    assert!(summary.object_files > 0);
+    assert!(!summary.config && summary.hooks.is_empty());
+}
+
+#[test]
+fn a_rewritten_history_is_not_a_fast_forward() {
+    let r = Repo::new();
+    r.agent_commits("fn main() { /* one */ }\n");
+    r.task.commit().unwrap();
+    git(&r.copy(), &["reset", "-q", "--hard", "HEAD~1"]);
+    r.agent_commits("fn main() { /* other */ }\n");
+
+    let summary = r.task.effects().unwrap().git.expect("a git summary");
+    let main = summary
+        .refs
+        .iter()
+        .find(|c| c.name == "refs/heads/main")
+        .unwrap();
+    assert_eq!(main.fast_forward, Some(false));
+    assert_eq!(main.commits, Some(1));
+}
+
+#[test]
+fn hooks_and_config_are_reported() {
+    let r = Repo::new();
+    write(
+        &r.copy().join(".git/hooks/pre-commit"),
+        "#!/bin/sh\necho pwned\n",
+    );
+    git(&r.copy(), &["config", "core.fsmonitor", "echo pwned"]);
+
+    let summary = r.task.effects().unwrap().git.expect("a git summary");
+    assert_eq!(summary.hooks, ["pre-commit"]);
+    assert!(summary.config);
+    assert!(summary.refs.is_empty());
+}
+
+#[test]
+fn git_status_in_the_copy_is_not_reported() {
+    let r = Repo::new();
+    touch_later(&r.copy().join("notes.txt"), 10);
+    git(&r.copy(), &["status", "--porcelain"]);
+
+    let set = r.task.effects().unwrap();
+    assert!(
+        set.effects.iter().any(|e| e.path == ".git/index"),
+        "the index file did change"
+    );
+    assert_eq!(set.git, None);
+    assert_eq!(set.files().count(), 0);
+}
+
+#[test]
+fn undo_leaves_the_new_objects_in_place() {
+    let r = Repo::new();
+    r.agent_commits("fn main() { /* agent */ }\n");
+    let agent = head(&r.copy());
+    r.task.commit().unwrap();
+    r.task.undo().unwrap();
+
+    git(&r.work(), &["cat-file", "-e", &agent]);
+    git(&r.work(), &["fsck", "--no-progress"]);
+    assert!(r.task.effects().unwrap().is_empty());
+}

@@ -468,6 +468,83 @@ fn read_only_directories_survive_the_round_trip() {
     );
 }
 
+/// Background processes (git maintenance, IDE indexers, build daemons) create
+/// and delete files while Kule walks the tree. An entry that disappears
+/// between listing and `lstat` is simply gone, not an error.
+#[test]
+fn effects_survive_files_vanishing_during_the_scan() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let s = Setup::new();
+    let churn = s.copy().join("churn");
+    fs::create_dir(&churn).unwrap();
+    let stop = Arc::new(AtomicBool::new(false));
+    let worker = {
+        let (churn, stop) = (churn.clone(), stop.clone());
+        std::thread::spawn(move || {
+            while !stop.load(Ordering::Relaxed) {
+                for i in 0..50 {
+                    let _ = fs::write(churn.join(format!("tmp-{i}.lock")), "x");
+                }
+                for i in 0..50 {
+                    let _ = fs::remove_file(churn.join(format!("tmp-{i}.lock")));
+                }
+            }
+        })
+    };
+    let result: Result<(), Error> = (0..300).try_for_each(|_| s.task.effects().map(drop));
+    stop.store(true, Ordering::Relaxed);
+    worker.join().unwrap();
+    result.unwrap();
+}
+
+/// A workspace where something keeps writing (an IDE, a watcher) must still
+/// be copyable: each entry is taken as it stood when it was cloned.
+#[test]
+fn a_task_can_be_made_while_files_churn() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let home = TempDir::new().unwrap();
+    let ws = TempDir::new().unwrap();
+    fixture(ws.path());
+    for i in 0..300 {
+        write(
+            &ws.path().join(format!("bulk/file-{i}.txt")),
+            format!("{i}\n"),
+        );
+    }
+    let churn = ws.path().join("churn");
+    fs::create_dir(&churn).unwrap();
+    let stop = Arc::new(AtomicBool::new(false));
+    let worker = {
+        let (churn, stop) = (churn.clone(), stop.clone());
+        std::thread::spawn(move || {
+            while !stop.load(Ordering::Relaxed) {
+                for i in 0..20 {
+                    let _ = fs::write(churn.join(format!("tmp-{i}")), "x");
+                }
+                for i in 0..20 {
+                    let _ = fs::remove_file(churn.join(format!("tmp-{i}")));
+                }
+            }
+        })
+    };
+    let made: Result<Vec<Task>, Error> = (0..5)
+        .map(|_| Task::create(home.path(), ws.path()))
+        .collect();
+    stop.store(true, Ordering::Relaxed);
+    worker.join().unwrap();
+    for task in made.unwrap() {
+        assert!(task.effects().unwrap().is_empty());
+        assert_eq!(
+            fs::read_to_string(task.copy().join("bulk/file-7.txt")).unwrap(),
+            "7\n"
+        );
+    }
+}
+
 #[test]
 fn a_held_lock_turns_writers_away() {
     let s = Setup::new();

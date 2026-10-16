@@ -13,32 +13,77 @@ use serde::de::DeserializeOwned;
 use walkdir::WalkDir;
 
 use crate::error::{Error, IoContext, Result};
-use crate::manifest::{Kind, Stamp, relative};
+use crate::manifest::{Kind, Stamp, Tree, relative, vanished};
 
-/// Clones the tree under `src` into `dst`, which must not exist yet. Files are
+/// Clones the tree under `src` into `dst`, which must not exist yet, and
+/// returns the stamp each entry of `src` had when it was cloned. Files are
 /// reflinked where the filesystem allows it and copied otherwise; modes and
 /// modification times are kept so incremental builds see the same tree.
-pub fn clone_tree(src: &Path, dst: &Path) -> Result<()> {
+///
+/// Other processes may write to `src` meanwhile (an IDE, git maintenance).
+/// An entry is cloned again until its stamp is the same before and after,
+/// and one that disappears is left out. The copy is then not one moment of
+/// `src`, but every entry holds exactly what its returned stamp describes,
+/// and that is what conflict checks compare against later.
+pub fn clone_tree(src: &Path, dst: &Path) -> Result<Tree> {
+    const ATTEMPTS: usize = 5;
     fs::create_dir(dst).at(dst)?;
+    let mut taken = Tree::new();
     let mut dirs = Vec::new();
     for entry in WalkDir::new(src)
         .min_depth(1)
         .follow_links(false)
         .sort_by_file_name()
     {
-        let entry = entry.map_err(|e| Error::Io {
-            path: e.path().unwrap_or(src).to_path_buf(),
-            source: e.into(),
-        })?;
-        let Some(stamp) = Stamp::of(entry.path())? else {
-            continue;
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(e) if vanished(&e) => continue,
+            Err(e) => {
+                return Err(Error::Io {
+                    path: e.path().unwrap_or(src).to_path_buf(),
+                    source: e.into(),
+                });
+            }
         };
-        let to = dst.join(relative(src, entry.path())?);
-        if stamp.kind == Kind::Dir {
-            fs::create_dir(&to).at(&to)?;
-            dirs.push((to, stamp));
-        } else {
-            place(entry.path(), &to, &stamp)?;
+        let rel = relative(src, entry.path())?;
+        let to = dst.join(&rel);
+        let mut stable = None;
+        for _ in 0..ATTEMPTS {
+            let Some(before) = Stamp::of(entry.path())? else {
+                break;
+            };
+            let cloned = match before.kind {
+                Kind::Dir => fs::create_dir(&to).at(&to),
+                _ => place(entry.path(), &to, &before),
+            };
+            match cloned {
+                Err(e) if is_vanished(&e) => {
+                    remove(&to)?;
+                    break;
+                }
+                other => other?,
+            }
+            match Stamp::of(entry.path())? {
+                Some(after) if before.unchanged(&after) => {
+                    stable = Some(before);
+                    break;
+                }
+                _ => remove(&to)?,
+            }
+        }
+        match stable {
+            Some(stamp) => {
+                if stamp.kind == Kind::Dir {
+                    dirs.push((to, stamp.clone()));
+                }
+                taken.insert(rel, stamp);
+            }
+            None if Stamp::of(entry.path())?.is_some() => {
+                return Err(Error::Invalid(format!(
+                    "{rel} kept changing while Kule copied it; try again"
+                )));
+            }
+            None => {}
         }
     }
     for (dir, stamp) in dirs.iter().rev() {
@@ -47,7 +92,12 @@ pub fn clone_tree(src: &Path, dst: &Path) -> Result<()> {
     if let Some(root) = Stamp::of(src)? {
         finish(dst, &root)?;
     }
-    Ok(())
+    Ok(taken)
+}
+
+fn is_vanished(e: &Error) -> bool {
+    matches!(e, Error::Io { source, .. }
+        if matches!(source.kind(), io::ErrorKind::NotFound | io::ErrorKind::NotADirectory))
 }
 
 /// Makes each of `paths` under `dst` what it is under `src`; a path missing
@@ -177,8 +227,24 @@ pub fn remove_dir_tree(path: &Path) -> Result<()> {
     }
 }
 
+/// Whether two files hold the same bytes. A file that disappeared in the
+/// meantime does not hold them.
 pub fn same_bytes(a: &Path, b: &Path) -> Result<bool> {
-    let (mut fa, mut fb) = (File::open(a).at(a)?, File::open(b).at(b)?);
+    let open = |path: &Path| match File::open(path) {
+        Ok(file) => Ok(Some(file)),
+        Err(e)
+            if matches!(
+                e.kind(),
+                io::ErrorKind::NotFound | io::ErrorKind::NotADirectory
+            ) =>
+        {
+            Ok(None)
+        }
+        Err(e) => Err(e).at(path),
+    };
+    let (Some(mut fa), Some(mut fb)) = (open(a)?, open(b)?) else {
+        return Ok(false);
+    };
     let (mut ba, mut bb) = (vec![0u8; 64 * 1024], vec![0u8; 64 * 1024]);
     loop {
         let na = read_full(&mut fa, &mut ba).at(a)?;

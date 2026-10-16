@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::Result;
 use crate::fsops::same_bytes;
+use crate::git::{self, GitSummary};
 use crate::manifest::{Baseline, Entry, Kind, Stamp, scan};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -24,10 +25,23 @@ pub struct Effect {
     pub kind: Kind,
 }
 
-/// Sorted by path, so a parent always comes before its children.
+impl Effect {
+    /// Whether the path is inside the repository's `.git` directory. Those
+    /// effects are read through [`EffectSet::git`] rather than one by one.
+    pub fn in_git(&self) -> bool {
+        git::classify(&self.path).is_some()
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EffectSet {
+    /// Every changed path, `.git` included, sorted so that a parent always
+    /// comes before its children.
     pub effects: Vec<Effect>,
+    /// What the changes under `.git` mean; `None` when they mean nothing,
+    /// such as an index refresh by `git status`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub git: Option<GitSummary>,
 }
 
 impl EffectSet {
@@ -42,12 +56,17 @@ impl EffectSet {
     pub fn paths(&self) -> Vec<String> {
         self.effects.iter().map(|e| e.path.clone()).collect()
     }
+
+    /// The effects outside `.git`.
+    pub fn files(&self) -> impl Iterator<Item = &Effect> {
+        self.effects.iter().filter(|e| !e.in_git())
+    }
 }
 
 pub(crate) fn compute(copy: &Path, work: &Path, baseline: &Baseline) -> Result<EffectSet> {
     let now = scan(copy)?;
     let mut effects = Vec::new();
-    for (path, entry) in baseline {
+    for (path, entry) in &baseline.entries {
         match now.get(path) {
             None => effects.push(Effect {
                 path: path.clone(),
@@ -67,7 +86,7 @@ pub(crate) fn compute(copy: &Path, work: &Path, baseline: &Baseline) -> Result<E
         }
     }
     for (path, stamp) in &now {
-        if !baseline.contains_key(path) {
+        if !baseline.entries.contains_key(path) {
             effects.push(Effect {
                 path: path.clone(),
                 change: Change::Created,
@@ -76,7 +95,8 @@ pub(crate) fn compute(copy: &Path, work: &Path, baseline: &Baseline) -> Result<E
         }
     }
     effects.sort_by(|a, b| a.path.cmp(&b.path));
-    Ok(EffectSet { effects })
+    let git = git::summarize(copy, baseline.git.as_ref(), &effects)?;
+    Ok(EffectSet { effects, git })
 }
 
 /// The copy's stamp moved; decides whether its type, mode or content did.

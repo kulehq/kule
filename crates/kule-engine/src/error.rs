@@ -22,6 +22,8 @@ pub enum Error {
         #[source]
         source: serde_json::Error,
     },
+    #[error("git repository at {}: {message}", path.display())]
+    Git { path: PathBuf, message: String },
     #[error("{0}")]
     Invalid(String),
 }

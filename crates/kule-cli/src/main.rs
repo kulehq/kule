@@ -3,7 +3,7 @@ use std::process::{Command, ExitCode};
 
 use anyhow::{Context, Result, anyhow};
 use clap::{Parser, Subcommand};
-use kule_engine::{Change, EffectSet, Error, Kind, Task};
+use kule_engine::{Change, Effect, EffectSet, Error, GitSummary, Kind, RefChange, Task};
 
 /// Kule engine (M0): run commands in a copy-on-write copy of a workspace,
 /// then commit or roll back what they did.
@@ -127,32 +127,93 @@ fn run() -> Result<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
+/// Files one per line; `.git` as what it means, not as object file names.
 fn print_set(set: &EffectSet) {
     const SHOWN: usize = 40;
-    if set.is_empty() {
+    let files: Vec<&Effect> = set.files().collect();
+    if files.is_empty() && set.git.is_none() {
         println!("no changes");
         return;
     }
-    println!(
-        "{} changes: +{} ~{} -{}",
-        set.effects.len(),
-        set.count(Change::Created),
-        set.count(Change::Modified),
-        set.count(Change::Deleted)
-    );
-    for effect in set.effects.iter().take(SHOWN) {
-        let mark = match effect.change {
-            Change::Created => '+',
-            Change::Modified => '~',
-            Change::Deleted => '-',
-        };
-        let slash = if effect.kind == Kind::Dir { "/" } else { "" };
-        println!("  {mark} {}{slash}", effect.path);
-    }
-    if set.effects.len() > SHOWN {
+    if !files.is_empty() {
+        let count = |change| files.iter().filter(|e| e.change == change).count();
         println!(
-            "  … {} more (kule status --json)",
-            set.effects.len() - SHOWN
+            "{} file changes: +{} ~{} -{}",
+            files.len(),
+            count(Change::Created),
+            count(Change::Modified),
+            count(Change::Deleted)
         );
+        for effect in files.iter().take(SHOWN) {
+            let mark = match effect.change {
+                Change::Created => '+',
+                Change::Modified => '~',
+                Change::Deleted => '-',
+            };
+            let slash = if effect.kind == Kind::Dir { "/" } else { "" };
+            println!("  {mark} {}{slash}", effect.path);
+        }
+        if files.len() > SHOWN {
+            println!("  … {} more (kule status --json)", files.len() - SHOWN);
+        }
+    }
+    if let Some(git) = &set.git {
+        print_git(git);
+    }
+}
+
+fn print_git(git: &GitSummary) {
+    for change in &git.refs {
+        println!("git: {}", describe_ref(change));
+    }
+    let mut store = Vec::new();
+    if git.object_files > 0 {
+        store.push(format!("{} new object files", git.object_files));
+    }
+    if git.index {
+        store.push("index changed".to_owned());
+    }
+    if !store.is_empty() {
+        println!("git: {}", store.join(" · "));
+    }
+    if git.config {
+        println!("git: config changed (it can make the next git command run code)");
+    }
+    for hook in &git.hooks {
+        println!("git: hook {hook} changed (it runs on the next matching git command)");
+    }
+    for path in &git.other {
+        println!("git: {path} changed");
+    }
+}
+
+fn describe_ref(change: &RefChange) -> String {
+    let name = change
+        .name
+        .strip_prefix("refs/heads/")
+        .unwrap_or(&change.name);
+    let short = |value: &str| match value.strip_prefix("ref: ") {
+        Some(target) => target
+            .strip_prefix("refs/heads/")
+            .unwrap_or(target)
+            .to_owned(),
+        None => value.chars().take(7).collect(),
+    };
+    match (&change.old, &change.new) {
+        (None, Some(new)) => format!("new {name} at {}", short(new)),
+        (Some(old), None) => format!("deleted {name} (was {})", short(old)),
+        (None, None) => name.to_owned(),
+        (Some(old), Some(new)) => {
+            let mut line = format!("{name} {} → {}", short(old), short(new));
+            match change.fast_forward {
+                Some(true) => line.push_str(" · fast-forward"),
+                Some(false) => line.push_str(" · history rewritten"),
+                None => {}
+            }
+            if let Some(n) = change.commits {
+                line.push_str(&format!(" · {n} commit{}", if n == 1 { "" } else { "s" }));
+            }
+            line
+        }
     }
 }

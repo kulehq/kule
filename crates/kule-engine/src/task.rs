@@ -1,5 +1,6 @@
 //! Tasks: a workspace, its copy-on-write copy, and the baseline between them.
 
+use std::collections::BTreeMap;
 use std::fs::{self, OpenOptions};
 use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
@@ -9,9 +10,10 @@ use serde::{Deserialize, Serialize};
 use walkdir::WalkDir;
 
 use crate::checkpoint::{Checkpoint, State, Store};
-use crate::effects::{self, Change, EffectSet};
+use crate::effects::{self, Change, Effect, EffectSet};
 use crate::error::{Error, IoContext, Result};
 use crate::fsops::{self, read_json, write_json};
+use crate::git::{self, GitState, Part};
 use crate::manifest::{Baseline, Entry, Kind, Stamp, Tree, relative, scan};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -72,15 +74,14 @@ impl Task {
 
     fn populate(&self) -> Result<()> {
         write_json(&self.dir.join("task.json"), &self.info)?;
-        let work = &self.info.workspace;
-        let before = scan(work)?;
-        fsops::clone_tree(work, &self.copy())?;
-        if scan(work)? != before {
-            return Err(Error::Invalid(
-                "the workspace changed while Kule was copying it; try again".into(),
-            ));
-        }
-        let baseline = pair(before, scan(&self.copy())?)?;
+        let taken = fsops::clone_tree(&self.info.workspace, &self.copy())?;
+        // The repository state is read from the copy: it is what the agent
+        // starts from, so a human commit made during the copy must show up
+        // as a change in the workspace, not be folded into the baseline.
+        let baseline = Baseline {
+            entries: pair(taken, scan(&self.copy())?)?,
+            git: git::read(&self.copy())?,
+        };
         self.save_baseline(&baseline)
     }
 
@@ -146,14 +147,17 @@ impl Task {
         if set.is_empty() {
             return Ok(None);
         }
+        let work_git = git::read(self.workspace())?;
         let mut conflicts = Vec::new();
         for effect in &set.effects {
-            let now = Stamp::of(&self.workspace().join(&effect.path))?;
-            let untouched = match (baseline.get(&effect.path), &now) {
-                (Some(entry), Some(now)) => entry.work.unchanged(now),
-                (None, None) => true,
-                _ => false,
-            };
+            let expected = baseline.entries.get(&effect.path).map(|e| &e.work);
+            let untouched = self.untouched(
+                &effect.path,
+                effect.kind,
+                expected,
+                work_git.as_ref(),
+                baseline.git.as_ref(),
+            )?;
             let replaces_dir = effect.change == Change::Deleted || effect.kind != Kind::Dir;
             if !untouched || (replaces_dir && self.has_unknown_under(&effect.path, &baseline)?) {
                 conflicts.push(effect.path.clone());
@@ -172,6 +176,7 @@ impl Task {
                 checkpoint.after.insert(path.clone(), stamp);
             }
         }
+        checkpoint.git_after = git::read(self.workspace())?;
         checkpoint.state = State::Applied;
         store.save(&checkpoint)?;
         self.resync(&mut baseline, &paths)?;
@@ -207,17 +212,30 @@ impl Task {
         let Some(mut checkpoint) = store.last_applied()? else {
             return Ok(None);
         };
-        let mut paths: Vec<String> = checkpoint.effects.iter().map(|e| e.path.clone()).collect();
+        // Git objects the commit added stay: they are harmless, `git gc`
+        // collects them, and a reference made since may already need them.
+        let reverted: Vec<&Effect> = checkpoint
+            .effects
+            .iter()
+            .filter(|e| {
+                !(e.change == Change::Created && git::classify(&e.path) == Some(Part::Object))
+            })
+            .collect();
+        let mut paths: Vec<String> = reverted.iter().map(|e| e.path.clone()).collect();
         paths.sort();
 
+        let work_git = git::read(self.workspace())?;
         let mut conflicts = Vec::new();
-        for path in &paths {
+        for effect in &reverted {
+            let path = &effect.path;
+            let untouched = self.untouched(
+                path,
+                effect.kind,
+                checkpoint.after.get(path),
+                work_git.as_ref(),
+                checkpoint.git_after.as_ref(),
+            )?;
             let now = Stamp::of(&self.workspace().join(path))?;
-            let untouched = match (checkpoint.after.get(path), &now) {
-                (Some(after), Some(now)) => after.unchanged(now),
-                (None, None) => true,
-                _ => false,
-            };
             let removes_dir = matches!(&now, Some(s) if s.kind == Kind::Dir)
                 && Stamp::of(&store.before(checkpoint.id).join(path))?
                     .is_none_or(|s| s.kind != Kind::Dir);
@@ -225,6 +243,7 @@ impl Task {
                 conflicts.push(path.clone());
             }
         }
+        conflicts.sort();
         if !conflicts.is_empty() {
             return Err(Error::Conflict(conflicts));
         }
@@ -256,11 +275,42 @@ impl Task {
                 path: e.path().unwrap_or(&root).to_path_buf(),
                 source: e.into(),
             })?;
-            if !baseline.contains_key(&relative(self.workspace(), entry.path())?) {
+            if !baseline
+                .entries
+                .contains_key(&relative(self.workspace(), entry.path())?)
+            {
                 return Ok(true);
             }
         }
         Ok(false)
+    }
+
+    /// Whether the workspace still holds what Kule expects at `path`: the
+    /// stamp `expected` (nothing when `None`), or, for the parts of `.git`
+    /// whose files change without meaning anything, the repository state
+    /// `expected_git`.
+    fn untouched(
+        &self,
+        path: &str,
+        kind: Kind,
+        expected: Option<&Stamp>,
+        now_git: Option<&GitState>,
+        expected_git: Option<&GitState>,
+    ) -> Result<bool> {
+        match git::classify(path) {
+            Some(Part::Object | Part::Derived) => return Ok(true),
+            Some(Part::Index) => return Ok(git::index_untouched(now_git, expected_git)),
+            Some(Part::Ref) if kind != Kind::Dir => {
+                return Ok(git::refs_untouched(path, now_git, expected_git));
+            }
+            _ => {}
+        }
+        let now = Stamp::of(&self.workspace().join(path))?;
+        Ok(match (expected, &now) {
+            (Some(expected), Some(now)) => expected.unchanged(now),
+            (None, None) => true,
+            _ => false,
+        })
     }
 
     /// Records `paths` as in sync again after the workspace and the copy were
@@ -271,10 +321,10 @@ impl Task {
             let copy = Stamp::of(&self.copy().join(path))?;
             match (work, copy) {
                 (Some(work), Some(copy)) => {
-                    baseline.insert(path.clone(), Entry { work, copy });
+                    baseline.entries.insert(path.clone(), Entry { work, copy });
                 }
                 (None, None) => {
-                    baseline.remove(path);
+                    baseline.entries.remove(path);
                 }
                 _ => {
                     return Err(Error::Invalid(format!(
@@ -283,6 +333,7 @@ impl Task {
                 }
             }
         }
+        baseline.git = git::read(self.workspace())?;
         self.save_baseline(baseline)
     }
 
@@ -340,9 +391,9 @@ fn new_task_dir(tasks: &Path) -> Result<(String, PathBuf)> {
     )))
 }
 
-/// Joins the workspace scan and the copy scan into a baseline; both must hold
+/// Joins the workspace scan and the copy scan entry by entry; both must hold
 /// exactly the same paths.
-fn pair(work: Tree, copy: Tree) -> Result<Baseline> {
+fn pair(work: Tree, copy: Tree) -> Result<BTreeMap<String, Entry>> {
     if let Some(path) = work
         .keys()
         .find(|p| !copy.contains_key(*p))

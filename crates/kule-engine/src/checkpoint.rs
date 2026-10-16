@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use crate::effects::{Change, Effect};
 use crate::error::{Error, IoContext, Result};
 use crate::fsops::{copy_parent_times, mirror, read_json, write_json};
+use crate::git::GitState;
 use crate::manifest::{Kind, Stamp};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -32,6 +33,10 @@ pub struct Checkpoint {
     /// The workspace's stamps right after the commit, for the paths it left in
     /// place. Undo refuses to run when they no longer match.
     pub after: BTreeMap<String, Stamp>,
+    /// The workspace repository's state right after the commit; undo checks
+    /// `.git` refs and index against it instead of against stamps.
+    #[serde(default)]
+    pub git_after: Option<GitState>,
 }
 
 pub(crate) struct Store {
@@ -78,6 +83,7 @@ impl Store {
             state: State::Applying,
             effects: effects.to_vec(),
             after: BTreeMap::new(),
+            git_after: None,
         };
         self.save(&checkpoint)?;
         Ok(checkpoint)

@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use walkdir::WalkDir;
 
 use crate::error::{Error, IoContext, Result};
+use crate::git::GitState;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -58,7 +59,13 @@ impl Stamp {
             return Ok(None);
         };
         let link = match kind {
-            Kind::Symlink => Some(utf8(&std::fs::read_link(path).at(path)?)?),
+            Kind::Symlink => match std::fs::read_link(path) {
+                Ok(target) => Some(utf8(&target)?),
+                Err(e) if matches!(e.kind(), ErrorKind::NotFound | ErrorKind::NotADirectory) => {
+                    return Ok(None);
+                }
+                Err(e) => return Err(e).at(path),
+            },
             _ => None,
         };
         Ok(Some(Stamp {
@@ -95,24 +102,50 @@ pub struct Entry {
     pub copy: Stamp,
 }
 
-pub type Baseline = BTreeMap<String, Entry>;
+/// Where the workspace and the copy last agreed.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Baseline {
+    pub entries: BTreeMap<String, Entry>,
+    /// The workspace repository's state at that point, when it has one.
+    pub git: Option<GitState>,
+}
 
+/// Walks the tree under `root`. Other processes keep creating and deleting
+/// files while Kule looks (git maintenance, IDE indexers), so an entry that
+/// disappears between being listed and being read is left out, not an error.
 pub fn scan(root: &Path) -> Result<Tree> {
     let mut tree = Tree::new();
     for entry in WalkDir::new(root).min_depth(1).follow_links(false) {
-        let entry = entry.map_err(|e| Error::Io {
-            path: e.path().unwrap_or(root).to_path_buf(),
-            source: e.into(),
-        })?;
-        let meta = entry.metadata().map_err(|e| Error::Io {
-            path: entry.path().to_path_buf(),
-            source: e.into(),
-        })?;
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(e) if vanished(&e) => continue,
+            Err(e) => {
+                return Err(Error::Io {
+                    path: e.path().unwrap_or(root).to_path_buf(),
+                    source: e.into(),
+                });
+            }
+        };
+        let meta = match entry.metadata() {
+            Ok(meta) => meta,
+            Err(e) if vanished(&e) => continue,
+            Err(e) => {
+                return Err(Error::Io {
+                    path: entry.path().to_path_buf(),
+                    source: e.into(),
+                });
+            }
+        };
         if let Some(stamp) = Stamp::from_meta(entry.path(), &meta)? {
             tree.insert(relative(root, entry.path())?, stamp);
         }
     }
     Ok(tree)
+}
+
+pub fn vanished(e: &walkdir::Error) -> bool {
+    e.io_error()
+        .is_some_and(|io| matches!(io.kind(), ErrorKind::NotFound | ErrorKind::NotADirectory))
 }
 
 pub fn relative(root: &Path, path: &Path) -> Result<String> {
