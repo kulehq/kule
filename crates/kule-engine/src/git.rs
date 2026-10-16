@@ -25,8 +25,12 @@ pub(crate) enum Part {
     /// `HEAD`, `packed-refs` and `refs/`.
     Ref,
     Index,
-    /// Written by Git as a side effect: logs, `COMMIT_EDITMSG`, lock files.
+    /// Written by Git as a side effect: logs, `COMMIT_EDITMSG`.
     Derived,
+    /// A lock a git process holds while it writes: one left in the copy is
+    /// a crashed process's, and one in the workspace is a live process's.
+    /// Never committed either way.
+    Lock,
     /// Can make the next `git` command run code.
     Config,
     /// Runs code on the next matching `git` command.
@@ -40,17 +44,57 @@ pub(crate) fn classify(path: &str) -> Option<Part> {
         return Some(Part::Other);
     }
     let rest = path.strip_prefix(".git/")?;
-    let first = rest.split('/').next().unwrap_or(rest);
-    Some(match first {
-        _ if rest.ends_with(".lock") => Part::Derived,
+    if rest.ends_with(".lock") {
+        return Some(Part::Lock);
+    }
+    let parts: Vec<&str> = rest.split('/').collect();
+    // Submodules and worktrees keep repositories of their own under
+    // `.git/modules/<name>/` and `.git/worktrees/<name>/`: their hooks and
+    // config run code just the same.
+    if matches!(parts[0], "modules" | "worktrees") {
+        let name = parts.last().copied().unwrap_or_default();
+        return Some(if parts.contains(&"hooks") {
+            Part::Hook
+        } else if matches!(name, "config" | "config.worktree") {
+            Part::Config
+        } else {
+            Part::Other
+        });
+    }
+    Some(match parts[0] {
+        // Alternates point the repository at another object store.
+        "objects"
+            if matches!(
+                parts.get(1..),
+                Some(["info", "alternates" | "http-alternates"])
+            ) =>
+        {
+            Part::Config
+        }
         "objects" => Part::Object,
         "HEAD" | "packed-refs" | "refs" => Part::Ref,
         "index" => Part::Index,
         "logs" | "COMMIT_EDITMSG" | "ORIG_HEAD" | "FETCH_HEAD" => Part::Derived,
-        "config" => Part::Config,
+        "config" | "config.worktree" => Part::Config,
         "hooks" => Part::Hook,
         _ => Part::Other,
     })
+}
+
+/// Whether reference `name` is listed in the repository's `packed-refs`.
+pub(crate) fn is_packed(root: &Path, name: &str) -> Result<bool> {
+    let path = root.join(".git/packed-refs");
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(e) => {
+            return Err(Error::Io { path, source: e });
+        }
+    };
+    Ok(text
+        .lines()
+        .filter(|line| !line.starts_with('#') && !line.starts_with('^'))
+        .any(|line| line.split_once(' ').is_some_and(|(_, r)| r.trim() == name)))
 }
 
 /// What a repository means, as far as conflicts go.
@@ -219,6 +263,11 @@ pub(crate) fn summarize(
         match classify(&effect.path) {
             Some(Part::Object) if effect.change == Change::Created && effect.kind == Kind::File => {
                 summary.object_files += 1;
+            }
+            // Objects are written once and never change; one changed or
+            // removed rewrites history's content, so it goes to a person.
+            Some(Part::Object) if effect.kind != Kind::Dir => {
+                summary.other.push(effect.path.clone());
             }
             Some(Part::Config) => summary.config = true,
             Some(Part::Hook) if effect.kind != Kind::Dir => {

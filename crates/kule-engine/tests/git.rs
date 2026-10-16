@@ -5,7 +5,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use kule_engine::{Error, Task};
+use kule_engine::{Error, Policy, Task, Verdict};
 use tempfile::TempDir;
 
 fn git(dir: &Path, args: &[&str]) -> String {
@@ -267,4 +267,96 @@ fn undo_leaves_the_new_objects_in_place() {
     git(&r.work(), &["cat-file", "-e", &agent]);
     git(&r.work(), &["fsck", "--no-progress"]);
     assert!(r.task.effects().unwrap().is_empty());
+}
+
+/// What the built-in policy says about the copy's changes, and the subjects
+/// it put to a person or denied.
+fn ruling(r: &Repo) -> (Verdict, Vec<String>) {
+    let ruling = Policy::builtin().judge(&r.task.effects().unwrap());
+    let holding = ruling.holding().map(|j| j.subject.clone()).collect();
+    (ruling.verdict, holding)
+}
+
+#[test]
+fn a_rewritten_or_removed_object_goes_to_a_person() {
+    let r = Repo::new();
+    let objects = r.copy().join(".git/objects");
+    let loose = fs::read_dir(&objects)
+        .unwrap()
+        .flatten()
+        .find(|d| d.file_name().len() == 2)
+        .unwrap()
+        .path();
+    fs::remove_dir_all(&loose).unwrap();
+    let (verdict, holding) = ruling(&r);
+    assert_eq!(verdict, Verdict::Ask, "{holding:?}");
+    assert!(
+        holding.iter().any(|s| s.contains(".git/objects/")),
+        "{holding:?}"
+    );
+}
+
+#[test]
+fn alternates_are_judged_like_config() {
+    let r = Repo::new();
+    write(
+        &r.copy().join(".git/objects/info/alternates"),
+        "/tmp/elsewhere\n",
+    );
+    let (verdict, holding) = ruling(&r);
+    assert_ne!(verdict, Verdict::Allow);
+    assert_eq!(holding, ["git config"]);
+}
+
+#[test]
+fn hooks_and_config_of_submodules_and_worktrees_count_as_hooks_and_config() {
+    let r = Repo::new();
+    write(
+        &r.copy().join(".git/modules/sub/hooks/post-checkout"),
+        "#!/bin/sh\n",
+    );
+    write(
+        &r.copy().join(".git/worktrees/wt/config.worktree"),
+        "[core]\n",
+    );
+    let summary = r.task.effects().unwrap().git.unwrap();
+    assert!(summary.config);
+    assert_eq!(summary.hooks, [".git/modules/sub/hooks/post-checkout"]);
+    assert_eq!(ruling(&r).0, Verdict::Deny);
+}
+
+#[test]
+fn a_lock_left_in_the_copy_never_reaches_the_workspace() {
+    let r = Repo::new();
+    write(&r.copy().join(".git/index.lock"), "");
+    write(&r.copy().join("notes.txt"), "more notes\n");
+    let checkpoint = r.task.commit().unwrap().unwrap();
+    assert!(
+        checkpoint
+            .effects
+            .iter()
+            .all(|e| !e.path.ends_with(".lock"))
+    );
+    assert!(!r.work().join(".git/index.lock").exists());
+    assert_eq!(
+        fs::read_to_string(r.work().join("notes.txt")).unwrap(),
+        "more notes\n"
+    );
+    // The lock does not hold up undo either.
+    r.task.undo().unwrap().unwrap();
+}
+
+#[test]
+fn deleting_a_branch_the_workspace_has_packed_is_a_conflict() {
+    let r = Repo::new();
+    git(&r.work(), &["branch", "feature"]);
+    // The task is older than the branch; a new one sees it.
+    let home = TempDir::new().unwrap();
+    let task = Task::create(home.path(), &r.work()).unwrap();
+    git(&task.copy(), &["branch", "-D", "feature"]);
+    git(&r.work(), &["pack-refs", "--all"]);
+    match task.commit() {
+        Err(Error::Conflict(paths)) => assert_eq!(paths, [".git/refs/heads/feature"]),
+        other => panic!("expected a conflict, got {other:?}"),
+    }
 }

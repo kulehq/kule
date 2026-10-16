@@ -80,12 +80,14 @@ impl EffectSet {
     }
 
     /// What a commit takes: everything, or everything but the ignored paths.
+    /// Git's lock files never go: one in the copy is a crashed process's.
     pub fn to_commit(&self, include_ignored: bool) -> EffectSet {
         EffectSet {
             effects: self
                 .effects
                 .iter()
                 .filter(|e| include_ignored || !e.ignored)
+                .filter(|e| git::classify(&e.path) != Some(git::Part::Lock))
                 .cloned()
                 .collect(),
             git: self.git.clone(),

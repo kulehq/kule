@@ -250,6 +250,14 @@ impl Task {
                 conflicts.push(effect.path.clone());
             }
         }
+        // A reference deleted in the copy is a loose file gone; in the
+        // workspace it may live in packed-refs, which the commit would leave
+        // standing, and the deletion would silently not happen.
+        for change in set.git.iter().flat_map(|g| &g.refs) {
+            if change.new.is_none() && git::is_packed(self.workspace(), &change.name)? {
+                conflicts.push(format!(".git/{}", change.name));
+            }
+        }
         if !conflicts.is_empty() {
             return Err(Error::Conflict(conflicts));
         }
