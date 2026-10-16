@@ -11,8 +11,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::effects::{Change, Effect};
 use crate::error::{Error, IoContext, Result};
-use crate::fsops::{mirror, read_json, write_json};
-use crate::manifest::Stamp;
+use crate::fsops::{copy_parent_times, mirror, read_json, write_json};
+use crate::manifest::{Kind, Stamp};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -50,23 +50,29 @@ impl Store {
     }
 
     /// Saves the workspace's version of every path the commit is about to
-    /// replace or delete, and records the checkpoint as `Applying`.
+    /// replace or delete, along with the times of their parent directories,
+    /// and records the checkpoint as `Applying`.
     pub fn begin(&self, work: &Path, effects: &[Effect]) -> Result<Checkpoint> {
         fs::create_dir_all(&self.root).at(&self.root)?;
         let id = self.ids()?.last().map_or(1, |last| last + 1);
         let before = self.before(id);
         fs::create_dir_all(&before).at(&before)?;
+        let all: Vec<String> = effects.iter().map(|e| e.path.clone()).collect();
         let replaced: Vec<String> = effects
             .iter()
             .filter(|e| e.change != Change::Created)
             .map(|e| e.path.clone())
             .collect();
-        for path in &replaced {
-            if let Some(parent) = before.join(path).parent() {
-                fs::create_dir_all(parent).at(parent)?;
+        for path in &all {
+            if let Some(parent) = Path::new(path).parent()
+                && Stamp::of(&work.join(parent))?.is_some_and(|s| s.kind == Kind::Dir)
+            {
+                let dir = before.join(parent);
+                fs::create_dir_all(&dir).at(&dir)?;
             }
         }
         mirror(work, &before, &replaced, false)?;
+        copy_parent_times(work, &before, &all)?;
         let checkpoint = Checkpoint {
             id,
             state: State::Applying,

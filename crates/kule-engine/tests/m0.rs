@@ -219,6 +219,75 @@ fn commit_makes_the_workspace_match_the_copy() {
     assert!(s.task.commit().unwrap().is_none());
 }
 
+/// Build tools decide what to rebuild from mtimes. Directories are created
+/// fresh, so only Kule can carry their times over; files keep theirs through
+/// the clone on APFS but not through a plain copy.
+#[test]
+fn the_copy_keeps_modification_times() {
+    let s = Setup::new();
+    for rel in [
+        "src",
+        "src/nested/deep",
+        "src/empty-dir",
+        "src/main.rs",
+        "run.sh",
+    ] {
+        let (w, c) = (
+            fs::symlink_metadata(s.work().join(rel)).unwrap(),
+            fs::symlink_metadata(s.copy().join(rel)).unwrap(),
+        );
+        assert_eq!(
+            (w.mtime(), w.mtime_nsec()),
+            (c.mtime(), c.mtime_nsec()),
+            "{rel}"
+        );
+    }
+}
+
+/// Adding or removing a child moves its parent's mtime. After a rollback the
+/// parents of what came back (the root included) must carry the workspace's
+/// times again.
+#[test]
+fn rollback_restores_parent_directory_times() {
+    let s = Setup::new();
+    fs::remove_dir_all(s.copy().join("src/nested")).unwrap();
+    write(&s.copy().join("extra.txt"), "x\n");
+    s.task.rollback().unwrap();
+    for rel in ["", "src"] {
+        let (w, c) = (
+            fs::metadata(s.work().join(rel)).unwrap(),
+            fs::metadata(s.copy().join(rel)).unwrap(),
+        );
+        assert_eq!(
+            (w.mtime(), w.mtime_nsec()),
+            (c.mtime(), c.mtime_nsec()),
+            "{rel:?}"
+        );
+    }
+}
+
+#[test]
+fn undo_restores_parent_directory_times() {
+    let s = Setup::new();
+    let times = |root: &Path| -> Vec<(i64, i64)> {
+        ["", "src"]
+            .iter()
+            .map(|rel| {
+                let m = fs::metadata(root.join(rel)).unwrap();
+                (m.mtime(), m.mtime_nsec())
+            })
+            .collect()
+    };
+    let before = times(&s.work());
+    fs::remove_dir_all(s.copy().join("src/nested")).unwrap();
+    write(&s.copy().join("docs/guide.md"), "# Guide\n");
+    s.task.commit().unwrap();
+    assert_ne!(times(&s.work()), before);
+    s.task.undo().unwrap();
+    assert_eq!(times(&s.work()), before);
+    assert_eq!(times(&s.copy()), before);
+}
+
 #[test]
 fn commit_keeps_modification_times() {
     let s = Setup::new();
@@ -342,6 +411,20 @@ fn undo_refuses_when_the_workspace_changed_after_the_commit() {
         fs::read_to_string(s.work().join("src/main.rs")).unwrap(),
         "fn main() { /* human */ }\n"
     );
+}
+
+#[test]
+fn undo_refuses_to_remove_a_directory_holding_unknown_files() {
+    let s = Setup::new();
+    write(&s.copy().join("docs/guide.md"), "# Guide\n");
+    s.task.commit().unwrap();
+    write(&s.work().join("docs/human-notes.md"), "keep me\n");
+
+    match s.task.undo() {
+        Err(Error::Conflict(paths)) => assert_eq!(paths, ["docs"]),
+        other => panic!("expected a conflict, got {other:?}"),
+    }
+    assert!(s.work().join("docs/human-notes.md").exists());
 }
 
 #[test]

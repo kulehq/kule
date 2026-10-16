@@ -1,5 +1,6 @@
 //! Filesystem moves shared by task creation, commit, rollback and undo.
 
+use std::collections::BTreeSet;
 use std::fs::{self, File};
 use std::io::{self, Read};
 use std::os::unix::fs::{PermissionsExt, symlink};
@@ -97,6 +98,30 @@ pub fn mirror(src: &Path, dst: &Path, paths: &[String], atomic: bool) -> Result<
     for (p, (s, _)) in paths.iter().zip(&stamps).rev() {
         if let Some(s) = s.as_ref().filter(|s| s.kind == Kind::Dir) {
             finish(&dst.join(p), s)?;
+        }
+    }
+
+    // 4. The same goes for the parents of what changed, which are not in `paths`.
+    copy_parent_times(src, dst, paths)
+}
+
+/// Gives the parent directories of `paths` (the root included) under `dst`
+/// the modification times they have under `src`, where both are directories.
+pub fn copy_parent_times(src: &Path, dst: &Path, paths: &[String]) -> Result<()> {
+    let listed: BTreeSet<&str> = paths.iter().map(String::as_str).collect();
+    let parents: BTreeSet<&str> = paths
+        .iter()
+        .filter_map(|p| Path::new(p).parent()?.to_str())
+        .filter(|p| !listed.contains(p))
+        .collect();
+    for parent in parents {
+        let (from, to) = (src.join(parent), dst.join(parent));
+        if let (Some(s), Some(d)) = (Stamp::of(&from)?, Stamp::of(&to)?)
+            && s.kind == Kind::Dir
+            && d.kind == Kind::Dir
+        {
+            let mtime = FileTime::from_unix_time(s.mtime.0, s.mtime.1 as u32);
+            filetime::set_file_mtime(&to, mtime).at(&to)?;
         }
     }
     Ok(())
