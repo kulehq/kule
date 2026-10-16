@@ -56,12 +56,15 @@ pub fn clone_tree(src: &Path, dst: &Path) -> Result<Tree> {
                 Kind::Dir => fs::create_dir(&to).at(&to),
                 _ => place(entry.path(), &to, &before),
             };
-            match cloned {
-                Err(e) if is_vanished(&e) => {
+            // Copying reports a vanished source differently per platform
+            // (`fs::copy` on Linux says the source is not a regular file),
+            // so ask the filesystem rather than the error.
+            if let Err(e) = cloned {
+                if is_vanished(&e) || Stamp::of(entry.path())?.is_none() {
                     remove(&to)?;
                     break;
                 }
-                other => other?,
+                return Err(e);
             }
             match Stamp::of(entry.path())? {
                 Some(after) if before.unchanged(&after) => {
