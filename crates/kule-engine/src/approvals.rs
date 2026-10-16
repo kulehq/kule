@@ -4,7 +4,7 @@
 //! answers in time the connection is refused with a reason that tells the
 //! agent to skip the step, so the agent never hangs.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -60,7 +60,14 @@ struct State {
     waiting: BTreeMap<u64, Waiting>,
     /// Proxies that stopped: what they ask from now on is denied at once.
     withdrawn: HashSet<u64>,
+    /// A person's answers, kept for the rest of the proxy's run: one answer
+    /// per host and port, not one per connection.
+    remembered: HashMap<(u64, String, u16), Answer>,
 }
+
+/// The most questions one proxy can have waiting; more are refused at once,
+/// so a task cannot bury the person in them.
+pub const MAX_WAITING: usize = 16;
 
 struct Waiting {
     question: Question,
@@ -94,7 +101,9 @@ impl Approvals {
         self.settle(|w| (w.question.id == id).then_some(answer)) > 0
     }
 
-    /// Asks and waits up to `timeout` for the answer.
+    /// Asks and waits up to `timeout` for the answer. A person answers once
+    /// per host and port in a proxy's run: a question already waiting for
+    /// them is shared, and their answer is kept for the rest of the run.
     pub(crate) fn ask(
         &self,
         source: u64,
@@ -105,39 +114,76 @@ impl Approvals {
         timeout: Duration,
     ) -> Answer {
         let now = unix_now();
-        let id = {
+        let key = (source, host.to_owned(), port);
+        let (id, owner) = {
             let mut state = lock(&self.inner.state);
             if state.withdrawn.contains(&source) {
                 return Answer::Denied;
             }
-            state.next += 1;
-            let id = state.next;
-            let question = Question {
-                id,
-                task: task.to_owned(),
-                host: host.to_owned(),
-                port,
-                rules: rules.to_vec(),
-                asked_unix: now,
-                deadline_unix: now + timeout.as_secs(),
-            };
-            state.waiting.insert(
-                id,
-                Waiting {
-                    question,
-                    source,
-                    answer: None,
-                },
-            );
-            id
+            if let Some(answer) = state.remembered.get(&key) {
+                return *answer;
+            }
+            let same = state
+                .waiting
+                .values()
+                .find(|w| w.source == source && w.question.host == host && w.question.port == port);
+            if let Some(id) = same.map(|w| w.question.id) {
+                (id, false)
+            } else if state
+                .waiting
+                .values()
+                .filter(|w| w.source == source)
+                .count()
+                >= MAX_WAITING
+            {
+                return Answer::Denied;
+            } else {
+                state.next += 1;
+                let id = state.next;
+                let question = Question {
+                    id,
+                    task: task.to_owned(),
+                    host: host.to_owned(),
+                    port,
+                    rules: rules.to_vec(),
+                    asked_unix: now,
+                    deadline_unix: now + timeout.as_secs(),
+                };
+                state.waiting.insert(
+                    id,
+                    Waiting {
+                        question,
+                        source,
+                        answer: None,
+                    },
+                );
+                (id, true)
+            }
         };
-        self.changed();
+        if owner {
+            self.changed();
+        }
+        self.wait(id, &key, timeout, owner)
+    }
 
+    /// Waits up to `timeout` for question `id`'s answer. Its `owner` keeps
+    /// the answer for `key` and takes the question off the list, under one
+    /// lock, so one sharing it finds the answer either way.
+    fn wait(&self, id: u64, key: &(u64, String, u16), timeout: Duration, owner: bool) -> Answer {
         let deadline = Instant::now() + timeout;
         let mut state = lock(&self.inner.state);
         let answer = loop {
-            if let Some(answer) = state.waiting.get(&id).and_then(|w| w.answer) {
-                break answer;
+            match state.waiting.get(&id) {
+                Some(w) if w.answer.is_some() => break w.answer.unwrap_or(Answer::Denied),
+                Some(_) => {}
+                // Taken off by its owner: answered (and kept) or timed out.
+                None => {
+                    break state
+                        .remembered
+                        .get(key)
+                        .copied()
+                        .unwrap_or(Answer::TimedOut);
+                }
             }
             let left = deadline.saturating_duration_since(Instant::now());
             if left.is_zero() {
@@ -150,9 +196,15 @@ impl Approvals {
                 .unwrap_or_else(|e| e.into_inner())
                 .0;
         };
-        state.waiting.remove(&id);
-        drop(state);
-        self.changed();
+        if owner {
+            if answer != Answer::TimedOut {
+                state.remembered.insert(key.clone(), answer);
+            }
+            state.waiting.remove(&id);
+            drop(state);
+            self.inner.answered.notify_all();
+            self.changed();
+        }
         answer
     }
 

@@ -131,6 +131,10 @@ impl Profile {
         sandbox.set_network(Network::Proxy(proxy.port()));
         let mut command = sandbox.command(&self.program().to_string_lossy(), &self.args())?;
         command.envs(self.env.iter().copied());
+        // Started from the task's tmp, not the copy: `npx` would otherwise
+        // take the repository's node_modules or .npmrc for the agent's own.
+        // The agent still works in the copy, which its session names.
+        command.current_dir(task.tmp()?);
         Ok(Launch { command, sandbox })
     }
 }
@@ -172,5 +176,11 @@ mod tests {
             OsStr::new("GEMINI_FORCE_FILE_STORAGE"),
             Some(OsStr::new("true"))
         )));
+        // Not from the copy, where the repository could stand in for npx's
+        // package.
+        assert_eq!(
+            launch.command.get_current_dir(),
+            Some(task.tmp().unwrap().as_path())
+        );
     }
 }

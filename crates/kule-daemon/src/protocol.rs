@@ -69,6 +69,11 @@ pub enum Call {
     CopyOf {
         task: String,
     },
+    /// The copy, for the person's terminal; refused while the copy's git
+    /// config or hooks hold changes (see `Task::terminal_dir`).
+    TerminalDir {
+        task: String,
+    },
     StartRun {
         task: String,
         agent: String,

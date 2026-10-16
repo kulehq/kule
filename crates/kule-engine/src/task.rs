@@ -423,6 +423,28 @@ impl Task {
         write_json(&self.dir.join("settings.json"), &settings)
     }
 
+    /// The copy, for a person's own terminal, unless what the task ran
+    /// changed what git runs there: config (`core.fsmonitor`, aliases) or
+    /// hooks would run outside the sandbox the moment their shell prompt
+    /// calls `git status`. Then this refuses, naming them, until they are
+    /// committed or rolled back.
+    pub fn terminal_dir(&self) -> Result<PathBuf> {
+        if let Some(git) = self.effects()?.git {
+            let mut runs: Vec<String> = git.hooks.iter().map(|h| format!("hook {h}")).collect();
+            if git.config {
+                runs.insert(0, "git config".to_owned());
+            }
+            if !runs.is_empty() {
+                return Err(Error::Invalid(format!(
+                    "the copy's {} changed, and git there would run it outside the sandbox; \
+                     review it, then commit or roll it back before opening a terminal",
+                    runs.join(", ")
+                )));
+            }
+        }
+        Ok(self.copy())
+    }
+
     /// The task's signed history, oldest first: every commit and undo.
     /// Fails when the chain was changed after it was signed.
     pub fn history(&self) -> Result<Vec<HistoryEntry>> {

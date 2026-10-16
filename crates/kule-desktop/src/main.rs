@@ -127,7 +127,7 @@ fn remove_task(kule: K<'_>, task: String) -> Result<()> {
 
 #[tauri::command(async)]
 fn open_terminal(kule: K<'_>, task: String) -> Result<()> {
-    let copy: PathBuf = kule.call(Call::CopyOf { task })?;
+    let copy: PathBuf = kule.call(Call::TerminalDir { task })?;
     terminal::open(&copy)
 }
 

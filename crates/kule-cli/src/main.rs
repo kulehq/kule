@@ -153,13 +153,14 @@ fn run() -> Result<ExitCode> {
         }
         Cmd::Shell { task } => {
             let task = Task::open(&home, &task)?;
+            let dir = task.terminal_dir()?;
             let shell = std::env::var_os("SHELL").unwrap_or_else(|| "/bin/sh".into());
             eprintln!(
                 "kule: in task {}'s copy, outside the sandbox; exit to come back",
                 task.id()
             );
             let status = Command::new(&shell)
-                .current_dir(task.copy())
+                .current_dir(dir)
                 .env("KULE_TASK", task.id())
                 .status()
                 .with_context(|| format!("could not start {}", shell.to_string_lossy()))?;

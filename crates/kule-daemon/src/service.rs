@@ -304,6 +304,11 @@ impl Service {
         Ok(self.open(id)?.copy())
     }
 
+    /// The copy, for the person's own terminal (see `Task::terminal_dir`).
+    pub fn terminal_dir(&self, id: &str) -> Result<PathBuf> {
+        self.open(id)?.terminal_dir().map_err(text)
+    }
+
     /// Deletes the task and its copy; the workspace is not touched.
     pub fn remove(&self, id: &str) -> Result<()> {
         self.idle(id)?.remove().map_err(text)?;

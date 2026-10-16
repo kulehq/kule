@@ -222,3 +222,61 @@ fn a_task_waits_fifteen_minutes_unless_a_person_sets_it_within_bounds() {
     }
     assert_eq!(s.task.approval_timeout().unwrap(), Duration::from_secs(300));
 }
+
+/// A raw client of `proxy`, asking for a tunnel to `target` on its own
+/// thread; joins to the status line.
+fn ask_through(proxy: &Proxy, target: &str) -> JoinHandle<String> {
+    use std::io::{BufRead, BufReader};
+    let (port, target) = (proxy.port(), target.to_owned());
+    std::thread::spawn(move || {
+        let mut s = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+        write!(s, "CONNECT {target} HTTP/1.1\r\n\r\n").unwrap();
+        let mut status = String::new();
+        let _ = BufReader::new(s).read_line(&mut status);
+        status
+    })
+}
+
+#[test]
+fn one_answer_per_host_and_port_in_a_run() {
+    let s = Setup::new();
+    let approvals = Approvals::new();
+    let proxy = s.asking(&approvals, DEFAULT_TIMEOUT);
+    let target = format!("127.0.0.1:{}", s.up);
+    let first = ask_through(&proxy, &target);
+    let id = question(&approvals);
+    let second = ask_through(&proxy, &target);
+    std::thread::sleep(Duration::from_millis(200));
+    // The second connection waits on the same question.
+    assert_eq!(approvals.waiting().len(), 1);
+
+    approvals.answer(id, true);
+    assert!(first.join().unwrap().contains("200"));
+    assert!(second.join().unwrap().contains("200"));
+    // And the next one is not asked again.
+    let third = ask_through(&proxy, &target).join().unwrap();
+    assert!(third.contains("200"), "{third}");
+    assert!(approvals.waiting().is_empty());
+}
+
+#[test]
+fn a_task_cannot_bury_the_person_in_questions() {
+    let s = Setup::new();
+    let approvals = Approvals::new();
+    let proxy = s.asking(&approvals, DEFAULT_TIMEOUT);
+    let waiting: Vec<_> = (0..kule_engine::MAX_WAITING)
+        .map(|i| ask_through(&proxy, &format!("host{i}.invalid:443")))
+        .collect();
+    let start = Instant::now();
+    while approvals.waiting().len() < kule_engine::MAX_WAITING {
+        assert!(start.elapsed() < Duration::from_secs(10));
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let one_more = ask_through(&proxy, "one-more.invalid:443").join().unwrap();
+    assert!(one_more.contains("403"), "{one_more}");
+    assert_eq!(approvals.waiting().len(), kule_engine::MAX_WAITING);
+    proxy.stop();
+    for client in waiting {
+        let _ = client.join();
+    }
+}

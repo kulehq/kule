@@ -32,7 +32,9 @@ mod snapshot;
 mod steps;
 mod task;
 
-pub use approvals::{Answer, Approvals, DEFAULT_TIMEOUT, MAX_TIMEOUT, MIN_TIMEOUT, Question};
+pub use approvals::{
+    Answer, Approvals, DEFAULT_TIMEOUT, MAX_TIMEOUT, MAX_WAITING, MIN_TIMEOUT, Question,
+};
 pub use checkpoint::{Checkpoint, State as CheckpointState};
 pub use effects::{Change, Effect, EffectSet};
 pub use error::{Error, Result};

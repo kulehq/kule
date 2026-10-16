@@ -360,3 +360,16 @@ fn deleting_a_branch_the_workspace_has_packed_is_a_conflict() {
         other => panic!("expected a conflict, got {other:?}"),
     }
 }
+
+/// Git in the person's own terminal would run what the task put in the
+/// copy's config or hooks, outside the sandbox.
+#[test]
+fn no_terminal_in_a_copy_whose_git_config_or_hooks_changed() {
+    let r = Repo::new();
+    assert_eq!(r.task.terminal_dir().unwrap(), r.copy());
+    git(&r.copy(), &["config", "core.fsmonitor", "touch /tmp/pwned"]);
+    let e = r.task.terminal_dir().unwrap_err().to_string();
+    assert!(e.contains("git config"), "{e}");
+    r.task.rollback().unwrap();
+    assert_eq!(r.task.terminal_dir().unwrap(), r.copy());
+}
