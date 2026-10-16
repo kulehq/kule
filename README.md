@@ -5,7 +5,7 @@ approve and steer. Every command an agent runs is a transaction in a
 copy-on-write copy of the workspace, and what reaches the real workspace is
 decided by the effects the command had, not by its text.
 
-**Status:** M0 (engine spike) done, M1 in progress. macOS and Linux.
+**Status:** M0 and M1 done (engine, git, sandbox, policy, proxy). macOS and Linux.
 
 ## M0: transactions on a copy-on-write copy
 
@@ -57,8 +57,14 @@ git: hook pre-commit changed (it runs on the next matching git command)
 macOS, Landlock on Linux). They may write only to the task's copy, its own
 `TMPDIR` and package caches; credentials such as `~/.ssh`, `~/.aws` and
 `~/.npmrc` cannot be read; `--no-network` shuts TCP. If the sandbox cannot be
-set up, the command does not run. `--allow-write`, `--hide` and
-`--no-sandbox` adjust it.
+set up, the command does not run. `--allow-write`, `--hide`, `--reveal` and
+`--no-sandbox` adjust it. On macOS, what the sandbox refused is printed after
+the command and kept in the task's `sandbox.jsonl`:
+
+```
+sandbox: refused file-read-data /Users/me/.config/gh/config.yml (gh)
+sandbox: refused file-write-create /Users/me/.zshrc (sh)
+```
 
 ## M1, step 3: policy
 
@@ -79,12 +85,43 @@ rewrites and mass deletes wait; git hooks are denied. Save your own as
 in `.kule/policy.cedar`; they are read from the real workspace, never from
 the copy an agent edits.
 
+## M1, step 4: the network goes through a proxy
+
+Commands can connect only to the task's proxy; the proxy variables point at
+it. Each connection is judged by the same policy (`net.connect`): package
+registries and model APIs pass, anything else is refused until the approval
+inbox exists. Every connection lands in the task's `network.jsonl`.
+
+```
+net: registry.npmjs.org:443 · tunneled (package-registries)
+net: example.com:443 ×2 · refused, waits for approval (no-rule-lets-it-pass)
+```
+
+`--no-network` shuts TCP; `--open-network` bypasses proxy and policy.
+
+## M1 in practice
+
+A headless Claude Code run inside the sandbox fixed a failing test in a
+small Rust repository and committed the fix; the policy let the result pass
+on its own and `kule commit` applied it:
+
+```sh
+kule exec $TASK --reveal ~/Library/Keychains \
+  --allow-write ~/.claude --allow-write ~/.claude.json \
+  -- claude -p "Fix the failing test, run cargo test, commit the fix." \
+     --allowedTools "Bash,Read,Edit,Write" --permission-prompts none
+kule status $TASK   # policy: passes on its own
+kule commit $TASK
+```
+
+Which paths an agent needs (its login, state, temporary files) is what agent
+profiles in M2 will settle; for now they are flags.
+
 ## Not yet
 
-- No network proxy yet: the network is either open or shut. Per-host rules
-  come with the proxy (the last step of M1).
-- Denied sandbox attempts are not recorded yet; the command sees the error.
-- No approval inbox and no desktop app (M2, M3).
+- Linux: Landlock reports refusals only to the audit log, so they are not
+  listed; the command still gets EPERM. Network rules need Linux 6.7.
+- No approval inbox, no agent profiles, no desktop app (M2, M3).
 
 ## License
 
