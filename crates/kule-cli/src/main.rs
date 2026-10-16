@@ -44,6 +44,10 @@ enum Cmd {
         /// Also hide PATH from the command (repeatable).
         #[arg(long, value_name = "PATH")]
         hide: Vec<PathBuf>,
+        /// Let the command read PATH although it is hidden by default, such
+        /// as ~/Library/Keychains for an agent's own login (repeatable).
+        #[arg(long, value_name = "PATH")]
+        reveal: Vec<PathBuf>,
         /// Shut TCP networking for the command, localhost included.
         #[arg(long, conflicts_with = "open_network")]
         no_network: bool,
@@ -118,6 +122,7 @@ fn run() -> Result<ExitCode> {
             task,
             allow_write,
             hide,
+            reveal,
             no_network,
             open_network,
             no_sandbox,
@@ -139,6 +144,9 @@ fn run() -> Result<ExitCode> {
                 }
                 for path in &hide {
                     sandbox.hide(path)?;
+                }
+                for path in &reveal {
+                    sandbox.reveal(path)?;
                 }
                 let network = if no_network {
                     Network::Deny

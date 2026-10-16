@@ -66,7 +66,8 @@ pub struct Sandbox {
     writable: Vec<PathBuf>,
     hidden: Vec<PathBuf>,
     network: Network,
-    /// Marks this sandbox's refusals where the platform reports them.
+    /// Marks this sandbox's refusals where the platform reports them (macOS).
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     tag: String,
 }
 
@@ -133,6 +134,15 @@ impl Sandbox {
     /// is hidden too, in case something creates it.
     pub fn hide(&mut self, path: &Path) -> Result<()> {
         self.hidden.push(real_or_planned(path)?);
+        Ok(())
+    }
+
+    /// Takes `path` off the hidden list, for a command that needs it (an
+    /// agent reading its own login from the keychain). Hidden paths inside
+    /// it stay hidden.
+    pub fn reveal(&mut self, path: &Path) -> Result<()> {
+        let path = real_or_planned(path)?;
+        self.hidden.retain(|hidden| hidden != &path);
         Ok(())
     }
 
