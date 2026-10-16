@@ -10,7 +10,8 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use kule_daemon::{
-    Call, Client, MAX_REQUEST, Notice, Service, TaskView, bind, run, serve, socket_path,
+    Call, Client, Hello, MAX_REQUEST, Notice, PROTOCOL, Service, TaskView, bind, run, serve,
+    socket_path,
 };
 use kule_engine::{Policy, Proxy, Task};
 use tempfile::TempDir;
@@ -190,4 +191,99 @@ fn the_socket_is_for_its_owner_only() {
         .permissions()
         .mode();
     assert_eq!(mode & 0o077, 0, "{mode:o}");
+}
+
+#[test]
+fn a_daemon_says_which_protocol_it_speaks() {
+    let home = TempDir::new().unwrap();
+    daemon(home.path());
+    let hello: Hello = Client::new(home.path()).call(Call::Hello).unwrap();
+    assert_eq!(hello.protocol, PROTOCOL);
+}
+
+#[test]
+fn shutdown_waits_until_nothing_is_going_on() {
+    let home = TempDir::new().unwrap();
+    let path = home.path().to_owned();
+    let service_home = path.clone();
+    let socket = socket_path(&path);
+    let listener = bind(&socket).unwrap();
+    let service = Arc::new(Service::new(service_home));
+    let served = service.clone();
+    let daemon =
+        std::thread::spawn(move || serve(listener, served, &socket, Duration::from_secs(600)));
+    let client = Client::new(home.path());
+    let ws = workspace();
+    let view: TaskView = client
+        .call(Call::CreateTask {
+            workspace: ws.path().to_owned(),
+        })
+        .unwrap();
+
+    // A question waiting keeps it up.
+    let task = Task::open(home.path(), &view.id).unwrap();
+    let proxy = Proxy::start_asking(
+        &task,
+        Policy::builtin(),
+        service.approvals(),
+        Duration::from_secs(60),
+    )
+    .unwrap();
+    ProxyClient::connect(proxy.port()).ask("example.invalid:443");
+    let start = Instant::now();
+    while service.questions().is_empty() && start.elapsed() < Duration::from_secs(10) {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let refused = client.call::<()>(Call::Shutdown).unwrap_err();
+    assert!(refused.contains("question is waiting"), "{refused}");
+    assert!(client.is_running());
+
+    drop(proxy);
+    client.call::<()>(Call::Shutdown).unwrap();
+    daemon.join().unwrap();
+    assert!(!client.is_running());
+}
+
+/// Answers like a daemon of another protocol, and stops when asked.
+fn foreign_daemon(home: &Path) -> std::thread::JoinHandle<()> {
+    use std::io::{BufRead, BufReader};
+    let socket = socket_path(home);
+    let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let mut stream = stream.unwrap();
+            let mut line = String::new();
+            BufReader::new(stream.try_clone().unwrap())
+                .read_line(&mut line)
+                .unwrap();
+            if line.contains("\"hello\"") {
+                let _ = stream
+                    .write_all(b"{\"id\":1,\"result\":{\"protocol\":999,\"version\":\"old\"}}\n");
+            } else if line.contains("\"shutdown\"") {
+                let _ = stream.write_all(b"{\"id\":1,\"result\":null}\n");
+                drop(listener);
+                fs::remove_file(&socket).unwrap();
+                return;
+            }
+        }
+    })
+}
+
+#[test]
+fn a_daemon_of_another_protocol_is_replaced() {
+    let home = TempDir::new().unwrap();
+    let old = foreign_daemon(home.path());
+    let client = Client::new(home.path());
+    assert!(client.is_running());
+
+    let path = home.path().to_owned();
+    client
+        .ensure_running(|| {
+            std::thread::spawn(move || run(&path, Duration::from_secs(600)));
+            Ok(())
+        })
+        .unwrap();
+    old.join().unwrap();
+    let hello: Hello = client.call(Call::Hello).unwrap();
+    assert_eq!(hello.protocol, PROTOCOL);
 }

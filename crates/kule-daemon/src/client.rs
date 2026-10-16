@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use serde::de::DeserializeOwned;
 
-use crate::protocol::{Call, Request, Response};
+use crate::protocol::{Call, Hello, PROTOCOL, Request, Response};
 use crate::server::{read_line, socket_path, write_line};
 use crate::service::{Notice, Result};
 
@@ -33,10 +33,24 @@ impl Client {
         UnixStream::connect(&self.socket).is_ok()
     }
 
-    /// Starts the daemon with `start` unless one answers, then waits for it.
+    /// Starts the daemon with `start` unless one that speaks this protocol
+    /// answers, then waits for it. A daemon of another version is asked to
+    /// stop first; it refuses while it has agents at work.
     pub fn ensure_running(&self, start: impl FnOnce() -> io::Result<()>) -> Result<()> {
         if self.is_running() {
-            return Ok(());
+            if matches!(self.call::<Hello>(Call::Hello), Ok(h) if h.protocol == PROTOCOL) {
+                return Ok(());
+            }
+            self.call::<()>(Call::Shutdown).map_err(|e| {
+                format!(
+                    "a Kule daemon of another version is running and did not stop ({e}); \
+                     stop it when its agents are done"
+                )
+            })?;
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while self.is_running() && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(50));
+            }
         }
         start().map_err(|e| format!("could not start the Kule daemon: {e}"))?;
         let deadline = Instant::now() + Duration::from_secs(10);

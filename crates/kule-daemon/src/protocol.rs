@@ -8,6 +8,17 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+/// Changes whenever a call, a result or a notice changes shape; a client
+/// and a daemon that disagree on it cannot talk.
+pub const PROTOCOL: u32 = 1;
+
+/// What a daemon says about itself.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Hello {
+    pub protocol: u32,
+    pub version: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Request {
     pub id: u64,
@@ -18,6 +29,10 @@ pub struct Request {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "method", content = "params", rename_all = "snake_case")]
 pub enum Call {
+    /// The daemon's [`Hello`]; every client asks first.
+    Hello,
+    /// Stops the daemon, unless an agent is at work or a question waits.
+    Shutdown,
     Agents,
     Tasks,
     CreateTask {

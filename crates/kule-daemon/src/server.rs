@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::protocol::{Call, Request, Response};
+use crate::protocol::{Call, Hello, PROTOCOL, Request, Response};
 use crate::service::Service;
 
 /// The longest request line the daemon reads.
@@ -48,10 +48,12 @@ pub fn run(home: &Path, idle_after: Duration) -> io::Result<()> {
 /// idle for `idle_after`, then removes the socket.
 pub fn serve(listener: UnixListener, service: Arc<Service>, socket: &Path, idle_after: Duration) {
     let clients = Arc::new(AtomicUsize::new(0));
-    let stopping = Arc::new(AtomicBool::new(false));
+    let control = Arc::new(Control {
+        stopping: AtomicBool::new(false),
+        socket: socket.to_owned(),
+    });
     {
-        let (service, clients, stopping) = (service.clone(), clients.clone(), stopping.clone());
-        let socket = socket.to_owned();
+        let (service, clients, control) = (service.clone(), clients.clone(), control.clone());
         std::thread::spawn(move || {
             let mut quiet_since = Instant::now();
             loop {
@@ -59,31 +61,44 @@ pub fn serve(listener: UnixListener, service: Arc<Service>, socket: &Path, idle_
                 if clients.load(Ordering::SeqCst) > 0 || service.busy() {
                     quiet_since = Instant::now();
                 } else if quiet_since.elapsed() >= idle_after {
-                    stopping.store(true, Ordering::SeqCst);
-                    // Wakes the accept loop, which sees the flag.
-                    let _ = UnixStream::connect(&socket);
+                    control.stop();
                     return;
                 }
             }
         });
     }
+    // SAFETY: geteuid has no preconditions and cannot fail.
     let me = unsafe { libc::geteuid() };
     for conn in listener.incoming() {
-        if stopping.load(Ordering::SeqCst) {
+        if control.stopping.load(Ordering::SeqCst) {
             break;
         }
         let Ok(stream) = conn else { continue };
         if peer_uid(&stream) != Some(me) {
             continue; // dropped: closes the connection
         }
-        let (service, clients) = (service.clone(), clients.clone());
+        let (service, clients, control) = (service.clone(), clients.clone(), control.clone());
         clients.fetch_add(1, Ordering::SeqCst);
         std::thread::spawn(move || {
-            let _ = handle(stream, &service);
+            let _ = handle(stream, &service, &control);
             clients.fetch_sub(1, Ordering::SeqCst);
         });
     }
     let _ = fs::remove_file(socket);
+}
+
+/// Lets the idle watch and a shutdown call stop the accept loop.
+struct Control {
+    stopping: AtomicBool,
+    socket: PathBuf,
+}
+
+impl Control {
+    fn stop(&self) {
+        self.stopping.store(true, Ordering::SeqCst);
+        // Wakes the accept loop, which sees the flag.
+        let _ = UnixStream::connect(&self.socket);
+    }
 }
 
 /// Holds `path` locked for as long as the file stays open.
@@ -161,7 +176,7 @@ pub fn peer_uid(stream: &UnixStream) -> Option<u32> {
     }
 }
 
-fn handle(stream: UnixStream, service: &Arc<Service>) -> io::Result<()> {
+fn handle(stream: UnixStream, service: &Arc<Service>, control: &Control) -> io::Result<()> {
     let mut writer = stream.try_clone()?;
     let mut reader = BufReader::new(stream);
     while let Some(line) = read_line(&mut reader, MAX_REQUEST)? {
@@ -182,6 +197,16 @@ fn handle(stream: UnixStream, service: &Arc<Service>) -> io::Result<()> {
             for notice in notices {
                 write_line(&mut writer, &notice)?;
             }
+            return Ok(());
+        }
+        if request.call == Call::Shutdown {
+            if service.busy() {
+                let busy = "an agent is at work or a question is waiting; not stopping";
+                write_line(&mut writer, &failed(request.id, busy.to_owned()))?;
+                continue;
+            }
+            write_line(&mut writer, &answered(request.id, Value::Null))?;
+            control.stop();
             return Ok(());
         }
         let response = match dispatch(service, request.call) {
@@ -227,7 +252,11 @@ pub fn dispatch(service: &Arc<Service>, call: Call) -> Result<Value, String> {
         Call::SetApprovalTimeout { task, minutes } => {
             json(service.set_approval_timeout(&task, minutes)?)
         }
-        Call::Subscribe => Err("subscribe on a connection of its own".to_owned()),
+        Call::Hello => json(Hello {
+            protocol: PROTOCOL,
+            version: env!("CARGO_PKG_VERSION").to_owned(),
+        }),
+        Call::Subscribe | Call::Shutdown => Err("not a call for dispatch".to_owned()),
     }
 }
 
