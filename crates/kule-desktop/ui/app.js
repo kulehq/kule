@@ -42,6 +42,20 @@ function h(tag, attrs, ...children) {
 
 const $ = (id) => document.getElementById(id);
 
+/**
+ * Replaces el's children. When the focus was inside el, it moves to the new
+ * element with the same data-key, so a redraw (a run's events, a refresh)
+ * does not throw a keyboard or screen reader user back to the top.
+ */
+function replace(el, ...children) {
+  const active = document.activeElement;
+  const key = active && active !== el && el.contains(active) ? active.dataset.key : undefined;
+  el.replaceChildren(...children);
+  if (!key) return;
+  const again = el.querySelector(`[data-key="${CSS.escape(key)}"]`);
+  if (again) again.focus();
+}
+
 function toast(message, kind) {
   const el = h("div", { class: `toast ${kind || ""}`, role: kind === "error" ? "alert" : "status" }, message);
   $("toasts").append(el);
@@ -121,7 +135,7 @@ function taskChip(task) {
   return null;
 }
 
-function taskItem(task) {
+function taskItem(task, list) {
   const parts = [task.changes ? plural(task.changes, "change") : "no changes"];
   if (task.ignored) parts.push(`${task.ignored} ignored`);
   const sub = `${parts.join(", ")} · ${task.id}`;
@@ -132,6 +146,7 @@ function taskItem(task) {
       "button",
       {
         class: "task-item",
+        "data-key": `${list}:${task.id}`,
         type: "button",
         "aria-current": task.id === state.current ? "true" : "false",
         title: task.workspace,
@@ -149,8 +164,8 @@ function renderSidebar() {
     (t) => questionsOf(t.id).length || (!t.running && (t.verdict === "ask" || t.verdict === "deny"))
   );
   $("inbox-section").hidden = waiting.length === 0;
-  $("inbox").replaceChildren(...waiting.map(taskItem));
-  $("tasks").replaceChildren(...state.tasks.map(taskItem));
+  replace($("inbox"), ...waiting.map((t) => taskItem(t, "inbox")));
+  replace($("tasks"), ...state.tasks.map((t) => taskItem(t, "tasks")));
   $("tasks-empty").hidden = state.tasks.length > 0;
 }
 
@@ -186,7 +201,10 @@ function renderTask() {
   count.textContent = String(task.changes);
 
   for (const tab of document.querySelectorAll(".tab")) {
-    tab.setAttribute("aria-selected", String(tab.dataset.tab === state.tab));
+    const selected = tab.dataset.tab === state.tab;
+    tab.setAttribute("aria-selected", String(selected));
+    // One stop for Tab; the arrow keys move between the tabs.
+    tab.tabIndex = selected ? 0 : -1;
   }
   for (const panel of document.querySelectorAll(".panel")) {
     panel.hidden = panel.dataset.panel !== state.tab;
@@ -250,19 +268,19 @@ function renderQuestions() {
             { class: "question-actions" },
             h(
               "button",
-              { class: "button ask", type: "button", "aria-label": `Approve ${q.host}:${q.port}`, onclick: (e) => inFlight(e.currentTarget, () => answer(q.id, true)) },
+              { class: "button ask", type: "button", "data-key": `approve:${q.id}`, "aria-label": `Approve ${q.host}:${q.port}`, onclick: (e) => inFlight(e.currentTarget, () => answer(q.id, true)) },
               "Approve"
             ),
             h(
               "button",
-              { class: "button ghost danger", type: "button", "aria-label": `Deny ${q.host}:${q.port}`, onclick: (e) => inFlight(e.currentTarget, () => answer(q.id, false)) },
+              { class: "button ghost danger", type: "button", "data-key": `deny:${q.id}`, "aria-label": `Deny ${q.host}:${q.port}`, onclick: (e) => inFlight(e.currentTarget, () => answer(q.id, false)) },
               "Deny"
             )
           )
         )
       )
     : [];
-  $("questions").replaceChildren(...cards);
+  replace($("questions"), ...cards);
 }
 
 async function answer(id, approve) {
@@ -335,7 +353,7 @@ function renderStream(id) {
   const stream = $("stream");
   const stick = stream.scrollTop + stream.clientHeight >= stream.scrollHeight - 40;
   if (items.length === 0) {
-    stream.replaceChildren(
+    replace(stream,
       h(
         "p",
         { class: "stream-empty" },
@@ -343,7 +361,7 @@ function renderStream(id) {
       )
     );
   } else {
-    stream.replaceChildren(...items.map(streamItem));
+    replace(stream, ...items.map(streamItem));
   }
   if (stick) stream.scrollTop = stream.scrollHeight;
 }
@@ -537,7 +555,7 @@ async function loadReview(id) {
   const holding = review.ruling.judgements.filter((j) => j.verdict !== "allow");
   ruling.className = `ruling ${empty ? "" : review.ruling.verdict}`;
   if (empty) {
-    ruling.replaceChildren(
+    replace(ruling,
       h("p", { class: "ruling-title" }, "Nothing to commit"),
       h(
         "p",
@@ -548,7 +566,7 @@ async function loadReview(id) {
       )
     );
   } else {
-    ruling.replaceChildren(
+    replace(ruling,
       h("p", { class: "ruling-title" }, VERDICT[review.ruling.verdict].title),
       holding.length
         ? h(
@@ -566,21 +584,23 @@ async function loadReview(id) {
   const actions = [];
   if (!empty) {
     if (review.ruling.verdict === "allow") {
-      actions.push(h("button", { class: "button primary", type: "button", disabled: busy, onclick: (e) => inFlight(e.currentTarget, () => commit(id, false, include, review.digest)) }, "Commit to workspace"));
+      actions.push(h("button", { class: "button primary", type: "button", "data-key": "commit", disabled: busy, onclick: (e) => inFlight(e.currentTarget, () => commit(id, false, include, review.digest)) }, "Commit to workspace"));
     } else if (review.ruling.verdict === "ask") {
       actions.push(
-        h("button", { class: "button ask", type: "button", disabled: busy, onclick: (e) => inFlight(e.currentTarget, () => commit(id, true, include, review.digest)) }, "Approve and commit")
+        h("button", { class: "button ask", type: "button", "data-key": "commit", disabled: busy, onclick: (e) => inFlight(e.currentTarget, () => commit(id, true, include, review.digest)) }, "Approve and commit")
       );
     }
   }
   if (!empty || ignored.length) {
-    actions.push(armed("Roll back", "Click again to throw the changes away", busy, () => rollback(id)));
+    const back = armed("Roll back", "Click again to throw the changes away", busy, () => rollback(id));
+    back.dataset.key = "rollback";
+    actions.push(back);
   }
-  $("review-actions").replaceChildren(...actions);
+  replace($("review-actions"), ...actions);
 
   const byChange = (c) => files.filter((e) => e.change === c);
   const held = new Map(review.ruling.judgements.filter((j) => j.verdict !== "allow").map((j) => [j.subject, j.verdict]));
-  $("effects").replaceChildren(
+  replace($("effects"),
     ...filesGroup("Created", byChange("created"), held),
     ...filesGroup("Modified", byChange("modified"), held),
     ...filesGroup("Deleted", byChange("deleted"), held),
@@ -597,6 +617,7 @@ function ignoredGroup(id, ignored, include, held) {
   if (ignored.length === 0) return [];
   const toggle = h("input", {
     type: "checkbox",
+    "data-key": "include-ignored",
     checked: include,
     onchange: () => {
       if (toggle.checked) state.includeIgnored.add(id);
@@ -694,6 +715,7 @@ async function rollback(id) {
 function undoButton(id, checkpoint, task) {
   const pending = task && task.changes > 0;
   const button = armed("Undo", `Click again to undo commit ${checkpoint}`, Boolean(task && (task.running || pending)), () => undo(id));
+  button.dataset.key = "undo";
   if (pending) button.title = "Commit or roll back the uncommitted changes first";
   return button;
 }
@@ -774,7 +796,7 @@ async function loadTimeline(id) {
       )
     );
   }
-  $("timeline").replaceChildren(...entries);
+  replace($("timeline"), ...entries);
 }
 
 function summarizeConnections(log) {
@@ -846,10 +868,10 @@ function select(id) {
 function clearPanels() {
   const loading = () => h("p", { class: "muted" }, "Loading…");
   $("ruling").className = "ruling";
-  $("ruling").replaceChildren(loading());
-  $("review-actions").replaceChildren();
-  $("effects").replaceChildren();
-  $("timeline").replaceChildren(loading());
+  replace($("ruling"), loading());
+  replace($("review-actions"));
+  replace($("effects"));
+  replace($("timeline"), loading());
 }
 
 async function newTask() {
@@ -908,12 +930,24 @@ async function start() {
   $("prompt").addEventListener("keydown", (e) => {
     if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) $("composer").requestSubmit();
   });
-  for (const tab of document.querySelectorAll(".tab")) {
-    tab.addEventListener("click", () => {
-      state.tab = tab.dataset.tab;
-      renderTask();
-    });
+  const tabs = [...document.querySelectorAll(".tab")];
+  const showTab = (tab) => {
+    state.tab = tab.dataset.tab;
+    renderTask();
+  };
+  for (const tab of tabs) {
+    tab.addEventListener("click", () => showTab(tab));
   }
+  $("tabs").addEventListener("keydown", (e) => {
+    const at = tabs.indexOf(document.activeElement);
+    if (at === -1) return;
+    const to = { ArrowRight: at + 1, ArrowLeft: at - 1, Home: 0, End: tabs.length - 1 }[e.key];
+    if (to === undefined) return;
+    e.preventDefault();
+    const tab = tabs[(to + tabs.length) % tabs.length];
+    showTab(tab);
+    tab.focus();
+  });
   const remove = armed(
     "Delete task",
     () => {
@@ -931,7 +965,7 @@ async function start() {
   } catch (err) {
     fail(err);
   }
-  $("agent").replaceChildren(...state.agents.map((name) => h("option", { value: name }, name)));
+  replace($("agent"), ...state.agents.map((name) => h("option", { value: name }, name)));
 
   await backend.onRun(onRun);
   await backend.onQuestions(onQuestions);

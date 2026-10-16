@@ -58,15 +58,15 @@
             <button id="remove-task" class="button ghost danger" type="button">Delete task</button>
           </div>
         </header>
-        <nav class="tabs" role="tablist">
-          <button class="tab" role="tab" data-tab="live" type="button">Live</button>
-          <button class="tab" role="tab" data-tab="review" type="button">
+        <nav class="tabs" role="tablist" aria-label="Task views" id="tabs">
+          <button class="tab" role="tab" id="tab-live" aria-controls="panel-live" data-tab="live" type="button">Live</button>
+          <button class="tab" role="tab" id="tab-review" aria-controls="panel-review" data-tab="review" type="button">
             Review <span class="tab-count" id="review-count" hidden></span>
           </button>
-          <button class="tab" role="tab" data-tab="timeline" type="button">Timeline</button>
+          <button class="tab" role="tab" id="tab-timeline" aria-controls="panel-timeline" data-tab="timeline" type="button">Timeline</button>
         </nav>
 
-        <section class="panel" data-panel="live">
+        <section class="panel" id="panel-live" role="tabpanel" aria-labelledby="tab-live" data-panel="live">
           <div class="questions" id="questions" aria-live="assertive"></div>
           <div class="stream" id="stream" aria-live="polite"></div>
           <form class="composer" id="composer">
@@ -103,13 +103,13 @@
           </form>
         </section>
 
-        <section class="panel" data-panel="review" hidden>
+        <section class="panel" id="panel-review" role="tabpanel" aria-labelledby="tab-review" data-panel="review" hidden>
           <div class="ruling" id="ruling"></div>
           <div class="review-actions" id="review-actions"></div>
           <div class="effects" id="effects"></div>
         </section>
 
-        <section class="panel" data-panel="timeline" hidden>
+        <section class="panel" id="panel-timeline" role="tabpanel" aria-labelledby="tab-timeline" data-panel="timeline" hidden>
           <div class="timeline" id="timeline"></div>
         </section>
       </section>
