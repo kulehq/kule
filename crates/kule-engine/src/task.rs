@@ -132,6 +132,14 @@ impl Task {
         self.dir.join("copy")
     }
 
+    /// The task's own temporary directory, created on first use. Commands
+    /// get it as `TMPDIR`; nothing in it is part of the workspace.
+    pub fn tmp(&self) -> Result<PathBuf> {
+        let tmp = self.dir.join("tmp");
+        fs::create_dir_all(&tmp).at(&tmp)?;
+        Ok(tmp)
+    }
+
     /// The uncommitted changes in the copy.
     pub fn effects(&self) -> Result<EffectSet> {
         effects::compute(&self.copy(), self.workspace(), &self.load_baseline()?)

@@ -3,10 +3,12 @@ use std::process::{Command, ExitCode};
 
 use anyhow::{Context, Result, anyhow};
 use clap::{Parser, Subcommand};
-use kule_engine::{Change, Effect, EffectSet, Error, GitSummary, Kind, RefChange, Task};
+use kule_engine::{
+    Change, Effect, EffectSet, Error, GitSummary, Kind, Network, RefChange, Sandbox, Task,
+};
 
-/// Kule engine (M0): run commands in a copy-on-write copy of a workspace,
-/// then commit or roll back what they did.
+/// Kule engine: run commands in a sandbox on a copy-on-write copy of a
+/// workspace, then commit or roll back what they did.
 #[derive(Parser)]
 #[command(name = "kule", version)]
 struct Cli {
@@ -25,10 +27,23 @@ enum Cmd {
     List,
     /// Print the path of a task's copy.
     Path { task: String },
-    /// Run a command inside the task's copy, then show what it changed.
-    /// M0 has no sandbox: the command can still write outside the copy.
+    /// Run a command inside the task's copy, in the sandbox, then show what
+    /// it changed. The sandbox lets it write only to the copy, the task's
+    /// TMPDIR and package caches, and hides credentials (~/.ssh, ~/.aws, …).
     Exec {
         task: String,
+        /// Also let the command write under PATH (repeatable).
+        #[arg(long = "allow-write", value_name = "PATH")]
+        allow_write: Vec<PathBuf>,
+        /// Also hide PATH from the command (repeatable).
+        #[arg(long, value_name = "PATH")]
+        hide: Vec<PathBuf>,
+        /// Shut TCP networking for the command, localhost included.
+        #[arg(long)]
+        no_network: bool,
+        /// Run without the sandbox: the command can write anywhere you can.
+        #[arg(long)]
+        no_sandbox: bool,
         #[arg(last = true, required = true)]
         command: Vec<String>,
     },
@@ -80,11 +95,34 @@ fn run() -> Result<ExitCode> {
             }
         }
         Cmd::Path { task } => println!("{}", Task::open(&home, &task)?.copy().display()),
-        Cmd::Exec { task, command } => {
+        Cmd::Exec {
+            task,
+            allow_write,
+            hide,
+            no_network,
+            no_sandbox,
+            command,
+        } => {
             let task = Task::open(&home, &task)?;
-            let status = Command::new(&command[0])
-                .args(&command[1..])
-                .current_dir(task.copy())
+            let mut child = if no_sandbox {
+                eprintln!("kule: running without the sandbox");
+                let mut child = Command::new(&command[0]);
+                child.args(&command[1..]).current_dir(task.copy());
+                child
+            } else {
+                let mut sandbox = Sandbox::for_task(&task)?;
+                for path in &allow_write {
+                    sandbox.allow_write(path)?;
+                }
+                for path in &hide {
+                    sandbox.hide(path)?;
+                }
+                if no_network {
+                    sandbox.set_network(Network::Deny);
+                }
+                sandbox.command(&command[0], &command[1..])?
+            };
+            let status = child
                 .env("KULE_TASK", task.id())
                 .status()
                 .with_context(|| format!("could not run {}", command[0]))?;
