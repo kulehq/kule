@@ -165,6 +165,19 @@ fn sandbox_python(sandbox: &Sandbox, script: &str) -> Output {
         .unwrap()
 }
 
+/// No controlling terminal: nothing in the sandbox can push keystrokes into
+/// the person's terminal, and its process group can be stopped as one.
+#[test]
+fn commands_run_in_a_session_of_their_own() {
+    let s = Setup::new();
+    let out = sandbox_python(
+        &s.sandbox(),
+        "import os; print(os.getsid(0) == os.getpid(), os.getpgrp() == os.getpid())",
+    );
+    assert!(ok(&out), "{out:?}");
+    assert_eq!(text(&out), "True True");
+}
+
 #[test]
 fn subprocesses_inherit_the_sandbox() {
     let s = Setup::new();

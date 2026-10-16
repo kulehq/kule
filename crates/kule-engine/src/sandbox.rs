@@ -177,7 +177,22 @@ impl Sandbox {
     /// A command that runs `program` inside the sandbox, in the copy, with
     /// `TMPDIR` pointing at the task's temporary directory.
     pub fn command(&self, program: &str, args: &[String]) -> Result<Command> {
+        use std::os::unix::process::CommandExt;
+
         let mut command = self.platform_command(program, args)?;
+        // A session of its own: no controlling terminal, so nothing it runs
+        // can push keystrokes into the person's terminal (TIOCSTI), and its
+        // whole process group can be stopped when it is done.
+        // SAFETY: setsid is async-signal-safe and touches nothing but the
+        // child between fork and exec.
+        unsafe {
+            command.pre_exec(|| {
+                if libc::setsid() == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
         command.current_dir(&self.copy).env("TMPDIR", &self.tmp);
         if let Network::Proxy(port) = self.network {
             let url = format!("http://127.0.0.1:{port}");

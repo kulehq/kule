@@ -10,7 +10,7 @@ use serde_json::Value;
 
 /// Changes whenever a call, a result or a notice changes shape; a client
 /// and a daemon that disagree on it cannot talk.
-pub const PROTOCOL: u32 = 1;
+pub const PROTOCOL: u32 = 2;
 
 /// What a daemon says about itself.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -50,6 +50,9 @@ pub enum Call {
         task: String,
         approve: bool,
         include_ignored: bool,
+        /// The digest of the review the person saw; refused if it changed.
+        #[serde(default)]
+        reviewed: Option<String>,
     },
     Rollback {
         task: String,

@@ -90,11 +90,18 @@ fn review(kule: K<'_>, task: String, include_ignored: bool) -> Result<Review> {
 }
 
 #[tauri::command(async)]
-fn commit(kule: K<'_>, task: String, approve: bool, include_ignored: bool) -> Result<Commit> {
+fn commit(
+    kule: K<'_>,
+    task: String,
+    approve: bool,
+    include_ignored: bool,
+    reviewed: Option<String>,
+) -> Result<Commit> {
     kule.call(Call::Commit {
         task,
         approve,
         include_ignored,
+        reviewed,
     })
 }
 

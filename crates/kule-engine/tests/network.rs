@@ -214,7 +214,14 @@ fn a_dropped_proxy_stops_serving() {
     let port = proxy.port();
     assert!(TcpStream::connect(("127.0.0.1", port)).is_ok());
     drop(proxy);
-    assert!(TcpStream::connect(("127.0.0.1", port)).is_err());
+    // Another test's proxy may get the port next, so ask what this task's
+    // log heard rather than whether the port answers.
+    let logged = connections(&s.task).unwrap().len();
+    if let Ok(mut stream) = TcpStream::connect(("127.0.0.1", port)) {
+        let _ = stream.write_all(b"CONNECT 127.0.0.1:9 HTTP/1.1\r\n\r\n");
+        std::thread::sleep(std::time::Duration::from_millis(200));
+    }
+    assert_eq!(connections(&s.task).unwrap().len(), logged);
 }
 
 #[test]

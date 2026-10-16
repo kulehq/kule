@@ -72,6 +72,13 @@ impl EffectSet {
         self.effects.iter().filter(|e| e.ignored)
     }
 
+    /// A hash of the set, to tell whether what a person reviewed is still
+    /// what a commit would take.
+    pub fn digest(&self) -> String {
+        let bytes = serde_json::to_vec(self).unwrap_or_default();
+        blake3::hash(&bytes).to_hex().to_string()
+    }
+
     /// What a commit takes: everything, or everything but the ignored paths.
     pub fn to_commit(&self, include_ignored: bool) -> EffectSet {
         EffectSet {

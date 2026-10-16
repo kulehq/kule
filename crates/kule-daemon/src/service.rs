@@ -55,6 +55,9 @@ pub struct TaskView {
 pub struct Review {
     pub effects: EffectSet,
     pub ruling: Ruling,
+    /// The digest of what a commit would take; a commit that names it is
+    /// refused if anything changed since.
+    pub digest: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -232,19 +235,38 @@ impl Service {
     pub fn review(&self, id: &str, include_ignored: bool) -> Result<Review> {
         let task = self.open(id)?;
         let effects = task.effects().map_err(text)?;
-        let ruling = self
-            .policy(&task)?
-            .judge(&effects.to_commit(include_ignored));
-        Ok(Review { effects, ruling })
+        let pending = task.pending(include_ignored).map_err(text)?;
+        let ruling = self.policy(&task)?.judge(&pending);
+        Ok(Review {
+            effects,
+            ruling,
+            digest: pending.digest(),
+        })
     }
 
     /// Commits what the policy lets through; with `approve`, also what it
     /// puts to a person. Denied changes never pass. Ignored paths stay in
-    /// the copy unless `include_ignored`.
-    pub fn commit(&self, id: &str, approve: bool, include_ignored: bool) -> Result<Commit> {
+    /// the copy unless `include_ignored`. With `reviewed`, the digest of a
+    /// [`Review`], it commits only if that is still exactly what it takes.
+    pub fn commit(
+        &self,
+        id: &str,
+        approve: bool,
+        include_ignored: bool,
+        reviewed: Option<&str>,
+    ) -> Result<Commit> {
         let task = self.idle(id)?;
         let policy = self.policy(&task)?;
-        match task.commit_with(include_ignored, policy.gate(approve)) {
+        let gate = policy.gate(approve);
+        let check = |set: &EffectSet| {
+            if reviewed.is_some_and(|digest| digest != set.digest()) {
+                return Err(Error::Invalid(
+                    "the changes are not the ones you reviewed any more; review them again".into(),
+                ));
+            }
+            gate(set)
+        };
+        match task.commit_with(include_ignored, check) {
             Ok(Some(checkpoint)) => Ok(Commit::Applied {
                 checkpoint: checkpoint.id,
                 changes: checkpoint.effects.len(),
@@ -466,19 +488,19 @@ mod tests {
         let (id, copy) = s.task();
         fs::write(copy.join("a.txt"), "edited\n").unwrap();
         assert!(matches!(
-            s.app.commit(&id, false, false).unwrap(),
+            s.app.commit(&id, false, false, None).unwrap(),
             Commit::Applied {
                 checkpoint: 1,
                 changes: 1
             }
         ));
         assert!(matches!(
-            s.app.commit(&id, false, false).unwrap(),
+            s.app.commit(&id, false, false, None).unwrap(),
             Commit::Nothing
         ));
 
         fs::write(copy.join("Cargo.toml"), "[package]\n").unwrap();
-        match s.app.commit(&id, false, false).unwrap() {
+        match s.app.commit(&id, false, false, None).unwrap() {
             Commit::Held { ruling } => assert_eq!(ruling.verdict, Verdict::Ask),
             other => panic!("expected the change to be held, got {other:?}"),
         }
@@ -488,7 +510,7 @@ mod tests {
         assert_eq!(review.effects.effects.len(), 1);
 
         assert!(matches!(
-            s.app.commit(&id, true, false).unwrap(),
+            s.app.commit(&id, true, false, None).unwrap(),
             Commit::Applied { checkpoint: 2, .. }
         ));
         assert!(s.ws.path().join("Cargo.toml").exists());
@@ -505,7 +527,7 @@ mod tests {
         .unwrap();
         let (id, copy) = s.task();
         fs::write(copy.join("secret.txt"), "x\n").unwrap();
-        match s.app.commit(&id, true, false).unwrap() {
+        match s.app.commit(&id, true, false, None).unwrap() {
             Commit::Held { ruling } => assert_eq!(ruling.verdict, Verdict::Deny),
             other => panic!("expected the change to be denied, got {other:?}"),
         }
@@ -529,7 +551,7 @@ mod tests {
         assert_eq!(timeline.steps.len(), 1);
         assert!(timeline.checkpoints.is_empty());
 
-        s.app.commit(&id, false, false).unwrap();
+        s.app.commit(&id, false, false, None).unwrap();
         let timeline = s.app.timeline(&id).unwrap();
         assert!(timeline.steps.is_empty());
         assert_eq!(timeline.checkpoints.len(), 1);
@@ -548,7 +570,7 @@ mod tests {
         let (id, copy) = s.task();
         fs::write(copy.join("a.txt"), "agent\n").unwrap();
         fs::write(s.ws.path().join("a.txt"), "human, a longer line\n").unwrap();
-        let e = s.app.commit(&id, false, false).unwrap_err();
+        let e = s.app.commit(&id, false, false, None).unwrap_err();
         assert!(e.contains("changed outside Kule at a.txt"), "{e}");
     }
 
@@ -561,7 +583,7 @@ mod tests {
 
         assert!(s.app.tasks().unwrap()[0].running);
         for refused in [
-            s.app.commit(&id, true, false).map(|_| ()),
+            s.app.commit(&id, true, false, None).map(|_| ()),
             s.app.rollback(&id).map(|_| ()),
             s.app.undo(&id).map(|_| ()),
             s.app.remove(&id),
@@ -621,12 +643,12 @@ mod tests {
         assert_eq!(s.app.review(&id, true).unwrap().ruling.judgements.len(), 1);
 
         assert!(matches!(
-            s.app.commit(&id, false, false).unwrap(),
+            s.app.commit(&id, false, false, None).unwrap(),
             Commit::Nothing
         ));
         assert!(!s.ws.path().join(".env").exists());
         assert!(matches!(
-            s.app.commit(&id, false, true).unwrap(),
+            s.app.commit(&id, false, true, None).unwrap(),
             Commit::Applied { changes: 1, .. }
         ));
         assert!(s.ws.path().join(".env").exists());
@@ -687,5 +709,30 @@ mod tests {
             300
         );
         assert!(s.app.set_approval_timeout(&id, 0).is_err());
+    }
+
+    /// Something still running in the copy can change it between the
+    /// person's review and their click; the commit names what they saw.
+    #[test]
+    fn a_commit_takes_only_what_was_reviewed() {
+        let s = Setup::new();
+        let (id, copy) = s.task();
+        fs::write(copy.join("b.txt"), "b\n").unwrap();
+        let review = s.app.review(&id, false).unwrap();
+
+        fs::write(copy.join("Cargo.toml"), "[package]\n").unwrap();
+        let e = s
+            .app
+            .commit(&id, true, false, Some(&review.digest))
+            .unwrap_err();
+        assert!(e.contains("review them again"), "{e}");
+        assert!(!s.ws.path().join("b.txt").exists());
+
+        let again = s.app.review(&id, false).unwrap();
+        assert_ne!(again.digest, review.digest);
+        assert!(matches!(
+            s.app.commit(&id, true, false, Some(&again.digest)).unwrap(),
+            Commit::Applied { changes: 2, .. }
+        ));
     }
 }

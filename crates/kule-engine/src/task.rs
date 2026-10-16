@@ -183,16 +183,15 @@ impl Task {
         self.commit_with(false, check)
     }
 
-    /// [`Task::commit_if`], taking the paths the workspace ignores too when
-    /// `include_ignored` is set.
-    pub fn commit_with(
-        &self,
-        include_ignored: bool,
-        check: impl FnOnce(&EffectSet) -> Result<()>,
-    ) -> Result<Option<Checkpoint>> {
-        let _lock = self.lock()?;
-        let mut baseline = self.load_baseline()?;
-        let all = effects::compute(&self.copy(), self.workspace(), &baseline)?;
+    /// What a commit would take now: [`Task::effects`] but for the paths the
+    /// workspace ignores, unless `include_ignored`. A person reviews this
+    /// set; its [`EffectSet::digest`] tells whether it is still the same.
+    pub fn pending(&self, include_ignored: bool) -> Result<EffectSet> {
+        self.commit_set(&self.load_baseline()?, include_ignored)
+    }
+
+    fn commit_set(&self, baseline: &Baseline, include_ignored: bool) -> Result<EffectSet> {
+        let all = effects::compute(&self.copy(), self.workspace(), baseline)?;
         let mut set = all.to_commit(include_ignored);
         // A directory the commit removes (deletes, or replaces with a file)
         // takes the ignored paths under it with it: they go through the
@@ -218,6 +217,19 @@ impl Task {
             );
             set.effects.sort_by(|a, b| a.path.cmp(&b.path));
         }
+        Ok(set)
+    }
+
+    /// [`Task::commit_if`], taking the paths the workspace ignores too when
+    /// `include_ignored` is set.
+    pub fn commit_with(
+        &self,
+        include_ignored: bool,
+        check: impl FnOnce(&EffectSet) -> Result<()>,
+    ) -> Result<Option<Checkpoint>> {
+        let _lock = self.lock()?;
+        let mut baseline = self.load_baseline()?;
+        let set = self.commit_set(&baseline, include_ignored)?;
         if set.is_empty() {
             return Ok(None);
         }

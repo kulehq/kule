@@ -92,6 +92,10 @@ pub async fn run(
         .kill_on_drop(true)
         .spawn()
         .map_err(|e| Error(format!("could not start the agent: {e}")))?;
+    // The sandbox starts the agent in a session of its own; when the run
+    // ends, however it ends, everything the agent left running in it goes
+    // too, so nothing keeps changing the copy behind the person's review.
+    let _group = Group(child.id() as i32);
     let stdin = child.stdin.take().ok_or_else(|| error("no stdin"))?;
     let stdout = child.stdout.take().ok_or_else(|| error("no stdout"))?;
 
@@ -179,6 +183,21 @@ pub async fn run(
     });
     let _ = child.kill();
     Ok(stop)
+}
+
+/// The agent's process group, killed when dropped.
+struct Group(i32);
+
+impl Drop for Group {
+    fn drop(&mut self) {
+        if self.0 > 0 {
+            // SAFETY: kill only sends a signal; a negative pid names the
+            // group the agent leads.
+            unsafe {
+                libc::kill(-self.0, libc::SIGKILL);
+            }
+        }
+    }
 }
 
 /// Turns session updates into events, and ended tool calls into steps.

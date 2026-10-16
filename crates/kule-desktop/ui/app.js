@@ -507,10 +507,10 @@ async function loadReview(id) {
   const actions = [];
   if (!empty) {
     if (review.ruling.verdict === "allow") {
-      actions.push(h("button", { class: "button primary", type: "button", disabled: busy, onclick: () => commit(id, false, include) }, "Commit to workspace"));
+      actions.push(h("button", { class: "button primary", type: "button", disabled: busy, onclick: () => commit(id, false, include, review.digest) }, "Commit to workspace"));
     } else if (review.ruling.verdict === "ask") {
       actions.push(
-        h("button", { class: "button ask", type: "button", disabled: busy, onclick: () => commit(id, true, include) }, "Approve and commit")
+        h("button", { class: "button ask", type: "button", disabled: busy, onclick: () => commit(id, true, include, review.digest) }, "Approve and commit")
       );
     }
   }
@@ -588,9 +588,9 @@ function armed(label, armedLabel, disabled, action) {
   return button;
 }
 
-async function commit(id, approve, includeIgnored) {
+async function commit(id, approve, includeIgnored, reviewed) {
   try {
-    const result = await call("commit", { task: id, approve, includeIgnored });
+    const result = await call("commit", { task: id, approve, includeIgnored, reviewed });
     state.includeIgnored.delete(id);
     if (result.outcome === "applied") toast(`Committed ${plural(result.changes, "change")} · checkpoint ${result.checkpoint}`);
     else if (result.outcome === "nothing") toast("Nothing to commit");

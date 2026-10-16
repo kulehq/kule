@@ -183,3 +183,25 @@ fn permission_requests_are_answered_with_the_allow_option() {
         text: "permission: allow".into()
     }));
 }
+
+/// What the agent leaves running goes when the run ends, so nothing keeps
+/// changing the copy behind the person's review.
+#[test]
+fn processes_the_agent_left_running_end_with_the_run() {
+    let s = Setup::new();
+    s.run("background pid.txt");
+    let pid: i32 = fs::read_to_string(s.task.copy().join("pid.txt"))
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    let start = std::time::Instant::now();
+    // SAFETY: signal 0 only checks that the process exists.
+    while unsafe { libc::kill(pid, 0) } == 0 {
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(5),
+            "process {pid} outlived the run"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+}
