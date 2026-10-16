@@ -12,6 +12,7 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use walkdir::WalkDir;
 
+use crate::clock::Clock;
 use crate::error::{Error, IoContext, Result};
 use crate::manifest::{Kind, Stamp, Tree, relative, vanished};
 
@@ -30,11 +31,18 @@ use crate::manifest::{Kind, Stamp, Tree, relative, vanished};
 /// before that clone. The workspace has moved past that stamp, so if the
 /// task changes the entry, commit reports a conflict instead of
 /// overwriting; if it does not, nothing happens to it.
-pub fn clone_tree(src: &Path, dst: &Path) -> Result<Tree> {
-    const ATTEMPTS: usize = 5;
+///
+/// A file written during the clone may be written again within the same
+/// tick of `clock`, unseen by its stamp. Such files are compared with their
+/// clone once the clock has moved on and cloned again when they differ; one
+/// that is never pinned down gets a stamp that matches nothing.
+pub(crate) fn clone_tree(src: &Path, dst: &Path, clock: &Clock) -> Result<Tree> {
+    const ROUNDS: usize = 5;
     fs::create_dir(dst).at(dst)?;
+    let start = clock.now()?;
     let mut taken = Tree::new();
     let mut dirs = Vec::new();
+    let mut racy = Vec::new();
     for entry in WalkDir::new(src)
         .min_depth(1)
         .follow_links(false)
@@ -52,44 +60,57 @@ pub fn clone_tree(src: &Path, dst: &Path) -> Result<Tree> {
         };
         let rel = relative(src, entry.path())?;
         let to = dst.join(&rel);
-        let mut stable = None;
-        for attempt in 1..=ATTEMPTS {
-            let Some(before) = Stamp::of(entry.path())? else {
-                break;
-            };
-            let cloned = match before.kind {
-                Kind::Dir => fs::create_dir(&to).at(&to),
-                _ => place(entry.path(), &to, &before),
-            };
-            // Copying reports a vanished source differently per platform
-            // (`fs::copy` on Linux says the source is not a regular file),
-            // so ask the filesystem rather than the error.
-            if let Err(e) = cloned {
-                if is_vanished(&e) || Stamp::of(entry.path())?.is_none() {
-                    remove(&to)?;
-                    break;
-                }
-                return Err(e);
-            }
-            match Stamp::of(entry.path())? {
-                Some(after) if before.unchanged(&after) => {
-                    stable = Some(before);
-                    break;
-                }
-                Some(_) if attempt == ATTEMPTS => {
-                    stable = Some(before);
-                    break;
-                }
-                _ => remove(&to)?,
-            }
+        let Some(stamp) = clone_entry(entry.path(), &to)? else {
+            continue;
+        };
+        match stamp.kind {
+            Kind::Dir => dirs.push((to, stamp.clone())),
+            Kind::File if stamp.ctime >= start => racy.push(rel.clone()),
+            _ => {}
         }
-        if let Some(stamp) = stable {
-            if stamp.kind == Kind::Dir {
-                dirs.push((to, stamp.clone()));
-            }
-            taken.insert(rel, stamp);
-        }
+        taken.insert(rel, stamp);
     }
+
+    for round in 1..=ROUNDS {
+        let Some(latest) = racy.iter().map(|rel| taken[rel].ctime).max() else {
+            break;
+        };
+        let past = clock.wait_past(latest)?;
+        let mut again = Vec::new();
+        for rel in racy {
+            let (from, to) = (src.join(&rel), dst.join(&rel));
+            let stamp = &taken[&rel];
+            let same = |path: &Path| Ok::<_, Error>(Stamp::of(path)?.as_ref() == Some(stamp));
+            if past && same(&from)? && same_bytes(&from, &to)? && same(&from)? {
+                continue;
+            }
+            if round == ROUNDS {
+                // The workspace has moved past a stamp that changed; one that
+                // did not may hide a write the clone missed.
+                if same(&from)? {
+                    let unknown = stamp.clone().unknown();
+                    taken.insert(rel, unknown);
+                }
+                continue;
+            }
+            remove(&to)?;
+            match clone_entry(&from, &to)? {
+                Some(stamp) => {
+                    match stamp.kind {
+                        Kind::Dir => dirs.push((to, stamp.clone())),
+                        Kind::File => again.push(rel.clone()),
+                        _ => {}
+                    }
+                    taken.insert(rel, stamp);
+                }
+                None => {
+                    taken.remove(&rel);
+                }
+            }
+        }
+        racy = again;
+    }
+
     for (dir, stamp) in dirs.iter().rev() {
         finish(dir, stamp)?;
     }
@@ -97,6 +118,39 @@ pub fn clone_tree(src: &Path, dst: &Path) -> Result<Tree> {
         finish(dst, &root)?;
     }
     Ok(taken)
+}
+
+/// Clones one entry to `to`, which must not exist, until its stamp is the
+/// same before and after, and returns that stamp; for an entry that never
+/// holds still, the stamp from before its last clone. `None` when the entry
+/// disappeared.
+fn clone_entry(from: &Path, to: &Path) -> Result<Option<Stamp>> {
+    const ATTEMPTS: usize = 5;
+    for attempt in 1..=ATTEMPTS {
+        let Some(before) = Stamp::of(from)? else {
+            return Ok(None);
+        };
+        let cloned = match before.kind {
+            Kind::Dir => fs::create_dir(to).at(to),
+            _ => place(from, to, &before),
+        };
+        // Copying reports a vanished source differently per platform
+        // (`fs::copy` on Linux says the source is not a regular file),
+        // so ask the filesystem rather than the error.
+        if let Err(e) = cloned {
+            if is_vanished(&e) || Stamp::of(from)?.is_none() {
+                remove(to)?;
+                return Ok(None);
+            }
+            return Err(e);
+        }
+        match Stamp::of(from)? {
+            Some(after) if before.unchanged(&after) => return Ok(Some(before)),
+            Some(_) if attempt == ATTEMPTS => return Ok(Some(before)),
+            _ => remove(to)?,
+        }
+    }
+    Ok(None)
 }
 
 fn is_vanished(e: &Error) -> bool {

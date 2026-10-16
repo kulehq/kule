@@ -13,7 +13,7 @@ use crate::effects::{Change, Effect};
 use crate::error::{Error, IoContext, Result};
 use crate::fsops::{copy_parent_times, mirror, read_json, write_json};
 use crate::git::GitState;
-use crate::manifest::{Kind, Stamp};
+use crate::manifest::{Baseline, Kind, Stamp};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -93,6 +93,14 @@ impl Store {
         write_json(&self.dir(checkpoint.id).join("checkpoint.json"), checkpoint)
     }
 
+    /// Every checkpoint, oldest first.
+    pub fn all(&self) -> Result<Vec<Checkpoint>> {
+        self.ids()?
+            .into_iter()
+            .map(|id| read_json(&self.dir(id).join("checkpoint.json")))
+            .collect()
+    }
+
     /// The newest checkpoint that is still applied, skipping undone ones, so
     /// repeated undo walks back one commit at a time.
     pub fn last_applied(&self) -> Result<Option<Checkpoint>> {
@@ -115,9 +123,10 @@ impl Store {
 
     /// After checkpoint `undone` was reverted, `paths` in the workspace hold
     /// what earlier commits left there again, but as new files with new
-    /// stamps. Updates the newest earlier applied checkpoint that touched each
-    /// path, so undoing that one later does not mistake them for outside edits.
-    pub fn refresh_after(&self, undone: u32, paths: &[String], work: &Path) -> Result<()> {
+    /// stamps, which `synced` holds. Updates the newest earlier applied
+    /// checkpoint that touched each path, so undoing that one later does not
+    /// mistake them for outside edits.
+    pub fn refresh_after(&self, undone: u32, paths: &[String], synced: &Baseline) -> Result<()> {
         let mut pending: Vec<&String> = paths.iter().collect();
         for id in self.ids()?.into_iter().rev().filter(|id| *id < undone) {
             if pending.is_empty() {
@@ -134,8 +143,8 @@ impl Store {
                     rest.push(path);
                     continue;
                 }
-                match Stamp::of(&work.join(path))? {
-                    Some(stamp) => checkpoint.after.insert(path.clone(), stamp),
+                match synced.entries.get(path) {
+                    Some(entry) => checkpoint.after.insert(path.clone(), entry.work.clone()),
                     None => checkpoint.after.remove(path),
                 };
                 changed = true;

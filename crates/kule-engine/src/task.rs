@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use walkdir::WalkDir;
 
 use crate::checkpoint::{Checkpoint, State, Store};
+use crate::clock::Clock;
 use crate::effects::{self, Change, Effect, EffectSet};
 use crate::error::{Error, IoContext, Result};
 use crate::fsops::{self, read_json, write_json};
@@ -74,7 +75,12 @@ impl Task {
 
     fn populate(&self) -> Result<()> {
         write_json(&self.dir.join("task.json"), &self.info)?;
-        let taken = fsops::clone_tree(&self.info.workspace, &self.copy())?;
+        let clock = self.clock(&self.info.workspace)?;
+        let taken = fsops::clone_tree(&self.info.workspace, &self.copy(), &clock)?;
+        // The copy's stamps need no settling: its files carry the workspace's
+        // modification times, which `clone_tree` has waited past when they
+        // were recent, so the agent's first write moves them.
+        //
         // The repository state is read from the copy: it is what the agent
         // starts from, so a human commit made during the copy must show up
         // as a change in the workspace, not be folded into the baseline.
@@ -196,15 +202,15 @@ impl Task {
         let mut checkpoint = store.begin(self.workspace(), &set.effects)?;
         let paths = set.paths();
         fsops::mirror(&self.copy(), self.workspace(), &paths, true)?;
+        self.resync(&mut baseline, &paths)?;
         for path in &paths {
-            if let Some(stamp) = Stamp::of(&self.workspace().join(path))? {
-                checkpoint.after.insert(path.clone(), stamp);
+            if let Some(entry) = baseline.entries.get(path) {
+                checkpoint.after.insert(path.clone(), entry.work.clone());
             }
         }
-        checkpoint.git_after = git::read(self.workspace())?;
+        checkpoint.git_after = baseline.git.clone();
         checkpoint.state = State::Applied;
         store.save(&checkpoint)?;
-        self.resync(&mut baseline, &paths)?;
         Ok(Some(checkpoint))
     }
 
@@ -275,11 +281,16 @@ impl Task {
 
         fsops::mirror(&store.before(checkpoint.id), self.workspace(), &paths, true)?;
         fsops::mirror(self.workspace(), &self.copy(), &paths, false)?;
+        self.resync(&mut baseline, &paths)?;
         checkpoint.state = State::Undone;
         store.save(&checkpoint)?;
-        store.refresh_after(checkpoint.id, &paths, self.workspace())?;
-        self.resync(&mut baseline, &paths)?;
+        store.refresh_after(checkpoint.id, &paths, &baseline)?;
         Ok(Some(checkpoint))
+    }
+
+    /// The task's commits, oldest first, undone ones included.
+    pub fn checkpoints(&self) -> Result<Vec<Checkpoint>> {
+        self.store().all()
     }
 
     /// Deletes the task and its copy. The workspace is not touched.
@@ -340,12 +351,33 @@ impl Task {
 
     /// Records `paths` as in sync again after the workspace and the copy were
     /// made equal there.
+    ///
+    /// A file written within the tick its stamp is read in can be written
+    /// again unseen (see `clock`), so such files are compared once the clock
+    /// has moved on. A pair that changed meanwhile keeps its old stamps,
+    /// which no longer match; one that differs without a stamp moving gets
+    /// stamps that match nothing.
     fn resync(&self, baseline: &mut Baseline, paths: &[String]) -> Result<()> {
+        let work_clock = self.clock(self.workspace())?;
+        let copy_clock = self.clock(&self.copy())?;
+        let (work_start, copy_start) = (work_clock.now()?, copy_clock.now()?);
+        let mut racy = Vec::new();
         for path in paths {
             let work = Stamp::of(&self.workspace().join(path))?;
             let copy = Stamp::of(&self.copy().join(path))?;
             match (work, copy) {
                 (Some(work), Some(copy)) => {
+                    if work.kind == Kind::File
+                        && (work.ctime >= work_start || copy.ctime >= copy_start)
+                    {
+                        racy.push((
+                            path.clone(),
+                            Entry {
+                                work: work.clone(),
+                                copy: copy.clone(),
+                            },
+                        ));
+                    }
                     baseline.entries.insert(path.clone(), Entry { work, copy });
                 }
                 (None, None) => {
@@ -358,9 +390,42 @@ impl Task {
                 }
             }
         }
+        if !racy.is_empty() {
+            let latest = |side: fn(&Entry) -> &Stamp| {
+                racy.iter()
+                    .map(|(_, e)| side(e).ctime)
+                    .max()
+                    .unwrap_or_default()
+            };
+            let past = work_clock.wait_past(latest(|e| &e.work))?
+                && copy_clock.wait_past(latest(|e| &e.copy))?;
+            for (path, entry) in racy {
+                let (work, copy) = (self.workspace().join(&path), self.copy().join(&path));
+                let held = || -> Result<bool> {
+                    Ok(Stamp::of(&work)?.as_ref() == Some(&entry.work)
+                        && Stamp::of(&copy)?.as_ref() == Some(&entry.copy))
+                };
+                if past && held()? && fsops::same_bytes(&work, &copy)? && held()? {
+                    continue;
+                }
+                if held()? {
+                    baseline.entries.insert(
+                        path,
+                        Entry {
+                            work: entry.work.unknown(),
+                            copy: entry.copy.unknown(),
+                        },
+                    );
+                }
+            }
+        }
         baseline.git = git::read(self.workspace())?;
         self.save_baseline(baseline)?;
         self.clear_steps()
+    }
+
+    fn clock(&self, watched: &Path) -> Result<Clock> {
+        Clock::new(&self.dir, watched)
     }
 
     fn store(&self) -> Store {

@@ -8,11 +8,13 @@
 //! costs one scan of the copy and no copy of any content.
 
 use std::collections::BTreeMap;
-use std::fs::OpenOptions;
+use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, ErrorKind, Write};
+use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
+use crate::clock::Clock;
 use crate::effects::Change;
 use crate::error::{Error, IoContext, Result};
 use crate::fsops::{read_json, write_json};
@@ -39,26 +41,41 @@ pub struct Step {
     pub changes: Vec<StepChange>,
 }
 
-/// The copy's stamp for each changed path at the last step.
+/// The copy's stamp for each changed path at the last step, and the content
+/// digest of the files whose stamp was too fresh to trust (see `clock`).
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct Mark {
     next_id: u32,
     stamps: BTreeMap<String, (Option<Stamp>, Kind)>,
+    #[serde(default)]
+    digests: BTreeMap<String, String>,
 }
 
 impl Task {
     /// Records a step: what changed in the copy since the previous one.
     pub fn step(&self, label: &str) -> Result<Step> {
+        let start = Clock::new(self.dir(), &self.copy())?.now()?;
         let set = self.effects()?;
         let mut mark = self.load_mark()?;
         let mut now = BTreeMap::new();
+        let mut digests = BTreeMap::new();
         let mut changes = Vec::new();
         for effect in set.files() {
-            let stamp = Stamp::of(&self.copy().join(&effect.path))?;
-            let moved = mark
-                .stamps
-                .get(&effect.path)
-                .is_none_or(|(before, _)| !same(before, &stamp));
+            let file = self.copy().join(&effect.path);
+            let stamp = Stamp::of(&file)?;
+            let racy = matches!(&stamp, Some(s) if s.kind == Kind::File && s.ctime >= start);
+            let recorded = mark.digests.get(&effect.path);
+            let digest = if racy || recorded.is_some() {
+                digest(&file)?
+            } else {
+                None
+            };
+            let moved = mark.stamps.get(&effect.path).is_none_or(|(before, _)| {
+                !same(before, &stamp) || recorded.is_some_and(|d| digest.as_ref() != Some(d))
+            });
+            if racy && let Some(digest) = digest {
+                digests.insert(effect.path.clone(), digest);
+            }
             if moved {
                 changes.push(StepChange {
                     path: effect.path.clone(),
@@ -85,6 +102,7 @@ impl Task {
             changes,
         };
         mark.stamps = now;
+        mark.digests = digests;
         write_json(&self.dir().join("steps-mark.json"), &mark)?;
         let path = self.dir().join("steps.jsonl");
         let mut log = OpenOptions::new()
@@ -139,6 +157,20 @@ impl Task {
             Ok(Mark::default())
         }
     }
+}
+
+/// The BLAKE3 digest of the file at `path`, or `None` when it is gone.
+fn digest(path: &Path) -> Result<Option<String>> {
+    let file = match File::open(path) {
+        Ok(file) => file,
+        Err(e) if matches!(e.kind(), ErrorKind::NotFound | ErrorKind::NotADirectory) => {
+            return Ok(None);
+        }
+        Err(e) => return Err(e).at(path),
+    };
+    let mut hasher = blake3::Hasher::new();
+    hasher.update_reader(file).at(path)?;
+    Ok(Some(hasher.finalize().to_hex().to_string()))
 }
 
 fn same(a: &Option<Stamp>, b: &Option<Stamp>) -> bool {

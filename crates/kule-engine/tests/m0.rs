@@ -573,6 +573,10 @@ fn a_file_written_during_creation_conflicts_if_the_task_changes_it() {
     stop.store(true, Ordering::Relaxed);
     writer.join().unwrap();
     let task = task.unwrap();
+    // The human's last save, the same size as whatever the copy got (which
+    // may be an empty file caught mid-write).
+    let copied = fs::read_to_string(task.copy().join("busy.txt")).unwrap();
+    write(&busy, "h".repeat(copied.len().max(1)));
 
     write(&task.copy().join("busy.txt"), "agent\n");
     match task.commit() {
@@ -580,6 +584,128 @@ fn a_file_written_during_creation_conflicts_if_the_task_changes_it() {
         other => panic!("expected a conflict, got {other:?}"),
     }
     assert_ne!(fs::read_to_string(&busy).unwrap(), "agent\n");
+}
+
+// Filesystems keep time in ticks (milliseconds on Linux ext4, two seconds on
+// FAT), so a same-size write right after Kule reads a stamp can leave the
+// stamp as it was. Each test below repeats a race that a coarse clock loses
+// often; on a nanosecond clock (APFS) they pass either way.
+const SAME_TICK_TRIES: usize = 20;
+
+#[test]
+fn a_same_size_write_right_after_creation_is_not_overwritten() {
+    for _ in 0..SAME_TICK_TRIES {
+        let home = TempDir::new().unwrap();
+        let ws = TempDir::new().unwrap();
+        write(&ws.path().join("a.txt"), "1\n");
+        let task = Task::create(home.path(), ws.path()).unwrap();
+        write(&ws.path().join("a.txt"), "2\n");
+        write(&task.copy().join("a.txt"), "agent\n");
+        assert!(matches!(task.commit(), Err(Error::Conflict(_))));
+        assert_eq!(fs::read_to_string(ws.path().join("a.txt")).unwrap(), "2\n");
+    }
+}
+
+#[test]
+fn a_same_size_write_during_creation_is_not_overwritten() {
+    for _ in 0..SAME_TICK_TRIES {
+        let home = TempDir::new().unwrap();
+        let ws = TempDir::new().unwrap();
+        let a = ws.path().join("a.txt");
+        write(&a, "1\n");
+        for i in 0..500 {
+            write(&ws.path().join(format!("b{i}.txt")), "b\n");
+        }
+        // Saves a.txt again as soon as its clone appears, while the rest of
+        // the workspace is still being copied.
+        let writer = {
+            let (tasks, a) = (home.path().join("tasks"), a.clone());
+            std::thread::spawn(move || {
+                loop {
+                    let cloned = fs::read_dir(&tasks)
+                        .into_iter()
+                        .flatten()
+                        .flatten()
+                        .any(|t| t.path().join("copy/a.txt").exists());
+                    if cloned {
+                        fs::write(&a, "2\n").unwrap();
+                        return;
+                    }
+                    std::thread::yield_now();
+                }
+            })
+        };
+        let task = Task::create(home.path(), ws.path()).unwrap();
+        writer.join().unwrap();
+        let copied = fs::read_to_string(task.copy().join("a.txt")).unwrap();
+        write(&task.copy().join("a.txt"), "agent\n");
+        match task.commit() {
+            Err(Error::Conflict(_)) => assert_eq!(fs::read_to_string(&a).unwrap(), "2\n"),
+            Ok(_) => assert_eq!(copied, "2\n", "the human's save was overwritten unseen"),
+            Err(e) => panic!("{e}"),
+        }
+    }
+}
+
+#[test]
+fn a_same_size_write_right_after_a_commit_is_not_overwritten() {
+    for _ in 0..SAME_TICK_TRIES {
+        let home = TempDir::new().unwrap();
+        let ws = TempDir::new().unwrap();
+        write(&ws.path().join("a.txt"), "1\n");
+        let task = Task::create(home.path(), ws.path()).unwrap();
+        write(&task.copy().join("a.txt"), "2\n");
+        task.commit().unwrap().unwrap();
+        write(&ws.path().join("a.txt"), "3\n");
+        assert!(matches!(task.undo(), Err(Error::Conflict(_))));
+        write(&task.copy().join("a.txt"), "4\n");
+        assert!(matches!(task.commit(), Err(Error::Conflict(_))));
+        assert_eq!(fs::read_to_string(ws.path().join("a.txt")).unwrap(), "3\n");
+    }
+}
+
+#[test]
+fn a_same_size_write_right_after_an_undo_is_not_overwritten() {
+    for _ in 0..SAME_TICK_TRIES {
+        let home = TempDir::new().unwrap();
+        let ws = TempDir::new().unwrap();
+        write(&ws.path().join("a.txt"), "1\n");
+        let task = Task::create(home.path(), ws.path()).unwrap();
+        write(&task.copy().join("a.txt"), "2\n");
+        task.commit().unwrap().unwrap();
+        write(&task.copy().join("a.txt"), "3\n");
+        task.commit().unwrap().unwrap();
+        task.undo().unwrap().unwrap();
+        write(&ws.path().join("a.txt"), "4\n");
+        // A conflict; FAT, which renumbers a file on every write, already
+        // reports the copy as out of sync.
+        assert!(task.undo().is_err());
+        assert_eq!(fs::read_to_string(ws.path().join("a.txt")).unwrap(), "4\n");
+    }
+}
+
+#[test]
+fn a_same_size_write_to_the_copy_right_after_a_rollback_is_seen() {
+    for _ in 0..SAME_TICK_TRIES {
+        let home = TempDir::new().unwrap();
+        let ws = TempDir::new().unwrap();
+        write(&ws.path().join("a.txt"), "1\n");
+        let task = Task::create(home.path(), ws.path()).unwrap();
+        write(&task.copy().join("a.txt"), "2\n");
+        // Rollback keeps the workspace's modification time, so the copy's
+        // stamp is fresh only when the workspace's file is.
+        write(&ws.path().join("a.txt"), "5\n");
+        task.rollback().unwrap();
+        write(&task.copy().join("a.txt"), "3\n");
+        let paths: Vec<String> = task
+            .effects()
+            .unwrap()
+            .effects
+            .into_iter()
+            .map(|e| e.path)
+            .collect();
+        assert_eq!(paths, ["a.txt"]);
+    }
 }
 
 #[test]

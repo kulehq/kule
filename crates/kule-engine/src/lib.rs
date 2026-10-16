@@ -16,6 +16,7 @@
 compile_error!("Kule M0 supports macOS and Linux only");
 
 mod checkpoint;
+mod clock;
 mod effects;
 mod error;
 mod fsops;
@@ -27,7 +28,7 @@ mod sandbox;
 mod steps;
 mod task;
 
-pub use checkpoint::Checkpoint;
+pub use checkpoint::{Checkpoint, State as CheckpointState};
 pub use effects::{Change, Effect, EffectSet};
 pub use error::{Error, Result};
 pub use git::{GitState, GitSummary, RefChange};

@@ -27,7 +27,9 @@ pub struct Stamp {
     /// Permission bits only.
     pub mode: u32,
     pub mtime: (i64, i64),
-    /// Any write or chmod moves the change time, and nothing can set it back.
+    /// Any write or chmod moves the change time, and nothing can set it back,
+    /// except that writes within one tick of the filesystem's clock share it
+    /// (see `clock`).
     pub ctime: (i64, i64),
     pub ino: u64,
     pub link: Option<String>,
@@ -87,6 +89,13 @@ impl Stamp {
             Kind::Dir => now.kind == Kind::Dir && now.mode == self.mode,
             _ => self == now,
         }
+    }
+
+    /// This stamp with a change time no entry has, for an entry whose
+    /// content Kule could not pin down: it counts as changed from now on.
+    pub fn unknown(mut self) -> Stamp {
+        self.ctime = (i64::MIN, -1);
+        self
     }
 }
 
