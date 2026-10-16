@@ -184,6 +184,8 @@ fn run() -> Result<ExitCode> {
             command,
         } => {
             let task = Task::open(&home, &task)?;
+            // Held while the command runs: commit and rollback wait for it.
+            let _at_work = task.agent_at_work()?;
             let logged_before = connections(&task)?.len();
             let started = Instant::now();
             let mut used = None;
@@ -261,6 +263,7 @@ fn run() -> Result<ExitCode> {
                 let known: Vec<&str> = kule_acp::PROFILES.iter().map(|p| p.name).collect();
                 anyhow!("no agent profile {agent}; known: {}", known.join(", "))
             })?;
+            let _at_work = task.agent_at_work()?;
             let started = Instant::now();
             let logged_before = connections(&task)?.len();
             let proxy = Proxy::start(&task, profile.open_hosts(load_policy(&home, &task)?)?)?;

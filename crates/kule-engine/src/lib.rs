@@ -45,4 +45,4 @@ pub use network::{Connection, Proxy, connections};
 pub use policy::{DEFAULT_POLICY, Judgement, Policy, REPO_POLICY, Ruling, Verdict};
 pub use sandbox::{Denial, Network, PASSED_ENV, Sandbox, denials, record_denials};
 pub use steps::{Step, StepChange};
-pub use task::{Task, TaskInfo};
+pub use task::{AgentAtWork, Task, TaskInfo};

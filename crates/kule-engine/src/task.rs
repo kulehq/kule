@@ -81,8 +81,9 @@ impl Task {
         }
     }
 
+    /// Writes `task.json` last: until then the task is not listed, so a
+    /// half-made one never shows.
     fn populate(&self) -> Result<()> {
-        write_json(&self.dir.join("task.json"), &self.info)?;
         let clock = self.clock(&self.info.workspace)?;
         let taken = fsops::clone_tree(&self.info.workspace, &self.copy(), &clock)?;
         // The copy's stamps need no settling: its files carry the workspace's
@@ -96,7 +97,8 @@ impl Task {
             entries: pair(taken, scan(&self.copy())?)?,
             git: git::read(&self.copy())?,
         };
-        self.save_baseline(&baseline)
+        self.save_baseline(&baseline)?;
+        write_json(&self.dir.join("task.json"), &self.info)
     }
 
     pub fn open(home: &Path, id: &str) -> Result<Task> {
@@ -688,7 +690,48 @@ impl Task {
         write_json(&self.dir.join("baseline.json"), baseline)
     }
 
+    /// Marks the task as having an agent at work (by this process) until the
+    /// guard is dropped. Commit, rollback, undo and remove refuse meanwhile,
+    /// whichever process asks: committing or rolling back under a running
+    /// agent would split its work in two.
+    pub fn agent_at_work(&self) -> Result<AgentAtWork> {
+        let path = self.dir.join("agent");
+        if let Some(pid) = self.agent_pid() {
+            return Err(Error::Invalid(format!(
+                "an agent is already at work in task {} (process {pid})",
+                self.info.id
+            )));
+        }
+        let _ = fs::remove_file(&path);
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .at(&path)?;
+        writeln!(file, "{}", std::process::id()).at(&path)?;
+        Ok(AgentAtWork(path))
+    }
+
+    /// The process with an agent at work in the task, if it is still alive.
+    pub fn agent_pid(&self) -> Option<u32> {
+        let pid: u32 = fs::read_to_string(self.dir.join("agent"))
+            .ok()?
+            .trim()
+            .parse()
+            .ok()?;
+        // SAFETY: signal 0 only asks whether the process exists.
+        let alive = unsafe { libc::kill(pid as i32, 0) } == 0
+            || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM);
+        alive.then_some(pid)
+    }
+
     fn lock(&self) -> Result<Lock> {
+        if let Some(pid) = self.agent_pid() {
+            return Err(Error::Invalid(format!(
+                "an agent is at work in task {} (process {pid}); wait until it is done",
+                self.info.id
+            )));
+        }
         let path = self.dir.join("lock");
         match OpenOptions::new().write(true).create_new(true).open(&path) {
             Ok(mut file) => {
@@ -700,6 +743,16 @@ impl Task {
             }
             Err(e) => Err(e).at(&path),
         }
+    }
+}
+
+/// An agent at work in a task, marked until dropped (see
+/// [`Task::agent_at_work`]).
+pub struct AgentAtWork(PathBuf);
+
+impl Drop for AgentAtWork {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.0);
     }
 }
 

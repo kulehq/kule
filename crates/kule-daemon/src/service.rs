@@ -223,7 +223,12 @@ impl Service {
     pub fn tasks(&self) -> Result<Vec<TaskView>> {
         let mut infos = Task::list(&self.home).map_err(text)?;
         infos.sort_by(|a, b| (b.created_unix, &b.id).cmp(&(a.created_unix, &a.id)));
-        infos.iter().map(|info| self.view(&info.id)).collect()
+        // One task that cannot be read (being removed, damaged) does not
+        // hide the others.
+        Ok(infos
+            .iter()
+            .filter_map(|info| self.view(&info.id).ok())
+            .collect())
     }
 
     pub fn create(&self, workspace: &Path) -> Result<TaskView> {
@@ -325,6 +330,14 @@ impl Service {
         if !self.running.lock().unwrap().insert(id.to_owned()) {
             return Err(format!("an agent is already at work in task {id}"));
         }
+        // Marked in the task too, so the CLI and any other process see it.
+        let at_work = match task.agent_at_work() {
+            Ok(at_work) => at_work,
+            Err(e) => {
+                self.running.lock().unwrap().remove(id);
+                return Err(text(e));
+            }
+        };
         self.emit(
             id,
             RunEvent::Prompt {
@@ -338,6 +351,7 @@ impl Service {
                 Ok(denials) => (None, denials),
                 Err(e) => (Some(e), Vec::new()),
             };
+            drop(at_work);
             service.running.lock().unwrap().remove(task.id());
             service.emit(task.id(), RunEvent::Finished { error, denials });
         });
@@ -740,5 +754,25 @@ mod tests {
             s.app.commit(&id, true, false, Some(&again.digest)).unwrap(),
             Commit::Applied { changes: 2, .. }
         ));
+    }
+
+    /// One task that cannot be read (half made, half removed) does not
+    /// blank the list.
+    #[test]
+    fn an_unreadable_task_does_not_hide_the_others() {
+        let s = Setup::new();
+        let (good, _) = s.task();
+        let broken = s.app.home.join("tasks/broken");
+        fs::create_dir_all(&broken).unwrap();
+        fs::write(
+            broken.join("task.json"),
+            format!(
+                "{{\"id\":\"broken\",\"workspace\":{:?},\"created_unix\":1}}",
+                s.ws.path()
+            ),
+        )
+        .unwrap();
+        let ids: Vec<String> = s.app.tasks().unwrap().into_iter().map(|t| t.id).collect();
+        assert_eq!(ids, [good]);
     }
 }

@@ -864,3 +864,29 @@ fn a_commit_that_fails_halfway_leaves_nothing_behind() {
     s.task.rollback().unwrap();
     assert_eq!(s.task.undo().unwrap().unwrap().id, first.id);
 }
+
+/// An agent at work, started by any process, holds commit, rollback, undo
+/// and remove off; a mark left by a process that died does not.
+#[test]
+fn an_agent_at_work_holds_off_commit_rollback_undo_and_remove() {
+    let s = Setup::new();
+    write(&s.copy().join("a.txt"), "one\n");
+    let at_work = s.task.agent_at_work().unwrap();
+    assert!(s.task.agent_at_work().is_err());
+    let busy = |r: Result<(), Error>| match r {
+        Err(Error::Invalid(m)) => assert!(m.contains("at work"), "{m}"),
+        other => panic!("expected a refusal, got {other:?}"),
+    };
+    busy(s.task.commit().map(|_| ()));
+    busy(s.task.rollback().map(|_| ()));
+    busy(s.task.undo().map(|_| ()));
+    busy(s.task.clone().remove());
+    drop(at_work);
+    assert!(s.task.commit().unwrap().is_some());
+
+    let mark = s.task.copy().parent().unwrap().join("agent");
+    fs::write(&mark, "999999\n").unwrap();
+    assert_eq!(s.task.agent_pid(), None);
+    write(&s.copy().join("b.txt"), "two\n");
+    assert!(s.task.commit().unwrap().is_some());
+}
