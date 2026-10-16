@@ -223,6 +223,9 @@ fn run() -> Result<ExitCode> {
                     proxy = Some(started);
                     Network::Proxy(port)
                 };
+                if network != Network::Allow {
+                    warn_if_network_not_isolated();
+                }
                 sandbox.set_network(network);
                 let child = sandbox.command(&command[0], &command[1..])?;
                 used = Some(sandbox);
@@ -269,6 +272,7 @@ fn run() -> Result<ExitCode> {
             let _at_work = task.agent_at_work()?;
             let started = Instant::now();
             let logged_before = connections(&task)?.len();
+            warn_if_network_not_isolated();
             let proxy = Proxy::start(&task, profile.open_hosts(load_policy(&home, &task)?)?)?;
             let kule_acp::Launch {
                 command,
@@ -527,6 +531,17 @@ fn print_ruling(ruling: &Ruling) {
 }
 
 /// Files one per line; `.git` as what it means, not as object file names.
+fn warn_if_network_not_isolated() {
+    if !kule_engine::isolates_network() {
+        eprintln!(
+            "kule: this system refuses unprivileged user namespaces, so the sandbox \
+             checks only the proxy's port: a command can reach any address on that \
+             port and send datagrams anywhere. Allow them (on Ubuntu: sysctl \
+             kernel.apparmor_restrict_unprivileged_userns=0) to close that."
+        );
+    }
+}
+
 fn print_set(set: &EffectSet) {
     const SHOWN: usize = 40;
     let files: Vec<&Effect> = set.files().filter(|e| !e.ignored).collect();

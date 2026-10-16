@@ -4,8 +4,9 @@
 
 use std::fs;
 use std::io::Write;
-use std::net::{TcpListener, TcpStream};
+use std::net::{IpAddr, Ipv4Addr, TcpListener, TcpStream, UdpSocket};
 use std::process::Output;
+use std::time::Duration;
 
 use kule_engine::{DEFAULT_POLICY, Network, Policy, Proxy, Sandbox, Task, Verdict, connections};
 use tempfile::TempDir;
@@ -303,4 +304,70 @@ fn a_profile_can_open_its_own_hosts_but_not_past_a_forbid() {
             .permit_hosts("x", &["evil\" || true"])
             .is_err()
     );
+}
+
+/// This machine's address on its network, where it has one: what is sent
+/// there leaves the loopback interface. No packet is sent to find it.
+fn own_address() -> Option<IpAddr> {
+    let socket = UdpSocket::bind("0.0.0.0:0").ok()?;
+    socket.connect("192.0.2.1:9").ok()?;
+    let ip = socket.local_addr().ok()?.ip();
+    (!ip.is_loopback() && !ip.is_unspecified()).then_some(ip)
+}
+
+fn python_in(sandbox: &Sandbox, script: &str) -> Output {
+    sandbox
+        .command("python3", &["-c".to_owned(), script.to_owned()])
+        .unwrap()
+        .output()
+        .unwrap()
+}
+
+/// Landlock matches the port, not the address: a server elsewhere that
+/// listens on the proxy's port number stays out of reach all the same.
+/// (macOS counts the machine's own addresses as localhost, which the proxy
+/// rule names; what is reached there never leaves the machine.)
+#[cfg(target_os = "linux")]
+#[test]
+fn another_address_on_the_proxys_port_is_out_of_reach() {
+    let Some(ip) = own_address() else {
+        eprintln!("no address beyond loopback; nothing to try");
+        return;
+    };
+    let s = Setup::new();
+    let listener = TcpListener::bind((ip, 0)).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    // A sandbox whose proxy, as far as it knows, listens on that port.
+    let mut sandbox = Sandbox::new(&s.task).unwrap();
+    sandbox.set_network(Network::Proxy(port));
+    let out = python_in(
+        &sandbox,
+        &format!("import socket; socket.create_connection((\"{ip}\", {port}), timeout=3)"),
+    );
+    assert!(!out.status.success(), "reached {ip}:{port} past the proxy");
+}
+
+/// No datagram leaves the sandbox: not to a local resolver, not to the
+/// network. The proxy resolves names itself.
+#[test]
+fn datagrams_do_not_leave_the_sandbox() {
+    let s = Setup::new();
+    let mut targets = vec![IpAddr::V4(Ipv4Addr::LOCALHOST)];
+    targets.extend(own_address());
+    for ip in targets {
+        let receiver = UdpSocket::bind((ip, 0)).unwrap();
+        receiver
+            .set_read_timeout(Some(Duration::from_millis(500)))
+            .unwrap();
+        let port = receiver.local_addr().unwrap().port();
+        let _ = python_in(
+            &s.sandbox,
+            &format!(
+                "import socket\ns = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)\n\
+                 for _ in range(3):\n    try: s.sendto(b'leak', (\"{ip}\", {port}))\n    except OSError: pass"
+            ),
+        );
+        let mut buf = [0u8; 16];
+        assert!(receiver.recv(&mut buf).is_err(), "a datagram reached {ip}");
+    }
 }

@@ -171,6 +171,12 @@ at once.
 
 - Linux: Landlock reports refusals only to the audit log, so they are not
   listed; the command still gets EPERM. Network rules need Linux 6.7.
+  Commands get a network namespace of their own, with nothing but the
+  proxy in reach; that takes unprivileged user namespaces, which Ubuntu
+  24.04 refuses by default (`sysctl
+  kernel.apparmor_restrict_unprivileged_userns=0`). Without them only the
+  proxy's port is checked, and Kule says so. An agent's settings inside its
+  state directory are put back after the run rather than kept read-only.
 - Gemini needs an API key from AI Studio (Google no longer serves the
   Code Assist sign-in to clients like this), saved outside the keychain,
   which the sandbox keeps read-only: `GEMINI_FORCE_FILE_STORAGE=true gemini`,

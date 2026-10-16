@@ -345,6 +345,17 @@ impl Sandbox {
     }
 }
 
+/// Whether a sandbox with [`Network::Proxy`] or [`Network::Deny`] keeps
+/// every connection off the network but the proxy's. On Linux that takes a
+/// network namespace of its own, which some systems refuse to unprivileged
+/// users; there only the port is checked, any address, and datagrams pass.
+pub fn isolates_network() -> bool {
+    #[cfg(target_os = "linux")]
+    return crate::netns::available();
+    #[cfg(not(target_os = "linux"))]
+    return cfg!(target_os = "macos");
+}
+
 /// Appends refusals to the task's `sandbox.jsonl`.
 pub fn record_denials(task: &Task, denials: &[Denial]) -> Result<()> {
     if denials.is_empty() {
@@ -574,6 +585,21 @@ impl Sandbox {
         let mut ruleset = Some(self.landlock_ruleset()?);
         let mut command = Command::new(program);
         command.args(args);
+        // A network of its own first: its uid map is written under /proc,
+        // which Landlock would refuse afterwards.
+        if self.network != Network::Allow && crate::netns::available() {
+            let port = match self.network {
+                Network::Proxy(port) => Some(port),
+                _ => None,
+            };
+            let isolation =
+                crate::netns::Isolation::new(port).at(Path::new("/proc/self/ns/net"))?;
+            // SAFETY: enter only makes system calls on buffers and
+            // descriptors prepared before the fork.
+            unsafe {
+                command.pre_exec(move || isolation.enter());
+            }
+        }
         // SAFETY: the closure runs between fork and exec. It only makes the
         // two system calls that restrict the process (no_new_privs and
         // landlock_restrict_self) on a ruleset prepared before the fork.

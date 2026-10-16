@@ -26,6 +26,8 @@ mod git;
 mod history;
 mod ignore;
 mod manifest;
+#[cfg(target_os = "linux")]
+mod netns;
 mod network;
 mod policy;
 mod protect;
@@ -47,6 +49,8 @@ pub use manifest::Kind;
 pub use network::{Connection, Proxy, connections};
 pub use policy::{DEFAULT_POLICY, Judgement, Policy, REPO_POLICY, Ruling, Verdict};
 pub use protect::Kept;
-pub use sandbox::{Denial, Network, PASSED_ENV, Sandbox, denials, record_denials};
+pub use sandbox::{
+    Denial, Network, PASSED_ENV, Sandbox, denials, isolates_network, record_denials,
+};
 pub use steps::{Step, StepChange};
 pub use task::{AgentAtWork, Task, TaskInfo};
