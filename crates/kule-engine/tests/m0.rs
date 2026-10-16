@@ -614,3 +614,45 @@ fn a_task_reopens_from_its_home() {
     assert_eq!(changes(&again), [("src/new.rs".into(), Change::Created)]);
     assert_eq!(Task::list(home).unwrap().len(), 1);
 }
+
+#[test]
+fn steps_record_what_each_tool_call_changed() {
+    let s = Setup::new();
+    write(&s.copy().join("a.txt"), "one\n");
+    let first = s.task.step("write a").unwrap();
+    assert_eq!(first.id, 1);
+    let paths = |step: &kule_engine::Step| -> Vec<(String, Option<Change>)> {
+        step.changes
+            .iter()
+            .map(|c| (c.path.clone(), c.change))
+            .collect()
+    };
+    assert_eq!(paths(&first), [("a.txt".into(), Some(Change::Created))]);
+
+    write(
+        &s.copy().join("src/main.rs"),
+        "fn main() { /* edited */ }\n",
+    );
+    write(&s.copy().join("a.txt"), "two\n");
+    let second = s.task.step("edit two files").unwrap();
+    assert_eq!(
+        paths(&second),
+        [
+            ("a.txt".into(), Some(Change::Created)),
+            ("src/main.rs".into(), Some(Change::Modified))
+        ]
+    );
+
+    // Putting a file back the way the workspace has it shows up as undone.
+    write(&s.copy().join("src/main.rs"), "fn main() {}\n");
+    let third = s.task.step("revert main").unwrap();
+    assert_eq!(paths(&third), [("src/main.rs".into(), None)]);
+
+    let nothing = s.task.step("look around").unwrap();
+    assert!(nothing.changes.is_empty());
+    assert_eq!(s.task.steps().unwrap().len(), 4);
+
+    s.task.commit().unwrap();
+    assert!(s.task.steps().unwrap().is_empty());
+    assert_eq!(s.task.step("after commit").unwrap().id, 1);
+}

@@ -60,6 +60,18 @@ enum Cmd {
         #[arg(last = true, required = true)]
         command: Vec<String>,
     },
+    /// Give a coding agent a prompt: it runs over ACP inside the sandbox,
+    /// with its network through the task's proxy, and every tool call it
+    /// makes becomes a step. Nothing reaches the workspace until commit.
+    Run {
+        task: String,
+        /// claude-code or gemini
+        #[arg(long, default_value = "claude-code")]
+        agent: String,
+        prompt: String,
+    },
+    /// List the steps of the task's uncommitted work: what each tool call changed.
+    Steps { task: String },
     /// Show the task's uncommitted changes and what the policy says about them.
     Status {
         task: String,
@@ -184,6 +196,62 @@ fn run() -> Result<ExitCode> {
                 None => ExitCode::FAILURE,
             });
         }
+        Cmd::Run {
+            task,
+            agent,
+            prompt,
+        } => {
+            let task = Task::open(&home, &task)?;
+            let profile = kule_acp::profile(&agent).ok_or_else(|| {
+                let known: Vec<&str> = kule_acp::PROFILES.iter().map(|p| p.name).collect();
+                anyhow!("no agent profile {agent}; known: {}", known.join(", "))
+            })?;
+            let started = Instant::now();
+            let logged_before = connections(&task)?.len();
+            let mut sandbox = Sandbox::for_task(&task)?;
+            profile.apply(&mut sandbox)?;
+            let proxy = Proxy::start(&task, profile.open_hosts(load_policy(&home, &task)?)?)?;
+            sandbox.set_network(Network::Proxy(proxy.port()));
+            let command = sandbox.command(&profile.program().to_string_lossy(), &profile.args())?;
+            let (tx, rx) = futures::channel::mpsc::unbounded();
+            let runtime = tokio::runtime::Runtime::new()?;
+            let printer = runtime.spawn(print_events(rx));
+            let outcome = runtime.block_on(kule_acp::run(&task, command, &prompt, tx));
+            let _ = runtime.block_on(printer);
+            outcome.map_err(|e| {
+                anyhow!(
+                    "{e} (see {})",
+                    task.copy().with_file_name("agent.log").display()
+                )
+            })?;
+            println!();
+            print_set(&task.effects()?);
+            print_connections(&connections(&task)?[logged_before..]);
+            if let Some(denials) = sandbox.denials(started.elapsed())? {
+                record_denials(&task, &denials)?;
+                for d in &denials {
+                    println!(
+                        "sandbox: refused {} {} ({})",
+                        d.operation, d.path, d.process
+                    );
+                }
+            }
+            print_ruling(&load_policy(&home, &task)?.judge(&task.effects()?));
+        }
+        Cmd::Steps { task } => {
+            for step in Task::open(&home, &task)?.steps()? {
+                println!("{:>3}. {}", step.id, step.label);
+                for change in &step.changes {
+                    let mark = match change.change {
+                        Some(Change::Created) => "+",
+                        Some(Change::Modified) => "~",
+                        Some(Change::Deleted) => "-",
+                        None => "↺",
+                    };
+                    println!("       {mark} {}", change.path);
+                }
+            }
+        }
         Cmd::Status { task, json } => {
             let task = Task::open(&home, &task)?;
             let set = task.effects()?;
@@ -246,6 +314,57 @@ fn load_policy(home: &Path, task: &Task) -> Result<Policy> {
         Some(&home.join("policy.cedar")),
         task.workspace(),
     )?)
+}
+
+/// Prints an agent's events as they come: its answer as running text, tool
+/// calls and what each changed as their own lines.
+async fn print_events(mut rx: futures::channel::mpsc::UnboundedReceiver<kule_acp::Event>) {
+    use futures::StreamExt;
+    use kule_acp::Event;
+    let mut at_line_start = true;
+    let line = |text: String, at_line_start: &mut bool| {
+        if !*at_line_start {
+            println!();
+        }
+        println!("{text}");
+        *at_line_start = true;
+    };
+    while let Some(event) = rx.next().await {
+        match event {
+            Event::Message { text } => {
+                print!("{text}");
+                let _ = std::io::stdout().flush();
+                at_line_start = text.ends_with('\n');
+            }
+            Event::Thought { .. } | Event::Done { .. } => {}
+            Event::ToolCall { title, .. } => line(format!("· {title}"), &mut at_line_start),
+            Event::ToolDone {
+                title,
+                failed,
+                step,
+                ..
+            } => {
+                let changed: Vec<&str> = step.changes.iter().map(|c| c.path.as_str()).collect();
+                let what = if changed.is_empty() {
+                    "no file changes".to_owned()
+                } else {
+                    changed.join(", ")
+                };
+                let mark = if failed { "✗" } else { "✓" };
+                line(
+                    format!("{mark} {title} → step {}: {what}", step.id),
+                    &mut at_line_start,
+                );
+            }
+            Event::Permission { title, chosen } => line(
+                format!("· permission \"{title}\": {chosen}"),
+                &mut at_line_start,
+            ),
+            Event::Plan { entries } => {
+                line(format!("plan: {}", entries.join(" / ")), &mut at_line_start)
+            }
+        }
+    }
 }
 
 /// Appends the sandbox's refusals to the task's `sandbox.jsonl`.

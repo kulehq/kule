@@ -24,6 +24,7 @@ mod manifest;
 mod network;
 mod policy;
 mod sandbox;
+mod steps;
 mod task;
 
 pub use checkpoint::Checkpoint;
@@ -34,4 +35,5 @@ pub use manifest::Kind;
 pub use network::{Connection, Proxy, connections};
 pub use policy::{DEFAULT_POLICY, Judgement, Policy, REPO_POLICY, Ruling, Verdict};
 pub use sandbox::{Denial, Network, Sandbox};
+pub use steps::{Step, StepChange};
 pub use task::{Task, TaskInfo};

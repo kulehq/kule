@@ -25,7 +25,7 @@ pub struct TaskInfo {
 
 /// Layout under `<home>/tasks/<id>/`: `task.json`, `baseline.json`, `copy/`
 /// and `checkpoints/`.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Task {
     info: TaskInfo,
     dir: PathBuf,
@@ -359,7 +359,8 @@ impl Task {
             }
         }
         baseline.git = git::read(self.workspace())?;
-        self.save_baseline(baseline)
+        self.save_baseline(baseline)?;
+        self.clear_steps()
     }
 
     fn store(&self) -> Store {

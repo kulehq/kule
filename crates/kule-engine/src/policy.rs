@@ -17,7 +17,7 @@ use std::path::Path;
 use std::str::FromStr;
 
 use cedar_policy::{
-    Authorizer, Context, Decision, Entities, Entity, EntityId, EntityTypeName, EntityUid,
+    Authorizer, Context, Decision, Entities, Entity, EntityId, EntityTypeName, EntityUid, PolicyId,
     PolicySet, Request, RestrictedExpression,
 };
 use serde::{Deserialize, Serialize};
@@ -129,6 +129,34 @@ impl Policy {
                 _ => Err(Error::Held(ruling)),
             }
         }
+    }
+
+    /// Lets HTTPS connections to `hosts` pass on their own, under the rule
+    /// `id`. Agent profiles use it for the endpoints an agent needs to log in
+    /// and reach its model. A `forbid` (from a repository, say) still wins.
+    pub fn permit_hosts(mut self, id: &str, hosts: &[&str]) -> Result<Policy> {
+        let is_name = |s: &str| {
+            !s.is_empty()
+                && s.chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'))
+        };
+        if !is_name(id) || !hosts.iter().all(|h| is_name(h)) {
+            return Err(Error::Invalid(format!("bad host rule {id}: {hosts:?}")));
+        }
+        let list = hosts
+            .iter()
+            .map(|h| format!("\"{h}\""))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let text = format!(
+            "@id(\"{id}\") permit (principal, action == Kule::Action::\"auto\", resource) \
+             when {{ resource.kind == \"net.connect\" && resource.port == 443 && [{list}].contains(resource.host) }};"
+        );
+        let invalid = |e: &dyn std::fmt::Display| Error::Invalid(format!("policy: {e}"));
+        let policy = cedar_policy::Policy::parse(Some(PolicyId::new(format!("kule-{id}"))), text)
+            .map_err(|e| invalid(&e))?;
+        self.set.add(policy).map_err(|e| invalid(&e))?;
+        Ok(self)
     }
 
     /// Judges a network connection a command asks the proxy for. It happens

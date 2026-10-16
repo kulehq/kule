@@ -19,3 +19,6 @@ anyhow.workspace = true
 clap.workspace = true
 kule-engine = { version = "0.0.1", path = "../kule-engine" }
 serde_json.workspace = true
+futures = "0.3.34"
+kule-acp = { version = "0.0.1", path = "../kule-acp" }
+tokio = { version = "1.53.3", features = ["rt-multi-thread"] }

@@ -194,3 +194,41 @@ fn the_default_policy_lets_registries_and_model_apis_through_only() {
         );
     }
 }
+
+#[test]
+fn a_profile_can_open_its_own_hosts_but_not_past_a_forbid() {
+    let opened = Policy::builtin()
+        .permit_hosts("profile-gemini", &["oauth2.googleapis.com"])
+        .unwrap();
+    let j = opened.judge_connection("oauth2.googleapis.com", 443);
+    assert_eq!(
+        (j.verdict, j.rules),
+        (Verdict::Allow, vec!["profile-gemini".to_owned()])
+    );
+    assert_eq!(
+        opened.judge_connection("oauth2.googleapis.com", 80).verdict,
+        Verdict::Ask
+    );
+    assert_eq!(
+        Policy::builtin()
+            .judge_connection("oauth2.googleapis.com", 443)
+            .verdict,
+        Verdict::Ask
+    );
+
+    let forbid = r#"@id("no-google") forbid (principal, action, resource) when { resource.host like "*.googleapis.com" };"#;
+    let tight = Policy::from_texts(DEFAULT_POLICY, Some(forbid))
+        .unwrap()
+        .permit_hosts("profile-gemini", &["oauth2.googleapis.com"])
+        .unwrap();
+    assert_eq!(
+        tight.judge_connection("oauth2.googleapis.com", 443).verdict,
+        Verdict::Deny
+    );
+
+    assert!(
+        Policy::builtin()
+            .permit_hosts("x", &["evil\" || true"])
+            .is_err()
+    );
+}
