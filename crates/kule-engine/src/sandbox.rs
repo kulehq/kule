@@ -635,13 +635,16 @@ impl Sandbox {
         // settings. A protected path that is a writable root, or holds one,
         // stays read-only; one inside a writable directory is put back after
         // the run instead (`keep_protected`).
-        let writable = carve_all(
-            self.writable()
-                .into_iter()
+        // The copy and tmp sit in Kule's home, which is hidden: they come
+        // back after the carving, as on macOS.
+        let mut writable = carve_all(
+            self.writable
+                .iter()
                 .filter(|root| !self.protected.iter().any(|p| root.starts_with(p)))
-                .map(Path::to_path_buf)
+                .cloned()
                 .collect(),
         );
+        writable.extend([self.copy.clone(), self.tmp.clone()]);
         let devices = [
             "/dev/null",
             "/dev/zero",
@@ -675,7 +678,9 @@ impl Sandbox {
 fn carve(roots: Vec<PathBuf>, hidden: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
     for root in roots {
-        if root == hidden {
+        // Inside `hidden` too: an earlier carve for a path within it may
+        // have left its children here.
+        if root.starts_with(hidden) {
             continue;
         }
         if !hidden.starts_with(&root) {

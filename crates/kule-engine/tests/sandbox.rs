@@ -503,7 +503,9 @@ fn package_managers_write_to_the_tasks_own_caches() {
 #[test]
 fn the_persons_package_caches_are_read_only() {
     let s = Setup::new();
-    let home = s.outside();
+    // Not under /tmp, which the defaults leave writable.
+    let person = TempDir::new_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
+    let home = fs::canonicalize(person.path()).unwrap();
     let caches = [
         ".cargo/registry",
         ".cargo/git",
@@ -530,5 +532,23 @@ fn the_persons_package_caches_are_read_only() {
         assert_eq!(text(&out), "real", "{cache} is not readable");
         assert!(!ok(&out), "{cache} is writable");
         assert!(!dir.join("new").exists());
+    }
+}
+
+/// A hidden directory stays hidden whole when a path inside it was hidden
+/// first (Landlock builds the readable set by carving them out in turn).
+#[test]
+fn a_hidden_directory_stays_hidden_after_a_path_inside_it() {
+    let s = Setup::new();
+    let state = s.outside().join("agent");
+    fs::create_dir_all(state.join("projects")).unwrap();
+    fs::write(state.join("login.json"), "secret\n").unwrap();
+    fs::write(state.join("projects/session.jsonl"), "secret\n").unwrap();
+    let mut sandbox = s.sandbox();
+    sandbox.hide(&state.join("login.json")).unwrap();
+    sandbox.hide(&state).unwrap();
+    for path in ["login.json", "projects/session.jsonl"] {
+        let out = sh(&sandbox, &format!("cat '{}'", state.join(path).display()));
+        assert!(!ok(&out), "{path}: {out:?}");
     }
 }
