@@ -165,6 +165,42 @@ fn sandbox_python(sandbox: &Sandbox, script: &str) -> Output {
         .unwrap()
 }
 
+/// An agent's own settings sit inside its writable state; where they name
+/// hooks or MCP servers that run outside the sandbox later, they stay
+/// readable but not writable.
+#[test]
+fn a_protected_file_inside_a_writable_directory_stays_read_only() {
+    let s = Setup::new();
+    let state = s.outside().join("agent-state");
+    fs::create_dir_all(&state).unwrap();
+    fs::write(state.join("settings.json"), "{}\n").unwrap();
+    let mut sandbox = s.sandbox();
+    sandbox.allow_write(&state).unwrap();
+    sandbox.protect(&state.join("settings.json")).unwrap();
+
+    let out = sh(
+        &sandbox,
+        &format!(
+            "cat '{0}/settings.json' && echo session > '{0}/session.json'",
+            state.display()
+        ),
+    );
+    assert!(ok(&out), "{out:?}");
+    assert_eq!(text(&out), "{}");
+    let out = sh(
+        &sandbox,
+        &format!(
+            "echo '{{\"hooks\":1}}' > '{}/settings.json'",
+            state.display()
+        ),
+    );
+    assert!(!ok(&out));
+    assert_eq!(
+        fs::read_to_string(state.join("settings.json")).unwrap(),
+        "{}\n"
+    );
+}
+
 /// Tokens and agent sockets in the person's environment stay out; what
 /// tools need to find themselves goes in, and what is passed on purpose.
 #[test]

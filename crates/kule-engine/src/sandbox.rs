@@ -116,6 +116,8 @@ pub struct Sandbox {
     tmp: PathBuf,
     writable: Vec<PathBuf>,
     hidden: Vec<PathBuf>,
+    /// Readable but never writable, even inside a writable path.
+    protected: Vec<PathBuf>,
     network: Network,
     /// Environment variables passed on beyond [`PASSED_ENV`].
     passed_env: Vec<String>,
@@ -150,6 +152,7 @@ impl Sandbox {
             // copies, the policy, the key that signs every task's history and
             // the daemon's token are none of a task's business.
             hidden: vec![real_or_planned(&task.home())?],
+            protected: Vec::new(),
             network: Network::Allow,
             passed_env: Vec::new(),
             tag: format!("kule-{}-{nanos:x}", task.id()),
@@ -190,6 +193,15 @@ impl Sandbox {
 
     pub fn allow_write(&mut self, path: &Path) -> Result<()> {
         self.writable.push(real(path)?);
+        Ok(())
+    }
+
+    /// Keeps `path` readable but not writable, even inside a writable path:
+    /// an agent's own settings, where hooks and MCP servers that run outside
+    /// the sandbox later are configured. A path that does not exist yet is
+    /// protected too.
+    pub fn protect(&mut self, path: &Path) -> Result<()> {
+        self.protected.push(real_or_planned(path)?);
         Ok(())
     }
 
@@ -431,6 +443,27 @@ impl Sandbox {
         text.push_str(
             "(allow file-read* file-write* (subpath (param \"C\")) (subpath (param \"T\")))\n",
         );
+        for (i, path) in self.protected.iter().enumerate() {
+            text.push_str(&format!(
+                "(deny file-write* (subpath (param \"P{i}\")) {tag})\n"
+            ));
+            params.push((format!("P{i}"), path.as_path()));
+        }
+        // Resolving the working directory (realpath) looks at every directory
+        // on the way to the copy and tmp, inside the hidden home too; what
+        // those directories list stays hidden.
+        let ancestors: std::collections::BTreeSet<&Path> = self
+            .copy
+            .ancestors()
+            .chain(self.tmp.ancestors())
+            .skip(1)
+            .collect();
+        for (i, dir) in ancestors.into_iter().enumerate() {
+            text.push_str(&format!(
+                "(allow file-read-metadata (literal (param \"A{i}\")))\n"
+            ));
+            params.push((format!("A{i}"), dir));
+        }
         (text, params)
     }
 
@@ -549,7 +582,10 @@ impl Sandbox {
         // directory would otherwise reach a hidden path inside it. The cost
         // is that nothing new can be created directly in such a directory,
         // only inside its existing children.
-        let writable = carve_all(self.writable().into_iter().map(Path::to_path_buf).collect());
+        let writable = self.protected.iter().fold(
+            carve_all(self.writable().into_iter().map(Path::to_path_buf).collect()),
+            |roots, protected| carve(roots, protected),
+        );
         let devices = [
             "/dev/null",
             "/dev/zero",

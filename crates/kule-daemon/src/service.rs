@@ -366,7 +366,8 @@ impl Service {
                 service.emit(&id, RunEvent::Agent { event });
             }
         });
-        let outcome = runtime.block_on(kule_acp::run(task, launch.command, prompt, tx));
+        let outcome =
+            runtime.block_on(kule_acp::run(task, launch.command, prompt, launch.mode, tx));
         let _ = runtime.block_on(forward);
         outcome.map_err(|e| {
             format!(

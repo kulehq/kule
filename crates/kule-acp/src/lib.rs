@@ -19,8 +19,8 @@ use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
     ContentBlock, InitializeRequest, NewSessionRequest, PermissionOptionKind, PromptRequest,
     RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
-    SelectedPermissionOutcome, SessionNotification, SessionUpdate, TextContent, ToolCallStatus,
-    ToolKind,
+    SelectedPermissionOutcome, SessionNotification, SessionUpdate, SetSessionModeRequest,
+    TextContent, ToolCallStatus, ToolKind,
 };
 use agent_client_protocol::{Agent, ByteStreams, ConnectionTo};
 use futures::channel::mpsc::UnboundedSender;
@@ -77,6 +77,7 @@ pub async fn run(
     task: &Task,
     agent: Command,
     prompt: &str,
+    mode: Option<&str>,
     events: UnboundedSender<Event>,
 ) -> Result<String, Error> {
     let log = task.copy().with_file_name("agent.log");
@@ -109,6 +110,7 @@ pub async fn run(
 
     let cwd = task.copy();
     let prompt = prompt.to_owned();
+    let mode = mode.map(str::to_owned);
     let watcher = Watcher {
         task: task.clone(),
         events: events.clone(),
@@ -174,6 +176,17 @@ pub async fn run(
                     .send_request(NewSessionRequest::new(cwd))
                     .block_task()
                     .await?;
+                if let Some(mode) = mode.filter(|m| {
+                    session
+                        .modes
+                        .as_ref()
+                        .is_some_and(|s| s.available_modes.iter().any(|a| a.id.to_string() == *m))
+                }) {
+                    connection
+                        .send_request(SetSessionModeRequest::new(session.session_id.clone(), mode))
+                        .block_task()
+                        .await?;
+                }
                 let response = connection
                     .send_request(PromptRequest::new(
                         session.session_id,

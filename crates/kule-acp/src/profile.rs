@@ -17,9 +17,17 @@ pub struct Profile {
     pub command: &'static [&'static str],
     /// Paths under the home directory the agent writes its own state to.
     pub state: &'static [&'static str],
+    /// Paths in that state that configure what runs outside the sandbox
+    /// later (hooks, MCP servers, sandbox settings): readable, never
+    /// writable.
+    pub protected: &'static [&'static str],
     /// Default-hidden paths under the home directory the agent needs to read
     /// (macOS only: the keychain holding its login).
     pub reveal_on_macos: &'static [&'static str],
+    /// The session mode to start in, when the agent offers it: one that
+    /// leaves sandboxing to Kule, for an agent whose own sandbox cannot
+    /// start inside Kule's.
+    pub mode: Option<&'static str>,
     /// Environment variables the agent is started with.
     pub env: &'static [(&'static str, &'static str)],
     /// The person's environment variables the agent may see: its own
@@ -33,8 +41,15 @@ pub struct Profile {
 pub const PROFILES: &[Profile] = &[
     Profile {
         name: "claude-code",
+        mode: None,
         command: &["npx", "-y", "@agentclientprotocol/claude-agent-acp@0.92.0"],
         state: &[".claude", ".claude.json", ".local/state/claude"],
+        protected: &[
+            ".claude/settings.json",
+            ".claude/settings.local.json",
+            ".claude/hooks",
+            ".claude.json",
+        ],
         reveal_on_macos: &["Library/Keychains"],
         env: &[],
         pass_env: &[
@@ -46,8 +61,10 @@ pub const PROFILES: &[Profile] = &[
     },
     Profile {
         name: "gemini",
+        mode: None,
         command: &["gemini", "--acp"],
         state: &[".gemini"],
+        protected: &[".gemini/settings.json"],
         reveal_on_macos: &[],
         // The keychain only works for Gemini when it can write a probe item
         // there, which the sandbox refuses; its own encrypted file under
@@ -62,6 +79,7 @@ pub const PROFILES: &[Profile] = &[
     },
     Profile {
         name: "codex",
+        mode: Some("agent-full-access"),
         // Codex runs each command in its own Seatbelt or Landlock sandbox,
         // which cannot be set up inside Kule's; Kule's sandbox stands in.
         command: &[
@@ -72,6 +90,7 @@ pub const PROFILES: &[Profile] = &[
             "sandbox_mode=\"danger-full-access\"",
         ],
         state: &[".codex"],
+        protected: &[".codex/config.toml"],
         reveal_on_macos: &[],
         env: &[],
         pass_env: &["OPENAI_API_KEY", "CODEX_HOME"],
@@ -97,6 +116,9 @@ impl Profile {
             if path.exists() {
                 sandbox.allow_write(&path)?;
             }
+        }
+        for path in self.protected {
+            sandbox.protect(&home.join(path))?;
         }
         if cfg!(target_os = "macos") {
             for path in self.reveal_on_macos {
@@ -135,7 +157,11 @@ impl Profile {
         // take the repository's node_modules or .npmrc for the agent's own.
         // The agent still works in the copy, which its session names.
         command.current_dir(task.tmp()?);
-        Ok(Launch { command, sandbox })
+        Ok(Launch {
+            command,
+            sandbox,
+            mode: self.mode,
+        })
     }
 }
 
@@ -144,6 +170,8 @@ impl Profile {
 pub struct Launch {
     pub command: Command,
     pub sandbox: Sandbox,
+    /// The session mode to ask for (see [`Profile::mode`]).
+    pub mode: Option<&'static str>,
 }
 
 #[cfg(test)]

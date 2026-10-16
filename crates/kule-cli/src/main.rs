@@ -264,11 +264,15 @@ fn run() -> Result<ExitCode> {
             let started = Instant::now();
             let logged_before = connections(&task)?.len();
             let proxy = Proxy::start(&task, profile.open_hosts(load_policy(&home, &task)?)?)?;
-            let kule_acp::Launch { command, sandbox } = profile.launch(&task, &proxy)?;
+            let kule_acp::Launch {
+                command,
+                sandbox,
+                mode,
+            } = profile.launch(&task, &proxy)?;
             let (tx, rx) = futures::channel::mpsc::unbounded();
             let runtime = tokio::runtime::Runtime::new()?;
             let printer = runtime.spawn(print_events(rx));
-            let outcome = runtime.block_on(kule_acp::run(&task, command, &prompt, tx));
+            let outcome = runtime.block_on(kule_acp::run(&task, command, &prompt, mode, tx));
             let _ = runtime.block_on(printer);
             outcome.map_err(|e| {
                 anyhow!(

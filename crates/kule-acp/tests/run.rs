@@ -39,7 +39,7 @@ impl Setup {
         let (tx, rx) = mpsc::unbounded();
         let runtime = tokio::runtime::Runtime::new().unwrap();
         runtime.block_on(async {
-            run(&self.task, agent, script, tx).await.unwrap();
+            run(&self.task, agent, script, None, tx).await.unwrap();
         });
         runtime.block_on(rx.collect::<Vec<_>>())
     }
