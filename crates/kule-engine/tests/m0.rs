@@ -807,3 +807,60 @@ fn steps_record_what_each_tool_call_changed() {
     assert!(s.task.steps().unwrap().is_empty());
     assert_eq!(s.task.step("after commit").unwrap().id, 1);
 }
+
+/// Module caches and build directories are often read-only (`chmod 555`);
+/// rollback, commit and undo still get through them.
+#[test]
+fn read_only_directories_do_not_stop_rollback_commit_or_undo() {
+    let s = Setup::new();
+    let ro = |p: &Path, mode| fs::set_permissions(p, fs::Permissions::from_mode(mode)).unwrap();
+
+    // The agent fills a cache and makes it read-only: rollback still works.
+    write(&s.copy().join("cache/x"), "x\n");
+    ro(&s.copy().join("cache"), 0o555);
+    s.task.rollback().unwrap();
+    assert!(!s.copy().join("cache").exists());
+
+    // A read-only directory in the workspace: commit can delete it, undo
+    // brings it back, mode included.
+    write(&s.work().join("vendor/lib.txt"), "lib\n");
+    ro(&s.work().join("vendor"), 0o555);
+    let home = TempDir::new().unwrap();
+    let task = Task::create(home.path(), &s.work()).unwrap();
+    ro(&task.copy().join("vendor"), 0o755);
+    fs::remove_dir_all(task.copy().join("vendor")).unwrap();
+    task.commit().unwrap().unwrap();
+    assert!(!s.work().join("vendor").exists());
+    task.undo().unwrap().unwrap();
+    assert_eq!(
+        fs::read_to_string(s.work().join("vendor/lib.txt")).unwrap(),
+        "lib\n"
+    );
+    let mode = fs::metadata(s.work().join("vendor")).unwrap().mode() & 0o777;
+    assert_eq!(mode, 0o555);
+    ro(&s.work().join("vendor"), 0o755);
+    ro(&task.copy().join("vendor"), 0o755);
+}
+
+/// A commit that fails halfway puts the workspace back and leaves no
+/// interrupted checkpoint in undo's way.
+#[test]
+fn a_commit_that_fails_halfway_leaves_nothing_behind() {
+    let s = Setup::new();
+    write(&s.copy().join("a.txt"), "one\n");
+    let first = s.task.commit().unwrap().unwrap();
+    let before = snapshot(&s.work());
+
+    // a.txt goes in first; then zz.txt cannot be read from the copy.
+    write(&s.copy().join("a.txt"), "two\n");
+    write(&s.copy().join("zz.txt"), "secret\n");
+    fs::set_permissions(s.copy().join("zz.txt"), fs::Permissions::from_mode(0o000)).unwrap();
+    let result = s.task.commit();
+    assert!(result.is_err(), "{result:?}");
+    assert_eq!(snapshot(&s.work()), before);
+
+    // Undo still reaches the commit before.
+    fs::set_permissions(s.copy().join("zz.txt"), fs::Permissions::from_mode(0o644)).unwrap();
+    s.task.rollback().unwrap();
+    assert_eq!(s.task.undo().unwrap().unwrap().id, first.id);
+}

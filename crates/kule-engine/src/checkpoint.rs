@@ -84,6 +84,12 @@ impl Store {
         Ok(())
     }
 
+    /// Forgets a checkpoint whose commit was put back, so it does not stand
+    /// in undo's way as an interrupted one. Its snapshot stays in the store.
+    pub fn discard(&self, checkpoint: &Checkpoint) -> Result<()> {
+        remove(&self.dir(checkpoint.id))
+    }
+
     /// Keeps the workspace's version of every path the commit is about to
     /// replace or delete, along with the times of their parent directories,
     /// and records the checkpoint as `Applying`.

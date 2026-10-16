@@ -265,8 +265,47 @@ impl Task {
         let store = self.store();
         let mut checkpoint = store.begin(self.workspace(), &set.effects)?;
         let paths = set.paths();
-        fsops::mirror(&self.copy(), self.workspace(), &paths, true)?;
-        self.resync(&mut baseline, &paths)?;
+        if let Err(failed) = fsops::mirror(&self.copy(), self.workspace(), &paths, true) {
+            // Part of it may be in place: put back what the commit replaced
+            // and forget the checkpoint, so nothing is left half done. Only
+            // the paths it got to: rewriting the others would change their
+            // stamps and make them look edited from outside.
+            let touched: Vec<String> = paths
+                .iter()
+                .filter(|p| {
+                    let now = Stamp::of(&self.workspace().join(p)).ok().flatten();
+                    let was = baseline.entries.get(*p).map(|e| &e.work);
+                    match (was, &now) {
+                        (Some(was), Some(now)) => !was.unchanged(now),
+                        (None, None) => false,
+                        _ => true,
+                    }
+                })
+                .cloned()
+                .collect();
+            let restored = store
+                .before(&checkpoint)
+                .and_then(|before| fsops::mirror(&before, self.workspace(), &touched, true));
+            let _ = store.done_with(&checkpoint);
+            if restored.is_ok() {
+                // What was put back holds the baseline's content again, as
+                // new files: their stamps go to the baseline and to the
+                // commit before, as after an undo.
+                for path in &touched {
+                    if let (Some(now), Some(entry)) = (
+                        Stamp::of(&self.workspace().join(path))?,
+                        baseline.entries.get_mut(path),
+                    ) {
+                        entry.work = now;
+                    }
+                }
+                self.save_baseline(&baseline)?;
+                store.refresh_after(checkpoint.id, &touched, &baseline)?;
+                store.discard(&checkpoint)?;
+            }
+            return Err(failed);
+        }
+        self.settle(&mut baseline, &paths)?;
         for path in &paths {
             if let Some(entry) = baseline.entries.get(path) {
                 checkpoint.after.insert(path.clone(), entry.work.clone());
@@ -274,7 +313,12 @@ impl Task {
         }
         checkpoint.git_after = baseline.git.clone();
         checkpoint.state = State::Applied;
+        // The checkpoint before the baseline: a crash in between leaves a
+        // baseline older than the workspace, which reports conflicts rather
+        // than overwriting anything.
         store.save(&checkpoint)?;
+        self.save_baseline(&baseline)?;
+        self.clear_steps()?;
         store.record(Event::Commit {
             checkpoint: checkpoint.id,
             changes: checkpoint.effects.len(),
@@ -345,8 +389,11 @@ impl Task {
         store.done_with(&checkpoint)?;
         undone?;
         checkpoint.state = State::Undone;
+        // As for commit: the checkpoint first, then the baseline.
         store.save(&checkpoint)?;
         store.refresh_after(checkpoint.id, &paths, &baseline)?;
+        self.save_baseline(&baseline)?;
+        self.clear_steps()?;
         store.record(Event::Undo {
             checkpoint: checkpoint.id,
         })?;
@@ -390,7 +437,7 @@ impl Task {
         }
         fsops::mirror(before, self.workspace(), paths, true)?;
         fsops::mirror(self.workspace(), &self.copy(), paths, false)?;
-        self.resync(baseline, paths)
+        self.settle(baseline, paths)
     }
 
     /// How long the task's connections wait for a person before they are
@@ -549,6 +596,14 @@ impl Task {
     /// which no longer match; one that differs without a stamp moving gets
     /// stamps that match nothing.
     fn resync(&self, baseline: &mut Baseline, paths: &[String]) -> Result<()> {
+        self.settle(baseline, paths)?;
+        self.save_baseline(baseline)?;
+        self.clear_steps()
+    }
+
+    /// [`Task::resync`] without saving: the baseline in memory only, so a
+    /// commit or undo can record its checkpoint first.
+    fn settle(&self, baseline: &mut Baseline, paths: &[String]) -> Result<()> {
         let work_clock = self.clock(self.workspace())?;
         let copy_clock = self.clock(&self.copy())?;
         let (work_start, copy_start) = (work_clock.now()?, copy_clock.now()?);
@@ -599,7 +654,10 @@ impl Task {
                 if past && held()? && fsops::same_bytes(&work, &copy)? && held()? {
                     continue;
                 }
-                if held()? {
+                // A clock that did not move leaves the stamps as they are when
+                // the bytes agree; marking them unknown would show a change
+                // nobody made, from then on.
+                if held()? && !fsops::same_bytes(&work, &copy)? {
                     baseline.entries.insert(
                         path,
                         Entry {
@@ -611,8 +669,7 @@ impl Task {
             }
         }
         baseline.git = git::read(self.workspace())?;
-        self.save_baseline(baseline)?;
-        self.clear_steps()
+        Ok(())
     }
 
     fn clock(&self, watched: &Path) -> Result<Clock> {

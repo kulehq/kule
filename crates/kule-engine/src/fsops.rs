@@ -178,7 +178,8 @@ pub fn mirror(src: &Path, dst: &Path, paths: &[String], atomic: bool) -> Result<
             Some(_) => atomic,
         };
         if !keep {
-            remove(&dst.join(p))?;
+            let gone = dst.join(p);
+            in_parent(&gone, || remove(&gone))?;
         }
     }
 
@@ -186,20 +187,23 @@ pub fn mirror(src: &Path, dst: &Path, paths: &[String], atomic: bool) -> Result<
     for (p, (s, _)) in paths.iter().zip(&stamps) {
         let Some(s) = s else { continue };
         let (from, to) = (src.join(p), dst.join(p));
-        if s.kind == Kind::Dir {
-            if Stamp::of(&to)?.is_none() {
-                fs::create_dir(&to).at(&to)?;
+        in_parent(&to, || {
+            if s.kind == Kind::Dir {
+                if Stamp::of(&to)?.is_none() {
+                    fs::create_dir(&to).at(&to)?;
+                }
+            } else if atomic {
+                let tmp = temp_beside(&to);
+                let placed = place(&from, &tmp, s).and_then(|()| fs::rename(&tmp, &to).at(&to));
+                if placed.is_err() {
+                    let _ = fs::remove_file(&tmp);
+                }
+                placed?;
+            } else {
+                place(&from, &to, s)?;
             }
-        } else if atomic {
-            let tmp = temp_beside(&to);
-            let placed = place(&from, &tmp, s).and_then(|()| fs::rename(&tmp, &to).at(&to));
-            if placed.is_err() {
-                let _ = fs::remove_file(&tmp);
-            }
-            placed?;
-        } else {
-            place(&from, &to, s)?;
-        }
+            Ok(())
+        })?;
     }
 
     // 3. Directory modes and times last: adding a child moves a directory's mtime.
@@ -233,6 +237,26 @@ pub fn copy_parent_times(src: &Path, dst: &Path, paths: &[String]) -> Result<()>
         }
     }
     Ok(())
+}
+
+/// Runs `f`, which adds or removes an entry in `path`'s directory, with that
+/// directory writable for the moment if it is not (a read-only module cache,
+/// a `chmod 555` build directory), and its mode put back afterwards.
+fn in_parent<T>(path: &Path, f: impl FnOnce() -> Result<T>) -> Result<T> {
+    let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) else {
+        return f();
+    };
+    let mode = match fs::symlink_metadata(parent) {
+        Ok(meta) if meta.is_dir() => meta.permissions().mode() & 0o7777,
+        _ => return f(),
+    };
+    if mode & 0o200 != 0 {
+        return f();
+    }
+    fs::set_permissions(parent, fs::Permissions::from_mode(mode | 0o700)).at(parent)?;
+    let done = f();
+    fs::set_permissions(parent, fs::Permissions::from_mode(mode)).at(parent)?;
+    done
 }
 
 /// Puts the file or symlink described by `stamp` (read from `from`) at `to`,
