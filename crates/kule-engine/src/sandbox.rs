@@ -253,10 +253,17 @@ impl Sandbox {
                 .handle_access(AccessNet::BindTcp | AccessNet::ConnectTcp)
                 .map_err(|e| fail(&e))?;
         }
-        let mut readable = vec![PathBuf::from("/")];
-        for hidden in &self.hidden {
-            readable = carve(readable, hidden);
-        }
+        let carve_all = |roots: Vec<PathBuf>| {
+            self.hidden
+                .iter()
+                .fold(roots, |roots, hidden| carve(roots, hidden))
+        };
+        let readable = carve_all(vec![PathBuf::from("/")]);
+        // Writable roots are carved the same way: an allowance for a
+        // directory would otherwise reach a hidden path inside it. The cost
+        // is that nothing new can be created directly in such a directory,
+        // only inside its existing children.
+        let writable = carve_all(self.writable().into_iter().map(Path::to_path_buf).collect());
         let devices = [
             "/dev/null",
             "/dev/zero",
@@ -265,11 +272,6 @@ impl Sandbox {
             "/dev/ptmx",
             "/dev/pts",
         ];
-        let writable: Vec<&Path> = self
-            .writable()
-            .into_iter()
-            .filter(|w| !self.hidden.iter().any(|h| w.starts_with(h)))
-            .collect();
         ruleset
             .create()
             .map_err(|e| fail(&e))?
