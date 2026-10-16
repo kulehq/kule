@@ -1809,6 +1809,7 @@ dependencies = [
 [[package]]
 name = "lonca-net"
 version = "0.1.0"
+source = "git+https://github.com/selcukgural/lonca?rev=5ce1f1f5d7c81b055e4c0225997692d7de0fca33#5ce1f1f5d7c81b055e4c0225997692d7de0fca33"
 
 [[package]]
 name = "memchr"

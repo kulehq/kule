@@ -12,7 +12,8 @@ blake3.workspace = true
 cedar-policy.workspace = true
 filetime.workspace = true
 gix.workspace = true
-lonca-net = { path = "../lonca-net" }
+# Shared with Lonca, pinned to a commit until it is on crates.io.
+lonca-net = { git = "https://github.com/selcukgural/lonca", rev = "5ce1f1f5d7c81b055e4c0225997692d7de0fca33" }
 reflink-copy.workspace = true
 serde.workspace = true
 serde_json.workspace = true

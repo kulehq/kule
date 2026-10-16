@@ -107,10 +107,16 @@ impl Sandbox {
         self.platform_denials(window)
     }
 
-    /// [`Sandbox::new`] plus the defaults for the user's home directory:
-    /// package caches writable, credentials hidden.
+    /// [`Sandbox::new`] plus the defaults: `/tmp` and package caches
+    /// writable, credentials in the home directory hidden. Shells and tools
+    /// write to `/tmp` by hard-coded path, whatever `TMPDIR` says, and
+    /// nothing there belongs to the workspace.
     pub fn for_task(task: &Task) -> Result<Sandbox> {
         let mut sandbox = Sandbox::new(task)?;
+        let tmp = Path::new("/tmp");
+        if tmp.is_dir() {
+            sandbox.allow_write(tmp)?;
+        }
         if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
             for cache in CACHES_IN_HOME {
                 let path = home.join(cache);

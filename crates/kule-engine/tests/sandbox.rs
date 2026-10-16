@@ -267,3 +267,19 @@ fn refusals_are_reported_where_the_platform_allows() {
     );
     assert_eq!(bystander.denials(window).unwrap(), Some(Vec::new()));
 }
+
+/// Shells and tools write to /tmp by hard-coded path; the default sandbox
+/// lets them, the bare one does not.
+#[test]
+fn the_default_sandbox_lets_commands_use_tmp() {
+    let s = Setup::new();
+    let name = format!("kule-tmp-test-{}", std::process::id());
+    let script = format!("echo x > /tmp/{name} && cat /tmp/{name} && rm /tmp/{name}");
+
+    let bare = sh(&s.sandbox(), &script);
+    assert!(!ok(&bare), "the bare sandbox let /tmp through");
+
+    let default = sh(&Sandbox::for_task(&s.task).unwrap(), &script);
+    assert!(ok(&default), "{default:?}");
+    assert_eq!(text(&default), "x");
+}
