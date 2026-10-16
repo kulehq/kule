@@ -6,12 +6,12 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use futures::StreamExt;
 use kule_engine::{
-    Checkpoint, Connection, Denial, EffectSet, Error, Policy, Proxy, Ruling, Step, Task, Verdict,
-    connections, denials, record_denials,
+    Approvals, Checkpoint, Connection, Denial, EffectSet, Error, Policy, Proxy, Question, Ruling,
+    Step, Task, Verdict, connections, denials, record_denials,
 };
 use serde::Serialize;
 
@@ -43,6 +43,10 @@ pub struct TaskView {
     /// What the policy says about `changes`; `None` when there are none.
     pub verdict: Option<Verdict>,
     pub running: bool,
+    /// Questions the task's agent is waiting on.
+    pub waiting: usize,
+    /// How long a question waits before it is refused.
+    pub approval_timeout_secs: u64,
 }
 
 /// The task's uncommitted work, ignored paths marked, and what the policy
@@ -95,6 +99,8 @@ pub struct App {
     home: PathBuf,
     /// Tasks with an agent at work: one agent per task at a time.
     running: Mutex<HashSet<String>>,
+    /// Questions agents are waiting on, from every task.
+    approvals: Approvals,
 }
 
 impl App {
@@ -102,7 +108,35 @@ impl App {
         App {
             home,
             running: Mutex::new(HashSet::new()),
+            approvals: Approvals::new(),
         }
+    }
+
+    /// Calls `listener` with every waiting question whenever they change.
+    pub fn on_questions(&self, listener: impl Fn(Vec<Question>) + Send + Sync + 'static) {
+        self.approvals.on_change(listener);
+    }
+
+    pub fn questions(&self) -> Vec<Question> {
+        self.approvals.waiting()
+    }
+
+    /// Answers a waiting question; an error when it was answered, withdrawn
+    /// or timed out meanwhile.
+    pub fn answer(&self, id: u64, approve: bool) -> Result<()> {
+        if self.approvals.answer(id, approve) {
+            Ok(())
+        } else {
+            Err("that question is no longer waiting".to_owned())
+        }
+    }
+
+    /// Sets how long the task's questions wait, in minutes.
+    pub fn set_approval_timeout(&self, id: &str, minutes: u64) -> Result<TaskView> {
+        let task = self.open(id)?;
+        task.set_approval_timeout(Duration::from_secs(minutes.saturating_mul(60)))
+            .map_err(text)?;
+        self.view(id)
     }
 
     /// `KULE_HOME`, else `~/.kule`.
@@ -230,7 +264,8 @@ impl App {
         // Serves this run only, with the policy as it is now; dropped when
         // the run returns, which closes it.
         let policy = profile.open_hosts(self.policy(task)?).map_err(text)?;
-        let proxy = Proxy::start(task, policy).map_err(text)?;
+        let timeout = task.approval_timeout().map_err(text)?;
+        let proxy = Proxy::start_asking(task, policy, &self.approvals, timeout).map_err(text)?;
         let launch = profile.launch(task, &proxy).map_err(text)?;
         let (tx, mut rx) = futures::channel::mpsc::unbounded();
         let runtime = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
@@ -269,6 +304,13 @@ impl App {
             ignored: all.ignored().count(),
             verdict: verdict.transpose()?.map(|r| r.verdict),
             running: self.running.lock().unwrap().contains(id),
+            waiting: self
+                .approvals
+                .waiting()
+                .iter()
+                .filter(|q| q.task == id)
+                .count(),
+            approval_timeout_secs: task.approval_timeout().map_err(text)?.as_secs(),
         })
     }
 
@@ -515,5 +557,62 @@ mod tests {
             Commit::Applied { changes: 1, .. }
         ));
         assert!(s.ws.path().join(".env").exists());
+    }
+
+    #[test]
+    fn a_question_shows_on_its_task_and_its_answer_opens_the_connection() {
+        use std::io::{Read, Write};
+        use std::net::{TcpListener, TcpStream};
+
+        let s = Setup::new();
+        let (id, _) = s.task();
+        let upstream = TcpListener::bind("127.0.0.1:0").unwrap();
+        let up = upstream.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            for stream in upstream.incoming() {
+                let _ = stream.unwrap().write_all(b"hello\n");
+            }
+        });
+        let task = Task::open(&s.app.home, &id).unwrap();
+        let proxy = Proxy::start_asking(
+            &task,
+            Policy::builtin(),
+            &s.app.approvals,
+            task.approval_timeout().unwrap(),
+        )
+        .unwrap();
+        let port = proxy.port();
+        let client = std::thread::spawn(move || {
+            let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+            write!(stream, "CONNECT 127.0.0.1:{up} HTTP/1.1\r\n\r\n").unwrap();
+            let mut reply = String::new();
+            let _ = stream.read_to_string(&mut reply);
+            reply
+        });
+
+        let mut waiting = Vec::new();
+        for _ in 0..500 {
+            waiting = s.app.questions();
+            if !waiting.is_empty() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(waiting.len(), 1);
+        assert_eq!(s.app.tasks().unwrap()[0].waiting, 1);
+        s.app.answer(waiting[0].id, true).unwrap();
+        assert!(client.join().unwrap().contains("hello"));
+        assert!(s.app.answer(waiting[0].id, true).is_err());
+        assert_eq!(s.app.tasks().unwrap()[0].waiting, 0);
+        drop(proxy);
+
+        assert_eq!(
+            s.app
+                .set_approval_timeout(&id, 5)
+                .unwrap()
+                .approval_timeout_secs,
+            300
+        );
+        assert!(s.app.set_approval_timeout(&id, 0).is_err());
     }
 }

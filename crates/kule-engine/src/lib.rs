@@ -15,6 +15,7 @@
 #[cfg(not(unix))]
 compile_error!("Kule M0 supports macOS and Linux only");
 
+mod approvals;
 mod checkpoint;
 mod clock;
 mod effects;
@@ -29,6 +30,7 @@ mod sandbox;
 mod steps;
 mod task;
 
+pub use approvals::{Answer, Approvals, DEFAULT_TIMEOUT, MAX_TIMEOUT, MIN_TIMEOUT, Question};
 pub use checkpoint::{Checkpoint, State as CheckpointState};
 pub use effects::{Change, Effect, EffectSet};
 pub use error::{Error, Result};

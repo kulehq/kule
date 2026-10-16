@@ -4,8 +4,9 @@
 //! [`Network::Proxy`](crate::Network::Proxy)). Each connection is judged by
 //! the policy as a `net.connect` effect and written to the task's
 //! `network.jsonl`, refused ones included. Network effects cannot be rolled
-//! back, so only what passes on its own goes through; asking a person while
-//! the command waits comes with the approval inbox.
+//! back, so a connection goes through only when the policy lets it pass on
+//! its own or a person approves it while the command waits (see
+//! [`Approvals`]).
 
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
@@ -13,10 +14,11 @@ use std::io::{BufRead, BufReader, ErrorKind, Write};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
+use crate::approvals::{Answer, Approvals};
 use crate::error::{Error, IoContext, Result};
 use crate::policy::{Judgement, Policy, Verdict};
 use crate::task::Task;
@@ -31,17 +33,54 @@ pub struct Connection {
     pub rules: Vec<String>,
     /// `refused`, `unresolved`, `private`, `unreachable` or `tunneled`.
     pub outcome: String,
+    /// For a connection put to a person, how it was decided.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub answer: Option<Answer>,
 }
 
 /// The proxy of one task, serving until it is dropped. Dropping it closes
-/// the port and cuts the connections still open.
+/// the port, withdraws the questions it has waiting and cuts the
+/// connections still open.
 pub struct Proxy {
-    server: lonca_net::Server,
+    server: Option<lonca_net::Server>,
+    asker: Option<Asker>,
+}
+
+/// Where a proxy puts the connections that wait for a person.
+#[derive(Clone)]
+struct Asker {
+    approvals: Approvals,
+    source: u64,
+    task: String,
+    timeout: Duration,
 }
 
 impl Proxy {
-    /// Starts the proxy on a free loopback port.
+    /// Starts the proxy on a free loopback port. Connections the policy puts
+    /// to a person are refused at once: nobody is there to ask.
     pub fn start(task: &Task, policy: Policy) -> Result<Proxy> {
+        Self::serve(task, policy, None)
+    }
+
+    /// [`Proxy::start`], putting the connections that wait for a person to
+    /// `approvals` and holding each until it is answered or `timeout` runs
+    /// out.
+    pub fn start_asking(
+        task: &Task,
+        policy: Policy,
+        approvals: &Approvals,
+        timeout: Duration,
+    ) -> Result<Proxy> {
+        let asker = Asker {
+            approvals: approvals.clone(),
+            source: approvals.new_source(),
+            task: task.id().to_owned(),
+            timeout,
+        };
+        Self::serve(task, policy, Some(asker))
+    }
+
+    fn serve(task: &Task, policy: Policy, asker: Option<Asker>) -> Result<Proxy> {
         let addr = Path::new("127.0.0.1:0");
         let listener = lonca_net::bind("127.0.0.1:0").at(addr)?;
         let path = log_path(task);
@@ -54,19 +93,40 @@ impl Proxy {
             policy,
             log: Mutex::new(log),
             pending: Mutex::new(HashMap::new()),
+            asker: asker.clone(),
         });
         let server = lonca_net::spawn(listener, gate).at(addr)?;
-        Ok(Proxy { server })
+        Ok(Proxy {
+            server: Some(server),
+            asker,
+        })
     }
 
     pub fn port(&self) -> u16 {
-        self.server.local_addr().port()
+        self.server.as_ref().map_or(0, |s| s.local_addr().port())
     }
 
     /// Closes the proxy and cuts the connections still open; once it
     /// returns, [`connections`] lists them all.
-    pub fn stop(self) {
-        self.server.stop();
+    pub fn stop(mut self) {
+        self.shut();
+    }
+
+    fn shut(&mut self) {
+        // Questions first: a connection held for an answer would keep the
+        // server from finishing.
+        if let Some(asker) = &self.asker {
+            asker.approvals.withdraw(asker.source);
+        }
+        if let Some(server) = self.server.take() {
+            server.stop();
+        }
+    }
+}
+
+impl Drop for Proxy {
+    fn drop(&mut self) {
+        self.shut();
     }
 }
 
@@ -96,20 +156,40 @@ fn log_path(task: &Task) -> PathBuf {
 struct Gate {
     policy: Policy,
     log: Mutex<File>,
-    /// Judgements waiting for their outcome, by the client's address.
-    pending: Mutex<HashMap<SocketAddr, Judgement>>,
+    /// Judgements waiting for their outcome, with the person's answer if
+    /// one was asked, by the client's address.
+    pending: Mutex<HashMap<SocketAddr, (Judgement, Option<Answer>)>>,
+    asker: Option<Asker>,
 }
 
 impl lonca_net::Gate for Gate {
     fn decide(&self, request: &lonca_net::Request<'_>) -> lonca_net::Verdict {
         let judgement = self.policy.judge_connection(request.host, request.port);
-        let allow = judgement.verdict == Verdict::Allow;
-        let reason = match judgement.verdict {
-            Verdict::Allow => String::new(),
-            Verdict::Ask => format!("waits for approval ({})", judgement.rules.join(", ")),
-            Verdict::Deny => format!("denied ({})", judgement.rules.join(", ")),
+        let rules = judgement.rules.join(", ");
+        // Each connection has its own thread, so waiting here holds only
+        // this one.
+        let answer = match (&self.asker, judgement.verdict) {
+            (Some(asker), Verdict::Ask) => Some(asker.approvals.ask(
+                asker.source,
+                &asker.task,
+                request.host,
+                request.port,
+                &judgement.rules,
+                asker.timeout,
+            )),
+            _ => None,
         };
-        lock(&self.pending).insert(request.peer, judgement);
+        let allow = judgement.verdict == Verdict::Allow || answer == Some(Answer::Approved);
+        let reason = match (judgement.verdict, answer) {
+            (Verdict::Allow, _) | (_, Some(Answer::Approved)) => String::new(),
+            (Verdict::Ask, None) => format!("waits for approval ({rules})"),
+            (Verdict::Ask, Some(Answer::Denied)) => format!("denied by a person ({rules})"),
+            (Verdict::Ask, Some(Answer::TimedOut)) => {
+                format!("nobody approved it in time ({rules}); skip this step and go on without it")
+            }
+            (Verdict::Deny, _) => format!("denied ({rules})"),
+        };
+        lock(&self.pending).insert(request.peer, (judgement, answer));
         lonca_net::Verdict {
             allow,
             // Loopback by name only, and only when the policy let it pass;
@@ -120,7 +200,7 @@ impl lonca_net::Gate for Gate {
     }
 
     fn finished(&self, request: &lonca_net::Request<'_>, outcome: lonca_net::Outcome) {
-        let Some(judgement) = lock(&self.pending).remove(&request.peer) else {
+        let Some((judgement, answer)) = lock(&self.pending).remove(&request.peer) else {
             return;
         };
         let record = Connection {
@@ -132,6 +212,7 @@ impl lonca_net::Gate for Gate {
             verdict: judgement.verdict,
             rules: judgement.rules,
             outcome: format!("{outcome:?}").to_lowercase(),
+            answer,
         };
         if let Ok(mut line) = serde_json::to_vec(&record) {
             line.push(b'\n');

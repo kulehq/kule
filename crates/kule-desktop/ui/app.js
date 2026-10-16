@@ -10,6 +10,7 @@ const backend = window.__TAURI__
   ? {
       invoke: (cmd, args) => window.__TAURI__.core.invoke(cmd, args),
       onRun: (handler) => window.__TAURI__.event.listen("run", (e) => handler(e.payload)),
+      onQuestions: (handler) => window.__TAURI__.event.listen("questions", (e) => handler(e.payload)),
     }
   : window.kuleMock;
 
@@ -84,6 +85,8 @@ const state = {
   streams: new Map(),
   /** Tasks whose next commit also takes the paths the workspace ignores. */
   includeIgnored: new Set(),
+  /** Questions agents are waiting on, from every task. */
+  questions: [],
 };
 
 const currentTask = () => state.tasks.find((t) => t.id === state.current);
@@ -95,7 +98,10 @@ function streamOf(id) {
 
 // --- Sidebar ---------------------------------------------------------------
 
+const questionsOf = (id) => state.questions.filter((q) => q.task === id);
+
 function taskChip(task) {
+  if (questionsOf(task.id).length) return h("span", { class: "chip ask" }, "waiting for you");
   if (task.running) return h("span", { class: "chip running" }, "working");
   if (task.verdict) return h("span", { class: `chip ${task.verdict}` }, VERDICT[task.verdict].chip);
   return null;
@@ -125,7 +131,9 @@ function taskItem(task) {
 }
 
 function renderSidebar() {
-  const waiting = state.tasks.filter((t) => !t.running && (t.verdict === "ask" || t.verdict === "deny"));
+  const waiting = state.tasks.filter(
+    (t) => questionsOf(t.id).length || (!t.running && (t.verdict === "ask" || t.verdict === "deny"))
+  );
   $("inbox-section").hidden = waiting.length === 0;
   $("inbox").replaceChildren(...waiting.map(taskItem));
   $("tasks").replaceChildren(...state.tasks.map(taskItem));
@@ -168,6 +176,7 @@ function renderTask() {
   }
 
   renderComposer(task);
+  renderQuestions();
   renderStream(task.id);
   if (state.tab === "review") loadReview(task.id);
   if (state.tab === "timeline") loadTimeline(task.id);
@@ -182,6 +191,79 @@ function renderComposer(task) {
   $("composer-hint").textContent = busy
     ? "The agent is at work. Its steps appear here as it goes."
     : "Runs in the sandbox, network through the task's proxy.";
+  $("timeout").value = String(Math.round(task.approval_timeout_secs / 60));
+}
+
+// --- Questions -------------------------------------------------------------
+
+function left(deadline) {
+  const secs = Math.max(0, deadline - Math.floor(Date.now() / 1000));
+  const m = Math.floor(secs / 60);
+  const s = String(secs % 60).padStart(2, "0");
+  return m >= 60 ? `${Math.floor(m / 60)} h ${m % 60} min` : `${m}:${s}`;
+}
+
+/** The current task's questions, as cards the person answers. */
+function renderQuestions() {
+  const task = currentTask();
+  const cards = task
+    ? questionsOf(task.id).map((q) =>
+        h(
+          "div",
+          { class: "question", role: "alert" },
+          h(
+            "div",
+            { class: "question-text" },
+            h("p", { class: "question-title" }, `The agent wants to connect to ${q.host}:${q.port}`),
+            h(
+              "p",
+              { class: "muted" },
+              `No rule lets it pass on its own (${q.rules.join(", ")}). Unanswered, it is refused in `,
+              h("span", { class: "countdown", "data-deadline": q.deadline_unix }, left(q.deadline_unix)),
+              " and the agent goes on without it."
+            )
+          ),
+          h(
+            "div",
+            { class: "question-actions" },
+            h("button", { class: "button ask", type: "button", onclick: () => answer(q.id, true) }, "Approve"),
+            h("button", { class: "button ghost danger", type: "button", onclick: () => answer(q.id, false) }, "Deny")
+          )
+        )
+      )
+    : [];
+  $("questions").replaceChildren(...cards);
+}
+
+async function answer(id, approve) {
+  try {
+    await call("answer", { id, approve });
+  } catch (err) {
+    fail(err);
+  }
+}
+
+async function onQuestions(waiting) {
+  const before = new Set(state.questions.map((q) => q.id));
+  state.questions = waiting;
+  for (const q of waiting) {
+    if (!before.has(q.id) && q.task !== state.current) {
+      toast(`Task ${q.task} waits for you: ${q.host}:${q.port}`);
+    }
+  }
+  renderSidebar();
+  renderQuestions();
+}
+
+async function setTimeoutFor() {
+  const task = currentTask();
+  if (!task) return;
+  try {
+    await call("set_approval_timeout", { task: task.id, minutes: Number($("timeout").value) });
+    await refresh();
+  } catch (err) {
+    fail(err);
+  }
 }
 
 // --- Live ------------------------------------------------------------------
@@ -582,13 +664,23 @@ async function loadTimeline(id) {
 function summarizeConnections(log) {
   const seen = new Map();
   for (const c of log) {
-    const key = `${c.host}:${c.port} ${c.verdict} ${c.outcome}`;
+    const key = `${c.host}:${c.port} ${c.verdict} ${c.outcome} ${c.answer || ""}`;
     const entry = seen.get(key) || { c, n: 0 };
     entry.n += 1;
     seen.set(key, entry);
   }
   return [...seen.values()].map(({ c, n }) => {
-    const what = c.verdict === "allow" ? c.outcome : c.verdict === "ask" ? "refused, waits for approval" : "refused, denied";
+    const asked = {
+      approved: `approved by you · ${c.outcome}`,
+      denied: "denied by you",
+      timed_out: "refused, nobody answered in time",
+    };
+    const what =
+      c.verdict === "allow"
+        ? c.outcome
+        : c.verdict === "ask"
+          ? asked[c.answer] || "refused, waits for approval"
+          : "refused, denied";
     return `${c.host}:${c.port}${n > 1 ? ` ×${n}` : ""} · ${what}`;
   });
 }
@@ -696,6 +788,19 @@ async function start() {
   $("agent").replaceChildren(...state.agents.map((name) => h("option", { value: name }, name)));
 
   await backend.onRun(onRun);
+  await backend.onQuestions(onQuestions);
+  try {
+    state.questions = await call("questions");
+  } catch (err) {
+    fail(err);
+  }
+  $("timeout").addEventListener("change", setTimeoutFor);
+  // Counts down the deadlines without re-rendering the cards.
+  setInterval(() => {
+    for (const el of document.querySelectorAll(".countdown")) {
+      el.textContent = left(Number(el.dataset.deadline));
+    }
+  }, 1000);
   await refresh();
 }
 

@@ -4,11 +4,12 @@ use std::collections::BTreeMap;
 use std::fs::{self, OpenOptions};
 use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use walkdir::WalkDir;
 
+use crate::approvals;
 use crate::checkpoint::{Checkpoint, State, Store};
 use crate::clock::Clock;
 use crate::effects::{self, Change, Effect, EffectSet};
@@ -22,6 +23,12 @@ pub struct TaskInfo {
     pub id: String,
     pub workspace: PathBuf,
     pub created_unix: u64,
+}
+
+/// What a person set for the task.
+#[derive(Debug, Serialize, Deserialize)]
+struct Settings {
+    approval_timeout_secs: u64,
 }
 
 /// Layout under `<home>/tasks/<id>/`: `task.json`, `baseline.json`, `copy/`
@@ -313,6 +320,36 @@ impl Task {
         store.save(&checkpoint)?;
         store.refresh_after(checkpoint.id, &paths, &baseline)?;
         Ok(Some(checkpoint))
+    }
+
+    /// How long the task's connections wait for a person before they are
+    /// refused: [`approvals::DEFAULT_TIMEOUT`] unless a person set it. The
+    /// setting lives outside the copy, where nothing the task runs can
+    /// write.
+    pub fn approval_timeout(&self) -> Result<Duration> {
+        let path = self.dir.join("settings.json");
+        if !path.is_file() {
+            return Ok(approvals::DEFAULT_TIMEOUT);
+        }
+        let settings: Settings = read_json(&path)?;
+        Ok(Duration::from_secs(settings.approval_timeout_secs))
+    }
+
+    /// Sets [`Task::approval_timeout`]; it can be anywhere from
+    /// [`approvals::MIN_TIMEOUT`] to [`approvals::MAX_TIMEOUT`] but never off.
+    pub fn set_approval_timeout(&self, timeout: Duration) -> Result<()> {
+        if !(approvals::MIN_TIMEOUT..=approvals::MAX_TIMEOUT).contains(&timeout) {
+            return Err(Error::Invalid(format!(
+                "an approval can wait from {} minute to {} hours, not {} seconds",
+                approvals::MIN_TIMEOUT.as_secs() / 60,
+                approvals::MAX_TIMEOUT.as_secs() / 3600,
+                timeout.as_secs()
+            )));
+        }
+        let settings = Settings {
+            approval_timeout_secs: timeout.as_secs(),
+        };
+        write_json(&self.dir.join("settings.json"), &settings)
     }
 
     /// The task's commits, oldest first, undone ones included.

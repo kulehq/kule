@@ -13,6 +13,7 @@ use tauri::{AppHandle, Emitter, State};
 use tauri_plugin_dialog::DialogExt;
 
 use app::{App, Commit, Result, Review, RunEvent, TaskView, Timeline};
+use kule_engine::Question;
 
 type Kule<'a> = State<'a, Arc<App>>;
 
@@ -78,6 +79,21 @@ fn open_terminal(kule: Kule<'_>, task: String) -> Result<()> {
     terminal::open(&kule.copy_of(&task)?)
 }
 
+#[tauri::command(async)]
+fn questions(kule: Kule<'_>) -> Vec<Question> {
+    kule.questions()
+}
+
+#[tauri::command(async)]
+fn answer(kule: Kule<'_>, id: u64, approve: bool) -> Result<()> {
+    kule.answer(id, approve)
+}
+
+#[tauri::command(async)]
+fn set_approval_timeout(kule: Kule<'_>, task: String, minutes: u64) -> Result<TaskView> {
+    kule.set_approval_timeout(&task, minutes)
+}
+
 /// One event of a run, for the window's `run` listener.
 #[derive(Clone, Serialize)]
 struct RunMessage {
@@ -113,9 +129,19 @@ fn main() {
             std::process::exit(2);
         }
     };
+    let kule = Arc::new(App::new(home));
+    let asked = Arc::clone(&kule);
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .manage(Arc::new(App::new(home)))
+        .setup(move |app| {
+            // Questions arrive from proxy threads; the window hears each change.
+            let handle = app.handle().clone();
+            asked.on_questions(move |waiting| {
+                let _ = handle.emit("questions", waiting);
+            });
+            Ok(())
+        })
+        .manage(kule)
         .invoke_handler(tauri::generate_handler![
             agents,
             tasks,
@@ -128,6 +154,9 @@ fn main() {
             timeline,
             remove_task,
             open_terminal,
+            questions,
+            answer,
+            set_approval_timeout,
             start_run,
         ])
         .run(tauri::generate_context!())

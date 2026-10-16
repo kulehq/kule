@@ -469,6 +469,47 @@ select:focus-visible {
   color: var(--deny);
 }
 
+.questions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 0 24px;
+}
+
+.questions:not(:empty) {
+  padding-top: 14px;
+}
+
+.question {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 14px;
+  border: 1px solid var(--ask);
+  border-radius: var(--radius);
+  background: var(--ask-soft);
+}
+
+.question-title {
+  color: var(--ask);
+  font-weight: 650;
+}
+
+.question-text .muted {
+  font-size: 13px;
+}
+
+.countdown {
+  font-family: var(--mono);
+}
+
+.question-actions {
+  display: flex;
+  flex: none;
+  gap: 6px;
+}
+
 .composer {
   display: flex;
   flex-direction: column;

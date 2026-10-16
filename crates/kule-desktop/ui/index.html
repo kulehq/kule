@@ -67,6 +67,7 @@
         </nav>
 
         <section class="panel" data-panel="live">
+          <div class="questions" id="questions" aria-live="assertive"></div>
           <div class="stream" id="stream" aria-live="polite"></div>
           <form class="composer" id="composer">
             <textarea
@@ -78,6 +79,22 @@
               <label class="agent-pick">
                 Agent
                 <select id="agent"></select>
+              </label>
+              <label
+                class="agent-pick"
+                title="How long the agent waits when it asks for something the policy puts to you. Unanswered, it is refused and the agent goes on without it."
+              >
+                Waits for you
+                <select id="timeout">
+                  <option value="1">1 min</option>
+                  <option value="5">5 min</option>
+                  <option value="15">15 min</option>
+                  <option value="30">30 min</option>
+                  <option value="60">1 hour</option>
+                  <option value="120">2 hours</option>
+                  <option value="240">4 hours</option>
+                  <option value="480">8 hours</option>
+                </select>
               </label>
               <span class="hint" id="composer-hint"></span>
               <button class="button primary" id="send" type="submit">Run</button>

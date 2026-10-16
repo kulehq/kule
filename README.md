@@ -140,6 +140,13 @@ stay in the copy: a commit leaves them behind unless asked
 (`kule commit --include-ignored`, or *Also commit these* in the app). The
 rules come from the workspace, never from the copy.
 
+In the app, a connection the policy puts to a person waits for an answer:
+it shows under *Needs you* and on the task's Live tab with Approve and
+Deny. Unanswered, it is refused when the task's wait runs out (15 minutes
+unless set from 1 minute to 8 hours; never off) and the agent is told to
+go on without it. The CLI has nobody to ask and refuses such connections
+at once.
+
 ## Not yet
 
 - Linux: Landlock reports refusals only to the audit log, so they are not
