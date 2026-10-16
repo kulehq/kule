@@ -250,7 +250,8 @@ function absorb(id, event) {
       items.push({ kind: "tool", id: event.id, title: event.title, done: false });
       break;
     case "tool_done": {
-      const files = event.step.changes.map((c) => c.path);
+      // Calls that only read or think take no step.
+      const files = event.step ? event.step.changes.map((c) => c.path) : [];
       const open = items.find((i) => i.kind === "tool" && i.id === event.id && !i.done);
       const entry = open || { kind: "tool", id: event.id };
       Object.assign(entry, { title: event.title || entry.title, done: true, failed: event.failed, files });

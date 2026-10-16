@@ -20,6 +20,7 @@ use agent_client_protocol::schema::v1::{
     ContentBlock, InitializeRequest, NewSessionRequest, PermissionOptionKind, PromptRequest,
     RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
     SelectedPermissionOutcome, SessionNotification, SessionUpdate, TextContent, ToolCallStatus,
+    ToolKind,
 };
 use agent_client_protocol::{Agent, ByteStreams, ConnectionTo};
 use futures::channel::mpsc::UnboundedSender;
@@ -38,12 +39,13 @@ pub enum Event {
     Thought { text: String },
     /// The agent started a tool call.
     ToolCall { id: String, title: String },
-    /// A tool call ended; `step` is what it changed in the copy.
+    /// A tool call ended; `step` is what it changed in the copy. Calls that
+    /// only read, search, fetch or think take no step.
     ToolDone {
         id: String,
         title: String,
         failed: bool,
-        step: Step,
+        step: Option<Step>,
     },
     /// The agent asked for permission and Kule answered.
     Permission { title: String, chosen: String },
@@ -99,6 +101,7 @@ pub async fn run(
         task: task.clone(),
         events: events.clone(),
         titles: HashMap::new(),
+        kinds: HashMap::new(),
     };
     let mut watcher = Some(watcher);
     let stop = agent_client_protocol::Client
@@ -183,6 +186,7 @@ struct Watcher {
     task: Task,
     events: UnboundedSender<Event>,
     titles: HashMap<String, String>,
+    kinds: HashMap<String, ToolKind>,
 }
 
 impl Watcher {
@@ -201,6 +205,7 @@ impl Watcher {
             SessionUpdate::ToolCall(call) => {
                 let id = call.tool_call_id.to_string();
                 self.titles.insert(id.clone(), call.title.clone());
+                self.kinds.insert(id.clone(), call.kind);
                 self.send(Event::ToolCall {
                     id: id.clone(),
                     title: call.title,
@@ -211,6 +216,9 @@ impl Watcher {
                 let id = update.tool_call_id.to_string();
                 if let Some(title) = update.fields.title {
                     self.titles.insert(id.clone(), title);
+                }
+                if let Some(kind) = update.fields.kind {
+                    self.kinds.insert(id.clone(), kind);
                 }
                 if let Some(status) = update.fields.status {
                     self.maybe_done(id, status);
@@ -231,12 +239,34 @@ impl Watcher {
             _ => return,
         };
         let title = self.titles.get(&id).cloned().unwrap_or_default();
+        // A call that only looks or thinks takes no step: what changed while
+        // it ran belongs to a call that can change files and is still going,
+        // such as an edit waiting on a review.
+        let looks = matches!(
+            self.kinds.get(&id),
+            Some(
+                ToolKind::Read
+                    | ToolKind::Search
+                    | ToolKind::Think
+                    | ToolKind::Fetch
+                    | ToolKind::SwitchMode
+            )
+        );
+        if looks {
+            self.send(Event::ToolDone {
+                id,
+                title,
+                failed,
+                step: None,
+            });
+            return;
+        }
         match self.task.step(&title) {
             Ok(step) => self.send(Event::ToolDone {
                 id,
                 title,
                 failed,
-                step,
+                step: Some(step),
             }),
             Err(e) => self.send(Event::Message {
                 text: format!("\n[kule: could not record the step: {e}]\n"),

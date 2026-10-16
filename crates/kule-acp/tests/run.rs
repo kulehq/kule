@@ -45,7 +45,8 @@ impl Setup {
     }
 }
 
-/// A finished tool call: its title, whether it failed, and its step's changes.
+/// A finished tool call: its title, whether it failed, and its step's
+/// changes (none when it took no step).
 type Done<'a> = (&'a str, bool, Vec<(String, Option<Change>)>);
 
 fn done(events: &[Event]) -> Vec<Done<'_>> {
@@ -60,8 +61,8 @@ fn done(events: &[Event]) -> Vec<Done<'_>> {
             } => Some((
                 title.as_str(),
                 *failed,
-                step.changes
-                    .iter()
+                step.iter()
+                    .flat_map(|s| &s.changes)
                     .map(|c| (c.path.clone(), c.change))
                     .collect(),
             )),
@@ -128,6 +129,32 @@ fn back_to_back_tool_calls_lose_nothing() {
         3,
         "one step per tool call, even if empty"
     );
+}
+
+/// Codex reviews an edit in a `think` call that ends before the edit does.
+/// The review takes no step, so the change goes to the edit.
+#[test]
+fn a_call_that_only_thinks_takes_no_step() {
+    let s = Setup::new();
+    let events = s.run("reviewed-write a.txt one");
+
+    assert_eq!(
+        done(&events),
+        [
+            ("review", false, vec![]),
+            (
+                "edit a.txt",
+                false,
+                vec![("a.txt".into(), Some(Change::Created))]
+            ),
+        ]
+    );
+    let review_step = events.iter().find_map(|e| match e {
+        Event::ToolDone { title, step, .. } if title == "review" => Some(step.is_none()),
+        _ => None,
+    });
+    assert_eq!(review_step, Some(true));
+    assert_eq!(s.task.steps().unwrap().len(), 1);
 }
 
 #[test]

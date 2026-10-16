@@ -360,13 +360,17 @@ async fn print_events(mut rx: futures::channel::mpsc::UnboundedReceiver<kule_acp
                 step,
                 ..
             } => {
+                let mark = if failed { "✗" } else { "✓" };
+                let Some(step) = step else {
+                    line(format!("{mark} {title}"), &mut at_line_start);
+                    continue;
+                };
                 let changed: Vec<&str> = step.changes.iter().map(|c| c.path.as_str()).collect();
                 let what = if changed.is_empty() {
                     "no file changes".to_owned()
                 } else {
                     changed.join(", ")
                 };
-                let mark = if failed { "✗" } else { "✓" };
                 line(
                     format!("{mark} {title} → step {}: {what}", step.id),
                     &mut at_line_start,

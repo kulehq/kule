@@ -6,7 +6,10 @@
 //!   session's working directory unless absolute;
 //! - `say <text>`: a message;
 //! - `sleep <ms>`: waits, the way a real agent waits for its model;
-//! - `ask`: asks the client for permission and says what it chose.
+//! - `ask`: asks the client for permission and says what it chose;
+//! - `reviewed-write <path> <text>`: an edit that writes the file while a
+//!   review (a `think` call) runs inside it, the review ending first, as
+//!   Codex does.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -16,7 +19,7 @@ use agent_client_protocol::schema::v1::{
     NewSessionRequest, NewSessionResponse, PermissionOption, PermissionOptionKind, PromptRequest,
     PromptResponse, RequestPermissionOutcome, RequestPermissionRequest, SessionId,
     SessionNotification, SessionUpdate, StopReason, TextContent, ToolCall, ToolCallStatus,
-    ToolCallUpdate, ToolCallUpdateFields,
+    ToolCallUpdate, ToolCallUpdateFields, ToolKind,
 };
 use agent_client_protocol::{Agent, Client, ConnectionTo, Responder, Stdio};
 
@@ -114,6 +117,35 @@ async fn perform(
                     ToolCallUpdateFields::new().status(status),
                 )),
             ))
+        }
+        "reviewed-write" => {
+            let (path, text) = rest.split_once(' ').unwrap_or((rest, ""));
+            let (edit, review) = (format!("call-{n}"), format!("call-{n}-review"));
+            let start = |id: &str, title: String, kind: ToolKind| {
+                cx.send_notification(SessionNotification::new(
+                    session.clone(),
+                    SessionUpdate::ToolCall(
+                        ToolCall::new(id.to_owned(), title)
+                            .kind(kind)
+                            .status(ToolCallStatus::InProgress),
+                    ),
+                ))
+            };
+            let end = |id: &str| {
+                cx.send_notification(SessionNotification::new(
+                    session.clone(),
+                    SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
+                        id.to_owned(),
+                        ToolCallUpdateFields::new().status(ToolCallStatus::Completed),
+                    )),
+                ))
+            };
+            start(&edit, format!("edit {path}"), ToolKind::Edit)?;
+            start(&review, "review".to_owned(), ToolKind::Think)?;
+            let _ = std::fs::write(dir.join(path), format!("{text}\n"));
+            end(&review)?;
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+            end(&edit)
         }
         "say" => say(rest.to_owned()),
         // A real agent waits for its model between tool calls.
