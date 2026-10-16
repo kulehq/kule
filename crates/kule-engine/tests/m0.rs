@@ -1,0 +1,419 @@
+//! Milestone M0: copy, effects, commit, rollback and undo on a real filesystem.
+
+use std::collections::BTreeMap;
+use std::fs;
+use std::os::unix::fs::{MetadataExt, PermissionsExt, symlink};
+use std::path::Path;
+
+use kule_engine::{Change, Error, Kind, Task};
+use tempfile::TempDir;
+use walkdir::WalkDir;
+
+/// What a tree looks like to someone who reads it: type, permission bits,
+/// and the bytes or link target of every entry.
+type Snapshot = BTreeMap<String, (Kind, u32, Vec<u8>)>;
+
+fn snapshot(root: &Path) -> Snapshot {
+    let mut snap = Snapshot::new();
+    for entry in WalkDir::new(root).min_depth(1).follow_links(false) {
+        let entry = entry.unwrap();
+        let rel = entry
+            .path()
+            .strip_prefix(root)
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_owned();
+        let meta = entry.path().symlink_metadata().unwrap();
+        let ft = meta.file_type();
+        let value = if ft.is_symlink() {
+            let target = fs::read_link(entry.path()).unwrap();
+            (
+                Kind::Symlink,
+                0,
+                target.to_str().unwrap().as_bytes().to_vec(),
+            )
+        } else if ft.is_dir() {
+            (Kind::Dir, meta.mode() & 0o7777, Vec::new())
+        } else {
+            (
+                Kind::File,
+                meta.mode() & 0o7777,
+                fs::read(entry.path()).unwrap(),
+            )
+        };
+        snap.insert(rel, value);
+    }
+    snap
+}
+
+fn write(path: &Path, bytes: impl AsRef<[u8]>) {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).unwrap();
+    }
+    fs::write(path, bytes).unwrap();
+}
+
+fn chmod(path: &Path, mode: u32) {
+    fs::set_permissions(path, fs::Permissions::from_mode(mode)).unwrap();
+}
+
+/// A small repository with the shapes that tend to break copies: nested
+/// directories, a binary file, an empty file, an executable, a symlink and an
+/// empty directory.
+fn fixture(root: &Path) {
+    write(&root.join("README.md"), "hello\n");
+    write(&root.join("src/main.rs"), "fn main() {}\n");
+    write(
+        &root.join("src/lib.rs"),
+        "pub fn add(a: u8, b: u8) -> u8 { a + b }\n",
+    );
+    write(&root.join("src/empty.txt"), "");
+    let binary: Vec<u8> = (0..=255u8).cycle().take(300_000).collect();
+    write(&root.join("src/nested/deep/data.bin"), binary);
+    fs::create_dir_all(root.join("src/empty-dir")).unwrap();
+    write(&root.join("run.sh"), "#!/bin/sh\necho hi\n");
+    chmod(&root.join("run.sh"), 0o755);
+    symlink("src/main.rs", root.join("main-link")).unwrap();
+}
+
+struct Setup {
+    _home: TempDir,
+    _ws: TempDir,
+    task: Task,
+}
+
+impl Setup {
+    fn new() -> Self {
+        let home = TempDir::new().unwrap();
+        let ws = TempDir::new().unwrap();
+        fixture(ws.path());
+        let task = Task::create(home.path(), ws.path()).unwrap();
+        Setup {
+            _home: home,
+            _ws: ws,
+            task,
+        }
+    }
+
+    fn work(&self) -> std::path::PathBuf {
+        self.task.workspace().to_path_buf()
+    }
+
+    fn copy(&self) -> std::path::PathBuf {
+        self.task.copy()
+    }
+}
+
+/// The edits most tests make in the copy: one of each kind of change.
+fn edit(copy: &Path) {
+    write(&copy.join("src/new.rs"), "// new\n");
+    write(
+        &copy.join("src/main.rs"),
+        "fn main() { println!(\"hi\"); }\n",
+    );
+    fs::remove_file(copy.join("README.md")).unwrap();
+    chmod(&copy.join("run.sh"), 0o644);
+    fs::remove_file(copy.join("main-link")).unwrap();
+    symlink("src/lib.rs", copy.join("main-link")).unwrap();
+    fs::create_dir(copy.join("docs")).unwrap();
+}
+
+fn changes(task: &Task) -> Vec<(String, Change)> {
+    task.effects()
+        .unwrap()
+        .effects
+        .into_iter()
+        .map(|e| (e.path, e.change))
+        .collect()
+}
+
+#[test]
+fn the_copy_matches_the_workspace() {
+    let s = Setup::new();
+    assert_eq!(snapshot(&s.copy()), snapshot(&s.work()));
+    assert!(s.task.effects().unwrap().is_empty());
+}
+
+/// M0's acceptance test.
+#[test]
+fn rm_rf_src_then_rollback_restores_every_byte() {
+    let s = Setup::new();
+    let pristine = snapshot(&s.work());
+
+    fs::remove_dir_all(s.copy().join("src")).unwrap();
+
+    let set = s.task.effects().unwrap();
+    let deleted: Vec<&str> = set.effects.iter().map(|e| e.path.as_str()).collect();
+    assert_eq!(
+        deleted,
+        [
+            "src",
+            "src/empty-dir",
+            "src/empty.txt",
+            "src/lib.rs",
+            "src/main.rs",
+            "src/nested",
+            "src/nested/deep",
+            "src/nested/deep/data.bin"
+        ]
+    );
+    assert!(set.effects.iter().all(|e| e.change == Change::Deleted));
+    assert_eq!(
+        snapshot(&s.work()),
+        pristine,
+        "the workspace must not notice"
+    );
+
+    s.task.rollback().unwrap();
+
+    assert_eq!(snapshot(&s.copy()), pristine);
+    assert_eq!(snapshot(&s.work()), pristine);
+    assert!(s.task.effects().unwrap().is_empty());
+}
+
+#[test]
+fn effects_report_each_kind_of_change() {
+    let s = Setup::new();
+    edit(&s.copy());
+    assert_eq!(
+        changes(&s.task),
+        [
+            ("README.md".into(), Change::Deleted),
+            ("docs".into(), Change::Created),
+            ("main-link".into(), Change::Modified),
+            ("run.sh".into(), Change::Modified),
+            ("src/main.rs".into(), Change::Modified),
+            ("src/new.rs".into(), Change::Created),
+        ]
+    );
+}
+
+#[test]
+fn rewriting_the_same_bytes_is_not_a_change() {
+    let s = Setup::new();
+    let main = s.copy().join("src/main.rs");
+    let before = fs::metadata(&main).unwrap();
+    write(&main, "fn main() {}\n");
+    write(
+        &s.copy().join("src/lib.rs"),
+        "pub fn add(a: u8, b: u8) -> u8 { a - b }\n",
+    );
+    // The stamp moved, so the byte comparison is what decides.
+    let after = fs::metadata(&main).unwrap();
+    assert_ne!(
+        (before.ctime(), before.ctime_nsec()),
+        (after.ctime(), after.ctime_nsec())
+    );
+    assert_eq!(changes(&s.task), [("src/lib.rs".into(), Change::Modified)]);
+}
+
+#[test]
+fn commit_makes_the_workspace_match_the_copy() {
+    let s = Setup::new();
+    edit(&s.copy());
+    let cp = s.task.commit().unwrap().expect("a checkpoint");
+    assert_eq!(cp.effects.len(), 6);
+    assert_eq!(snapshot(&s.work()), snapshot(&s.copy()));
+    assert!(s.task.effects().unwrap().is_empty());
+    assert!(s.task.commit().unwrap().is_none());
+}
+
+#[test]
+fn commit_keeps_modification_times() {
+    let s = Setup::new();
+    write(&s.copy().join("src/new.rs"), "// new\n");
+    s.task.commit().unwrap();
+    for rel in ["src/new.rs", "src/main.rs", "src/nested/deep/data.bin"] {
+        let (w, c) = (
+            fs::metadata(s.work().join(rel)).unwrap(),
+            fs::metadata(s.copy().join(rel)).unwrap(),
+        );
+        assert_eq!(
+            (w.mtime(), w.mtime_nsec()),
+            (c.mtime(), c.mtime_nsec()),
+            "{rel}"
+        );
+    }
+}
+
+#[test]
+fn rollback_after_every_kind_of_change() {
+    let s = Setup::new();
+    let pristine = snapshot(&s.work());
+    edit(&s.copy());
+    let set = s.task.rollback().unwrap();
+    assert_eq!(set.effects.len(), 6);
+    assert_eq!(snapshot(&s.copy()), pristine);
+    assert_eq!(snapshot(&s.work()), pristine);
+    assert!(s.task.effects().unwrap().is_empty());
+}
+
+#[test]
+fn commit_refuses_when_the_workspace_changed_underneath() {
+    let s = Setup::new();
+    write(&s.copy().join("src/main.rs"), "fn main() { /* agent */ }\n");
+    write(&s.work().join("src/main.rs"), "fn main() { /* human */ }\n");
+
+    match s.task.commit() {
+        Err(Error::Conflict(paths)) => assert_eq!(paths, ["src/main.rs"]),
+        other => panic!("expected a conflict, got {other:?}"),
+    }
+    assert_eq!(
+        fs::read_to_string(s.work().join("src/main.rs")).unwrap(),
+        "fn main() { /* human */ }\n"
+    );
+    assert_eq!(
+        fs::read_to_string(s.copy().join("src/main.rs")).unwrap(),
+        "fn main() { /* agent */ }\n"
+    );
+}
+
+#[test]
+fn commit_refuses_to_delete_a_directory_holding_unknown_files() {
+    let s = Setup::new();
+    fs::remove_dir_all(s.copy().join("src/nested")).unwrap();
+    write(&s.work().join("src/nested/human-notes.txt"), "keep me\n");
+
+    match s.task.commit() {
+        Err(Error::Conflict(paths)) => {
+            assert!(paths.contains(&"src/nested".to_owned()), "{paths:?}")
+        }
+        other => panic!("expected a conflict, got {other:?}"),
+    }
+    assert!(s.work().join("src/nested/human-notes.txt").exists());
+}
+
+#[test]
+fn undo_restores_the_workspace_and_the_copy() {
+    let s = Setup::new();
+    let pristine = snapshot(&s.work());
+    edit(&s.copy());
+    fs::remove_dir_all(s.copy().join("src/nested")).unwrap();
+    s.task.commit().unwrap();
+    assert_ne!(snapshot(&s.work()), pristine);
+
+    let cp = s.task.undo().unwrap().expect("an undone checkpoint");
+    assert_eq!(cp.id, 1);
+    assert_eq!(snapshot(&s.work()), pristine);
+    assert_eq!(snapshot(&s.copy()), pristine);
+    assert!(s.task.effects().unwrap().is_empty());
+    assert!(s.task.undo().unwrap().is_none());
+}
+
+#[test]
+fn repeated_undo_walks_back_one_commit_at_a_time() {
+    let s = Setup::new();
+    let v0 = snapshot(&s.work());
+    write(&s.copy().join("a.txt"), "one\n");
+    s.task.commit().unwrap();
+    let v1 = snapshot(&s.work());
+    write(&s.copy().join("a.txt"), "two\n");
+    s.task.commit().unwrap();
+
+    assert_eq!(s.task.undo().unwrap().unwrap().id, 2);
+    assert_eq!(snapshot(&s.work()), v1);
+    assert_eq!(s.task.undo().unwrap().unwrap().id, 1);
+    assert_eq!(snapshot(&s.work()), v0);
+}
+
+#[test]
+fn undo_refuses_with_uncommitted_changes() {
+    let s = Setup::new();
+    write(&s.copy().join("a.txt"), "one\n");
+    s.task.commit().unwrap();
+    write(&s.copy().join("b.txt"), "pending\n");
+    assert!(matches!(s.task.undo(), Err(Error::Invalid(_))));
+    assert!(s.work().join("a.txt").exists());
+}
+
+#[test]
+fn undo_refuses_when_the_workspace_changed_after_the_commit() {
+    let s = Setup::new();
+    write(&s.copy().join("src/main.rs"), "fn main() { /* agent */ }\n");
+    s.task.commit().unwrap();
+    write(&s.work().join("src/main.rs"), "fn main() { /* human */ }\n");
+
+    match s.task.undo() {
+        Err(Error::Conflict(paths)) => assert_eq!(paths, ["src/main.rs"]),
+        other => panic!("expected a conflict, got {other:?}"),
+    }
+    assert_eq!(
+        fs::read_to_string(s.work().join("src/main.rs")).unwrap(),
+        "fn main() { /* human */ }\n"
+    );
+}
+
+#[test]
+fn type_changes_commit_and_roll_back() {
+    let s = Setup::new();
+    let pristine = snapshot(&s.work());
+    let swap = |copy: &Path| {
+        fs::remove_file(copy.join("README.md")).unwrap();
+        write(&copy.join("README.md/index.md"), "now a directory\n");
+        fs::remove_dir_all(copy.join("src/nested")).unwrap();
+        write(&copy.join("src/nested"), "now a file\n");
+    };
+
+    swap(&s.copy());
+    s.task.rollback().unwrap();
+    assert_eq!(snapshot(&s.copy()), pristine);
+
+    swap(&s.copy());
+    s.task.commit().unwrap();
+    assert_eq!(snapshot(&s.work()), snapshot(&s.copy()));
+    s.task.undo().unwrap();
+    assert_eq!(snapshot(&s.work()), pristine);
+    assert_eq!(snapshot(&s.copy()), pristine);
+}
+
+#[test]
+fn read_only_directories_survive_the_round_trip() {
+    let s = Setup::new();
+    let pristine = snapshot(&s.work());
+    fs::remove_dir_all(s.copy().join("src/nested")).unwrap();
+    s.task.commit().unwrap();
+    s.task.undo().unwrap();
+    assert_eq!(snapshot(&s.work()), pristine);
+
+    // A directory made read-only in the copy is committed with its mode.
+    chmod(&s.copy().join("src/empty-dir"), 0o555);
+    s.task.commit().unwrap();
+    assert_eq!(
+        fs::metadata(s.work().join("src/empty-dir")).unwrap().mode() & 0o777,
+        0o555
+    );
+}
+
+#[test]
+fn a_held_lock_turns_writers_away() {
+    let s = Setup::new();
+    write(&s.copy().join("a.txt"), "one\n");
+    let lock = s.task.copy().parent().unwrap().join("lock");
+    write(&lock, "12345\n");
+    assert!(matches!(s.task.commit(), Err(Error::Busy(_))));
+    assert!(!s.work().join("a.txt").exists());
+    fs::remove_file(&lock).unwrap();
+    assert!(s.task.commit().unwrap().is_some());
+}
+
+#[test]
+fn a_home_inside_the_workspace_is_refused() {
+    let ws = TempDir::new().unwrap();
+    fixture(ws.path());
+    let home = ws.path().join(".kule");
+    assert!(matches!(
+        Task::create(&home, ws.path()),
+        Err(Error::Invalid(_))
+    ));
+}
+
+#[test]
+fn a_task_reopens_from_its_home() {
+    let s = Setup::new();
+    write(&s.copy().join("src/new.rs"), "// new\n");
+    let home = s._home.path();
+    let again = Task::open(home, s.task.id()).unwrap();
+    assert_eq!(changes(&again), [("src/new.rs".into(), Change::Created)]);
+    assert_eq!(Task::list(home).unwrap().len(), 1);
+}
