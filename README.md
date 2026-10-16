@@ -139,8 +139,10 @@ cargo run -p kule-desktop   # Linux needs libwebkit2gtk-4.1-dev
 
 - Linux: Landlock reports refusals only to the audit log, so they are not
   listed; the command still gets EPERM. Network rules need Linux 6.7.
-- Gemini and Codex profiles: Google no longer serves the Gemini CLI's
-  Code Assist login to third-party clients; Codex has no profile yet.
+- Gemini needs an API key from AI Studio (Google no longer serves the
+  Code Assist sign-in to clients like this), saved outside the keychain,
+  which the sandbox keeps read-only: `GEMINI_FORCE_FILE_STORAGE=true gemini`,
+  then `/auth`. Codex works with a ChatGPT sign-in (`codex login`).
 - The engine runs inside the app; a daemon (and checkpoints on Lonca) is M3.
 
 ## License

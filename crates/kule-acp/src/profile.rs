@@ -20,6 +20,8 @@ pub struct Profile {
     /// Default-hidden paths under the home directory the agent needs to read
     /// (macOS only: the keychain holding its login).
     pub reveal_on_macos: &'static [&'static str],
+    /// Environment variables the agent is started with.
+    pub env: &'static [(&'static str, &'static str)],
     /// HTTPS hosts the agent needs for its login and model, beyond what the
     /// policy already lets through. Open only while this agent runs.
     pub hosts: &'static [&'static str],
@@ -31,6 +33,7 @@ pub const PROFILES: &[Profile] = &[
         command: &["npx", "-y", "@agentclientprotocol/claude-agent-acp@0.92.0"],
         state: &[".claude", ".claude.json", ".local/state/claude"],
         reveal_on_macos: &["Library/Keychains"],
+        env: &[],
         hosts: &[],
     },
     Profile {
@@ -38,9 +41,33 @@ pub const PROFILES: &[Profile] = &[
         command: &["gemini", "--acp"],
         state: &[".gemini"],
         reveal_on_macos: &[],
-        // A Google sign-in refreshes its token at oauth2 and reaches the
-        // model through Code Assist (cloudcode-pa), not the public API.
-        hosts: &["oauth2.googleapis.com", "cloudcode-pa.googleapis.com"],
+        // The keychain only works for Gemini when it can write a probe item
+        // there, which the sandbox refuses; its own encrypted file under
+        // ~/.gemini needs no more than the state above. Save the API key
+        // once with `GEMINI_FORCE_FILE_STORAGE=true gemini` and `/auth`.
+        env: &[("GEMINI_FORCE_FILE_STORAGE", "true")],
+        // With an API key it talks to the public API, which the policy lets
+        // through. Google no longer serves its Code Assist sign-in to
+        // clients like this one.
+        hosts: &[],
+    },
+    Profile {
+        name: "codex",
+        // Codex runs each command in its own Seatbelt or Landlock sandbox,
+        // which cannot be set up inside Kule's; Kule's sandbox stands in.
+        command: &[
+            "npx",
+            "-y",
+            "@agentclientprotocol/codex-acp@2.2.2",
+            "-c",
+            "sandbox_mode=\"danger-full-access\"",
+        ],
+        state: &[".codex"],
+        reveal_on_macos: &[],
+        env: &[],
+        // A ChatGPT sign-in refreshes its token at auth.openai.com and
+        // reaches the model through chatgpt.com, not the public API.
+        hosts: &["auth.openai.com", "chatgpt.com"],
     },
 ];
 
@@ -89,7 +116,8 @@ impl Profile {
         let mut sandbox = Sandbox::for_task(task)?;
         self.apply(&mut sandbox)?;
         sandbox.set_network(Network::Proxy(proxy.port()));
-        let command = sandbox.command(&self.program().to_string_lossy(), &self.args())?;
+        let mut command = sandbox.command(&self.program().to_string_lossy(), &self.args())?;
+        command.envs(self.env.iter().copied());
         Ok(Launch { command, sandbox })
     }
 }
@@ -99,4 +127,37 @@ impl Profile {
 pub struct Launch {
     pub command: Command,
     pub sandbox: Sandbox,
+}
+
+#[cfg(test)]
+mod tests {
+    use std::ffi::OsStr;
+
+    use tempfile::TempDir;
+
+    use super::*;
+
+    #[test]
+    fn every_profile_names_hosts_the_policy_accepts() {
+        for profile in PROFILES {
+            assert!(
+                profile.open_hosts(Policy::builtin()).is_ok(),
+                "{}",
+                profile.name
+            );
+        }
+    }
+
+    #[test]
+    fn an_agent_starts_with_its_profiles_environment() {
+        let (home, ws) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+        let task = Task::create(home.path(), ws.path()).unwrap();
+        let proxy = Proxy::start(&task, Policy::builtin()).unwrap();
+        let launch = profile("gemini").unwrap().launch(&task, &proxy).unwrap();
+        let env: Vec<_> = launch.command.get_envs().collect();
+        assert!(env.contains(&(
+            OsStr::new("GEMINI_FORCE_FILE_STORAGE"),
+            Some(OsStr::new("true"))
+        )));
+    }
 }

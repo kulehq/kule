@@ -64,7 +64,7 @@ enum Cmd {
     /// makes becomes a step. Nothing reaches the workspace until commit.
     Run {
         task: String,
-        /// claude-code or gemini
+        /// claude-code, codex or gemini
         #[arg(long, default_value = "claude-code")]
         agent: String,
         prompt: String,
