@@ -189,6 +189,9 @@ impl Sandbox {
                 command.env(var, &url);
             }
             command.env_remove("NO_PROXY").env_remove("no_proxy");
+            // Node's built-in fetch ignores the variables above unless told
+            // to (Node 24+); without the proxy its connections just fail.
+            command.env("NODE_USE_ENV_PROXY", "1");
         }
         Ok(command)
     }

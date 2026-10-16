@@ -158,13 +158,15 @@ fn connections_around_the_proxy_are_blocked() {
 fn commands_find_the_proxy_in_the_usual_variables() {
     let s = Setup::new();
     let out = s.python(
-        "import os; print(os.environ['HTTPS_PROXY'], os.environ['http_proxy'], os.environ.get('NO_PROXY'))",
+        "import os; print(os.environ['HTTPS_PROXY'], os.environ['http_proxy'], os.environ.get('NO_PROXY'), os.environ.get('NODE_USE_ENV_PROXY'))",
     );
     let text = String::from_utf8_lossy(&out.stdout);
     let parts: Vec<&str> = text.split_whitespace().collect();
     assert!(parts[0].starts_with("http://127.0.0.1:"), "{text}");
     assert_eq!(parts[0], parts[1]);
     assert_eq!(parts[2], "None");
+    // Node's fetch reads the variables only when this says so.
+    assert_eq!(parts[3], "1");
 }
 
 #[test]
