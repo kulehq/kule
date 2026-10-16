@@ -15,6 +15,9 @@ gix.workspace = true
 # Shared with Lonca. Builds use the pinned commit; a crates.io publish uses
 # the version, so that version has to be on crates.io first.
 lonca-net = { version = "0.1.1", git = "https://github.com/selcukgural/lonca", rev = "c1724c1f02e27efebf09aa9664c7efbdcd3083a7" }
+# Checkpoints and their signed history live in Lonca's object store. Not on
+# crates.io yet, so for now this keeps kule-engine from being published.
+lonca-core = { git = "https://github.com/selcukgural/lonca", rev = "c1724c1f02e27efebf09aa9664c7efbdcd3083a7" }
 reflink-copy.workspace = true
 serde.workspace = true
 serde_json.workspace = true

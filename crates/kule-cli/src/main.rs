@@ -100,6 +100,9 @@ enum Cmd {
     Rollback { task: String },
     /// Revert the task's newest commit in the workspace and the copy.
     Undo { task: String },
+    /// Show the task's signed history (every commit and undo), checked
+    /// entry by entry; fails if anything in it was changed.
+    History { task: String },
     /// Delete a task and its copy. The workspace is not touched.
     Rm { task: String },
     /// Run the Kule daemon in the foreground: it owns agent runs and the
@@ -345,6 +348,27 @@ fn run() -> Result<ExitCode> {
             Some(cp) => println!("undid checkpoint {} ({} changes)", cp.id, cp.effects.len()),
             None => println!("nothing to undo"),
         },
+        Cmd::History { task } => {
+            let history = Task::open(&home, &task)?.history()?;
+            for entry in &history {
+                let what = match &entry.event {
+                    kule_engine::HistoryEvent::Commit {
+                        checkpoint,
+                        changes,
+                        snapshot,
+                        ..
+                    } => format!(
+                        "commit {checkpoint} · {changes} changes · snapshot {}",
+                        &snapshot[..snapshot.len().min(12)]
+                    ),
+                    kule_engine::HistoryEvent::Undo { checkpoint } => {
+                        format!("undo {checkpoint}")
+                    }
+                };
+                println!("{:>3}. {what}", entry.seq);
+            }
+            println!("history verified: {} entries, signed", history.len());
+        }
         Cmd::Daemon { idle_secs } => {
             eprintln!("kule: daemon for {}", home.display());
             kule_daemon::run(&home, std::time::Duration::from_secs(idle_secs))

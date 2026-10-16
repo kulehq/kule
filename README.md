@@ -142,6 +142,12 @@ it shows what happened meanwhile. It listens on `<home>/kuled.sock`, which
 only its owner can open (checked by peer credentials too), runs once per
 home, and exits after ten idle minutes.
 
+What a commit replaced is kept in the task's own Lonca store (git objects
+under `checkpoints/store.git`, with modes and times beside them), and every
+commit and undo is an entry in a signed, hash-chained history (`kule history
+TASK`). The signing key lives in Kule's home and is hidden from every
+sandbox.
+
 Paths the workspace's `.gitignore` excludes (build output, caches, `.env`)
 stay in the copy: a commit leaves them behind unless asked
 (`kule commit --include-ignored`, or *Also commit these* in the app). The
@@ -162,7 +168,7 @@ at once.
   Code Assist sign-in to clients like this), saved outside the keychain,
   which the sandbox keeps read-only: `GEMINI_FORCE_FILE_STORAGE=true gemini`,
   then `/auth`. Codex works with a ChatGPT sign-in (`codex login`).
-- The engine runs inside the app; a daemon (and checkpoints on Lonca) is M3.
+- Windows (v1).
 
 ## License
 

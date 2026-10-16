@@ -16,6 +16,7 @@ use crate::effects::{self, Change, Effect, EffectSet};
 use crate::error::{Error, IoContext, Result};
 use crate::fsops::{self, read_json, write_json};
 use crate::git::{self, GitState, Part};
+use crate::history::{Entry as HistoryEntry, Event};
 use crate::manifest::{Baseline, Entry, Kind, Stamp, Tree, relative, scan};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -230,6 +231,12 @@ impl Task {
         checkpoint.git_after = baseline.git.clone();
         checkpoint.state = State::Applied;
         store.save(&checkpoint)?;
+        store.record(Event::Commit {
+            checkpoint: checkpoint.id,
+            changes: checkpoint.effects.len(),
+            snapshot: checkpoint.snapshot.clone().unwrap_or_default(),
+            effects: lonca_core::canonical::digest_of(&checkpoint.effects),
+        })?;
         Ok(Some(checkpoint))
     }
 
@@ -289,9 +296,32 @@ impl Task {
             )));
         }
 
+        let before = store.before(&checkpoint)?;
+        let undone = self.revert(&checkpoint, &reverted, &paths, &before, &mut baseline);
+        store.done_with(&checkpoint)?;
+        undone?;
+        checkpoint.state = State::Undone;
+        store.save(&checkpoint)?;
+        store.refresh_after(checkpoint.id, &paths, &baseline)?;
+        store.record(Event::Undo {
+            checkpoint: checkpoint.id,
+        })?;
+        Ok(Some(checkpoint))
+    }
+
+    /// Puts `before` back at `paths`, in the workspace and the copy, unless
+    /// the workspace no longer looks as `checkpoint` left it.
+    fn revert(
+        &self,
+        checkpoint: &Checkpoint,
+        reverted: &[&Effect],
+        paths: &[String],
+        before: &Path,
+        baseline: &mut Baseline,
+    ) -> Result<()> {
         let work_git = git::read(self.workspace())?;
         let mut conflicts = Vec::new();
-        for effect in &reverted {
+        for effect in reverted {
             let path = &effect.path;
             let untouched = self.untouched(
                 path,
@@ -302,9 +332,8 @@ impl Task {
             )?;
             let now = Stamp::of(&self.workspace().join(path))?;
             let removes_dir = matches!(&now, Some(s) if s.kind == Kind::Dir)
-                && Stamp::of(&store.before(checkpoint.id).join(path))?
-                    .is_none_or(|s| s.kind != Kind::Dir);
-            if !untouched || (removes_dir && self.has_unknown_under(path, &baseline)?) {
+                && Stamp::of(&before.join(path))?.is_none_or(|s| s.kind != Kind::Dir);
+            if !untouched || (removes_dir && self.has_unknown_under(path, baseline)?) {
                 conflicts.push(path.clone());
             }
         }
@@ -312,14 +341,9 @@ impl Task {
         if !conflicts.is_empty() {
             return Err(Error::Conflict(conflicts));
         }
-
-        fsops::mirror(&store.before(checkpoint.id), self.workspace(), &paths, true)?;
-        fsops::mirror(self.workspace(), &self.copy(), &paths, false)?;
-        self.resync(&mut baseline, &paths)?;
-        checkpoint.state = State::Undone;
-        store.save(&checkpoint)?;
-        store.refresh_after(checkpoint.id, &paths, &baseline)?;
-        Ok(Some(checkpoint))
+        fsops::mirror(before, self.workspace(), paths, true)?;
+        fsops::mirror(self.workspace(), &self.copy(), paths, false)?;
+        self.resync(baseline, paths)
     }
 
     /// How long the task's connections wait for a person before they are
@@ -350,6 +374,25 @@ impl Task {
             approval_timeout_secs: timeout.as_secs(),
         };
         write_json(&self.dir.join("settings.json"), &settings)
+    }
+
+    /// The task's signed history, oldest first: every commit and undo.
+    /// Fails when the chain was changed after it was signed.
+    pub fn history(&self) -> Result<Vec<HistoryEntry>> {
+        self.store().history()
+    }
+
+    /// The key that signs the history of every task in this home.
+    pub(crate) fn key_path(&self) -> PathBuf {
+        self.home().join("kule.key")
+    }
+
+    /// Kule's home: the task lives at `<home>/tasks/<id>`.
+    pub(crate) fn home(&self) -> PathBuf {
+        self.dir
+            .parent()
+            .and_then(Path::parent)
+            .map_or_else(|| self.dir.clone(), Path::to_path_buf)
     }
 
     /// The task's commits, oldest first, undone ones included.
@@ -493,7 +536,7 @@ impl Task {
     }
 
     fn store(&self) -> Store {
-        Store::new(self.dir.join("checkpoints"))
+        Store::new(self.dir.join("checkpoints"), self.key_path())
     }
 
     fn load_baseline(&self) -> Result<Baseline> {

@@ -1,19 +1,25 @@
 //! Checkpoints: what a commit replaced, kept so the commit can be undone.
 //!
-//! M0 keeps them as plain directories inside the task. This module is the
-//! seam where Lonca's store takes over in M3.
+//! What a commit replaced is a snapshot in the task's own store, Lonca's
+//! object store at `checkpoints/store.git` (see [`crate::snapshot`]), and
+//! every commit and undo is an entry in the task's signed history (see
+//! [`crate::history`]). Checkpoints from before M3 kept a plain `before/`
+//! directory instead, which undo still reads.
 
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use lonca_core::keys::KeyPair;
 use serde::{Deserialize, Serialize};
 
 use crate::effects::{Change, Effect};
 use crate::error::{Error, IoContext, Result};
-use crate::fsops::{copy_parent_times, mirror, read_json, write_json};
+use crate::fsops::{read_json, remove, write_json};
 use crate::git::GitState;
-use crate::manifest::{Baseline, Kind, Stamp};
+use crate::history::{Entry, Event, History};
+use crate::manifest::{Baseline, Stamp};
+use crate::snapshot::{Snapshots, lonca};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -37,56 +43,91 @@ pub struct Checkpoint {
     /// `.git` refs and index against it instead of against stamps.
     #[serde(default)]
     pub git_after: Option<GitState>,
+    /// The snapshot of what the commit replaced, a commit in the task's
+    /// store; `None` for a checkpoint with a `before/` directory.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snapshot: Option<String>,
 }
 
 pub(crate) struct Store {
     root: PathBuf,
+    /// The key that signs the task's history: one per Kule home.
+    key: PathBuf,
 }
 
 impl Store {
-    pub fn new(root: PathBuf) -> Self {
-        Self { root }
+    pub fn new(root: PathBuf, key: PathBuf) -> Self {
+        Self { root, key }
     }
 
-    /// The workspace as it was before the commit, for the paths it replaced or
-    /// deleted. Paths the commit created are absent, which is what undo wants.
-    pub fn before(&self, id: u32) -> PathBuf {
-        self.dir(id).join("before")
+    fn snapshots(&self) -> Result<Snapshots> {
+        Snapshots::open(&self.root.join("store.git"))
     }
 
-    /// Saves the workspace's version of every path the commit is about to
+    /// The workspace as it was before the commit, for the paths it replaced
+    /// or deleted, laid out as a directory; paths the commit created are
+    /// absent, which is what undo wants. [`Store::done_with`] removes it.
+    pub fn before(&self, checkpoint: &Checkpoint) -> Result<PathBuf> {
+        let before = self.dir(checkpoint.id).join("before");
+        if let Some(snapshot) = &checkpoint.snapshot {
+            remove(&before)?;
+            self.snapshots()?.restore(snapshot, &before)?;
+        }
+        Ok(before)
+    }
+
+    /// Removes the directory [`Store::before`] laid out from a snapshot.
+    pub fn done_with(&self, checkpoint: &Checkpoint) -> Result<()> {
+        if checkpoint.snapshot.is_some() {
+            remove(&self.dir(checkpoint.id).join("before"))?;
+        }
+        Ok(())
+    }
+
+    /// Keeps the workspace's version of every path the commit is about to
     /// replace or delete, along with the times of their parent directories,
     /// and records the checkpoint as `Applying`.
     pub fn begin(&self, work: &Path, effects: &[Effect]) -> Result<Checkpoint> {
         fs::create_dir_all(&self.root).at(&self.root)?;
         let id = self.ids()?.last().map_or(1, |last| last + 1);
-        let before = self.before(id);
-        fs::create_dir_all(&before).at(&before)?;
+        let dir = self.dir(id);
+        fs::create_dir_all(&dir).at(&dir)?;
         let all: Vec<String> = effects.iter().map(|e| e.path.clone()).collect();
         let replaced: Vec<String> = effects
             .iter()
             .filter(|e| e.change != Change::Created)
             .map(|e| e.path.clone())
             .collect();
-        for path in &all {
-            if let Some(parent) = Path::new(path).parent()
-                && Stamp::of(&work.join(parent))?.is_some_and(|s| s.kind == Kind::Dir)
-            {
-                let dir = before.join(parent);
-                fs::create_dir_all(&dir).at(&dir)?;
-            }
-        }
-        mirror(work, &before, &replaced, false)?;
-        copy_parent_times(work, &before, &all)?;
+        let snapshot = self.snapshots()?.save(id, work, &replaced, &all)?;
         let checkpoint = Checkpoint {
             id,
             state: State::Applying,
             effects: effects.to_vec(),
             after: BTreeMap::new(),
             git_after: None,
+            snapshot: Some(snapshot),
         };
         self.save(&checkpoint)?;
         Ok(checkpoint)
+    }
+
+    /// Adds `event` to the task's signed history.
+    pub fn record(&self, event: Event) -> Result<()> {
+        let key = KeyPair::load_or_create(&self.key).map_err(|e| lonca(&self.key, e))?;
+        let snapshots = self.snapshots()?;
+        History::new(snapshots.store()).append(&key, event)?;
+        Ok(())
+    }
+
+    /// The task's history, checked against the home's key.
+    pub fn history(&self) -> Result<Vec<Entry>> {
+        if !self.root.join("store.git").is_dir() {
+            return Ok(Vec::new());
+        }
+        let key = KeyPair::load_or_create(&self.key).map_err(|e| lonca(&self.key, e))?;
+        let snapshots = self.snapshots()?;
+        let entries = History::new(snapshots.store()).read(&key.public_hex())?;
+        Ok(entries.into_iter().map(|(entry, _)| entry).collect())
     }
 
     pub fn save(&self, checkpoint: &Checkpoint) -> Result<()> {
@@ -112,8 +153,8 @@ impl Store {
                 State::Applying => {
                     return Err(Error::Invalid(format!(
                         "commit {id} was interrupted; the workspace may hold part of it \
-                         (its previous content is in {})",
-                        self.before(id).display()
+                         (its previous content is kept in checkpoint {id} under {})",
+                        self.dir(id).display()
                     )));
                 }
             }

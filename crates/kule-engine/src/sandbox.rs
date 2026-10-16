@@ -84,8 +84,8 @@ pub struct Denial {
 }
 
 impl Sandbox {
-    /// Writes only to the task's copy and temporary directory, nothing
-    /// hidden, network allowed.
+    /// Writes only to the task's copy and temporary directory, network
+    /// allowed; hidden is only Kule's signing key.
     pub fn new(task: &Task) -> Result<Sandbox> {
         let tmp = task.tmp()?;
         let nanos = SystemTime::now()
@@ -95,7 +95,9 @@ impl Sandbox {
             copy: real(&task.copy())?,
             tmp: real(&tmp)?,
             writable: Vec::new(),
-            hidden: Vec::new(),
+            // The key that signs every task's history: whatever a task runs
+            // must not be able to sign entries of its own.
+            hidden: vec![real_or_planned(&task.key_path())?],
             network: Network::Allow,
             tag: format!("kule-{}-{nanos:x}", task.id()),
         })
