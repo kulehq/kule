@@ -518,10 +518,38 @@ impl Task {
         self.store().all()
     }
 
-    /// Deletes the task and its copy. The workspace is not touched.
+    /// Deletes the task and its copy. The workspace is not touched. The task
+    /// is gone at once, moved to Kule's trash; [`Task::empty_trash`] takes
+    /// its files off the disk, which can take a while for a large copy and
+    /// its caches.
     pub fn remove(self) -> Result<()> {
         let _lock = self.lock()?;
-        fsops::remove_dir_tree(&self.dir)
+        let trash = trash_dir(&self.home());
+        fs::create_dir_all(&trash).at(&trash)?;
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos());
+        let to = trash.join(format!("{}-{nanos:x}", self.info.id));
+        fs::rename(&self.dir, &to).at(&self.dir)
+    }
+
+    /// Deletes what removed tasks left in Kule's trash under `home`.
+    pub fn empty_trash(home: &Path) -> Result<()> {
+        let trash = trash_dir(home);
+        let entries = match fs::read_dir(&trash) {
+            Ok(entries) => entries,
+            Err(e) if e.kind() == ErrorKind::NotFound => return Ok(()),
+            Err(e) => return Err(e).at(&trash),
+        };
+        for entry in entries {
+            let path = entry.at(&trash)?.path();
+            match fsops::remove_dir_tree(&path) {
+                // Another emptying got there first.
+                Err(Error::Io { source, .. }) if source.kind() == ErrorKind::NotFound => {}
+                other => other?,
+            }
+        }
+        Ok(())
     }
 
     /// Whether the workspace has entries under `path` that the baseline does
@@ -762,6 +790,11 @@ impl Drop for Lock {
     fn drop(&mut self) {
         let _ = fs::remove_file(&self.0);
     }
+}
+
+/// Where removed tasks wait to be deleted, out of the task list.
+fn trash_dir(home: &Path) -> PathBuf {
+    home.join("trash")
 }
 
 fn new_task_dir(tasks: &Path) -> Result<(String, PathBuf)> {

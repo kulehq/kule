@@ -890,3 +890,26 @@ fn an_agent_at_work_holds_off_commit_rollback_undo_and_remove() {
     write(&s.copy().join("b.txt"), "two\n");
     assert!(s.task.commit().unwrap().is_some());
 }
+
+/// A removed task leaves the list at once; its files, read-only
+/// directories too, go when the trash is emptied, which may come later.
+#[test]
+fn a_removed_task_goes_to_the_trash_then_off_the_disk() {
+    let s = Setup::new();
+    let home = s._home.path().to_path_buf();
+    let locked = s.copy().join("src/locked");
+    fs::create_dir_all(&locked).unwrap();
+    write(&locked.join("f.txt"), "x");
+    chmod(&locked, 0o555);
+    let id = s.task.id().to_owned();
+
+    s.task.clone().remove().unwrap();
+    assert!(Task::list(&home).unwrap().is_empty());
+    assert!(Task::open(&home, &id).is_err());
+    assert_eq!(fs::read_dir(home.join("trash")).unwrap().count(), 1);
+
+    Task::empty_trash(&home).unwrap();
+    assert_eq!(fs::read_dir(home.join("trash")).unwrap().count(), 0);
+    // Nothing to do is not an error.
+    Task::empty_trash(&home).unwrap();
+}

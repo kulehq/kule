@@ -357,6 +357,12 @@ impl Service {
     pub fn remove(&self, id: &str) -> Result<()> {
         self.idle(id)?.remove().map_err(text)?;
         self.streams.lock().unwrap().remove(id);
+        let home = self.home.clone();
+        std::thread::spawn(move || {
+            if let Err(e) = Task::empty_trash(&home) {
+                eprintln!("kule: emptying the trash: {e}");
+            }
+        });
         Ok(())
     }
 

@@ -57,8 +57,12 @@ git: hook pre-commit changed (it runs on the next matching git command)
 
 `kule exec` runs commands in the operating system's sandbox (Seatbelt on
 macOS, Landlock on Linux). They may write only to the task's copy, its own
-`TMPDIR` and package caches; credentials such as `~/.ssh`, `~/.aws` and
-`~/.npmrc` cannot be read; `--no-network` shuts TCP. If the sandbox cannot be
+`TMPDIR` and `/tmp`; credentials such as `~/.ssh`, `~/.aws`, `~/.npmrc` and
+cargo's registry token cannot be read; `--no-network` shuts TCP. Package
+managers (cargo, npm, pip, uv, Go, NuGet, Yarn, pnpm) get caches of the
+task's own, so nothing a command leaves in a cache reaches a build you run
+later; your caches stay read-only. On macOS the cargo and npm caches start
+as copy-on-write clones of yours. If the sandbox cannot be
 set up, the command does not run. `--allow-write`, `--hide`, `--reveal` and
 `--no-sandbox` adjust it. On macOS, what the sandbox refused is printed after
 the command and kept in the task's `sandbox.jsonl`:
@@ -120,7 +124,8 @@ kule commit $TASK
 
 `kule run $TASK --agent claude-code "prompt"` starts the agent over the
 Agent Client Protocol inside the sandbox. Its profile opens only the agent's
-own state and login; every tool call becomes a step (`kule steps $TASK`).
+own state and login; other agents' logins and transcripts stay hidden. Every
+tool call becomes a step (`kule steps $TASK`).
 
 `crates/kule-desktop` is a Tauri app around the same engine:
 

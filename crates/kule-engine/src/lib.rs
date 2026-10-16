@@ -16,6 +16,7 @@
 compile_error!("Kule M0 supports macOS and Linux only");
 
 mod approvals;
+mod caches;
 mod checkpoint;
 mod clock;
 mod effects;
@@ -36,6 +37,7 @@ mod task;
 pub use approvals::{
     Answer, Approvals, DEFAULT_TIMEOUT, MAX_TIMEOUT, MAX_WAITING, MIN_TIMEOUT, Question,
 };
+pub use caches::Sources as CacheSources;
 pub use checkpoint::{Checkpoint, State as CheckpointState};
 pub use effects::{Change, Effect, EffectSet};
 pub use error::{Error, Result};

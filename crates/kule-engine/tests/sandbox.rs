@@ -7,7 +7,7 @@ use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::Output;
 
-use kule_engine::{Network, Sandbox, Task};
+use kule_engine::{CacheSources, Network, Sandbox, Task};
 use tempfile::TempDir;
 
 struct Setup {
@@ -455,7 +455,80 @@ fn the_default_sandbox_lets_commands_use_tmp() {
     let bare = sh(&s.sandbox(), &script);
     assert!(!ok(&bare), "the bare sandbox let /tmp through");
 
-    let default = sh(&Sandbox::for_task(&s.task).unwrap(), &script);
+    let default = sh(&Sandbox::for_task_with(&s.task, None).unwrap(), &script);
     assert!(ok(&default), "{default:?}");
     assert_eq!(text(&default), "x");
+}
+
+/// What a package manager finds in the person's caches it builds or
+/// installs later without checking again; a task gets caches of its own.
+#[test]
+fn package_managers_write_to_the_tasks_own_caches() {
+    let s = Setup::new();
+    let person = s.outside();
+    let registry = person.join(".cargo/registry/src/serde-1.0.0");
+    fs::create_dir_all(&registry).unwrap();
+    fs::write(registry.join("lib.rs"), "real\n").unwrap();
+    fs::write(person.join(".cargo/credentials.toml"), "token = \"t\"\n").unwrap();
+    let mut sandbox = s.sandbox();
+    sandbox
+        .use_task_caches(&CacheSources {
+            home: person.clone(),
+            cargo_home: person.join(".cargo"),
+        })
+        .unwrap();
+
+    let out = sh(
+        &sandbox,
+        "mkdir -p \"$CARGO_HOME/registry/src/serde-1.0.0\" \
+         && echo poisoned > \"$CARGO_HOME/registry/src/serde-1.0.0/lib.rs\" \
+         && echo x > \"$XDG_CACHE_HOME/pip\" && echo \"$CARGO_HOME\"",
+    );
+    assert!(ok(&out), "{out:?}");
+    assert!(Path::new(&text(&out)).starts_with(fs::canonicalize(s.task.tmp().unwrap()).unwrap()));
+    assert_eq!(
+        fs::read_to_string(registry.join("lib.rs")).unwrap(),
+        "real\n"
+    );
+
+    let out = sh(
+        &sandbox,
+        &format!("cat '{}/.cargo/credentials.toml'", person.display()),
+    );
+    assert!(!ok(&out), "{out:?}");
+}
+
+/// A task's defaults leave the person's caches as they are: readable, and
+/// nothing can be left in them.
+#[test]
+fn the_persons_package_caches_are_read_only() {
+    let s = Setup::new();
+    let home = s.outside();
+    let caches = [
+        ".cargo/registry",
+        ".cargo/git",
+        ".npm",
+        ".nuget/packages",
+        ".cache",
+        "Library/Caches",
+    ];
+    for cache in caches {
+        fs::create_dir_all(home.join(cache)).unwrap();
+        fs::write(home.join(cache).join("cached"), "real\n").unwrap();
+    }
+    let sources = CacheSources {
+        cargo_home: home.join(".cargo"),
+        home: home.clone(),
+    };
+    let sandbox = Sandbox::for_task_with(&s.task, Some(sources)).unwrap();
+    for cache in caches {
+        let dir = home.join(cache);
+        let out = sh(
+            &sandbox,
+            &format!("cat '{0}/cached' && echo x > '{0}/new'", dir.display()),
+        );
+        assert_eq!(text(&out), "real", "{cache} is not readable");
+        assert!(!ok(&out), "{cache} is writable");
+        assert!(!dir.join("new").exists());
+    }
 }

@@ -10,6 +10,7 @@
 //! paths: Seatbelt matches resolved paths, and Landlock works on file
 //! descriptors, so a symlink in the copy cannot lead a write outside it.
 
+use std::ffi::OsString;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -18,6 +19,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
+use crate::caches::{self, Sources};
 use crate::error::{Error, IoContext, Result};
 use crate::protect::Kept;
 use crate::task::Task;
@@ -86,18 +88,18 @@ const HIDDEN_IN_HOME: &[&str] = &[
     ".config/gh",
     ".config/gcloud",
     ".config/git/credentials",
+    ".config/hub",
+    ".config/op",
+    ".terraform.d/credentials.tfrc.json",
+    ".vault-token",
+    ".password-store",
+    ".local/share/keyrings",
     "Library/Keychains",
-];
-
-/// Package caches: tools write here while building, and what lands here is
-/// not part of the workspace. Only the ones that exist are opened.
-const CACHES_IN_HOME: &[&str] = &[
-    ".cargo/registry",
-    ".cargo/git",
-    ".npm",
-    ".nuget/packages",
-    ".cache",
-    "Library/Caches",
+    // Agents' logins; an agent's profile shows it its own.
+    ".claude/.credentials.json",
+    ".codex/auth.json",
+    ".gemini/gemini-credentials.json",
+    ".gemini/oauth_creds.json",
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -122,6 +124,8 @@ pub struct Sandbox {
     network: Network,
     /// Environment variables passed on beyond [`PASSED_ENV`].
     passed_env: Vec<String>,
+    /// Variables the sandbox sets itself, over the person's.
+    env: Vec<(String, OsString)>,
     /// Marks this sandbox's refusals where the platform reports them (macOS).
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     tag: String,
@@ -168,6 +172,7 @@ impl Sandbox {
             protected: Vec::new(),
             network: Network::Allow,
             passed_env: Vec::new(),
+            env: Vec::new(),
             tag: format!("kule-{}-{nanos:x}", task.id()),
         })
     }
@@ -180,28 +185,40 @@ impl Sandbox {
         self.platform_denials(window)
     }
 
-    /// [`Sandbox::new`] plus the defaults: `/tmp` and package caches
-    /// writable, credentials in the home directory hidden. Shells and tools
-    /// write to `/tmp` by hard-coded path, whatever `TMPDIR` says, and
-    /// nothing there belongs to the workspace.
+    /// [`Sandbox::new`] plus the defaults: `/tmp` writable, package caches
+    /// of the task's own, credentials in the home directory hidden. Shells
+    /// and tools write to `/tmp` by hard-coded path, whatever `TMPDIR`
+    /// says, and nothing there belongs to the workspace.
     pub fn for_task(task: &Task) -> Result<Sandbox> {
+        Sandbox::for_task_with(task, Sources::from_env())
+    }
+
+    /// [`Sandbox::for_task`] for the person whose home and caches
+    /// `sources` names.
+    pub fn for_task_with(task: &Task, sources: Option<Sources>) -> Result<Sandbox> {
         let mut sandbox = Sandbox::new(task)?;
         let tmp = Path::new("/tmp");
         if tmp.is_dir() {
             sandbox.allow_write(tmp)?;
         }
-        if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
-            for cache in CACHES_IN_HOME {
-                let path = home.join(cache);
-                if path.is_dir() {
-                    sandbox.allow_write(&path)?;
-                }
-            }
+        if let Some(sources) = sources {
             for secret in HIDDEN_IN_HOME {
-                sandbox.hide(&home.join(secret))?;
+                sandbox.hide(&sources.home.join(secret))?;
             }
+            sandbox.use_task_caches(&sources)?;
         }
         Ok(sandbox)
+    }
+
+    /// Points package managers at caches in the task's tmp, and hides the
+    /// registry credentials kept next to cargo's. The person's own caches
+    /// stay read-only (see the `caches` module).
+    pub fn use_task_caches(&mut self, sources: &Sources) -> Result<()> {
+        for file in ["credentials.toml", "credentials"] {
+            self.hide(&sources.cargo_home.join(file))?;
+        }
+        self.env = caches::prepare(&self.tmp, sources)?;
+        Ok(())
     }
 
     pub fn allow_write(&mut self, path: &Path) -> Result<()> {
@@ -306,6 +323,7 @@ impl Sandbox {
             }
         }
         command.current_dir(&self.copy).env("TMPDIR", &self.tmp);
+        command.envs(self.env.iter().map(|(k, v)| (k, v)));
         if let Network::Proxy(port) = self.network {
             let url = format!("http://127.0.0.1:{port}");
             for var in [

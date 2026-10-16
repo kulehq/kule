@@ -37,6 +37,11 @@ pub fn run(home: &Path, idle_after: Duration) -> io::Result<()> {
     let token = new_token(home)?;
     let socket = socket_path(home);
     let listener = bind(&socket)?;
+    // What an earlier removal left behind, out of the way of requests.
+    let trash = home.to_owned();
+    std::thread::spawn(move || {
+        let _ = kule_engine::Task::empty_trash(&trash);
+    });
     serve(
         listener,
         Arc::new(Service::new(home.to_owned())),

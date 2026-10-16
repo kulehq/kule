@@ -5,10 +5,10 @@
 //! reading what it was refused (`sandbox.jsonl`): its own state and login,
 //! nothing of the workspace or of other tools.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
 
-use kule_engine::{Kept, Network, Policy, Proxy, Result, Sandbox, Task};
+use kule_engine::{CacheSources, Kept, Network, Policy, Proxy, Result, Sandbox, Task};
 
 #[derive(Debug, Clone, Copy)]
 pub struct Profile {
@@ -21,6 +21,9 @@ pub struct Profile {
     /// later (hooks, MCP servers, sandbox settings): readable, never
     /// writable.
     pub protected: &'static [&'static str],
+    /// Its login inside that state, hidden from every other agent and from
+    /// commands Kule runs itself.
+    pub login: &'static [&'static str],
     /// Default-hidden paths under the home directory the agent needs to read
     /// (macOS only: the keychain holding its login).
     pub reveal_on_macos: &'static [&'static str],
@@ -43,7 +46,13 @@ pub const PROFILES: &[Profile] = &[
         name: "claude-code",
         mode: None,
         command: &["npx", "-y", "@agentclientprotocol/claude-agent-acp@0.92.0"],
-        state: &[".claude", ".claude.json", ".local/state/claude"],
+        state: &[
+            ".claude",
+            ".claude.json",
+            ".local/state/claude",
+            "Library/Caches/claude-cli-nodejs",
+        ],
+        login: &[".claude/.credentials.json"],
         protected: &[
             ".claude/settings.json",
             ".claude/settings.local.json",
@@ -64,6 +73,10 @@ pub const PROFILES: &[Profile] = &[
         mode: None,
         command: &["gemini", "--acp"],
         state: &[".gemini"],
+        login: &[
+            ".gemini/gemini-credentials.json",
+            ".gemini/oauth_creds.json",
+        ],
         protected: &[".gemini/settings.json"],
         reveal_on_macos: &[],
         // The keychain only works for Gemini when it can write a probe item
@@ -90,6 +103,7 @@ pub const PROFILES: &[Profile] = &[
             "sandbox_mode=\"danger-full-access\"",
         ],
         state: &[".codex"],
+        login: &[".codex/auth.json"],
         protected: &[".codex/config.toml"],
         reveal_on_macos: &[],
         env: &[],
@@ -107,15 +121,22 @@ pub fn profile(name: &str) -> Option<&'static Profile> {
 impl Profile {
     /// Opens the agent's own state and login in `sandbox`. Paths that do not
     /// exist are skipped: the agent has never run here.
-    pub fn apply(&self, sandbox: &mut Sandbox) -> Result<()> {
-        let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
-            return Ok(());
-        };
+    /// Other agents' state, their logins and what the person said to them,
+    /// is hidden. `home` is the person's home directory.
+    pub fn apply(&self, sandbox: &mut Sandbox, home: &Path) -> Result<()> {
+        for other in PROFILES.iter().filter(|p| p.name != self.name) {
+            for state in other.state {
+                sandbox.hide(&home.join(state))?;
+            }
+        }
         for state in self.state {
             let path = home.join(state);
             if path.exists() {
                 sandbox.allow_write(&path)?;
             }
+        }
+        for path in self.login {
+            sandbox.reveal(&home.join(path))?;
         }
         for path in self.protected {
             sandbox.protect(&home.join(path))?;
@@ -148,8 +169,22 @@ impl Profile {
     /// state opened, its network through `proxy` (started with
     /// [`Profile::open_hosts`]).
     pub fn launch(&self, task: &Task, proxy: &Proxy) -> Result<Launch> {
-        let mut sandbox = Sandbox::for_task(task)?;
-        self.apply(&mut sandbox)?;
+        self.launch_for(task, proxy, CacheSources::from_env())
+    }
+
+    /// [`Profile::launch`] for the person whose home and caches `person`
+    /// names.
+    pub fn launch_for(
+        &self,
+        task: &Task,
+        proxy: &Proxy,
+        person: Option<CacheSources>,
+    ) -> Result<Launch> {
+        let home = person.as_ref().map(|p| p.home.clone());
+        let mut sandbox = Sandbox::for_task_with(task, person)?;
+        if let Some(home) = home {
+            self.apply(&mut sandbox, &home)?;
+        }
         sandbox.set_network(Network::Proxy(proxy.port()));
         let kept = sandbox.keep_protected()?;
         let mut command = sandbox.command(&self.program().to_string_lossy(), &self.args())?;
@@ -203,7 +238,10 @@ mod tests {
         let (home, ws) = (TempDir::new().unwrap(), TempDir::new().unwrap());
         let task = Task::create(home.path(), ws.path()).unwrap();
         let proxy = Proxy::start(&task, Policy::builtin()).unwrap();
-        let launch = profile("gemini").unwrap().launch(&task, &proxy).unwrap();
+        let launch = profile("gemini")
+            .unwrap()
+            .launch_for(&task, &proxy, None)
+            .unwrap();
         let env: Vec<_> = launch.command.get_envs().collect();
         assert!(env.contains(&(
             OsStr::new("GEMINI_FORCE_FILE_STORAGE"),
@@ -215,5 +253,52 @@ mod tests {
             launch.command.get_current_dir(),
             Some(task.tmp().unwrap().as_path())
         );
+    }
+
+    /// One agent's login and transcripts are none of another's business.
+    #[test]
+    fn an_agent_sees_its_own_login_and_no_other_agents_state() {
+        let (home, ws, person) = (
+            TempDir::new().unwrap(),
+            TempDir::new().unwrap(),
+            TempDir::new().unwrap(),
+        );
+        let task = Task::create(home.path(), ws.path()).unwrap();
+        let person = std::fs::canonicalize(person.path()).unwrap();
+        for (dir, file) in [
+            (".claude", ".credentials.json"),
+            (".claude/projects", "session.jsonl"),
+            (".codex", "auth.json"),
+            (".gemini", "gemini-credentials.json"),
+        ] {
+            std::fs::create_dir_all(person.join(dir)).unwrap();
+            std::fs::write(person.join(dir).join(file), "secret\n").unwrap();
+        }
+        let read = |profile: &Profile, path: &str| {
+            let mut sandbox = Sandbox::for_task_with(
+                &task,
+                Some(CacheSources {
+                    home: person.clone(),
+                    cargo_home: person.join(".cargo"),
+                }),
+            )
+            .unwrap();
+            profile.apply(&mut sandbox, &person).unwrap();
+            let target = person.join(path);
+            sandbox
+                .command("cat", &[target.display().to_string()])
+                .unwrap()
+                .output()
+                .unwrap()
+                .status
+                .success()
+        };
+        let (claude, codex) = (profile("claude-code").unwrap(), profile("codex").unwrap());
+        assert!(read(claude, ".claude/.credentials.json"));
+        assert!(!read(claude, ".codex/auth.json"));
+        assert!(!read(claude, ".gemini/gemini-credentials.json"));
+        assert!(read(codex, ".codex/auth.json"));
+        assert!(!read(codex, ".claude/.credentials.json"));
+        assert!(!read(codex, ".claude/projects/session.jsonl"));
     }
 }

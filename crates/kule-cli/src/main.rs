@@ -404,6 +404,7 @@ fn run() -> Result<ExitCode> {
         }
         Cmd::Rm { task } => {
             Task::open(&home, &task)?.remove()?;
+            Task::empty_trash(&home)?;
             println!("removed task {task}");
         }
     }
@@ -453,10 +454,13 @@ async fn print_events(mut rx: futures::channel::mpsc::UnboundedReceiver<kule_acp
                     continue;
                 };
                 let changed: Vec<&str> = step.changes.iter().map(|c| c.path.as_str()).collect();
-                let what = if changed.is_empty() {
-                    "no file changes".to_owned()
-                } else {
-                    changed.join(", ")
+                // A build touches hundreds of files; the first few say enough,
+                // and `kule steps` has the rest.
+                const SHOWN: usize = 5;
+                let what = match changed.len() {
+                    0 => "no file changes".to_owned(),
+                    n if n <= SHOWN => changed.join(", "),
+                    n => format!("{} and {} more", changed[..SHOWN].join(", "), n - SHOWN),
                 };
                 line(
                     format!("{mark} {title} → step {}: {what}", step.id),
