@@ -143,6 +143,7 @@ fn run() -> Result<ExitCode> {
             let logged_before = connections(&task)?.len();
             let started = Instant::now();
             let mut used = None;
+            let mut proxy = None;
             let mut child = if no_sandbox {
                 eprintln!("kule: running without the sandbox");
                 let mut child = Command::new(&command[0]);
@@ -165,7 +166,10 @@ fn run() -> Result<ExitCode> {
                     eprintln!("kule: network open, bypassing the proxy and the policy");
                     Network::Allow
                 } else {
-                    Network::Proxy(Proxy::start(&task, load_policy(&home, &task)?)?.port())
+                    let started = Proxy::start(&task, load_policy(&home, &task)?)?;
+                    let port = started.port();
+                    proxy = Some(started);
+                    Network::Proxy(port)
                 };
                 sandbox.set_network(network);
                 let child = sandbox.command(&command[0], &command[1..])?;
@@ -176,6 +180,11 @@ fn run() -> Result<ExitCode> {
                 .env("KULE_TASK", task.id())
                 .status()
                 .with_context(|| format!("could not run {}", command[0]))?;
+            // Cuts what the command left open and logs it, so the list below
+            // is complete.
+            if let Some(proxy) = proxy {
+                proxy.stop();
+            }
             print_set(&task.effects()?);
             print_connections(&connections(&task)?[logged_before..]);
             if let Some(sandbox) = used
@@ -221,6 +230,7 @@ fn run() -> Result<ExitCode> {
                 )
             })?;
             println!();
+            proxy.stop();
             print_set(&task.effects()?);
             print_connections(&connections(&task)?[logged_before..]);
             if let Some(denials) = sandbox.denials(started.elapsed())? {

@@ -3,7 +3,7 @@
 //!
 //! The engine runs in this process for now; a daemon takes it over later.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
@@ -91,9 +91,6 @@ pub struct App {
     home: PathBuf,
     /// Tasks with an agent at work: one agent per task at a time.
     running: Mutex<HashSet<String>>,
-    /// The proxy of each task and agent, started on the first run and used
-    /// again after: a proxy serves until the process exits.
-    proxies: Mutex<HashMap<(String, String), Proxy>>,
 }
 
 impl App {
@@ -101,7 +98,6 @@ impl App {
         App {
             home,
             running: Mutex::new(HashSet::new()),
-            proxies: Mutex::new(HashMap::new()),
         }
     }
 
@@ -218,15 +214,11 @@ impl App {
         emit: Arc<impl Fn(RunEvent) + Send + Sync + 'static>,
     ) -> Result<Vec<Denial>> {
         let started = Instant::now();
-        let launch = {
-            let mut proxies = self.proxies.lock().unwrap();
-            let key = (task.id().to_owned(), profile.name.to_owned());
-            if !proxies.contains_key(&key) {
-                let policy = profile.open_hosts(self.policy(task)?).map_err(text)?;
-                proxies.insert(key.clone(), Proxy::start(task, policy).map_err(text)?);
-            }
-            profile.launch(task, &proxies[&key]).map_err(text)?
-        };
+        // Serves this run only, with the policy as it is now; dropped when
+        // the run returns, which closes it.
+        let policy = profile.open_hosts(self.policy(task)?).map_err(text)?;
+        let proxy = Proxy::start(task, policy).map_err(text)?;
+        let launch = profile.launch(task, &proxy).map_err(text)?;
         let (tx, mut rx) = futures::channel::mpsc::unbounded();
         let runtime = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
         let forward = runtime.spawn(async move {

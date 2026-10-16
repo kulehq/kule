@@ -13,8 +13,8 @@ cedar-policy.workspace = true
 filetime.workspace = true
 gix.workspace = true
 # Shared with Lonca. Builds use the pinned commit; a crates.io publish uses
-# the version, so lonca-net 0.1.0 has to be published first.
-lonca-net = { version = "0.1.0", git = "https://github.com/selcukgural/lonca", rev = "5ce1f1f5d7c81b055e4c0225997692d7de0fca33" }
+# the version, so that version has to be on crates.io first.
+lonca-net = { version = "0.1.1", git = "https://github.com/selcukgural/lonca", rev = "c1724c1f02e27efebf09aa9664c7efbdcd3083a7" }
 reflink-copy.workspace = true
 serde.workspace = true
 serde_json.workspace = true

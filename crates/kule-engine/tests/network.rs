@@ -4,7 +4,7 @@
 
 use std::fs;
 use std::io::Write;
-use std::net::TcpListener;
+use std::net::{TcpListener, TcpStream};
 use std::process::Output;
 
 use kule_engine::{DEFAULT_POLICY, Network, Policy, Proxy, Sandbox, Task, Verdict, connections};
@@ -28,6 +28,7 @@ struct Setup {
     _ws: TempDir,
     task: Task,
     sandbox: Sandbox,
+    _proxy: Proxy,
 }
 
 impl Setup {
@@ -44,6 +45,7 @@ impl Setup {
             _ws: ws,
             task,
             sandbox,
+            _proxy: proxy,
         }
     }
 
@@ -152,6 +154,67 @@ fn connections_around_the_proxy_are_blocked() {
     ));
     assert!(!out.status.success(), "a direct connection went through");
     assert!(connections(&s.task).unwrap().is_empty());
+}
+
+/// An upstream that keeps every connection open and never answers.
+fn silent_upstream() -> u16 {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        let mut held = Vec::new();
+        for stream in listener.incoming() {
+            held.push(stream.unwrap());
+        }
+    });
+    port
+}
+
+#[test]
+fn stopping_the_proxy_logs_the_tunnels_a_command_left_open() {
+    let s = Setup::new();
+    let proxy = Proxy::start(&s.task, policy()).unwrap();
+    let mut sandbox = Sandbox::new(&s.task).unwrap();
+    sandbox.set_network(Network::Proxy(proxy.port()));
+    let up = silent_upstream();
+    let script = format!(
+        r#"
+import os, socket
+port = int(os.environ["HTTPS_PROXY"].rsplit(":", 1)[1])
+s = socket.create_connection(("127.0.0.1", port), timeout=5)
+s.sendall(b"CONNECT 127.0.0.1:{up} HTTP/1.1\r\n\r\n")
+print(s.recv(4096).decode().splitlines()[0])
+"#
+    );
+    let out = sandbox
+        .command("python3", &["-c".to_owned(), script])
+        .unwrap()
+        .output()
+        .unwrap();
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("200"),
+        "{out:?}"
+    );
+
+    let logged = || {
+        connections(&s.task)
+            .unwrap()
+            .iter()
+            .any(|c| c.port == up && c.outcome == "tunneled")
+    };
+    // The command is gone, but the upstream never closed: still open.
+    assert!(!logged());
+    proxy.stop();
+    assert!(logged());
+}
+
+#[test]
+fn a_dropped_proxy_stops_serving() {
+    let s = Setup::new();
+    let proxy = Proxy::start(&s.task, policy()).unwrap();
+    let port = proxy.port();
+    assert!(TcpStream::connect(("127.0.0.1", port)).is_ok());
+    drop(proxy);
+    assert!(TcpStream::connect(("127.0.0.1", port)).is_err());
 }
 
 #[test]

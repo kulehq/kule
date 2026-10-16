@@ -33,9 +33,10 @@ pub struct Connection {
     pub outcome: String,
 }
 
-/// The proxy of one task, serving until the process exits.
+/// The proxy of one task, serving until it is dropped. Dropping it closes
+/// the port and cuts the connections still open.
 pub struct Proxy {
-    port: u16,
+    server: lonca_net::Server,
 }
 
 impl Proxy {
@@ -43,7 +44,6 @@ impl Proxy {
     pub fn start(task: &Task, policy: Policy) -> Result<Proxy> {
         let addr = Path::new("127.0.0.1:0");
         let listener = lonca_net::bind("127.0.0.1:0").at(addr)?;
-        let port = listener.local_addr().at(addr)?.port();
         let path = log_path(task);
         let log = OpenOptions::new()
             .create(true)
@@ -55,12 +55,18 @@ impl Proxy {
             log: Mutex::new(log),
             pending: Mutex::new(HashMap::new()),
         });
-        std::thread::spawn(move || lonca_net::serve(listener, gate));
-        Ok(Proxy { port })
+        let server = lonca_net::spawn(listener, gate).at(addr)?;
+        Ok(Proxy { server })
     }
 
     pub fn port(&self) -> u16 {
-        self.port
+        self.server.local_addr().port()
+    }
+
+    /// Closes the proxy and cuts the connections still open; once it
+    /// returns, [`connections`] lists them all.
+    pub fn stop(self) {
+        self.server.stop();
     }
 }
 

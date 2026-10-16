@@ -3275,8 +3275,8 @@ dependencies = [
 
 [[package]]
 name = "lonca-net"
-version = "0.1.0"
-source = "git+https://github.com/selcukgural/lonca?rev=5ce1f1f5d7c81b055e4c0225997692d7de0fca33#5ce1f1f5d7c81b055e4c0225997692d7de0fca33"
+version = "0.1.1"
+source = "git+https://github.com/selcukgural/lonca?rev=c1724c1f02e27efebf09aa9664c7efbdcd3083a7#c1724c1f02e27efebf09aa9664c7efbdcd3083a7"
 
 [[package]]
 name = "markup5ever"
