@@ -35,6 +35,6 @@ pub use git::{GitState, GitSummary, RefChange};
 pub use manifest::Kind;
 pub use network::{Connection, Proxy, connections};
 pub use policy::{DEFAULT_POLICY, Judgement, Policy, REPO_POLICY, Ruling, Verdict};
-pub use sandbox::{Denial, Network, Sandbox};
+pub use sandbox::{Denial, Network, Sandbox, denials, record_denials};
 pub use steps::{Step, StepChange};
 pub use task::{Task, TaskInfo};

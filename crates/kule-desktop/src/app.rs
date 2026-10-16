@@ -1,0 +1,462 @@
+//! What the desktop app does, apart from its window. Tauri's commands are
+//! thin wrappers around [`App`], so its tests run on real tasks without one.
+//!
+//! The engine runs in this process for now; a daemon takes it over later.
+
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
+use std::time::Instant;
+
+use futures::StreamExt;
+use kule_engine::{
+    Checkpoint, Connection, Denial, EffectSet, Error, Policy, Proxy, Ruling, Step, Task, Verdict,
+    connections, denials, record_denials,
+};
+use serde::Serialize;
+
+/// Errors reach the window as text.
+pub type Result<T> = std::result::Result<T, String>;
+
+fn text(e: Error) -> String {
+    match e {
+        Error::Conflict(paths) => format!(
+            "the workspace changed outside Kule at {}; roll back, or start a new task on \
+             the current workspace",
+            paths.join(", ")
+        ),
+        e => e.to_string(),
+    }
+}
+
+/// A task as the task list shows it.
+#[derive(Debug, Clone, Serialize)]
+pub struct TaskView {
+    pub id: String,
+    pub workspace: PathBuf,
+    pub created_unix: u64,
+    /// Uncommitted changes, `.git` internals included.
+    pub changes: usize,
+    /// What the policy says about them; `None` when there are none.
+    pub verdict: Option<Verdict>,
+    pub running: bool,
+}
+
+/// The task's uncommitted work and what the policy says about it.
+#[derive(Debug, Clone, Serialize)]
+pub struct Review {
+    pub effects: EffectSet,
+    pub ruling: Ruling,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "outcome", rename_all = "snake_case")]
+pub enum Commit {
+    Applied {
+        checkpoint: u32,
+        changes: usize,
+    },
+    Nothing,
+    /// The policy holds the changes: they wait for approval, or are denied.
+    Held {
+        ruling: Ruling,
+    },
+}
+
+/// What happened in the task, newest work last.
+#[derive(Debug, Clone, Serialize)]
+pub struct Timeline {
+    /// The uncommitted work, one step per tool call.
+    pub steps: Vec<Step>,
+    pub checkpoints: Vec<Checkpoint>,
+    pub connections: Vec<Connection>,
+    pub denials: Vec<Denial>,
+}
+
+/// What a run reports to the window.
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum RunEvent {
+    Agent {
+        event: kule_acp::Event,
+    },
+    /// The run is over; `error` says why it failed.
+    Finished {
+        error: Option<String>,
+        denials: Vec<Denial>,
+    },
+}
+
+pub struct App {
+    home: PathBuf,
+    /// Tasks with an agent at work: one agent per task at a time.
+    running: Mutex<HashSet<String>>,
+    /// The proxy of each task and agent, started on the first run and used
+    /// again after: a proxy serves until the process exits.
+    proxies: Mutex<HashMap<(String, String), Proxy>>,
+}
+
+impl App {
+    pub fn new(home: PathBuf) -> App {
+        App {
+            home,
+            running: Mutex::new(HashSet::new()),
+            proxies: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// `KULE_HOME`, else `~/.kule`.
+    pub fn default_home() -> Result<PathBuf> {
+        if let Some(home) = std::env::var_os("KULE_HOME") {
+            return Ok(PathBuf::from(home));
+        }
+        std::env::var_os("HOME")
+            .map(|h| PathBuf::from(h).join(".kule"))
+            .ok_or_else(|| "HOME is not set; set KULE_HOME".to_owned())
+    }
+
+    pub fn agents(&self) -> Vec<&'static str> {
+        kule_acp::PROFILES.iter().map(|p| p.name).collect()
+    }
+
+    /// Every task, newest first.
+    pub fn tasks(&self) -> Result<Vec<TaskView>> {
+        let mut infos = Task::list(&self.home).map_err(text)?;
+        infos.sort_by(|a, b| (b.created_unix, &b.id).cmp(&(a.created_unix, &a.id)));
+        infos.iter().map(|info| self.view(&info.id)).collect()
+    }
+
+    pub fn create(&self, workspace: &Path) -> Result<TaskView> {
+        let task = Task::create(&self.home, workspace).map_err(text)?;
+        self.view(task.id())
+    }
+
+    pub fn review(&self, id: &str) -> Result<Review> {
+        let task = self.open(id)?;
+        let effects = task.effects().map_err(text)?;
+        let ruling = self.policy(&task)?.judge(&effects);
+        Ok(Review { effects, ruling })
+    }
+
+    /// Commits what the policy lets through; with `approve`, also what it
+    /// puts to a person. Denied changes never pass.
+    pub fn commit(&self, id: &str, approve: bool) -> Result<Commit> {
+        let task = self.idle(id)?;
+        let policy = self.policy(&task)?;
+        match task.commit_if(policy.gate(approve)) {
+            Ok(Some(checkpoint)) => Ok(Commit::Applied {
+                checkpoint: checkpoint.id,
+                changes: checkpoint.effects.len(),
+            }),
+            Ok(None) => Ok(Commit::Nothing),
+            Err(Error::Held(ruling)) => Ok(Commit::Held { ruling }),
+            Err(e) => Err(text(e)),
+        }
+    }
+
+    /// Throws the uncommitted work away; returns how many changes it held.
+    pub fn rollback(&self, id: &str) -> Result<usize> {
+        let set = self.idle(id)?.rollback().map_err(text)?;
+        Ok(set.effects.len())
+    }
+
+    /// Reverts the newest commit; returns its checkpoint, if there was one.
+    pub fn undo(&self, id: &str) -> Result<Option<u32>> {
+        let undone = self.idle(id)?.undo().map_err(text)?;
+        Ok(undone.map(|c| c.id))
+    }
+
+    pub fn timeline(&self, id: &str) -> Result<Timeline> {
+        let task = self.open(id)?;
+        Ok(Timeline {
+            steps: task.steps().map_err(text)?,
+            checkpoints: task.checkpoints().map_err(text)?,
+            connections: connections(&task).map_err(text)?,
+            denials: denials(&task).map_err(text)?,
+        })
+    }
+
+    /// Deletes the task and its copy; the workspace is not touched.
+    pub fn remove(&self, id: &str) -> Result<()> {
+        self.idle(id)?.remove().map_err(text)
+    }
+
+    /// Gives `agent` the prompt in the background. `emit` gets the agent's
+    /// events as they come and [`RunEvent::Finished`] last, also when the
+    /// agent could not start.
+    pub fn start_run(
+        self: &Arc<Self>,
+        id: &str,
+        agent: &str,
+        prompt: &str,
+        emit: impl Fn(RunEvent) + Send + Sync + 'static,
+    ) -> Result<()> {
+        let profile = kule_acp::profile(agent).ok_or_else(|| format!("no agent {agent}"))?;
+        let task = self.open(id)?;
+        if !self.running.lock().unwrap().insert(id.to_owned()) {
+            return Err(format!("an agent is already at work in task {id}"));
+        }
+        let (app, prompt) = (Arc::clone(self), prompt.to_owned());
+        std::thread::spawn(move || {
+            let emit = Arc::new(emit);
+            let (error, denials) = match app.run(&task, profile, &prompt, Arc::clone(&emit)) {
+                Ok(denials) => (None, denials),
+                Err(e) => (Some(e), Vec::new()),
+            };
+            app.running.lock().unwrap().remove(task.id());
+            emit(RunEvent::Finished { error, denials });
+        });
+        Ok(())
+    }
+
+    /// One run, start to end; returns what the sandbox refused.
+    fn run(
+        &self,
+        task: &Task,
+        profile: &'static kule_acp::Profile,
+        prompt: &str,
+        emit: Arc<impl Fn(RunEvent) + Send + Sync + 'static>,
+    ) -> Result<Vec<Denial>> {
+        let started = Instant::now();
+        let launch = {
+            let mut proxies = self.proxies.lock().unwrap();
+            let key = (task.id().to_owned(), profile.name.to_owned());
+            if !proxies.contains_key(&key) {
+                let policy = profile.open_hosts(self.policy(task)?).map_err(text)?;
+                proxies.insert(key.clone(), Proxy::start(task, policy).map_err(text)?);
+            }
+            profile.launch(task, &proxies[&key]).map_err(text)?
+        };
+        let (tx, mut rx) = futures::channel::mpsc::unbounded();
+        let runtime = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
+        let forward = runtime.spawn(async move {
+            while let Some(event) = rx.next().await {
+                emit(RunEvent::Agent { event });
+            }
+        });
+        let outcome = runtime.block_on(kule_acp::run(task, launch.command, prompt, tx));
+        let _ = runtime.block_on(forward);
+        outcome.map_err(|e| {
+            format!(
+                "{e} (see {})",
+                task.copy().with_file_name("agent.log").display()
+            )
+        })?;
+        let refused = launch
+            .sandbox
+            .denials(started.elapsed())
+            .map_err(text)?
+            .unwrap_or_default();
+        record_denials(task, &refused).map_err(text)?;
+        Ok(refused)
+    }
+
+    fn view(&self, id: &str) -> Result<TaskView> {
+        let task = self.open(id)?;
+        let effects = task.effects().map_err(text)?;
+        let verdict = (!effects.is_empty()).then(|| self.policy(&task).map(|p| p.judge(&effects)));
+        Ok(TaskView {
+            id: task.id().to_owned(),
+            workspace: task.workspace().to_owned(),
+            created_unix: task.info().created_unix,
+            changes: effects.effects.len(),
+            verdict: verdict.transpose()?.map(|r| r.verdict),
+            running: self.running.lock().unwrap().contains(id),
+        })
+    }
+
+    fn open(&self, id: &str) -> Result<Task> {
+        Task::open(&self.home, id).map_err(text)
+    }
+
+    /// The task, refused while an agent works in it: committing or rolling
+    /// back under a running agent would split its work in two.
+    fn idle(&self, id: &str) -> Result<Task> {
+        if self.running.lock().unwrap().contains(id) {
+            return Err(format!(
+                "an agent is at work in task {id}; wait until it is done"
+            ));
+        }
+        self.open(id)
+    }
+
+    /// The user's policy, or the built-in one, plus the workspace's forbids.
+    fn policy(&self, task: &Task) -> Result<Policy> {
+        Policy::load(Some(&self.home.join("policy.cedar")), task.workspace()).map_err(text)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use kule_engine::CheckpointState;
+    use tempfile::TempDir;
+
+    use super::*;
+
+    struct Setup {
+        _home: TempDir,
+        ws: TempDir,
+        app: Arc<App>,
+    }
+
+    impl Setup {
+        fn new() -> Setup {
+            let (home, ws) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+            fs::write(ws.path().join("a.txt"), "a\n").unwrap();
+            let app = Arc::new(App::new(home.path().to_owned()));
+            Setup {
+                _home: home,
+                ws,
+                app,
+            }
+        }
+
+        fn task(&self) -> (String, PathBuf) {
+            let view = self.app.create(self.ws.path()).unwrap();
+            let copy = Task::open(&self.app.home, &view.id).unwrap().copy();
+            (view.id, copy)
+        }
+    }
+
+    #[test]
+    fn tasks_come_with_their_changes_and_verdict() {
+        let s = Setup::new();
+        let (first, copy) = s.task();
+        let (second, _) = s.task();
+        fs::write(copy.join("b.txt"), "b\n").unwrap();
+        fs::write(copy.join("Cargo.toml"), "[package]\n").unwrap();
+
+        // Both were made within a second, which is all creation times tell.
+        let tasks = s.app.tasks().unwrap();
+        assert!(tasks.is_sorted_by_key(|t| std::cmp::Reverse(t.created_unix)));
+        let get = |id: &str| tasks.iter().find(|t| t.id == id).unwrap();
+        assert_eq!((get(&second).changes, get(&second).verdict), (0, None));
+        let first = get(&first);
+        assert_eq!((first.changes, first.verdict), (2, Some(Verdict::Ask)));
+        assert!(!first.running);
+    }
+
+    #[test]
+    fn commit_follows_the_policy() {
+        let s = Setup::new();
+        let (id, copy) = s.task();
+        fs::write(copy.join("a.txt"), "edited\n").unwrap();
+        assert!(matches!(
+            s.app.commit(&id, false).unwrap(),
+            Commit::Applied {
+                checkpoint: 1,
+                changes: 1
+            }
+        ));
+        assert!(matches!(s.app.commit(&id, false).unwrap(), Commit::Nothing));
+
+        fs::write(copy.join("Cargo.toml"), "[package]\n").unwrap();
+        match s.app.commit(&id, false).unwrap() {
+            Commit::Held { ruling } => assert_eq!(ruling.verdict, Verdict::Ask),
+            other => panic!("expected the change to be held, got {other:?}"),
+        }
+        assert!(!s.ws.path().join("Cargo.toml").exists());
+        let review = s.app.review(&id).unwrap();
+        assert_eq!(review.ruling.verdict, Verdict::Ask);
+        assert_eq!(review.effects.effects.len(), 1);
+
+        assert!(matches!(
+            s.app.commit(&id, true).unwrap(),
+            Commit::Applied { checkpoint: 2, .. }
+        ));
+        assert!(s.ws.path().join("Cargo.toml").exists());
+    }
+
+    #[test]
+    fn a_denied_change_is_held_even_when_approved() {
+        let s = Setup::new();
+        fs::create_dir(s.ws.path().join(".kule")).unwrap();
+        fs::write(
+            s.ws.path().join(".kule/policy.cedar"),
+            "forbid (principal, action, resource) when { resource has name && resource.name == \"secret.txt\" };\n",
+        )
+        .unwrap();
+        let (id, copy) = s.task();
+        fs::write(copy.join("secret.txt"), "x\n").unwrap();
+        match s.app.commit(&id, true).unwrap() {
+            Commit::Held { ruling } => assert_eq!(ruling.verdict, Verdict::Deny),
+            other => panic!("expected the change to be denied, got {other:?}"),
+        }
+        assert!(!s.ws.path().join("secret.txt").exists());
+    }
+
+    #[test]
+    fn rollback_undo_and_the_timeline() {
+        let s = Setup::new();
+        let (id, copy) = s.task();
+        fs::write(copy.join("b.txt"), "b\n").unwrap();
+        assert_eq!(s.app.rollback(&id).unwrap(), 1);
+        assert!(!copy.join("b.txt").exists());
+
+        fs::write(copy.join("b.txt"), "b\n").unwrap();
+        Task::open(&s.app.home, &id)
+            .unwrap()
+            .step("write b")
+            .unwrap();
+        let timeline = s.app.timeline(&id).unwrap();
+        assert_eq!(timeline.steps.len(), 1);
+        assert!(timeline.checkpoints.is_empty());
+
+        s.app.commit(&id, false).unwrap();
+        let timeline = s.app.timeline(&id).unwrap();
+        assert!(timeline.steps.is_empty());
+        assert_eq!(timeline.checkpoints.len(), 1);
+        assert_eq!(timeline.checkpoints[0].state, CheckpointState::Applied);
+
+        assert_eq!(s.app.undo(&id).unwrap(), Some(1));
+        assert!(!s.ws.path().join("b.txt").exists());
+        let timeline = s.app.timeline(&id).unwrap();
+        assert_eq!(timeline.checkpoints[0].state, CheckpointState::Undone);
+        assert_eq!(s.app.undo(&id).unwrap(), None);
+    }
+
+    #[test]
+    fn a_workspace_changed_outside_kule_is_explained() {
+        let s = Setup::new();
+        let (id, copy) = s.task();
+        fs::write(copy.join("a.txt"), "agent\n").unwrap();
+        fs::write(s.ws.path().join("a.txt"), "human, a longer line\n").unwrap();
+        let e = s.app.commit(&id, false).unwrap_err();
+        assert!(e.contains("changed outside Kule at a.txt"), "{e}");
+    }
+
+    #[test]
+    fn a_task_with_an_agent_at_work_refuses_changes() {
+        let s = Setup::new();
+        let (id, copy) = s.task();
+        fs::write(copy.join("b.txt"), "b\n").unwrap();
+        s.app.running.lock().unwrap().insert(id.clone());
+
+        assert!(s.app.tasks().unwrap()[0].running);
+        for refused in [
+            s.app.commit(&id, true).map(|_| ()),
+            s.app.rollback(&id).map(|_| ()),
+            s.app.undo(&id).map(|_| ()),
+            s.app.remove(&id),
+            s.app.start_run(&id, "claude-code", "hi", |_| {}),
+        ] {
+            assert!(refused.unwrap_err().contains("at work"));
+        }
+        assert!(copy.join("b.txt").exists());
+
+        s.app.running.lock().unwrap().remove(&id);
+        s.app.remove(&id).unwrap();
+        assert!(s.app.tasks().unwrap().is_empty());
+    }
+
+    #[test]
+    fn an_unknown_agent_is_refused_before_anything_starts() {
+        let s = Setup::new();
+        let (id, _) = s.task();
+        let e = s.app.start_run(&id, "nobody", "hi", |_| {}).unwrap_err();
+        assert_eq!(e, "no agent nobody");
+        assert!(!s.app.running.lock().unwrap().contains(&id));
+    }
+}

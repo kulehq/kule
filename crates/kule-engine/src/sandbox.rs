@@ -10,6 +10,8 @@
 //! paths: Seatbelt matches resolved paths, and Landlock works on file
 //! descriptors, so a symlink in the copy cannot lead a write outside it.
 
+use std::fs::OpenOptions;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -190,6 +192,50 @@ impl Sandbox {
         }
         Ok(command)
     }
+}
+
+/// Appends refusals to the task's `sandbox.jsonl`.
+pub fn record_denials(task: &Task, denials: &[Denial]) -> Result<()> {
+    if denials.is_empty() {
+        return Ok(());
+    }
+    let path = denials_path(task);
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .at(&path)?;
+    for denial in denials {
+        let line = serde_json::to_string(denial).map_err(|source| Error::State {
+            path: path.clone(),
+            source,
+        })?;
+        writeln!(file, "{line}").at(&path)?;
+    }
+    Ok(())
+}
+
+/// Every refusal recorded for the task, oldest first.
+pub fn denials(task: &Task) -> Result<Vec<Denial>> {
+    let path = denials_path(task);
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(e).at(&path),
+    };
+    text.lines()
+        .filter(|line| !line.is_empty())
+        .map(|line| {
+            serde_json::from_str(line).map_err(|source| Error::State {
+                path: path.clone(),
+                source,
+            })
+        })
+        .collect()
+}
+
+fn denials_path(task: &Task) -> PathBuf {
+    task.dir().join("sandbox.jsonl")
 }
 
 /// The resolved form of an existing path.

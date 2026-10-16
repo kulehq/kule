@@ -6,8 +6,9 @@
 //! nothing of the workspace or of other tools.
 
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
-use kule_engine::{Policy, Result, Sandbox};
+use kule_engine::{Network, Policy, Proxy, Result, Sandbox, Task};
 
 #[derive(Debug, Clone, Copy)]
 pub struct Profile {
@@ -80,4 +81,22 @@ impl Profile {
     pub fn args(&self) -> Vec<String> {
         self.command[1..].iter().map(|s| s.to_string()).collect()
     }
+
+    /// Prepares the agent for `task`: the task's sandbox with this agent's
+    /// state opened, its network through `proxy` (started with
+    /// [`Profile::open_hosts`]).
+    pub fn launch(&self, task: &Task, proxy: &Proxy) -> Result<Launch> {
+        let mut sandbox = Sandbox::for_task(task)?;
+        self.apply(&mut sandbox)?;
+        sandbox.set_network(Network::Proxy(proxy.port()));
+        let command = sandbox.command(&self.program().to_string_lossy(), &self.args())?;
+        Ok(Launch { command, sandbox })
+    }
+}
+
+/// An agent ready to start, and the sandbox it runs in, which reports what
+/// it refused once the agent is done.
+pub struct Launch {
+    pub command: Command,
+    pub sandbox: Sandbox,
 }

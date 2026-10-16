@@ -26,7 +26,7 @@ use futures::channel::mpsc::UnboundedSender;
 use kule_engine::{Step, Task};
 use serde::Serialize;
 
-pub use profile::{PROFILES, Profile, profile};
+pub use profile::{Launch, PROFILES, Profile, profile};
 
 /// Something the agent did, as the person watching sees it.
 #[derive(Debug, Clone, PartialEq, Serialize)]

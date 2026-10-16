@@ -114,14 +114,34 @@ kule status $TASK   # policy: passes on its own
 kule commit $TASK
 ```
 
-Which paths an agent needs (its login, state, temporary files) is what agent
-profiles in M2 will settle; for now they are flags.
+## M2: agents over ACP, and the desktop app
+
+`kule run $TASK --agent claude-code "prompt"` starts the agent over the
+Agent Client Protocol inside the sandbox. Its profile opens only the agent's
+own state and login; every tool call becomes a step (`kule steps $TASK`).
+
+`crates/kule-desktop` is a Tauri app around the same engine:
+
+- **Tasks**: pick a folder to make a task; each shows its changes and the
+  policy's verdict. Tasks waiting for approval collect under *Needs you*.
+- **Live**: the agent's answer, tool calls and what each changed, as they
+  come.
+- **Review**: the effect set and the ruling, with *Commit*, *Approve and
+  commit* or *Roll back*.
+- **Timeline**: commits (with undo), uncommitted steps, network connections
+  and sandbox refusals.
+
+```sh
+cargo run -p kule-desktop   # Linux needs libwebkit2gtk-4.1-dev
+```
 
 ## Not yet
 
 - Linux: Landlock reports refusals only to the audit log, so they are not
   listed; the command still gets EPERM. Network rules need Linux 6.7.
-- No approval inbox, no agent profiles, no desktop app (M2, M3).
+- Gemini and Codex profiles: Google no longer serves the Gemini CLI's
+  Code Assist login to third-party clients; Codex has no profile yet.
+- The engine runs inside the app; a daemon (and checkpoints on Lonca) is M3.
 
 ## License
 

@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Kule</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <aside class="sidebar">
+      <header class="brand">
+        <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true">
+          <rect x="10" y="7" width="12" height="6" rx="1.5" />
+          <rect x="14" y="13" width="4" height="12" />
+          <rect x="10" y="25" width="12" height="2.5" rx="1" />
+          <rect x="15.25" y="3" width="1.5" height="4" />
+        </svg>
+        <span class="brand-name">Kule</span>
+      </header>
+      <button id="new-task" class="button primary wide" type="button">New task…</button>
+      <section class="nav-section" id="inbox-section" hidden>
+        <h2 class="nav-title">Needs you</h2>
+        <ul class="task-list" id="inbox"></ul>
+      </section>
+      <section class="nav-section">
+        <h2 class="nav-title">Tasks</h2>
+        <ul class="task-list" id="tasks"></ul>
+        <p class="nav-empty" id="tasks-empty" hidden>No tasks yet.</p>
+      </section>
+    </aside>
+
+    <main class="main">
+      <section class="empty-state" id="empty">
+        <h1>A control room for coding agents</h1>
+        <p>
+          A task is a copy-on-write copy of a workspace. The agent works there, in a sandbox,
+          and nothing reaches your workspace until you commit what the policy lets through.
+        </p>
+        <button id="empty-new-task" class="button primary" type="button">Choose a workspace…</button>
+      </section>
+
+      <section class="task" id="task" hidden>
+        <header class="task-header">
+          <div class="task-title">
+            <h1 id="task-name"></h1>
+            <p class="path" id="task-path"></p>
+          </div>
+          <div class="task-meta">
+            <span class="chip" id="task-state"></span>
+            <button id="remove-task" class="button ghost danger" type="button">Delete task</button>
+          </div>
+        </header>
+        <nav class="tabs" role="tablist">
+          <button class="tab" role="tab" data-tab="live" type="button">Live</button>
+          <button class="tab" role="tab" data-tab="review" type="button">
+            Review <span class="tab-count" id="review-count" hidden></span>
+          </button>
+          <button class="tab" role="tab" data-tab="timeline" type="button">Timeline</button>
+        </nav>
+
+        <section class="panel" data-panel="live">
+          <div class="stream" id="stream" aria-live="polite"></div>
+          <form class="composer" id="composer">
+            <textarea
+              id="prompt"
+              rows="3"
+              placeholder="Tell the agent what to do. It works in the task's copy; you review before anything reaches the workspace."
+            ></textarea>
+            <div class="composer-bar">
+              <label class="agent-pick">
+                Agent
+                <select id="agent"></select>
+              </label>
+              <span class="hint" id="composer-hint"></span>
+              <button class="button primary" id="send" type="submit">Run</button>
+            </div>
+          </form>
+        </section>
+
+        <section class="panel" data-panel="review" hidden>
+          <div class="ruling" id="ruling"></div>
+          <div class="review-actions" id="review-actions"></div>
+          <div class="effects" id="effects"></div>
+        </section>
+
+        <section class="panel" data-panel="timeline" hidden>
+          <div class="timeline" id="timeline"></div>
+        </section>
+      </section>
+    </main>
+
+    <div class="toasts" id="toasts" aria-live="assertive"></div>
+    <script src="app.js"></script>
+  </body>
+</html>

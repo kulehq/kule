@@ -1,4 +1,3 @@
-use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
@@ -7,8 +6,8 @@ use std::time::Instant;
 use anyhow::{Context, Result, anyhow};
 use clap::{Parser, Subcommand};
 use kule_engine::{
-    Change, Connection, DEFAULT_POLICY, Denial, Effect, EffectSet, Error, GitSummary, Kind,
-    Network, Policy, Proxy, RefChange, Ruling, Sandbox, Task, Verdict, connections,
+    Change, Connection, DEFAULT_POLICY, Effect, EffectSet, Error, GitSummary, Kind, Network,
+    Policy, Proxy, RefChange, Ruling, Sandbox, Task, Verdict, connections, record_denials,
 };
 
 /// Kule engine: run commands in a sandbox on a copy-on-write copy of a
@@ -208,11 +207,8 @@ fn run() -> Result<ExitCode> {
             })?;
             let started = Instant::now();
             let logged_before = connections(&task)?.len();
-            let mut sandbox = Sandbox::for_task(&task)?;
-            profile.apply(&mut sandbox)?;
             let proxy = Proxy::start(&task, profile.open_hosts(load_policy(&home, &task)?)?)?;
-            sandbox.set_network(Network::Proxy(proxy.port()));
-            let command = sandbox.command(&profile.program().to_string_lossy(), &profile.args())?;
+            let kule_acp::Launch { command, sandbox } = profile.launch(&task, &proxy)?;
             let (tx, rx) = futures::channel::mpsc::unbounded();
             let runtime = tokio::runtime::Runtime::new()?;
             let printer = runtime.spawn(print_events(rx));
@@ -365,23 +361,6 @@ async fn print_events(mut rx: futures::channel::mpsc::UnboundedReceiver<kule_acp
             }
         }
     }
-}
-
-/// Appends the sandbox's refusals to the task's `sandbox.jsonl`.
-fn record_denials(task: &Task, denials: &[Denial]) -> Result<()> {
-    if denials.is_empty() {
-        return Ok(());
-    }
-    let path = task.copy().with_file_name("sandbox.jsonl");
-    let mut file = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path)
-        .with_context(|| format!("could not open {}", path.display()))?;
-    for denial in denials {
-        writeln!(file, "{}", serde_json::to_string(denial)?)?;
-    }
-    Ok(())
 }
 
 /// The connections a command made, grouped by host, port and outcome.
