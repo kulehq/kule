@@ -427,6 +427,31 @@ fn undo_refuses_to_remove_a_directory_holding_unknown_files() {
     assert!(s.work().join("docs/human-notes.md").exists());
 }
 
+/// A rollback makes a person's file known to the baseline; undo must still
+/// not take it away with the directory the commit created.
+#[test]
+fn undo_keeps_a_persons_file_the_baseline_knows_from_a_rollback() {
+    let s = Setup::new();
+    write(&s.copy().join("docs/guide.md"), "# Guide\n");
+    s.task.commit().unwrap();
+    write(&s.work().join("docs/notes.md"), "a person's notes\n");
+    write(
+        &s.copy().join("docs/notes.md"),
+        "the agent's notes, longer\n",
+    );
+    assert!(matches!(s.task.commit(), Err(Error::Conflict(_))));
+    s.task.rollback().unwrap();
+
+    match s.task.undo() {
+        Err(Error::Conflict(paths)) => assert_eq!(paths, ["docs"]),
+        other => panic!("expected a conflict, got {other:?}"),
+    }
+    assert_eq!(
+        fs::read_to_string(s.work().join("docs/notes.md")).unwrap(),
+        "a person's notes\n"
+    );
+}
+
 #[test]
 fn type_changes_commit_and_roll_back() {
     let s = Setup::new();

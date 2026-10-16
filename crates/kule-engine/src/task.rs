@@ -192,8 +192,32 @@ impl Task {
     ) -> Result<Option<Checkpoint>> {
         let _lock = self.lock()?;
         let mut baseline = self.load_baseline()?;
-        let set =
-            effects::compute(&self.copy(), self.workspace(), &baseline)?.to_commit(include_ignored);
+        let all = effects::compute(&self.copy(), self.workspace(), &baseline)?;
+        let mut set = all.to_commit(include_ignored);
+        // A directory the commit removes (deletes, or replaces with a file)
+        // takes the ignored paths under it with it: they go through the
+        // conflict check and into the checkpoint like the rest, or undo
+        // could not bring them back.
+        let removed: Vec<String> = set
+            .effects
+            .iter()
+            .filter(|e| {
+                let was_dir = baseline
+                    .entries
+                    .get(&e.path)
+                    .is_some_and(|entry| entry.work.kind == Kind::Dir);
+                was_dir && (e.change == Change::Deleted || e.kind != Kind::Dir)
+            })
+            .map(|e| format!("{}/", e.path))
+            .collect();
+        if !include_ignored && !removed.is_empty() {
+            set.effects.extend(
+                all.ignored()
+                    .filter(|e| removed.iter().any(|dir| e.path.starts_with(dir.as_str())))
+                    .cloned(),
+            );
+            set.effects.sort_by(|a, b| a.path.cmp(&b.path));
+        }
         if set.is_empty() {
             return Ok(None);
         }
@@ -333,7 +357,10 @@ impl Task {
             let now = Stamp::of(&self.workspace().join(path))?;
             let removes_dir = matches!(&now, Some(s) if s.kind == Kind::Dir)
                 && Stamp::of(&before.join(path))?.is_none_or(|s| s.kind != Kind::Dir);
-            if !untouched || (removes_dir && self.has_unknown_under(path, baseline)?) {
+            // Only what this commit put there may go with the directory;
+            // anything else (a person's file, even one a rollback made known
+            // to the baseline) is not in `before` and would be lost.
+            if !untouched || (removes_dir && self.has_other_than(path, paths)?) {
                 conflicts.push(path.clone());
             }
         }
@@ -409,19 +436,34 @@ impl Task {
     /// Whether the workspace has entries under `path` that the baseline does
     /// not know: replacing or deleting the directory would destroy them.
     fn has_unknown_under(&self, path: &str, baseline: &Baseline) -> Result<bool> {
+        self.any_under(path, |rel| !baseline.entries.contains_key(rel))
+    }
+
+    /// Whether the workspace has entries under `path` other than `paths`.
+    fn has_other_than(&self, path: &str, paths: &[String]) -> Result<bool> {
+        let listed: std::collections::BTreeSet<&str> = paths.iter().map(String::as_str).collect();
+        self.any_under(path, |rel| !listed.contains(rel))
+    }
+
+    /// Whether any workspace entry under directory `path` (by its relative
+    /// path) is `wanted`. Entries that vanish during the walk are skipped.
+    fn any_under(&self, path: &str, wanted: impl Fn(&str) -> bool) -> Result<bool> {
         let root = self.workspace().join(path);
         if Stamp::of(&root)?.is_none_or(|s| s.kind != Kind::Dir) {
             return Ok(false);
         }
         for entry in WalkDir::new(&root).min_depth(1).follow_links(false) {
-            let entry = entry.map_err(|e| Error::Io {
-                path: e.path().unwrap_or(&root).to_path_buf(),
-                source: e.into(),
-            })?;
-            if !baseline
-                .entries
-                .contains_key(&relative(self.workspace(), entry.path())?)
-            {
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(e) if crate::manifest::vanished(&e) => continue,
+                Err(e) => {
+                    return Err(Error::Io {
+                        path: e.path().unwrap_or(&root).to_path_buf(),
+                        source: e.into(),
+                    });
+                }
+            };
+            if wanted(&relative(self.workspace(), entry.path())?) {
                 return Ok(true);
             }
         }

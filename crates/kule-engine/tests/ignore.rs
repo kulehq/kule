@@ -178,3 +178,53 @@ fn undo_leaves_uncommitted_ignored_paths_alone_and_refuses_to_overwrite_them() {
     }
     assert_eq!(fs::read_to_string(s.copy(".env")).unwrap(), "A=2\n");
 }
+
+/// A repository with `pkg/a.rs` tracked and an ignored `pkg/.env` beside it.
+fn with_package() -> Setup {
+    let (home, ws) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+    write(&ws.path().join(".gitignore"), ".env\n");
+    write(&ws.path().join("pkg/a.rs"), "fn a() {}\n");
+    write(&ws.path().join("pkg/.env"), "SECRET=1\n");
+    git(ws.path(), &["init", "-q"]);
+    git(ws.path(), &["add", ".gitignore", "pkg/a.rs"]);
+    git(ws.path(), &["commit", "-q", "-m", "start"]);
+    let task = Task::create(home.path(), ws.path()).unwrap();
+    Setup {
+        _home: home,
+        ws,
+        task,
+    }
+}
+
+#[test]
+fn deleting_a_directory_takes_its_ignored_files_into_the_checkpoint() {
+    let s = with_package();
+    fs::remove_dir_all(s.copy("pkg")).unwrap();
+    let checkpoint = s.task.commit().unwrap().unwrap();
+    let paths: Vec<&str> = checkpoint.effects.iter().map(|e| e.path.as_str()).collect();
+    assert_eq!(paths, ["pkg", "pkg/.env", "pkg/a.rs"]);
+    assert!(!s.work("pkg").exists());
+    assert!(s.marked().is_empty());
+
+    s.task.undo().unwrap().unwrap();
+    assert_eq!(
+        fs::read_to_string(s.work("pkg/.env")).unwrap(),
+        "SECRET=1\n"
+    );
+    assert_eq!(
+        fs::read_to_string(s.work("pkg/a.rs")).unwrap(),
+        "fn a() {}\n"
+    );
+}
+
+#[test]
+fn deleting_a_directory_does_not_take_a_persons_later_edit_to_an_ignored_file() {
+    let s = with_package();
+    write(&s.work("pkg/.env"), "SECRET=changed by a person, longer\n");
+    fs::remove_dir_all(s.copy("pkg")).unwrap();
+    match s.task.commit() {
+        Err(Error::Conflict(paths)) => assert_eq!(paths, ["pkg/.env"]),
+        other => panic!("expected a conflict, got {other:?}"),
+    }
+    assert!(s.work("pkg/.env").exists());
+}
