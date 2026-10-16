@@ -545,6 +545,43 @@ fn a_task_can_be_made_while_files_churn() {
     }
 }
 
+/// A file someone keeps writing while the task is made (an editor saving
+/// over and over) may be copied mid-stream. Whatever the copy got, a change
+/// the task makes to that file must not overwrite the human's later writes.
+#[test]
+fn a_file_written_during_creation_conflicts_if_the_task_changes_it() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let home = TempDir::new().unwrap();
+    let ws = TempDir::new().unwrap();
+    fixture(ws.path());
+    let busy = ws.path().join("busy.txt");
+    write(&busy, "0\n");
+    let stop = Arc::new(AtomicBool::new(false));
+    let writer = {
+        let (busy, stop) = (busy.clone(), stop.clone());
+        std::thread::spawn(move || {
+            let mut i = 0u64;
+            while !stop.load(Ordering::Relaxed) {
+                i += 1;
+                let _ = fs::write(&busy, format!("{i}\n"));
+            }
+        })
+    };
+    let task = Task::create(home.path(), ws.path());
+    stop.store(true, Ordering::Relaxed);
+    writer.join().unwrap();
+    let task = task.unwrap();
+
+    write(&task.copy().join("busy.txt"), "agent\n");
+    match task.commit() {
+        Err(Error::Conflict(paths)) => assert_eq!(paths, ["busy.txt"]),
+        other => panic!("expected a conflict, got {other:?}"),
+    }
+    assert_ne!(fs::read_to_string(&busy).unwrap(), "agent\n");
+}
+
 #[test]
 fn a_held_lock_turns_writers_away() {
     let s = Setup::new();

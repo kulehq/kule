@@ -23,8 +23,13 @@ use crate::manifest::{Kind, Stamp, Tree, relative, vanished};
 /// Other processes may write to `src` meanwhile (an IDE, git maintenance).
 /// An entry is cloned again until its stamp is the same before and after,
 /// and one that disappears is left out. The copy is then not one moment of
-/// `src`, but every entry holds exactly what its returned stamp describes,
-/// and that is what conflict checks compare against later.
+/// `src`, but every entry holds what its returned stamp describes, and that
+/// is what conflict checks compare against later.
+///
+/// An entry that never holds still gets its last clone and the stamp from
+/// before that clone. The workspace has moved past that stamp, so if the
+/// task changes the entry, commit reports a conflict instead of
+/// overwriting; if it does not, nothing happens to it.
 pub fn clone_tree(src: &Path, dst: &Path) -> Result<Tree> {
     const ATTEMPTS: usize = 5;
     fs::create_dir(dst).at(dst)?;
@@ -48,7 +53,7 @@ pub fn clone_tree(src: &Path, dst: &Path) -> Result<Tree> {
         let rel = relative(src, entry.path())?;
         let to = dst.join(&rel);
         let mut stable = None;
-        for _ in 0..ATTEMPTS {
+        for attempt in 1..=ATTEMPTS {
             let Some(before) = Stamp::of(entry.path())? else {
                 break;
             };
@@ -71,22 +76,18 @@ pub fn clone_tree(src: &Path, dst: &Path) -> Result<Tree> {
                     stable = Some(before);
                     break;
                 }
+                Some(_) if attempt == ATTEMPTS => {
+                    stable = Some(before);
+                    break;
+                }
                 _ => remove(&to)?,
             }
         }
-        match stable {
-            Some(stamp) => {
-                if stamp.kind == Kind::Dir {
-                    dirs.push((to, stamp.clone()));
-                }
-                taken.insert(rel, stamp);
+        if let Some(stamp) = stable {
+            if stamp.kind == Kind::Dir {
+                dirs.push((to, stamp.clone()));
             }
-            None if Stamp::of(entry.path())?.is_some() => {
-                return Err(Error::Invalid(format!(
-                    "{rel} kept changing while Kule copied it; try again"
-                )));
-            }
-            None => {}
+            taken.insert(rel, stamp);
         }
     }
     for (dir, stamp) in dirs.iter().rev() {
