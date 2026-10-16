@@ -187,7 +187,9 @@ fn stopping_the_proxy_withdraws_its_questions() {
         start.elapsed()
     );
     assert!(approvals.waiting().is_empty());
-    assert!(client.join().unwrap().contains("403"));
+    // The client hears the refusal, or the cut if that comes first.
+    let reply = client.join().unwrap();
+    assert!(!reply.contains("200"), "{reply}");
     assert_eq!(s.answers(), [Some(Answer::Denied)]);
 }
 
