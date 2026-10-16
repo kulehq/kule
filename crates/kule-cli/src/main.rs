@@ -28,6 +28,9 @@ enum Cmd {
     New { workspace: PathBuf },
     /// List tasks.
     List,
+    /// Open your shell in the task's copy, outside the sandbox. What you
+    /// change there is reviewed and committed like the agent's work.
+    Shell { task: String },
     /// Print the path of a task's copy.
     Path { task: String },
     /// Run a command inside the task's copy, in the sandbox, then show what
@@ -131,6 +134,25 @@ fn run() -> Result<ExitCode> {
             for info in Task::list(&home)? {
                 println!("{}  {}", info.id, info.workspace.display());
             }
+        }
+        Cmd::Shell { task } => {
+            let task = Task::open(&home, &task)?;
+            let shell = std::env::var_os("SHELL").unwrap_or_else(|| "/bin/sh".into());
+            eprintln!(
+                "kule: in task {}'s copy, outside the sandbox; exit to come back",
+                task.id()
+            );
+            let status = Command::new(&shell)
+                .current_dir(task.copy())
+                .env("KULE_TASK", task.id())
+                .status()
+                .with_context(|| format!("could not start {}", shell.to_string_lossy()))?;
+            print_set(&task.effects()?);
+            return Ok(match status.code() {
+                Some(0) => ExitCode::SUCCESS,
+                Some(code) => ExitCode::from(code.clamp(1, 255) as u8),
+                None => ExitCode::FAILURE,
+            });
         }
         Cmd::Path { task } => println!("{}", Task::open(&home, &task)?.copy().display()),
         Cmd::Exec {

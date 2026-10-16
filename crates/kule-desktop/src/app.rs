@@ -180,6 +180,11 @@ impl App {
         })
     }
 
+    /// Where the task's copy is, for the person's own terminal.
+    pub fn copy_of(&self, id: &str) -> Result<PathBuf> {
+        Ok(self.open(id)?.copy())
+    }
+
     /// Deletes the task and its copy; the workspace is not touched.
     pub fn remove(&self, id: &str) -> Result<()> {
         self.idle(id)?.remove().map_err(text)

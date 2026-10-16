@@ -3,6 +3,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod app;
+mod terminal;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -72,6 +73,11 @@ fn remove_task(kule: Kule<'_>, task: String) -> Result<()> {
     kule.remove(&task)
 }
 
+#[tauri::command(async)]
+fn open_terminal(kule: Kule<'_>, task: String) -> Result<()> {
+    terminal::open(&kule.copy_of(&task)?)
+}
+
 /// One event of a run, for the window's `run` listener.
 #[derive(Clone, Serialize)]
 struct RunMessage {
@@ -121,6 +127,7 @@ fn main() {
             undo,
             timeline,
             remove_task,
+            open_terminal,
             start_run,
         ])
         .run(tauri::generate_context!())

@@ -644,6 +644,16 @@ async function newTask() {
   }
 }
 
+async function openTerminal() {
+  const task = currentTask();
+  if (!task) return;
+  try {
+    await call("open_terminal", { task: task.id });
+  } catch (err) {
+    fail(err);
+  }
+}
+
 async function removeTask() {
   const task = currentTask();
   if (!task) return;
@@ -662,6 +672,7 @@ async function removeTask() {
 
 async function start() {
   $("new-task").addEventListener("click", newTask);
+  $("open-terminal").addEventListener("click", openTerminal);
   $("empty-new-task").addEventListener("click", newTask);
   $("composer").addEventListener("submit", submitPrompt);
   $("prompt").addEventListener("keydown", (e) => {
