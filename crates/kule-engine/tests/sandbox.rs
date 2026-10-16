@@ -165,6 +165,35 @@ fn sandbox_python(sandbox: &Sandbox, script: &str) -> Output {
         .unwrap()
 }
 
+/// Tokens and agent sockets in the person's environment stay out; what
+/// tools need to find themselves goes in, and what is passed on purpose.
+#[test]
+fn only_the_environment_tools_need_reaches_a_command() {
+    let s = Setup::new();
+    let (secret, passed) = (
+        format!("KULE_TEST_SECRET_{}", std::process::id()),
+        format!("KULE_TEST_PASSED_{}", std::process::id()),
+    );
+    // SAFETY: the names are this test's own; no other thread reads them.
+    unsafe {
+        std::env::set_var(&secret, "hunter2");
+        std::env::set_var(&passed, "on purpose");
+    }
+    let mut sandbox = s.sandbox();
+    sandbox.pass_env(&passed);
+    let out = sh(&sandbox, "env");
+    let env = text(&out);
+    assert!(ok(&out), "{out:?}");
+    assert!(!env.contains("hunter2"), "{env}");
+    assert!(env.contains(&format!("{passed}=on purpose")), "{env}");
+    for name in ["PATH=", "HOME="] {
+        assert!(
+            env.lines().any(|l| l.starts_with(name)),
+            "{name} missing: {env}"
+        );
+    }
+}
+
 /// No controlling terminal: nothing in the sandbox can push keystrokes into
 /// the person's terminal, and its process group can be stopped as one.
 #[test]

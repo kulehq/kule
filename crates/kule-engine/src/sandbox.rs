@@ -22,6 +22,55 @@ use crate::error::{Error, IoContext, Result};
 use crate::task::Task;
 
 /// Credentials and keys that commands in a task never get to read.
+/// Environment variables passed on to everything the sandbox runs: what
+/// shells and toolchains need to find themselves, and the person's locale
+/// and terminal settings. Nothing that carries a credential or a socket.
+pub const PASSED_ENV: &[&str] = &[
+    "PATH",
+    "HOME",
+    "USER",
+    "LOGNAME",
+    "SHELL",
+    "LANG",
+    "LANGUAGE",
+    "TZ",
+    "TERM",
+    "COLORTERM",
+    "NO_COLOR",
+    "FORCE_COLOR",
+    "EDITOR",
+    "PAGER",
+    "__CF_USER_TEXT_ENCODING",
+    "XDG_CONFIG_HOME",
+    "XDG_DATA_HOME",
+    "XDG_CACHE_HOME",
+    "XDG_STATE_HOME",
+    "CARGO_HOME",
+    "RUSTUP_HOME",
+    "RUSTUP_TOOLCHAIN",
+    "GOPATH",
+    "GOROOT",
+    "JAVA_HOME",
+    "NVM_DIR",
+    "NVM_BIN",
+    "PNPM_HOME",
+    "VOLTA_HOME",
+    "PYENV_ROOT",
+    "VIRTUAL_ENV",
+    "CONDA_PREFIX",
+    "DOTNET_ROOT",
+    "ANDROID_HOME",
+    "SDKROOT",
+    "DEVELOPER_DIR",
+    "HOMEBREW_PREFIX",
+    "HOMEBREW_CELLAR",
+    "HOMEBREW_REPOSITORY",
+];
+
+fn passes(name: &str) -> bool {
+    PASSED_ENV.contains(&name) || name.starts_with("LC_")
+}
+
 const HIDDEN_IN_HOME: &[&str] = &[
     ".ssh",
     ".aws",
@@ -68,6 +117,8 @@ pub struct Sandbox {
     writable: Vec<PathBuf>,
     hidden: Vec<PathBuf>,
     network: Network,
+    /// Environment variables passed on beyond [`PASSED_ENV`].
+    passed_env: Vec<String>,
     /// Marks this sandbox's refusals where the platform reports them (macOS).
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     tag: String,
@@ -100,6 +151,7 @@ impl Sandbox {
             // the daemon's token are none of a task's business.
             hidden: vec![real_or_planned(&task.home())?],
             network: Network::Allow,
+            passed_env: Vec::new(),
             tag: format!("kule-{}-{nanos:x}", task.id()),
         })
     }
@@ -161,6 +213,13 @@ impl Sandbox {
         self.network = network;
     }
 
+    /// Passes environment variable `name` on to what the sandbox runs, such
+    /// as an agent's own API key; others are left out but for the few tools
+    /// need (see [`PASSED_ENV`]).
+    pub fn pass_env(&mut self, name: &str) {
+        self.passed_env.push(name.to_owned());
+    }
+
     /// Everything the sandbox lets commands write to.
     pub fn writable(&self) -> Vec<&Path> {
         [&self.copy, &self.tmp]
@@ -192,6 +251,16 @@ impl Sandbox {
                 }
                 Ok(())
             });
+        }
+        // Only what tools need to find themselves and the person's
+        // settings, and what was passed on purpose: tokens and agent sockets
+        // in the environment (GITHUB_TOKEN, AWS_*, SSH_AUTH_SOCK) stay out.
+        command.env_clear();
+        for (name, value) in std::env::vars_os() {
+            let Some(text) = name.to_str() else { continue };
+            if passes(text) || self.passed_env.iter().any(|p| p == text) {
+                command.env(&name, value);
+            }
         }
         command.current_dir(&self.copy).env("TMPDIR", &self.tmp);
         if let Network::Proxy(port) = self.network {

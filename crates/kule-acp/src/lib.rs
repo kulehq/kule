@@ -80,18 +80,26 @@ pub async fn run(
     events: UnboundedSender<Event>,
 ) -> Result<String, Error> {
     let log = task.copy().with_file_name("agent.log");
-    let stderr = std::fs::OpenOptions::new()
+    let log = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
         .open(&log)
         .map_err(error)?;
+    // Through a pipe, not the file itself: the log sits in Kule's home,
+    // which the sandbox hides, and the agent must not hold it open.
     let mut child = async_process::Command::from(agent)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::from(stderr))
+        .stderr(Stdio::piped())
         .kill_on_drop(true)
         .spawn()
         .map_err(|e| Error(format!("could not start the agent: {e}")))?;
+    if let Some(stderr) = child.stderr.take() {
+        std::thread::spawn(move || {
+            let mut log = futures::io::AllowStdIo::new(log);
+            let _ = futures::executor::block_on(futures::io::copy(stderr, &mut log));
+        });
+    }
     // The sandbox starts the agent in a session of its own; when the run
     // ends, however it ends, everything the agent left running in it goes
     // too, so nothing keeps changing the copy behind the person's review.

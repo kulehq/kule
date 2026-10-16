@@ -22,6 +22,9 @@ pub struct Profile {
     pub reveal_on_macos: &'static [&'static str],
     /// Environment variables the agent is started with.
     pub env: &'static [(&'static str, &'static str)],
+    /// The person's environment variables the agent may see: its own
+    /// credentials, when it signs in by key. Others stay out.
+    pub pass_env: &'static [&'static str],
     /// HTTPS hosts the agent needs for its login and model, beyond what the
     /// policy already lets through. Open only while this agent runs.
     pub hosts: &'static [&'static str],
@@ -34,6 +37,11 @@ pub const PROFILES: &[Profile] = &[
         state: &[".claude", ".claude.json", ".local/state/claude"],
         reveal_on_macos: &["Library/Keychains"],
         env: &[],
+        pass_env: &[
+            "ANTHROPIC_API_KEY",
+            "ANTHROPIC_AUTH_TOKEN",
+            "CLAUDE_CODE_OAUTH_TOKEN",
+        ],
         hosts: &[],
     },
     Profile {
@@ -46,6 +54,7 @@ pub const PROFILES: &[Profile] = &[
         // ~/.gemini needs no more than the state above. Save the API key
         // once with `GEMINI_FORCE_FILE_STORAGE=true gemini` and `/auth`.
         env: &[("GEMINI_FORCE_FILE_STORAGE", "true")],
+        pass_env: &["GEMINI_API_KEY", "GOOGLE_API_KEY"],
         // With an API key it talks to the public API, which the policy lets
         // through. Google no longer serves its Code Assist sign-in to
         // clients like this one.
@@ -65,6 +74,7 @@ pub const PROFILES: &[Profile] = &[
         state: &[".codex"],
         reveal_on_macos: &[],
         env: &[],
+        pass_env: &["OPENAI_API_KEY", "CODEX_HOME"],
         // A ChatGPT sign-in refreshes its token at auth.openai.com and
         // reaches the model through chatgpt.com, not the public API.
         hosts: &["auth.openai.com", "chatgpt.com"],
@@ -92,6 +102,9 @@ impl Profile {
             for path in self.reveal_on_macos {
                 sandbox.reveal(&home.join(path))?;
             }
+        }
+        for name in self.pass_env {
+            sandbox.pass_env(name);
         }
         Ok(())
     }

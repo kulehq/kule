@@ -50,6 +50,11 @@ enum Cmd {
         /// as ~/Library/Keychains for an agent's own login (repeatable).
         #[arg(long, value_name = "PATH")]
         reveal: Vec<PathBuf>,
+        /// Pass environment variable NAME on to the command (repeatable). Only
+        /// what tools need to find themselves is passed otherwise; tokens
+        /// and agent sockets in the environment stay out.
+        #[arg(long = "pass-env", value_name = "NAME")]
+        pass_env: Vec<String>,
         /// Shut TCP networking for the command, localhost included.
         #[arg(long, conflicts_with = "open_network")]
         no_network: bool,
@@ -171,6 +176,7 @@ fn run() -> Result<ExitCode> {
             allow_write,
             hide,
             reveal,
+            pass_env,
             no_network,
             open_network,
             no_sandbox,
@@ -196,6 +202,9 @@ fn run() -> Result<ExitCode> {
                 }
                 for path in &reveal {
                     sandbox.reveal(path)?;
+                }
+                for name in &pass_env {
+                    sandbox.pass_env(name);
                 }
                 let network = if no_network {
                     Network::Deny
