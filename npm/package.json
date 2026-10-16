@@ -1,0 +1,14 @@
+{
+  "name": "kule",
+  "version": "0.0.1",
+  "description": "Kule: a control room for coding agents. Every command runs as a transaction in a sandboxed copy-on-write copy, judged by policy before it reaches the workspace.",
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/kulehq/kule",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kulehq/kule.git",
+    "directory": "npm"
+  },
+  "keywords": ["agents", "sandbox", "transactions", "policy", "claude-code", "codex"],
+  "files": ["README.md"]
+}

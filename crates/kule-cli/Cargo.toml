@@ -1,11 +1,14 @@
 [package]
-name = "kule-cli"
-description = "Command-line front end for the Kule engine"
+name = "kule"
+description = "A control room for coding agents: every command runs as a transaction in a sandboxed copy-on-write copy, judged by policy before it reaches the workspace"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
+readme = "../../README.md"
+keywords = ["agents", "sandbox", "transactions", "policy", "cli"]
+categories = ["command-line-utilities", "development-tools"]
 
 [[bin]]
 name = "kule"
@@ -14,5 +17,5 @@ path = "src/main.rs"
 [dependencies]
 anyhow.workspace = true
 clap.workspace = true
-kule-engine = { path = "../kule-engine" }
+kule-engine = { version = "0.0.1", path = "../kule-engine" }
 serde_json.workspace = true
