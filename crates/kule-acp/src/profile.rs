@@ -8,7 +8,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use kule_engine::{Network, Policy, Proxy, Result, Sandbox, Task};
+use kule_engine::{Kept, Network, Policy, Proxy, Result, Sandbox, Task};
 
 #[derive(Debug, Clone, Copy)]
 pub struct Profile {
@@ -151,6 +151,7 @@ impl Profile {
         let mut sandbox = Sandbox::for_task(task)?;
         self.apply(&mut sandbox)?;
         sandbox.set_network(Network::Proxy(proxy.port()));
+        let kept = sandbox.keep_protected()?;
         let mut command = sandbox.command(&self.program().to_string_lossy(), &self.args())?;
         command.envs(self.env.iter().copied());
         // Started from the task's tmp, not the copy: `npx` would otherwise
@@ -160,6 +161,7 @@ impl Profile {
         Ok(Launch {
             command,
             sandbox,
+            kept,
             mode: self.mode,
         })
     }
@@ -170,6 +172,9 @@ impl Profile {
 pub struct Launch {
     pub command: Command,
     pub sandbox: Sandbox,
+    /// The agent's settings, to put back once it is gone where the sandbox
+    /// could not keep them read-only.
+    pub kept: Kept,
     /// The session mode to ask for (see [`Profile::mode`]).
     pub mode: Option<&'static str>,
 }

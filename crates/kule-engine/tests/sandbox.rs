@@ -167,7 +167,9 @@ fn sandbox_python(sandbox: &Sandbox, script: &str) -> Output {
 
 /// An agent's own settings sit inside its writable state; where they name
 /// hooks or MCP servers that run outside the sandbox later, they stay
-/// readable but not writable.
+/// readable but not writable. Landlock cannot refuse the write without
+/// refusing new files next to them too, so on Linux they are put back
+/// after the run.
 #[test]
 fn a_protected_file_inside_a_writable_directory_stays_read_only() {
     let s = Setup::new();
@@ -177,6 +179,7 @@ fn a_protected_file_inside_a_writable_directory_stays_read_only() {
     let mut sandbox = s.sandbox();
     sandbox.allow_write(&state).unwrap();
     sandbox.protect(&state.join("settings.json")).unwrap();
+    let kept = sandbox.keep_protected().unwrap();
 
     let out = sh(
         &sandbox,
@@ -194,11 +197,45 @@ fn a_protected_file_inside_a_writable_directory_stays_read_only() {
             state.display()
         ),
     );
-    assert!(!ok(&out));
+    let restored = kept.restore().unwrap();
+    if cfg!(target_os = "macos") {
+        assert!(!ok(&out));
+        assert!(restored.is_empty());
+    } else {
+        assert_eq!(
+            restored,
+            [fs::canonicalize(state.join("settings.json")).unwrap()]
+        );
+    }
     assert_eq!(
         fs::read_to_string(state.join("settings.json")).unwrap(),
         "{}\n"
     );
+    assert_eq!(
+        fs::read_to_string(state.join("session.json")).unwrap(),
+        "session\n"
+    );
+}
+
+/// A protected path the agent's state names on its own, like a settings
+/// file in the home directory, is never writable.
+#[test]
+fn a_protected_writable_root_stays_read_only() {
+    let s = Setup::new();
+    let settings = s.outside().join("agent.json");
+    fs::write(&settings, "{}\n").unwrap();
+    let mut sandbox = s.sandbox();
+    sandbox.allow_write(&settings).unwrap();
+    sandbox.protect(&settings).unwrap();
+    let kept = sandbox.keep_protected().unwrap();
+
+    let out = sh(
+        &sandbox,
+        &format!("echo '{{}}{{}}' > '{}'", settings.display()),
+    );
+    assert!(!ok(&out), "{out:?}");
+    assert!(kept.restore().unwrap().is_empty());
+    assert_eq!(fs::read_to_string(&settings).unwrap(), "{}\n");
 }
 
 /// Tokens and agent sockets in the person's environment stay out; what

@@ -6,8 +6,8 @@ use std::time::Instant;
 use anyhow::{Context, Result, anyhow};
 use clap::{Parser, Subcommand};
 use kule_engine::{
-    Change, Connection, DEFAULT_POLICY, Effect, EffectSet, Error, GitSummary, Kind, Network,
-    Policy, Proxy, RefChange, Ruling, Sandbox, Task, Verdict, connections, record_denials,
+    Change, Connection, DEFAULT_POLICY, Denial, Effect, EffectSet, Error, GitSummary, Kind,
+    Network, Policy, Proxy, RefChange, Ruling, Sandbox, Task, Verdict, connections, record_denials,
 };
 
 /// Kule engine: run commands in a sandbox on a copy-on-write copy of a
@@ -273,6 +273,7 @@ fn run() -> Result<ExitCode> {
             let kule_acp::Launch {
                 command,
                 sandbox,
+                kept,
                 mode,
             } = profile.launch(&task, &proxy)?;
             let (tx, rx) = futures::channel::mpsc::unbounded();
@@ -280,6 +281,8 @@ fn run() -> Result<ExitCode> {
             let printer = runtime.spawn(print_events(rx));
             let outcome = runtime.block_on(kule_acp::run(&task, command, &prompt, mode, tx));
             let _ = runtime.block_on(printer);
+            // The agent's process group is gone by now.
+            let put_back = kept.restore()?;
             outcome.map_err(|e| {
                 anyhow!(
                     "{e} (see {})",
@@ -298,6 +301,11 @@ fn run() -> Result<ExitCode> {
                         d.operation, d.path, d.process
                     );
                 }
+            }
+            let put_back: Vec<Denial> = put_back.iter().map(|p| Denial::put_back(p)).collect();
+            record_denials(&task, &put_back)?;
+            for d in &put_back {
+                println!("sandbox: the agent changed {}; Kule put it back", d.path);
             }
             print_ruling(&load_policy(&home, &task)?.judge(&task.effects()?.to_commit(false)));
         }

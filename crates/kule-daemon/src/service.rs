@@ -422,17 +422,20 @@ impl Service {
         let outcome =
             runtime.block_on(kule_acp::run(task, launch.command, prompt, launch.mode, tx));
         let _ = runtime.block_on(forward);
+        // The agent's process group is gone by now.
+        let put_back = launch.kept.restore().map_err(text)?;
         outcome.map_err(|e| {
             format!(
                 "{e} (see {})",
                 task.copy().with_file_name("agent.log").display()
             )
         })?;
-        let refused = launch
+        let mut refused = launch
             .sandbox
             .denials(started.elapsed())
             .map_err(text)?
             .unwrap_or_default();
+        refused.extend(put_back.iter().map(|p| Denial::put_back(p)));
         record_denials(task, &refused).map_err(text)?;
         Ok(refused)
     }

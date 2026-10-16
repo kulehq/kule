@@ -19,6 +19,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, IoContext, Result};
+use crate::protect::Kept;
 use crate::task::Task;
 
 /// Credentials and keys that commands in a task never get to read.
@@ -136,6 +137,18 @@ pub struct Denial {
     pub path: String,
 }
 
+impl Denial {
+    /// A protected path the command changed, which Kule put back after the
+    /// run (see [`Sandbox::keep_protected`]).
+    pub fn put_back(path: &Path) -> Denial {
+        Denial {
+            process: "kule".to_owned(),
+            operation: "file-write (put back)".to_owned(),
+            path: path.display().to_string(),
+        }
+    }
+}
+
 impl Sandbox {
     /// Writes only to the task's copy and temporary directory, network
     /// allowed; hidden is only Kule's home, apart from that copy and tmp.
@@ -203,6 +216,24 @@ impl Sandbox {
     pub fn protect(&mut self, path: &Path) -> Result<()> {
         self.protected.push(real_or_planned(path)?);
         Ok(())
+    }
+
+    /// Notes the protected paths this platform cannot keep read-only, to be
+    /// put back when the run is over: on Linux, those inside a writable
+    /// directory (see [`Kept`]). Call it before the command starts, and
+    /// restore once everything it started is gone.
+    pub fn keep_protected(&self) -> Result<Kept> {
+        let writable = self.writable();
+        let paths = self
+            .protected
+            .iter()
+            .filter(|p| {
+                cfg!(target_os = "linux")
+                    && writable.iter().any(|root| p.starts_with(root) && p != root)
+            })
+            .cloned()
+            .collect();
+        Kept::new(paths)
     }
 
     /// Hides `path` from reading and writing. A path that does not exist yet
@@ -581,10 +612,17 @@ impl Sandbox {
         // Writable roots are carved the same way: an allowance for a
         // directory would otherwise reach a hidden path inside it. The cost
         // is that nothing new can be created directly in such a directory,
-        // only inside its existing children.
-        let writable = self.protected.iter().fold(
-            carve_all(self.writable().into_iter().map(Path::to_path_buf).collect()),
-            |roots, protected| carve(roots, protected),
+        // only inside its existing children. Protected paths are not carved,
+        // for that very cost: an agent writes its state next to its
+        // settings. A protected path that is a writable root, or holds one,
+        // stays read-only; one inside a writable directory is put back after
+        // the run instead (`keep_protected`).
+        let writable = carve_all(
+            self.writable()
+                .into_iter()
+                .filter(|root| !self.protected.iter().any(|p| root.starts_with(p)))
+                .map(Path::to_path_buf)
+                .collect(),
         );
         let devices = [
             "/dev/null",
