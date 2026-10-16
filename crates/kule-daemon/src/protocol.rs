@@ -22,6 +22,10 @@ pub struct Hello {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Request {
     pub id: u64,
+    /// The daemon's token (see `token_path`); requests without it are
+    /// refused.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token: Option<String>,
     #[serde(flatten)]
     pub call: Call,
 }

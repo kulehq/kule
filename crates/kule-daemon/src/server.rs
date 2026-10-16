@@ -4,6 +4,7 @@
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::os::fd::AsRawFd;
+use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
@@ -33,6 +34,7 @@ pub fn run(home: &Path, idle_after: Duration) -> io::Result<()> {
     fs::create_dir_all(home)?;
     fs::set_permissions(home, fs::Permissions::from_mode(0o700))?;
     let _lock = lock(&home.join("kuled.lock"))?;
+    let token = new_token(home)?;
     let socket = socket_path(home);
     let listener = bind(&socket)?;
     serve(
@@ -40,17 +42,49 @@ pub fn run(home: &Path, idle_after: Duration) -> io::Result<()> {
         Arc::new(Service::new(home.to_owned())),
         &socket,
         idle_after,
+        token,
     );
     Ok(())
 }
 
+/// Where the daemon keeps the token every request must carry.
+pub fn token_path(home: &Path) -> PathBuf {
+    home.join("kuled.token")
+}
+
+/// Makes a fresh token and writes it, readable by its owner only, to
+/// [`token_path`]. The sandbox hides Kule's home, so a task can reach the
+/// socket (Linux has no rule against that) but not speak to the daemon.
+pub fn new_token(home: &Path) -> io::Result<String> {
+    let mut bytes = [0u8; 32];
+    File::open("/dev/urandom")?.read_exact(&mut bytes)?;
+    let token: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+    let path = token_path(home);
+    let _ = fs::remove_file(&path);
+    let mut file = OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .mode(0o600)
+        .open(&path)?;
+    file.write_all(token.as_bytes())?;
+    Ok(token)
+}
+
 /// Serves `service` on `listener` (bound at `socket`) until it has been
-/// idle for `idle_after`, then removes the socket.
-pub fn serve(listener: UnixListener, service: Arc<Service>, socket: &Path, idle_after: Duration) {
+/// idle for `idle_after`, then removes the socket. Requests without
+/// `token` are refused.
+pub fn serve(
+    listener: UnixListener,
+    service: Arc<Service>,
+    socket: &Path,
+    idle_after: Duration,
+    token: String,
+) {
     let clients = Arc::new(AtomicUsize::new(0));
     let control = Arc::new(Control {
         stopping: AtomicBool::new(false),
         socket: socket.to_owned(),
+        token,
     });
     {
         let (service, clients, control) = (service.clone(), clients.clone(), control.clone());
@@ -91,6 +125,17 @@ pub fn serve(listener: UnixListener, service: Arc<Service>, socket: &Path, idle_
 struct Control {
     stopping: AtomicBool,
     socket: PathBuf,
+    token: String,
+}
+
+/// Compares in time that does not depend on where they differ.
+fn same_token(given: &str, expected: &str) -> bool {
+    given.len() == expected.len()
+        && given
+            .bytes()
+            .zip(expected.bytes())
+            .fold(0u8, |acc, (a, b)| acc | (a ^ b))
+            == 0
 }
 
 impl Control {
@@ -190,6 +235,15 @@ fn handle(stream: UnixStream, service: &Arc<Service>, control: &Control) -> io::
                 continue;
             }
         };
+        if !request
+            .token
+            .as_deref()
+            .is_some_and(|given| same_token(given, &control.token))
+        {
+            let refused = "not authorized: requests carry the token in Kule's home";
+            write_line(&mut writer, &failed(request.id, refused.to_owned()))?;
+            return Ok(());
+        }
         if request.call == Call::Subscribe {
             let notices = service.subscribe();
             write_line(&mut writer, &answered(request.id, Value::Null))?;

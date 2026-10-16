@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use serde::de::DeserializeOwned;
 
 use crate::protocol::{Call, Hello, PROTOCOL, Request, Response};
-use crate::server::{read_line, socket_path, write_line};
+use crate::server::{read_line, socket_path, token_path, write_line};
 use crate::service::{Notice, Result};
 
 /// The longest response a client reads; a task's timeline can be long.
@@ -20,12 +20,14 @@ const MAX_RESPONSE: usize = 64 << 20;
 #[derive(Debug, Clone)]
 pub struct Client {
     socket: PathBuf,
+    token: PathBuf,
 }
 
 impl Client {
     pub fn new(home: &Path) -> Client {
         Client {
             socket: socket_path(home),
+            token: token_path(home),
         }
     }
 
@@ -67,7 +69,15 @@ impl Client {
     pub fn call<T: DeserializeOwned>(&self, call: Call) -> Result<T> {
         let stream = self.connect()?;
         let mut writer = stream.try_clone().map_err(|e| e.to_string())?;
-        write_line(&mut writer, &Request { id: 1, call }).map_err(|e| e.to_string())?;
+        write_line(
+            &mut writer,
+            &Request {
+                id: 1,
+                token: self.token(),
+                call,
+            },
+        )
+        .map_err(|e| e.to_string())?;
         let mut reader = BufReader::new(stream);
         let line = read_line(&mut reader, MAX_RESPONSE)
             .map_err(|e| e.to_string())?
@@ -87,6 +97,7 @@ impl Client {
             &mut writer,
             &Request {
                 id: 1,
+                token: self.token(),
                 call: Call::Subscribe,
             },
         )
@@ -100,6 +111,13 @@ impl Client {
             }
         }
         Ok(())
+    }
+
+    /// The running daemon's token, read afresh: a new daemon has a new one.
+    fn token(&self) -> Option<String> {
+        std::fs::read_to_string(&self.token)
+            .ok()
+            .map(|t| t.trim().to_owned())
     }
 
     fn connect(&self) -> Result<UnixStream> {

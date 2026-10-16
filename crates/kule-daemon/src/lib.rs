@@ -12,7 +12,7 @@ use std::path::PathBuf;
 pub use client::{Client, spawn_daemon};
 pub use kule_engine::Question;
 pub use protocol::{Call, Hello, PROTOCOL, Request, Response};
-pub use server::{MAX_REQUEST, bind, dispatch, run, serve, socket_path};
+pub use server::{MAX_REQUEST, bind, dispatch, new_token, run, serve, socket_path, token_path};
 pub use service::{Commit, Notice, Result, Review, RunEvent, Service, TaskView, Timeline};
 
 /// Kule's home: `KULE_HOME`, else `~/.kule`.

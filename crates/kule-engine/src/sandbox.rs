@@ -85,7 +85,7 @@ pub struct Denial {
 
 impl Sandbox {
     /// Writes only to the task's copy and temporary directory, network
-    /// allowed; hidden is only Kule's signing key.
+    /// allowed; hidden is only Kule's home, apart from that copy and tmp.
     pub fn new(task: &Task) -> Result<Sandbox> {
         let tmp = task.tmp()?;
         let nanos = SystemTime::now()
@@ -95,9 +95,10 @@ impl Sandbox {
             copy: real(&task.copy())?,
             tmp: real(&tmp)?,
             writable: Vec::new(),
-            // The key that signs every task's history: whatever a task runs
-            // must not be able to sign entries of its own.
-            hidden: vec![real_or_planned(&task.key_path())?],
+            // Kule's home, but for the task's own copy and tmp: other tasks'
+            // copies, the policy, the key that signs every task's history and
+            // the daemon's token are none of a task's business.
+            hidden: vec![real_or_planned(&task.home())?],
             network: Network::Allow,
             tag: format!("kule-{}-{nanos:x}", task.id()),
         })
@@ -304,6 +305,17 @@ impl Sandbox {
             params.push((format!("W{i}"), path));
         }
         text.push_str(")\n");
+        // Unix sockets lead to daemons running as the user (Kule's own,
+        // Docker, ssh-agent, gpg-agent): none of them may take orders from a
+        // task. Sockets in the copy and tmp, such as a test server's, stay.
+        // Before the IP rules, which win for TCP.
+        text.push_str(&format!(
+            "(deny network-outbound (remote unix-socket) {tag})\n\
+             (allow network-outbound (remote unix-socket (subpath (param \"C\"))))\n\
+             (allow network-outbound (remote unix-socket (subpath (param \"T\"))))\n"
+        ));
+        params.push(("C".to_owned(), self.copy.as_path()));
+        params.push(("T".to_owned(), self.tmp.as_path()));
         match self.network {
             Network::Allow => {}
             Network::Deny => {
@@ -317,12 +329,24 @@ impl Sandbox {
                 ));
             }
         }
+        if self.network != Network::Allow {
+            // Name lookups would carry data out past the proxy, which
+            // resolves names itself.
+            text.push_str(&format!(
+                "(deny mach-lookup (global-name \"com.apple.dnssd.service\") {tag})\n"
+            ));
+        }
         for (i, path) in self.hidden.iter().enumerate() {
             text.push_str(&format!(
                 "(deny file-read* file-write* (subpath (param \"H{i}\")) {tag})\n"
             ));
             params.push((format!("H{i}"), path.as_path()));
         }
+        // The copy and tmp sit in Kule's home, which is hidden: they come back
+        // last, so a hidden path never takes them away.
+        text.push_str(
+            "(allow file-read* file-write* (subpath (param \"C\")) (subpath (param \"T\")))\n",
+        );
         (text, params)
     }
 

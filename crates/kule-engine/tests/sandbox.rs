@@ -20,7 +20,10 @@ struct Setup {
 
 impl Setup {
     fn new() -> Self {
-        let home = TempDir::new().unwrap();
+        // Kule's home is hidden from the sandbox; on Linux hiding it inside
+        // /tmp would take /tmp itself away, so it lives elsewhere, as
+        // ~/.kule does.
+        let home = TempDir::new_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
         let ws = TempDir::new().unwrap();
         fs::write(ws.path().join("README.md"), "hello\n").unwrap();
         let task = Task::create(home.path(), ws.path()).unwrap();
@@ -102,6 +105,64 @@ fn kule_state_next_to_the_copy_cannot_be_touched() {
     assert!(!ok(&out));
     assert_eq!(fs::read(&baseline).unwrap(), before);
     assert!(s.task.effects().is_ok());
+}
+
+#[test]
+fn kules_home_cannot_be_read_but_the_copy_can() {
+    let s = Setup::new();
+    let task_dir = s.task.copy().parent().unwrap().to_owned();
+    let home = task_dir.parent().unwrap().parent().unwrap().to_owned();
+    fs::write(home.join("policy.cedar"), "// the person's policy\n").unwrap();
+    let other = home.join("tasks/other/copy");
+    fs::create_dir_all(&other).unwrap();
+    fs::write(other.join("secret.rs"), "another project\n").unwrap();
+
+    for path in [
+        home.join("policy.cedar"),
+        other.join("secret.rs"),
+        task_dir.join("baseline.json"),
+    ] {
+        let out = sh(&s.sandbox(), &format!("cat '{}'", path.display()));
+        assert!(!ok(&out), "{} was readable", path.display());
+    }
+    let out = sh(
+        &s.sandbox(),
+        "cat README.md && echo more >> README.md && ls \"$TMPDIR\"",
+    );
+    assert!(ok(&out), "{out:?}");
+    assert!(text(&out).starts_with("hello"));
+}
+
+/// Unix sockets lead to the user's daemons (Kule's own, Docker, ssh-agent);
+/// only sockets in the copy and tmp are reachable. Linux has no Landlock
+/// rule for it; there the daemon also wants a token the sandbox cannot read.
+#[cfg(target_os = "macos")]
+#[test]
+fn unix_sockets_outside_the_copy_are_out_of_reach() {
+    use std::os::unix::net::UnixListener;
+    let s = Setup::new();
+    let outside = s.outside().join("daemon.sock");
+    let _daemon = UnixListener::bind(&outside).unwrap();
+    let inside = s.task.tmp().unwrap().join("test.sock");
+    let _test_server = UnixListener::bind(&inside).unwrap();
+    let connect = |path: &Path| {
+        let script = format!(
+            "import socket; s = socket.socket(socket.AF_UNIX); s.connect({:?}); print('connected')",
+            path.to_str().unwrap()
+        );
+        sandbox_python(&s.sandbox(), &script)
+    };
+    assert!(!ok(&connect(&outside)));
+    let reached = connect(&inside);
+    assert!(ok(&reached), "{reached:?}");
+}
+
+fn sandbox_python(sandbox: &Sandbox, script: &str) -> Output {
+    sandbox
+        .command("python3", &["-c".to_owned(), script.to_owned()])
+        .unwrap()
+        .output()
+        .unwrap()
 }
 
 #[test]

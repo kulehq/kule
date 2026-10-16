@@ -3,6 +3,7 @@
 
 use std::fs;
 use std::io::{Read, Write};
+use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::sync::Arc;
@@ -10,8 +11,8 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use kule_daemon::{
-    Call, Client, Hello, MAX_REQUEST, Notice, PROTOCOL, Service, TaskView, bind, run, serve,
-    socket_path,
+    Call, Client, Hello, MAX_REQUEST, Notice, PROTOCOL, Service, TaskView, bind, new_token, run,
+    serve, socket_path, token_path,
 };
 use kule_engine::{Policy, Proxy, Task};
 use tempfile::TempDir;
@@ -22,7 +23,8 @@ fn daemon(home: &Path) -> Arc<Service> {
     let listener = bind(&socket).unwrap();
     let service = Arc::new(Service::new(home.to_owned()));
     let served = service.clone();
-    std::thread::spawn(move || serve(listener, served, &socket, Duration::from_secs(600)));
+    let token = new_token(home).unwrap();
+    std::thread::spawn(move || serve(listener, served, &socket, Duration::from_secs(600), token));
     service
 }
 
@@ -183,7 +185,6 @@ fn an_overlong_request_is_cut_off() {
 
 #[test]
 fn the_socket_is_for_its_owner_only() {
-    use std::os::unix::fs::PermissionsExt;
     let home = TempDir::new().unwrap();
     daemon(home.path());
     let mode = fs::metadata(socket_path(home.path()))
@@ -210,8 +211,10 @@ fn shutdown_waits_until_nothing_is_going_on() {
     let listener = bind(&socket).unwrap();
     let service = Arc::new(Service::new(service_home));
     let served = service.clone();
-    let daemon =
-        std::thread::spawn(move || serve(listener, served, &socket, Duration::from_secs(600)));
+    let token = new_token(&path).unwrap();
+    let daemon = std::thread::spawn(move || {
+        serve(listener, served, &socket, Duration::from_secs(600), token)
+    });
     let client = Client::new(home.path());
     let ws = workspace();
     let view: TaskView = client
@@ -286,4 +289,40 @@ fn a_daemon_of_another_protocol_is_replaced() {
     old.join().unwrap();
     let hello: Hello = client.call(Call::Hello).unwrap();
     assert_eq!(hello.protocol, PROTOCOL);
+}
+
+#[test]
+fn a_request_without_the_token_is_refused() {
+    use std::io::{BufRead, BufReader};
+    let home = TempDir::new().unwrap();
+    daemon(home.path());
+    let token = fs::read_to_string(token_path(home.path())).unwrap();
+    let mode = fs::metadata(token_path(home.path()))
+        .unwrap()
+        .permissions()
+        .mode();
+    assert_eq!(mode & 0o077, 0, "{mode:o}");
+
+    let ask = |line: &str| {
+        let mut stream = UnixStream::connect(socket_path(home.path())).unwrap();
+        stream.write_all(line.as_bytes()).unwrap();
+        let mut reply = String::new();
+        BufReader::new(stream).read_line(&mut reply).unwrap();
+        reply
+    };
+    for line in [
+        "{\"id\":1,\"method\":\"tasks\"}\n".to_owned(),
+        "{\"id\":1,\"token\":\"0000\",\"method\":\"tasks\"}\n".to_owned(),
+        format!(
+            "{{\"id\":1,\"token\":\"{}\",\"method\":\"tasks\"}}\n",
+            "f".repeat(token.len())
+        ),
+    ] {
+        let reply = ask(&line);
+        assert!(reply.contains("not authorized"), "{line} -> {reply}");
+    }
+    let reply = ask(&format!(
+        "{{\"id\":1,\"token\":\"{token}\",\"method\":\"tasks\"}}\n"
+    ));
+    assert!(reply.contains("\"result\":[]"), "{reply}");
 }
