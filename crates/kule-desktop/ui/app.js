@@ -1138,7 +1138,7 @@ function renderStream(id) {
       h(
         "p",
         { class: "stream-empty" },
-        "Give the agent a task on the line below. Every tool call it makes becomes a step you can review."
+        "The agent works in the task's copy; nothing reaches your folder until you review and commit it. Each tool call it makes is a step you can look at."
       )
     );
   } else {
