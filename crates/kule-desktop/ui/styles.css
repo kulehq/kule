@@ -2598,8 +2598,8 @@ body.dragging-panel * {
 }
 
 #panel-live .composer {
-  gap: 4px;
-  padding: 8px 18px 8px;
+  gap: 0;
+  padding: 10px 18px 8px;
   background: var(--sunken);
 }
 
@@ -2671,7 +2671,10 @@ body.dragging-panel * {
 #panel-live .composer-bar {
   flex-wrap: wrap;
   gap: 4px 14px;
-  padding-left: 18px;
+  margin: 6px -18px -8px;
+  padding: 5px 18px 6px 36px;
+  border-top: 1px solid var(--border);
+  background: var(--surface);
   color: var(--faint);
   font: 11.5px var(--mono);
 }

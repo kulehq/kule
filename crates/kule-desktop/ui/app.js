@@ -568,7 +568,8 @@ function renderComposer(task) {
   $("remove-task").disabled = busy;
   $("composer-hint").textContent = busy
     ? "at work · its steps appear above as it goes"
-    : "sandboxed · network through the task's proxy";
+    : "↵ run · ⇧↵ new line · sandboxed";
+  $("composer-hint").title = "Runs in the sandbox; its network goes through the task's proxy.";
   $("timeout").value = String(Math.round(task.approval_timeout_secs / 60));
   // Not while the person is typing in it.
   if (document.activeElement !== $("budget")) {
@@ -4260,8 +4261,8 @@ function labelControls() {
   label($("open-settings"), "app.settings", "Settings");
   label($("open-terminal"), "task.terminal", "Opens your terminal in the task's copy, outside the sandbox. What you change there is reviewed like the agent's work.");
   label($("remove-task"), "task.delete", "Delete task");
-  label($("send"), "prompt.run", "Run");
-  $("send-keys").textContent = formatCombo(bindingOf(commandById("prompt.run")));
+  label($("send"), "prompt.run", "Run (Enter; Shift+Enter for a new line)");
+  $("send-keys").textContent = "↵";
   renderLayout();
 }
 
@@ -4739,6 +4740,12 @@ async function start() {
     if (entry && !entry.el.hidden && isShown("terminal")) entry.fit.fit();
   }).observe($("terminal-host"));
   $("prompt").addEventListener("input", fitPrompt);
+  // Enter runs the prompt; Shift+Enter starts a new line in it.
+  $("prompt").addEventListener("keydown", (e) => {
+    if (e.key !== "Enter" || e.shiftKey || e.altKey || e.metaKey || e.ctrlKey || e.isComposing) return;
+    e.preventDefault();
+    if (!$("send").disabled) $("composer").requestSubmit();
+  });
   new ResizeObserver(fitPrompt).observe($("panel-live"));
   // Changes made outside the window (a terminal in the copy, the CLI) show
   // when the person comes back to it.

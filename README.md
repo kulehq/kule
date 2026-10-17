@@ -302,7 +302,8 @@ it writes in Kule reaches it outside; you sign it in there once.
 - **Keyboard**: everything the window does is a command with a shortcut
   (Mod is ⌘ on macOS, Ctrl on Windows and Linux): Mod+K finds any command
   by name, Mod+N makes a task, Ctrl+Tab moves between tasks, Mod+1/2/3
-  show Live, Review and Timeline, Mod+Enter runs the prompt,
+  show the agent chat, Review and Timeline, Enter runs the prompt
+  (Shift+Enter for a new line, Mod+Enter too),
   Mod+Shift+Enter commits, Mod+Shift+Y and Mod+Shift+N answer a waiting
   connection. Settings → Shortcuts lists them all and lets you set your
   own; they are kept in Kule's home (`shortcuts.json`). Combos the system
