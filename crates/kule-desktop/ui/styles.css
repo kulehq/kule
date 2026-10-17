@@ -1170,3 +1170,44 @@ select:focus-visible {
   gap: 6px;
   margin-left: auto;
 }
+
+/* A task's right-click menu. */
+.menu {
+  position: fixed;
+  z-index: 10;
+  display: flex;
+  min-width: 180px;
+  flex-direction: column;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: 0 6px 24px rgb(0 0 0 / 0.18);
+}
+
+.menu-item {
+  padding: 6px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.menu-item:hover:not(:disabled),
+.menu-item:focus-visible {
+  background: var(--sunken);
+  outline: none;
+}
+
+.menu-item:disabled {
+  color: var(--faint);
+  cursor: default;
+}
+
+.menu-item.danger.armed,
+.menu-item.danger:hover:not(:disabled) {
+  color: var(--deny);
+}

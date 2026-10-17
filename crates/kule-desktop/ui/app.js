@@ -162,12 +162,77 @@ function taskItem(task, list) {
         "aria-current": task.id === state.current ? "true" : "false",
         title: task.workspace,
         onclick: () => select(task.id),
+        oncontextmenu: (e) => {
+          e.preventDefault();
+          taskMenu(task, e);
+        },
       },
       h("span", { class: "task-item-name" }, baseName(task.workspace)),
       taskChip(task),
       h("span", { class: "task-item-sub" }, sub)
     )
   );
+}
+
+/** The menu a task opens on a right click (or the menu key): the task's
+ * actions next to it, Delete armed as the button in the task view is. */
+function taskMenu(task, e) {
+  closeMenu();
+  const busy = task.running;
+  const remove = h(
+    "button",
+    { class: "menu-item danger", type: "button", role: "menuitem", disabled: busy },
+    busy ? "Delete task (agent at work)" : "Delete task"
+  );
+  remove.addEventListener("click", async () => {
+    if (!remove.classList.contains("armed")) {
+      remove.classList.add("armed");
+      remove.textContent = `Click again to delete ${baseName(task.workspace)}`;
+      setTimeout(() => {
+        remove.classList.remove("armed");
+        remove.textContent = "Delete task";
+      }, 4000);
+      return;
+    }
+    closeMenu();
+    await removeTask(task);
+  });
+  const items = [
+    h("button", { class: "menu-item", type: "button", role: "menuitem", onclick: () => (closeMenu(), openTerminal(task)) }, "Open terminal"),
+    remove,
+  ];
+  const menu = h("div", { class: "menu", id: "task-menu", role: "menu", "aria-label": `Task ${baseName(task.workspace)}` }, items);
+  document.body.append(menu);
+  // At the pointer, or under the task when the keyboard opened it; kept on screen.
+  const from = e.currentTarget.getBoundingClientRect();
+  const keyboard = e.clientX === 0 && e.clientY === 0;
+  const x = keyboard ? from.left + 8 : e.clientX;
+  const y = keyboard ? from.bottom : e.clientY;
+  menu.style.left = `${Math.min(x, window.innerWidth - menu.offsetWidth - 8)}px`;
+  menu.style.top = `${Math.min(y, window.innerHeight - menu.offsetHeight - 8)}px`;
+  menu.opener = e.currentTarget;
+  items[0].focus();
+  menu.addEventListener("keydown", (k) => {
+    const live = items.filter((i) => !i.disabled);
+    const at = live.indexOf(document.activeElement);
+    if (k.key === "Escape") {
+      k.preventDefault();
+      closeMenu(true);
+    } else if (k.key === "ArrowDown" || k.key === "ArrowUp") {
+      k.preventDefault();
+      const step = k.key === "ArrowDown" ? 1 : -1;
+      live[(at + step + live.length) % live.length].focus();
+    } else if (k.key === "Tab") {
+      closeMenu(true);
+    }
+  });
+}
+
+function closeMenu(refocus) {
+  const menu = $("task-menu");
+  if (!menu) return;
+  menu.remove();
+  if (refocus && menu.opener?.isConnected) menu.opener.focus();
 }
 
 function renderSidebar() {
@@ -1925,8 +1990,7 @@ async function newTask() {
   }
 }
 
-async function openTerminal() {
-  const task = currentTask();
+async function openTerminal(task = currentTask()) {
   if (!task) return;
   try {
     await call("open_terminal", { task: task.id });
@@ -1935,14 +1999,16 @@ async function openTerminal() {
   }
 }
 
-async function removeTask() {
-  const task = currentTask();
+async function removeTask(task = currentTask()) {
   if (!task) return;
   try {
     await call("remove_task", { task: task.id });
     state.streams.delete(task.id);
     state.loaded.delete(task.id);
-    state.current = null;
+    if (state.current === task.id) {
+      state.current = null;
+      clearPanels();
+    }
     toast(`Deleted task ${task.id}; the folder was not touched`);
   } catch (err) {
     fail(err);
@@ -1954,7 +2020,7 @@ async function removeTask() {
 
 async function start() {
   $("new-task").addEventListener("click", newTask);
-  $("open-terminal").addEventListener("click", openTerminal);
+  $("open-terminal").addEventListener("click", () => openTerminal());
   $("empty-new-task").addEventListener("click", newTask);
   $("composer").addEventListener("submit", submitPrompt);
   // Ctrl+Enter, or ⌘+Enter on a Mac, runs the prompt; Enter alone is a new line.
@@ -1998,6 +2064,12 @@ async function start() {
   );
   remove.id = "remove-task";
   $("remove-task").replaceWith(remove);
+  // A task's menu closes on a click elsewhere, or when the window changes.
+  document.addEventListener("pointerdown", (e) => {
+    if (!e.target.closest("#task-menu")) closeMenu();
+  });
+  window.addEventListener("blur", () => closeMenu());
+  window.addEventListener("resize", () => closeMenu());
 
   await loadAgentChoices();
   $("open-agents").addEventListener("click", openAgents);
