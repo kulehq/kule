@@ -434,7 +434,7 @@ select:focus-visible {
 
 .empty-state {
   display: flex;
-  max-width: 520px;
+  max-width: 620px;
   margin: auto;
   padding: 32px;
   flex-direction: column;
@@ -1158,7 +1158,7 @@ select:focus-visible {
   margin-bottom: 8px;
 }
 
-.agent-card-head h2,
+.agent-card-head h3,
 .agent-editor h2,
 .agent-registry h2 {
   margin-right: 4px;
@@ -1536,4 +1536,110 @@ select:focus-visible {
 
 .daily-spent.deny {
   color: var(--deny);
+}
+
+/* The empty window's setup: agents, policy, a folder. */
+.setup {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  width: 100%;
+  margin: 8px 0 0;
+  padding: 0;
+  counter-reset: step;
+  list-style: none;
+}
+
+.setup-step {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  padding-left: 34px;
+  counter-increment: step;
+}
+
+.setup-step::before {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: grid;
+  width: 22px;
+  height: 22px;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--accent-soft);
+  color: var(--accent);
+  content: counter(step);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.setup-step h2 {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.setup-step p {
+  font-size: 13px;
+}
+
+.setup-agents {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.setup-agent {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+}
+
+.setup-agent .muted {
+  font-size: 13px;
+}
+
+/* Kule's two policies, as a choice. */
+.policy-pick {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 620px;
+}
+
+.policy-option {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 2px 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  cursor: pointer;
+}
+
+.policy-option:has(input:checked) {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.policy-option input {
+  margin: 3px 0 0;
+  accent-color: var(--accent);
+}
+
+.policy-name {
+  font-weight: 600;
+}
+
+.policy-text {
+  grid-column: 2;
+  color: var(--muted);
+  font-size: 13px;
 }

@@ -189,9 +189,30 @@ pub struct Listed {
     /// that runs outside the sandbox later.
     #[serde(default)]
     pub warnings: Vec<String>,
+    /// The program it starts, when it is not on `PATH` (or not at the path
+    /// named): the agent cannot start until it is installed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub missing: Option<String>,
     /// Where its home of its own is, when it has one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub own_home_dir: Option<String>,
+}
+
+/// The program `command` starts, when it cannot be: a bare name on no
+/// directory of `path`, or a path to no executable file.
+pub fn missing_program(command: &[String], path: Option<&std::ffi::OsStr>) -> Option<String> {
+    use std::os::unix::fs::PermissionsExt;
+    let program = command.first()?;
+    let runs = |p: &Path| {
+        p.metadata()
+            .is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+    };
+    let found = if program.contains('/') {
+        runs(Path::new(program))
+    } else {
+        path.is_some_and(|path| std::env::split_paths(path).any(|dir| runs(&dir.join(program))))
+    };
+    (!found).then(|| program.clone())
 }
 
 /// Every profile Kule knows.
@@ -213,6 +234,7 @@ impl Agents {
                 held: None,
                 digest: String::new(),
                 warnings: Vec::new(),
+                missing: None,
                 own_home_dir: None,
             })
             .collect();
@@ -252,6 +274,7 @@ impl Agents {
                 held,
                 digest: String::new(),
                 warnings: Vec::new(),
+                missing: None,
                 own_home_dir: None,
             });
         }
@@ -266,8 +289,10 @@ impl Agents {
             .map(|l| (l.profile.name.clone(), l.profile.holds()))
             .collect();
         let home = person_home();
+        let path = std::env::var_os("PATH");
         for l in &mut listed {
             l.digest = l.profile.digest();
+            l.missing = missing_program(&l.profile.command, path.as_deref());
             l.profile.others = all
                 .iter()
                 .filter(|(name, _)| *name != l.profile.name)
@@ -1057,6 +1082,34 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
+
+    #[test]
+    fn a_program_not_on_path_is_missing() {
+        use std::os::unix::fs::PermissionsExt;
+        let (one, two) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+        let tool = two.path().join("agent-acp");
+        std::fs::write(&tool, "#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(&tool, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let plain = one.path().join("plain");
+        std::fs::write(&plain, "").unwrap();
+        let path = std::env::join_paths([one.path(), two.path()]).unwrap();
+        let cmd = |p: &str| vec![p.to_owned(), "--acp".to_owned()];
+
+        assert_eq!(missing_program(&cmd("agent-acp"), Some(&path)), None);
+        assert_eq!(missing_program(&cmd(tool.to_str().unwrap()), None), None);
+        assert_eq!(
+            missing_program(&cmd("npx"), Some(&path)).as_deref(),
+            Some("npx")
+        );
+        assert_eq!(
+            missing_program(&cmd("agent-acp"), None).as_deref(),
+            Some("agent-acp")
+        );
+        // A file that cannot be run is not the program.
+        assert!(missing_program(&cmd("plain"), Some(&path)).is_some());
+        assert!(missing_program(&cmd(plain.to_str().unwrap()), None).is_some());
+        assert_eq!(missing_program(&[], Some(&path)), None);
+    }
 
     #[test]
     fn every_built_in_profile_passes_its_own_checks() {

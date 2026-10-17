@@ -62,7 +62,10 @@ pub use manifest::Kind;
 pub use meet::{Meeting, Touched, changed_entities, meet, touched};
 pub use network::{Connection, Proxy, connections};
 pub use outline::FileOutline;
-pub use policy::{DEFAULT_POLICY, Judgement, Policy, REPO_POLICY, Ruling, Verdict};
+pub use policy::{
+    CAREFUL_POLICY, DEFAULT_POLICY, Judgement, Policy, PolicyChoice, REPO_POLICY, Ruling,
+    USER_POLICY, Verdict, choose_policy, policy_choice,
+};
 pub use preview::{Picture, Preview, previewable};
 pub use protect::{Kept, PutBack};
 pub use remembered::{

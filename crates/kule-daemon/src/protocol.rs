@@ -10,7 +10,7 @@ use serde_json::Value;
 
 /// Changes whenever a call, a result or a notice changes shape; a client
 /// and a daemon that disagree on it cannot talk.
-pub const PROTOCOL: u32 = 13;
+pub const PROTOCOL: u32 = 14;
 
 /// What a daemon says about itself.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -125,6 +125,13 @@ pub enum Call {
     /// first.
     SetOrder {
         tasks: Vec<String>,
+    },
+    /// Which policy holds: Kule's balanced or careful one, or the person's.
+    Policy,
+    /// Puts one of Kule's policies in place; never over one of the
+    /// person's.
+    ChoosePolicy {
+        choice: kule_engine::PolicyChoice,
     },
     /// What every task may spend together in 24 hours, and what they did.
     DailyBudget,

@@ -46,6 +46,7 @@
           <h1 id="settings-title">Settings</h1>
           <nav class="tabs" role="tablist" aria-label="Settings" id="settings-tabs">
             <button class="tab" role="tab" id="settings-agents" aria-controls="agents-view" data-view="agents" type="button">Agents</button>
+            <button class="tab" role="tab" id="settings-policy" aria-controls="agents-view" data-view="policy" type="button">Policy</button>
             <button class="tab" role="tab" id="settings-rules" aria-controls="agents-view" data-view="rules" type="button">Rules</button>
             <button class="tab" role="tab" id="settings-secrets" aria-controls="agents-view" data-view="secrets" type="button">Secrets</button>
             <button class="tab" role="tab" id="settings-budget" aria-controls="agents-view" data-view="budget" type="button">Budget</button>
@@ -60,7 +61,24 @@
           of it; the agent works there, in a sandbox, and nothing reaches your folder until you
           commit what the policy lets through.
         </p>
-        <button id="empty-new-task" class="button primary" type="button">Choose a folder…</button>
+        <ol class="setup">
+          <li class="setup-step">
+            <h2>Your agents</h2>
+            <ul class="setup-agents" id="setup-agents"></ul>
+            <p class="muted">
+              Sign each one in once, in a terminal, as you would without Kule; Kule's runs use that
+              sign-in. More agents are under Settings.
+            </p>
+          </li>
+          <li class="setup-step">
+            <h2>How careful</h2>
+            <div id="setup-policy"></div>
+          </li>
+          <li class="setup-step">
+            <h2>A folder</h2>
+            <button id="empty-new-task" class="button primary" type="button">Choose a folder…</button>
+          </li>
+        </ol>
       </section>
 
       <section class="task" id="task" hidden>

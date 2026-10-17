@@ -159,3 +159,29 @@ fn list_shows_a_tasks_name_and_colour() {
     let list = kule(home.path(), &["list"]);
     assert!(!list.contains('·') && !list.contains('('), "{list}");
 }
+
+#[test]
+fn policy_prints_the_one_that_holds_and_puts_kules_in_place() {
+    let home = TempDir::new().unwrap();
+    assert!(!kule(home.path(), &["policy"]).contains("@id(\"careful\")"));
+    assert_eq!(
+        kule(home.path(), &["policy", "careful"]),
+        "policy: careful\n"
+    );
+    assert!(kule(home.path(), &["policy"]).contains("@id(\"careful\")"));
+    kule(home.path(), &["policy", "balanced"]);
+    assert!(!home.path().join("policy.cedar").exists());
+
+    fs::write(home.path().join("policy.cedar"), "// mine\n").unwrap();
+    assert_eq!(kule(home.path(), &["policy"]), "// mine\n");
+    let refused = Command::new(env!("CARGO_BIN_EXE_kule"))
+        .args(["policy", "careful"])
+        .env("KULE_HOME", home.path())
+        .output()
+        .unwrap();
+    assert!(!refused.status.success());
+    assert_eq!(
+        fs::read_to_string(home.path().join("policy.cedar")).unwrap(),
+        "// mine\n"
+    );
+}

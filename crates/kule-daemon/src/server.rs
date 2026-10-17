@@ -342,6 +342,8 @@ pub fn dispatch(service: &Arc<Service>, call: Call) -> Result<Value, String> {
         Call::SetLabel { task, label } => json(service.set_label(&task, label.as_deref())?),
         Call::SetColor { task, color } => json(service.set_color(&task, color)?),
         Call::SetOrder { tasks } => json(service.set_order(&tasks)?),
+        Call::Policy => json(service.policy_choice()?),
+        Call::ChoosePolicy { choice } => json(service.choose_policy(choice)?),
         Call::DailyBudget => json(service.daily_budget()?),
         Call::SetDailyBudget { budget } => json(service.set_daily_budget(budget)?),
         Call::ApplyHome { task, paths } => json(service.apply_home(&task, &paths)?),

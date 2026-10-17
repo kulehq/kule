@@ -4,6 +4,7 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod shell_path;
 mod terminal;
 
 use std::path::{Path, PathBuf};
@@ -11,7 +12,8 @@ use std::time::Duration;
 
 use kule_daemon::{
     AgentProfile, Alert, Alerts, Call, Client, Commit, DailyBudget, Hello, Money, Notice, PROTOCOL,
-    Question, Result, Review, RunEvent, Sequenced, TaskColor, TaskView, Timeline, default_home,
+    PolicyChoice, Question, Result, Review, RunEvent, Sequenced, TaskColor, TaskView, Timeline,
+    default_home,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -316,6 +318,16 @@ fn set_order(kule: K<'_>, tasks: Vec<String>) -> Result<()> {
 }
 
 #[tauri::command(async)]
+fn policy(kule: K<'_>) -> Result<PolicyChoice> {
+    kule.call(Call::Policy)
+}
+
+#[tauri::command(async)]
+fn choose_policy(kule: K<'_>, choice: PolicyChoice) -> Result<PolicyChoice> {
+    kule.call(Call::ChoosePolicy { choice })
+}
+
+#[tauri::command(async)]
 fn daily_budget(kule: K<'_>) -> Result<DailyBudget> {
     kule.call(Call::DailyBudget)
 }
@@ -422,6 +434,12 @@ fn main() {
         }
         return;
     }
+    // Before any thread: the daemon this starts, its agents and the
+    // terminals it opens find what the person's shell finds.
+    if let Some(path) = shell_path::for_app() {
+        // SAFETY: nothing else runs yet that could read the environment.
+        unsafe { std::env::set_var("PATH", path) };
+    }
     let kule = Kule {
         home: home.clone(),
         client: Client::new(&home),
@@ -475,6 +493,8 @@ fn main() {
             set_label,
             set_color,
             set_order,
+            policy,
+            choose_policy,
             daily_budget,
             set_daily_budget,
             start_run,

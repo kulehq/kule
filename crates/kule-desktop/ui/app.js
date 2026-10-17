@@ -609,12 +609,149 @@ function renderSpent(task) {
 }
 
 /** Settings' sections, each a value of `state.view`. */
-const SETTINGS = ["agents", "rules", "secrets", "budget"];
+const SETTINGS = ["agents", "policy", "rules", "secrets", "budget"];
 
 async function openSettings(view = SETTINGS.includes(state.view) ? state.view : "agents") {
   closeMenu();
-  const opening = { agents: openAgents, rules: openRules, secrets: openSecrets, budget: openBudget }[view];
+  const opening = { agents: openAgents, policy: openPolicy, rules: openRules, secrets: openSecrets, budget: openBudget }[view];
   await opening();
+}
+
+// --- Policy ----------------------------------------------------------------
+
+const POLICIES = [
+  {
+    choice: "balanced",
+    name: "Balanced",
+    text: "Changes to files pass on their own. What decides what gets installed, built or run (manifests, lockfiles, CI, editor settings), git history rewrites and mass deletes wait for you.",
+  },
+  {
+    choice: "careful",
+    name: "Careful",
+    text: "Every change to a file or to git waits for you. Only package registries and the agents' own APIs are reached without asking.",
+  },
+];
+
+/** Kule's two policies to choose from, or a note when the person wrote
+ * their own; `idPrefix` keeps two pickers' ids apart. */
+function policyPicker(choice, idPrefix, chosen) {
+  if (choice === "own") {
+    return h(
+      "p",
+      { class: "muted" },
+      "Your own policy in ~/.kule/policy.cedar holds; Kule does not replace it. Move it away to choose one of Kule's."
+    );
+  }
+  return h(
+    "div",
+    { class: "policy-pick", role: "radiogroup", "aria-label": "Policy" },
+    POLICIES.map((p) =>
+      h(
+        "label",
+        { class: "policy-option", for: `${idPrefix}-${p.choice}` },
+        h("input", {
+          type: "radio",
+          name: `${idPrefix}-policy`,
+          id: `${idPrefix}-${p.choice}`,
+          "data-key": `${idPrefix}-${p.choice}`,
+          value: p.choice,
+          checked: p.choice === choice,
+          onchange: () => choosePolicy(p.choice, chosen),
+        }),
+        h("span", { class: "policy-name" }, p.name),
+        h("span", { class: "policy-text" }, p.text)
+      )
+    )
+  );
+}
+
+async function choosePolicy(choice, chosen) {
+  try {
+    await call("choose_policy", { choice });
+    toast(`The ${choice} policy holds from the next commit`);
+  } catch (err) {
+    fail(err);
+  }
+  await chosen();
+}
+
+async function openPolicy() {
+  state.view = "policy";
+  renderSidebar();
+  renderTask();
+  await renderPolicy();
+}
+
+async function renderPolicy() {
+  if (state.view !== "policy") return;
+  let choice = "balanced";
+  try {
+    choice = await call("policy");
+  } catch (err) {
+    fail(err);
+  }
+  replace(
+    $("agents-view"),
+    h(
+      "header",
+      { class: "agents-head" },
+      h("h2", {}, "Policy"),
+      h(
+        "p",
+        { class: "muted" },
+        "What passes on its own, what waits for you and what never passes, for every task. A repository can add its own refusals in .kule/policy.cedar; what you told Kule not to ask about again is under Rules."
+      )
+    ),
+    policyPicker(choice, "settings", renderPolicy)
+  );
+}
+
+// --- First run ---------------------------------------------------------------
+
+/** How each built-in agent is signed in, outside Kule. */
+const SIGN_IN = {
+  "claude-code": "run claude, then /login",
+  codex: "run codex login",
+  gemini: "run gemini and sign in",
+};
+
+/** What to install when an agent's program is not on PATH. */
+function installHint(program) {
+  if (program === "npx") return "needs Node.js (npx)";
+  if (program === "gemini") return "needs the Gemini CLI: npm install -g @google/gemini-cli";
+  return `needs ${program}, which is not on your PATH`;
+}
+
+/** The empty window's setup: the agents and whether they can start, the
+ * policy, and a folder. */
+async function loadWelcome() {
+  let listed = [];
+  let choice = "balanced";
+  try {
+    [listed, choice] = await Promise.all([call("agent_list"), call("policy")]);
+  } catch (err) {
+    fail(err);
+  }
+  const ours = listed.filter((l) => l.origin === "built_in" || SIGN_IN[l.profile.name]);
+  replace(
+    $("setup-agents"),
+    ...ours.map((l) => {
+      const name = l.profile.name;
+      const [mark, text] = l.missing
+        ? ["deny", installHint(l.missing)]
+        : l.held
+          ? ["ask", l.held]
+          : ["allow", SIGN_IN[name] ? `ready to start · to sign in, ${SIGN_IN[name]}` : "ready to start"];
+      return h(
+        "li",
+        { class: "setup-agent" },
+        h("span", { class: `chip ${mark}` }, mark === "allow" ? "found" : mark === "ask" ? "held" : "missing"),
+        h("strong", {}, name),
+        h("span", { class: "muted" }, text)
+      );
+    })
+  );
+  replace($("setup-policy"), policyPicker(choice, "setup", loadWelcome));
 }
 
 async function openBudget() {
@@ -1917,11 +2054,14 @@ function agentCard(listed) {
     h(
       "header",
       { class: "agent-card-head" },
-      h("h2", {}, profile.name),
+      h("h3", {}, profile.name),
       h("span", { class: "chip" }, yours ? "yours" : "built in"),
-      h("span", { class: `chip ${held ? "ask" : "allow"}` }, held ? "held" : "can run")
+      listed.missing
+        ? h("span", { class: "chip deny" }, "not installed")
+        : h("span", { class: `chip ${held ? "ask" : "allow"}` }, held ? "held" : "can run")
     ),
     held ? h("p", { class: "agent-held" }, held) : null,
+    listed.missing ? h("p", { class: "agent-held" }, `It ${installHint(listed.missing)}.`) : null,
     opens(profile, own_home_dir),
     (warnings || []).length ? h("ul", { class: "agent-warnings" }, ...warnings.map((w) => h("li", {}, w))) : null,
     actions.length ? h("div", { class: "agent-actions" }, ...actions) : null
@@ -2384,6 +2524,7 @@ async function refresh() {
   renderSidebar();
   renderTask();
   loadDaily();
+  if (!$("empty").hidden) loadWelcome();
 }
 
 function select(id) {

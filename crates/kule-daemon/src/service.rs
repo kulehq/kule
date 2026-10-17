@@ -449,6 +449,21 @@ impl Service {
         kule_engine::set_task_order(&self.home, ids).map_err(text)
     }
 
+    /// Which policy holds.
+    pub fn policy_choice(&self) -> Result<kule_engine::PolicyChoice> {
+        kule_engine::policy_choice(&self.home).map_err(text)
+    }
+
+    /// Puts one of Kule's policies in place, for the next commit and
+    /// connection; returns which holds then.
+    pub fn choose_policy(
+        &self,
+        choice: kule_engine::PolicyChoice,
+    ) -> Result<kule_engine::PolicyChoice> {
+        kule_engine::choose_policy(&self.home, choice).map_err(text)?;
+        self.policy_choice()
+    }
+
     /// What every task may spend together in 24 hours, and what they did.
     pub fn daily_budget(&self) -> Result<DailyBudget> {
         Ok(DailyBudget {
@@ -1288,6 +1303,28 @@ mod tests {
         let first = get(&first);
         assert_eq!((first.changes, first.verdict), (2, Some(Verdict::Ask)));
         assert!(!first.running);
+    }
+
+    #[test]
+    fn the_careful_policy_holds_every_change_for_the_next_commit() {
+        use kule_engine::PolicyChoice;
+        let s = Setup::new();
+        let (id, copy) = s.task();
+        assert_eq!(s.app.policy_choice().unwrap(), PolicyChoice::Balanced);
+        assert_eq!(
+            s.app.choose_policy(PolicyChoice::Careful).unwrap(),
+            PolicyChoice::Careful
+        );
+        fs::write(copy.join("a.txt"), "edited\n").unwrap();
+        assert!(matches!(
+            s.app.commit(&id, false, false, None).unwrap(),
+            Commit::Held { .. }
+        ));
+        s.app.choose_policy(PolicyChoice::Balanced).unwrap();
+        assert!(matches!(
+            s.app.commit(&id, false, false, None).unwrap(),
+            Commit::Applied { .. }
+        ));
     }
 
     #[test]

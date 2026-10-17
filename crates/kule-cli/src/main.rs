@@ -7,6 +7,7 @@ use std::time::Instant;
 use anyhow::{Context, Result, anyhow, bail};
 use clap::{Parser, Subcommand};
 use kule_engine::entities::{Change as EntityChange, Edit, Outline, Skip};
+use kule_engine::{CAREFUL_POLICY, PolicyChoice, USER_POLICY, choose_policy, policy_choice};
 use kule_engine::{
     Change, Connection, DEFAULT_POLICY, Denial, DiffSkip, Effect, EffectSet, Error, GitSummary,
     Kind, LineKind, Money, Network, Policy, Proxy, RefChange, Ruling, RunUsage, Sandbox, Task,
@@ -275,9 +276,15 @@ enum Cmd {
         #[command(subcommand)]
         action: Option<AgentsCmd>,
     },
-    /// Print the built-in policy. Save it as <KULE_HOME>/policy.cedar to
-    /// replace it; a repository adds forbid rules in .kule/policy.cedar.
-    Policy,
+    /// Print the policy that holds, or put one of Kule's in place:
+    /// `balanced` (the built-in one) or `careful` (every change to a file
+    /// or to git waits for you). A policy of your own is written to
+    /// <KULE_HOME>/policy.cedar, and Kule never replaces it; a repository
+    /// adds forbid rules in .kule/policy.cedar.
+    Policy {
+        /// balanced or careful
+        choice: Option<String>,
+    },
     /// Throw the task's uncommitted changes away.
     Rollback { task: String },
     /// Revert the task's newest commit in the workspace and the copy.
@@ -742,7 +749,25 @@ fn run() -> Result<ExitCode> {
         Cmd::Rules { action } => rules_cmd(&home, action.unwrap_or(RulesCmd::List))?,
         Cmd::Secrets { action } => secrets_cmd(&home, action.unwrap_or(SecretsCmd::List))?,
         Cmd::Home { task, action } => home_cmd(&home, &task, action.unwrap_or(HomeCmd::List))?,
-        Cmd::Policy => print!("{DEFAULT_POLICY}"),
+        Cmd::Policy { choice } => {
+            let path = home.join(USER_POLICY);
+            match choice.as_deref() {
+                None => match policy_choice(&home)? {
+                    PolicyChoice::Balanced => print!("{DEFAULT_POLICY}"),
+                    PolicyChoice::Careful => print!("{CAREFUL_POLICY}"),
+                    PolicyChoice::Own => print!("{}", std::fs::read_to_string(&path)?),
+                },
+                Some(name) => {
+                    let choice = match name {
+                        "balanced" => PolicyChoice::Balanced,
+                        "careful" => PolicyChoice::Careful,
+                        _ => bail!("{name}: the policies to choose are balanced and careful"),
+                    };
+                    choose_policy(&home, choice)?;
+                    println!("policy: {name}");
+                }
+            }
+        }
         Cmd::Rollback { task } => {
             let set = Task::open(&home, &task)?.rollback()?;
             println!("rolled back {} changes", set.effects.len());

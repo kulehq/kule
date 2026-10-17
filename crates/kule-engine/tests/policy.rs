@@ -398,3 +398,40 @@ fn the_gate_holds_what_waits_and_what_is_denied() {
     assert_eq!(fs::read_to_string(&readme).unwrap(), "hello\n");
     assert!(!s.task.workspace().join(".git/hooks/pre-commit").exists());
 }
+
+#[test]
+fn a_person_chooses_between_kules_policies_but_keeps_their_own() {
+    use kule_engine::{PolicyChoice, USER_POLICY, choose_policy, policy_choice};
+    let s = Setup::new(PROJECT, false);
+    write(&s.copy().join("README.md"), "hello again\n");
+    let home = TempDir::new().unwrap();
+    let user = home.path().join(USER_POLICY);
+    let readme = |home: &Path| {
+        let policy = Policy::load(Some(&home.join(USER_POLICY)), s.task.workspace()).unwrap();
+        on(&policy.judge(&s.task.effects().unwrap()), "README.md")
+    };
+    assert_eq!(policy_choice(home.path()).unwrap(), PolicyChoice::Balanced);
+    assert_eq!(readme(home.path()), (Verdict::Allow, rules(&["files"])));
+
+    choose_policy(home.path(), PolicyChoice::Careful).unwrap();
+    assert_eq!(policy_choice(home.path()).unwrap(), PolicyChoice::Careful);
+    assert_eq!(readme(home.path()), (Verdict::Ask, rules(&["careful"])));
+
+    choose_policy(home.path(), PolicyChoice::Balanced).unwrap();
+    assert!(!user.exists());
+    assert_eq!(readme(home.path()), (Verdict::Allow, rules(&["files"])));
+    // Twice is no error.
+    choose_policy(home.path(), PolicyChoice::Balanced).unwrap();
+
+    let own = r#"@id("mine") permit (principal, action, resource);"#;
+    write(&user, own);
+    assert_eq!(policy_choice(home.path()).unwrap(), PolicyChoice::Own);
+    for choice in [
+        PolicyChoice::Balanced,
+        PolicyChoice::Careful,
+        PolicyChoice::Own,
+    ] {
+        assert!(choose_policy(home.path(), choice).is_err());
+    }
+    assert_eq!(fs::read_to_string(&user).unwrap(), own);
+}

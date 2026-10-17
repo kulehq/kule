@@ -145,16 +145,18 @@ policy: waits for approval
   Cargo.toml · waits for approval (manifests-and-lockfiles)
 ```
 
-`kule commit` applies what passes, `kule commit --approve` also what waits,
-and nothing that is denied (a new git hook, for example). `kule policy`
-prints the built-in rules: source edits and fast-forward branch moves pass;
-manifests, lockfiles, CI and editor configuration, git config, history
-rewrites and mass deletes wait (more than 200, or more than 20 outside a git
-repository; a file renamed in the copy is a move, not a deletion); git
-hooks are denied. Save your own as
-`~/.kule/policy.cedar` to replace them. A repository can add `forbid` rules
-in `.kule/policy.cedar`; they are read from the real workspace, never from
-the copy an agent edits.
+`kule commit` applies what passes, `kule commit --approve` also what
+waits, and nothing that is denied (a new git hook, for example). `kule
+policy` prints the rules that hold. The built-in ones (*balanced*): source
+edits and fast-forward branch moves pass; manifests, lockfiles, CI and
+editor configuration, git config, history rewrites and mass deletes wait
+(more than 200, or more than 20 outside a git repository; a file renamed
+in the copy is a move, not a deletion); git hooks are denied. `kule policy
+careful` (or *Policy* in the app's Settings) makes every change to a file
+or to git wait; `kule policy balanced` goes back. Save your own as
+`~/.kule/policy.cedar` to replace them; Kule never overwrites it. A
+repository can add `forbid` rules in `.kule/policy.cedar`; they are read
+from the real workspace, never from the copy an agent edits.
 
 What you approve can be remembered, so it is asked once: `kule commit
 --approve --remember` (or *Don't ask again in this folder* in the app) lets
@@ -261,8 +263,13 @@ it writes in Kule reaches it outside; you sign it in there once.
   terminal in its copy or deletes it. Drag a task, or press Alt+↑/↓, to
   move it in the list; `kule list` keeps that order, and `kule name` and
   `kule color` do the rest from a terminal.
-- **Settings**: agents, remembered rules, secrets and the daily budget,
-  one section each.
+- **Settings**: agents, the policy, remembered rules, secrets and the
+  daily budget, one section each.
+- **First run**: with no task yet, the window shows which agents can start
+  (and what to install for those that cannot), lets you choose the
+  balanced or careful policy, then asks for a folder. Opened from the
+  Finder or a launcher, the app takes `PATH` from your login shell, so
+  agents find `npx` and the rest as they do in a terminal.
 - **Live**: the agent's answer, tool calls and what each changed, as they
   come.
 - **Review**: the effect set and the ruling, with *Commit*, *Approve and

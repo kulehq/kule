@@ -29,8 +29,76 @@ use crate::remembered::{Allowance, Remembered};
 
 pub const DEFAULT_POLICY: &str = include_str!("default_policy.cedar");
 
+/// The built-in policy with every change to a file or to git waiting for a
+/// person.
+pub const CAREFUL_POLICY: &str = concat!(
+    include_str!("default_policy.cedar"),
+    include_str!("careful_policy.cedar")
+);
+
 /// Where a repository keeps its own rules, relative to the workspace.
 pub const REPO_POLICY: &str = ".kule/policy.cedar";
+
+/// Where a person's policy lives, under Kule's home; the built-in one
+/// holds while there is none.
+pub const USER_POLICY: &str = "policy.cedar";
+
+/// Which policy holds: one of Kule's two, or one the person wrote.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PolicyChoice {
+    /// The built-in policy: changes to files pass, what decides what gets
+    /// installed, built or run waits.
+    Balanced,
+    /// [`CAREFUL_POLICY`].
+    Careful,
+    /// `<home>/policy.cedar` as the person wrote it.
+    Own,
+}
+
+/// Which policy holds under `home`.
+pub fn policy_choice(home: &Path) -> Result<PolicyChoice> {
+    let path = home.join(USER_POLICY);
+    if !path.is_file() {
+        return Ok(PolicyChoice::Balanced);
+    }
+    Ok(match read(&path)?.as_str() {
+        DEFAULT_POLICY => PolicyChoice::Balanced,
+        CAREFUL_POLICY => PolicyChoice::Careful,
+        _ => PolicyChoice::Own,
+    })
+}
+
+/// Puts one of Kule's policies in place. A policy the person wrote is
+/// never replaced: they move it away first.
+pub fn choose_policy(home: &Path, choice: PolicyChoice) -> Result<()> {
+    let path = home.join(USER_POLICY);
+    if policy_choice(home)? == PolicyChoice::Own {
+        return Err(Error::Invalid(format!(
+            "{} is a policy of your own; Kule does not replace it",
+            path.display()
+        )));
+    }
+    match choice {
+        PolicyChoice::Balanced => match std::fs::remove_file(&path) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+                Err(Error::Io { path, source: e })
+            }
+            _ => Ok(()),
+        },
+        PolicyChoice::Careful => {
+            std::fs::create_dir_all(home).map_err(|source| Error::Io {
+                path: home.to_path_buf(),
+                source,
+            })?;
+            std::fs::write(&path, CAREFUL_POLICY).map_err(|source| Error::Io { path, source })
+        }
+        PolicyChoice::Own => Err(Error::Invalid(format!(
+            "a policy of your own is written to {}",
+            path.display()
+        ))),
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
