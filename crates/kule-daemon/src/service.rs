@@ -202,6 +202,10 @@ pub enum RunEvent {
     Agent {
         event: kule_acp::Event,
     },
+    /// What Kule does before the agent starts and that takes a while.
+    Preparing {
+        text: String,
+    },
     /// The run is over; `error` says why it failed.
     Finished {
         error: Option<String>,
@@ -881,6 +885,17 @@ impl Service {
         let keys = profile.agent_keys();
         let proxy =
             Proxy::start_asking(task, policy, &self.approvals, timeout, &keys).map_err(text)?;
+        if let Some(spec) = profile.to_install() {
+            self.emit(
+                task.id(),
+                RunEvent::Preparing {
+                    text: format!(
+                        "Installing {spec} for {}, once; later runs start from it",
+                        profile.name
+                    ),
+                },
+            );
+        }
         let launch = profile.launch(task, &proxy).map_err(text)?;
         let (tx, mut rx) = futures::channel::mpsc::unbounded::<kule_acp::Event>();
         let runtime = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;

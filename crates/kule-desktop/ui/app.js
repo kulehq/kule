@@ -1169,7 +1169,7 @@ function absorb(id, event) {
       break;
     }
     case "permission":
-      items.push({ kind: "note", text: `Permission “${event.title}”: ${event.chosen}` });
+      items.push({ kind: "note", text: `Permission “${event.title}”: ${event.chosen}${event.granted === false ? " (not granted)" : ""}` });
       break;
     case "plan":
       items.push({ kind: "note", text: `Plan: ${event.entries.join(" / ")}` });
@@ -1185,6 +1185,8 @@ function fold(task, event) {
     streamOf(task).push({ kind: "prompt", text: event.text });
   } else if (event.type === "agent") {
     absorb(task, event.event);
+  } else if (event.type === "preparing") {
+    streamOf(task).push({ kind: "note", text: event.text });
   } else if (event.type === "finished") {
     const refused = event.denials.length ? ` · the sandbox refused ${plural(event.denials.length, "operation")}` : "";
     streamOf(task).push({

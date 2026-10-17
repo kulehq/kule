@@ -21,6 +21,8 @@ use kule_engine::{
 };
 use serde::{Deserialize, Serialize};
 
+use crate::packages;
+
 /// Kule's own profiles.
 const BUILT_IN: &str = include_str!("agents.toml");
 
@@ -744,6 +746,7 @@ impl Profile {
             Some(DEFAULT_HOME),
             kule_home.and_then(Path::to_str),
             Some(OWN_HOMES),
+            Some(packages::PACKAGES),
         ];
         for path in self.state.iter().chain(&self.login).chain(&self.protected) {
             if let Some(h) = hidden.clone().find(|h| within(path, h) || within(h, path)) {
@@ -964,6 +967,7 @@ impl Profile {
         layer: bool,
     ) -> Result<Launch> {
         let home = person.as_ref().map(|p| p.home.clone());
+        let (program, args) = self.started_as(home.as_deref());
         let mut sandbox = Sandbox::for_task_with(task, person)?;
         let mut own_home = None;
         if let Some(home) = home {
@@ -991,7 +995,7 @@ impl Profile {
         }
         sandbox.use_proxy(proxy);
         let kept = sandbox.keep_protected()?;
-        let mut command = sandbox.command(&self.program().to_string_lossy(), &self.args())?;
+        let mut command = sandbox.command(&program, &args)?;
         command.envs(&self.env);
         if let (Some(var), Some(dir)) = (&self.own_home, &own_home) {
             command.env(var, dir);
@@ -1006,6 +1010,45 @@ impl Profile {
             kept,
             mode: self.mode.clone(),
         })
+    }
+}
+
+impl Profile {
+    /// The package [`Profile::launch`] will install first, taking a while,
+    /// when the agent is one `npx` fetches and it is not installed yet.
+    pub fn to_install(&self) -> Option<String> {
+        let home = CacheSources::from_env()?.home;
+        let (spec, _, _) = packages::npx_package(&self.command)?;
+        (!packages::is_installed(&home.join(packages::PACKAGES), &spec)).then_some(spec)
+    }
+
+    /// What starts the agent: for one `npx` fetches, its package as Kule
+    /// installed it once under the person's `home` (see [`crate::packages`]),
+    /// installed now when it is not there yet; `npx` itself when that
+    /// fails, or with no home to install under.
+    fn started_as(&self, home: Option<&Path>) -> (String, Vec<String>) {
+        let as_written = (self.program().to_string_lossy().into_owned(), self.args());
+        let (Some(home), Some((spec, name, rest))) = (home, packages::npx_package(&self.command))
+        else {
+            return as_written;
+        };
+        let announce = || {
+            eprintln!(
+                "kule: installing {spec} for {}, once; later runs start from it",
+                self.name
+            )
+        };
+        match packages::installed(&home.join(packages::PACKAGES), &spec, &name, announce) {
+            Ok(script) => {
+                let mut args = vec![script.to_string_lossy().into_owned()];
+                args.extend(rest);
+                ("node".to_owned(), args)
+            }
+            Err(e) => {
+                eprintln!("kule: {e}; {} starts through npx instead", self.name);
+                as_written
+            }
+        }
     }
 }
 
@@ -1759,13 +1802,20 @@ own_home = "TOOL_HOME"
         let mut profile = Profile::bare("tool", vec!["tool".into()], BTreeMap::new());
         profile.own_home = Some("HOME".into());
         assert_eq!(profile.check(&[], None), Ok(()));
-        // And no profile reaches into the agents' own homes.
-        profile.state = vec![format!("{OWN_HOMES}/codex")];
-        assert!(
-            profile
-                .check(&[], None)
-                .unwrap_err()
-                .contains("Kule's own home")
-        );
+        // And no profile reaches into the agents' own homes, nor into the
+        // packages Kule starts them from.
+        for state in [
+            format!("{OWN_HOMES}/codex"),
+            format!("{}/npm", packages::PACKAGES),
+        ] {
+            profile.state = vec![state.clone()];
+            assert!(
+                profile
+                    .check(&[], None)
+                    .unwrap_err()
+                    .contains("Kule's own home"),
+                "{state}"
+            );
+        }
     }
 }

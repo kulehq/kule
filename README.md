@@ -247,6 +247,13 @@ another agent's state, Kule's home or a whole directory like `~/Documents`,
 and a package it fetches must name one exact version. Profiles live in
 Kule's home, which no sandbox can see, and never come from a workspace.
 
+An agent `npx` fetches (Claude Code's and Codex's ACP adapters) is
+installed once per version, outside the sandbox and without running the
+package's install scripts, under `~/Library/Application Support/Kule/packages`
+(`~/.local/share/kule/packages` on Linux), which no sandbox can write. It
+starts from there with `node`, so a new task does not fetch it again into
+its own npm cache.
+
 Under `keys`, the agent's variable holds a placeholder of the run and the
 task's proxy puts your key into requests to the hosts named, as it does
 for a kept secret (see below); the built-in agents take

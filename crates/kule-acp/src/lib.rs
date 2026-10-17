@@ -10,6 +10,7 @@
 //! answered yes, because the policy decides at commit what reaches the
 //! workspace; asking twice would only train people to click through.
 
+pub mod packages;
 mod profile;
 pub mod registry;
 pub mod trial;
