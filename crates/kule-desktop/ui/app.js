@@ -1340,6 +1340,88 @@ async function togglePreview(button, path) {
   button.setAttribute("aria-expanded", "true");
 }
 
+/** The section open in each tabbed container, by the section's name. */
+const openSection = new Map();
+
+/**
+ * Turns a container's sections, each opened by an h2.group-title (or the
+ * ignored files' details), into tabs side by side: the section's name and
+ * how many lines it holds, one section showing at a time. What comes
+ * before the first heading stays above the tabs.
+ */
+function tabify(container) {
+  const focused = container.contains(document.activeElement) ? document.activeElement : null;
+  const before = [];
+  const sections = [];
+  for (const node of [...container.childNodes]) {
+    const details = node.matches && node.matches("details.ignored-group");
+    if (details || (node.matches && node.matches("h2.group-title"))) {
+      const head = details ? node.querySelector("summary") : node;
+      const name = head.dataset.tab || head.textContent.split(" · ")[0].trim();
+      // In its own tab the ignored files show without a click.
+      if (details) node.open = true;
+      sections.push({ name, body: details ? [node] : [] });
+    } else if (sections.length) sections[sections.length - 1].body.push(node);
+    else before.push(node);
+  }
+  if (sections.length < 2) return;
+  // Its lines: files, commits and steps.
+  const count = (body) =>
+    body.reduce((n, node) => {
+      if (!node.matches) return n;
+      if (node.matches("div.entry")) return n + 1;
+      if (node.matches("ul.files")) return n + node.children.length;
+      return n + node.querySelectorAll("ul.files > li").length;
+    }, 0);
+  const want = openSection.get(container.id);
+  let active = sections.find((sec) => sec.name === want) || sections[0];
+  const panes = sections.map((sec) => h("div", { class: "section-pane", role: "tabpanel", "aria-label": sec.name }, sec.body));
+  const tabs = sections.map((sec, i) => {
+    const n = count(sec.body);
+    return h(
+      "button",
+      {
+        class: "section-tab",
+        type: "button",
+        role: "tab",
+        "data-key": `sec:${container.id}:${sec.name}`,
+        onclick: () => show(i),
+      },
+      sec.name,
+      n ? h("span", { class: "section-count" }, String(n)) : null
+    );
+  });
+  const show = (i) => {
+    active = sections[i];
+    openSection.set(container.id, active.name);
+    tabs.forEach((t, j) => {
+      t.setAttribute("aria-selected", String(j === i));
+      t.tabIndex = j === i ? 0 : -1;
+    });
+    panes.forEach((p, j) => (p.hidden = j !== i));
+  };
+  const bar = h("div", { class: "section-tabs", role: "tablist", "aria-label": "Sections" }, tabs);
+  bar.addEventListener("keydown", (e) => {
+    const at = tabs.indexOf(document.activeElement);
+    const to = { ArrowRight: at + 1, ArrowLeft: at - 1, Home: 0, End: tabs.length - 1 }[e.key];
+    if (at === -1 || to === undefined) return;
+    e.preventDefault();
+    const i = (to + tabs.length) % tabs.length;
+    show(i);
+    tabs[i].focus();
+  });
+  container.replaceChildren(...before, bar, ...panes);
+  show(sections.indexOf(active));
+  if (focused && focused.isConnected && document.activeElement !== focused) {
+    // Moved into a pane: the keyboard stays where it was, on its section.
+    const pane = focused.closest(".section-pane");
+    if (pane) show(panes.indexOf(pane));
+    focused.focus();
+  } else if (focused && !focused.isConnected && focused.dataset && focused.dataset.key) {
+    container.querySelector(`[data-key="${CSS.escape(focused.dataset.key)}"]`)?.focus();
+  }
+}
+
 function filesGroup(title, effects, holding, outlines) {
   if (effects.length === 0) return [];
   return [
@@ -1489,6 +1571,7 @@ async function loadReview(id) {
     ...ignoredGroup(id, ignored, include, held),
     ...homeGroup(id, review.home || [], busy, review.home_applied)
   );
+  tabify($("effects"));
 }
 
 /** Per task, home paths whose diff the person opened (true) or closed (false). */
@@ -1545,13 +1628,13 @@ function homeGroup(id, changes, busy, applied) {
         )
       )
     : null;
-  if (changes.length === 0) return undo ? [h("h2", { class: "group-title" }, "In your home (~)"), undo] : [];
+  if (changes.length === 0) return undo ? [h("h2", { class: "group-title", "data-tab": "In your home" }, "In your home (~)"), undo] : [];
   const mark = { created: "+", modified: "~", deleted: "−" };
   if (!homeShown.has(id)) homeShown.set(id, new Map());
   const shown = homeShown.get(id);
   const all = changes.map((c) => c.path);
   return [
-    h("h2", { class: "group-title" }, `In your home (~) · ${plural(changes.length, "change")}, caught for you`),
+    h("h2", { class: "group-title", "data-tab": "In your home" }, `In your home (~) · ${plural(changes.length, "change")}, caught for you`),
     h(
       "p",
       { class: "muted home-note" },
@@ -1648,7 +1731,7 @@ function meetsGroup(task) {
   const overlaps = (task && task.overlaps) || [];
   if (overlaps.length === 0) return [];
   return [
-    h("h2", { class: "group-title" }, "Other tasks change these too"),
+    h("h2", { class: "group-title", "data-tab": "Other tasks" }, "Other tasks change these too"),
     h(
       "ul",
       { class: "files" },
@@ -1690,7 +1773,7 @@ function ignoredGroup(id, ignored, include, held) {
     h(
       "details",
       { class: "ignored-group", open: include },
-      h("summary", { class: "group-title" }, `Ignored by the folder's .gitignore · ${ignored.length} ${include ? "included" : "stay in the copy"}`),
+      h("summary", { class: "group-title", "data-tab": "Ignored" }, `Ignored by the folder's .gitignore · ${ignored.length} ${include ? "included" : "stay in the copy"}`),
       h("label", { class: "check" }, toggle, "Also commit these"),
       h(
         "ul",
@@ -2404,6 +2487,7 @@ async function loadTimeline(id) {
   const task = currentTask();
   const entries = [];
 
+  entries.push(h("h2", { class: "group-title" }, "History"));
   const newestApplied = [...timeline.checkpoints].reverse().find((c) => c.state === "applied");
   for (const cp of timeline.checkpoints) {
     const files = cp.effects.filter((e) => !inGit(e.path));
@@ -2441,7 +2525,7 @@ async function loadTimeline(id) {
       )
     );
   }
-  if (entries.length === 0) {
+  if (entries.length === 1) {
     entries.push(h("p", { class: "muted" }, "No commits or steps yet."));
   }
 
@@ -2471,6 +2555,7 @@ async function loadTimeline(id) {
     );
   }
   replace($("timeline"), ...entries);
+  tabify($("timeline"));
 }
 
 function summarizeConnections(log) {
