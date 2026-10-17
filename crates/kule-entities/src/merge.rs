@@ -82,10 +82,13 @@ pub fn merge(path: &str, base: &[u8], theirs: &[u8], ours: &[u8]) -> Result<Vec<
     let base_lines: Vec<&str> = base_text.split_inclusive('\n').collect();
     let theirs_lines: Vec<&str> = theirs_text.split_inclusive('\n').collect();
     let ours_lines: Vec<&str> = ours_text.split_inclusive('\n').collect();
+    // Two insertions at one place are both kept only where Kule can check
+    // what they are (below); in plain text, as in git, they conflict.
     let merged = merge_lines(
         &base_lines,
         &hunks(&base_lines, &theirs_lines),
         &hunks(&base_lines, &ours_lines),
+        format.is_some(),
     )?;
 
     // Merged, every part must have changed as one side changed it: two
@@ -162,9 +165,14 @@ fn hunks<'a>(base: &[&str], side: &[&'a str]) -> Vec<Hunk<'a>> {
 
 /// Walks the base, taking each region one side changed from that side.
 /// Where both changed the same or touching lines: the same result is taken
-/// once, two insertions at one place are both taken (theirs first), and
-/// anything else is a conflict.
-fn merge_lines(base: &[&str], theirs: &[Hunk], ours: &[Hunk]) -> Result<String, Conflict> {
+/// once, two insertions at one place are both taken (theirs first) when
+/// `keep_both_insertions`, and anything else is a conflict.
+fn merge_lines(
+    base: &[&str],
+    theirs: &[Hunk],
+    ours: &[Hunk],
+    keep_both_insertions: bool,
+) -> Result<String, Conflict> {
     let mut all: Vec<(bool, &Hunk)> = theirs
         .iter()
         .map(|h| (true, h))
@@ -210,7 +218,7 @@ fn merge_lines(base: &[&str], theirs: &[Hunk], ours: &[Hunk]) -> Result<String, 
         match (side(true), side(false)) {
             (Some(one), None) | (None, Some(one)) => out.push_str(&one),
             (Some(t), Some(o)) if t == o => out.push_str(&t),
-            (Some(t), Some(o)) if start == end => {
+            (Some(t), Some(o)) if start == end && keep_both_insertions => {
                 out.push_str(&t);
                 out.push_str(&o);
             }
@@ -303,6 +311,17 @@ mod tests {
             merged("notes.txt", base, "a\nB\nc\n", "a\nB\nc\nd\n").unwrap(),
             "a\nB\nc\nd\n"
         );
+    }
+
+    #[test]
+    fn two_insertions_at_one_place_in_plain_text_conflict() {
+        // Nothing tells what they are: an empty file both wrote, a line both
+        // added at the end.
+        assert_eq!(
+            merged("busy.txt", "", "h", "agent\n"),
+            Err(vec!["line 1".to_owned()])
+        );
+        assert!(merged("notes.txt", "a\n", "a\nb\n", "a\nc\n").is_err());
     }
 
     #[test]

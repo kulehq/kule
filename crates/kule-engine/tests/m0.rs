@@ -607,7 +607,13 @@ fn a_file_written_during_creation_conflicts_if_the_task_changes_it() {
 
     write(&task.copy().join("busy.txt"), "agent\n");
     match task.commit() {
-        Err(Error::Conflict(paths)) => assert_eq!(paths, ["busy.txt"]),
+        // With what both changed when Kule could tell what they began from.
+        Err(Error::Conflict(paths)) => {
+            assert!(
+                paths.len() == 1 && paths[0].starts_with("busy.txt"),
+                "{paths:?}"
+            )
+        }
         other => panic!("expected a conflict, got {other:?}"),
     }
     assert_ne!(fs::read_to_string(&busy).unwrap(), "agent\n");
