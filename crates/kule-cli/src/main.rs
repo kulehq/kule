@@ -1,3 +1,5 @@
+mod paint;
+
 use std::collections::HashMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -516,7 +518,7 @@ fn run() -> Result<ExitCode> {
             } = profile.launch(&task, &proxy)?;
             let (tx, rx) = futures::channel::mpsc::unbounded();
             let runtime = tokio::runtime::Runtime::new()?;
-            let printer = runtime.spawn(print_events(rx, usage));
+            let printer = runtime.spawn(print_events(rx, usage, profile.name.clone()));
             let outcome = runtime.block_on(kule_acp::run_limited(
                 &task,
                 command,
@@ -573,6 +575,7 @@ fn run() -> Result<ExitCode> {
             }
             print_ruling(&load_policy(&home, &task)?.judge(&task.effects()?.to_commit(false)));
             print_spent(&task)?;
+            println!("{} {}", paint::dim("took:"), paint::took(started.elapsed()));
         }
         Cmd::Budget {
             task,
@@ -823,40 +826,74 @@ fn load_policy(home: &Path, task: &Task) -> Result<Policy> {
 /// Prints an agent's events as they come: its answer as running text, tool
 /// calls and what each changed as their own lines. Returns what the run
 /// used, as the agent reported it.
+///
+/// At a terminal, a busy line says the agent is at work and what on, tool
+/// calls are one coloured line each once done, set in under the answer,
+/// and a permission shows only when it was not granted. Elsewhere every
+/// event is a plain line of its own.
 async fn print_events(
     mut rx: futures::channel::mpsc::UnboundedReceiver<kule_acp::Event>,
     mut usage: RunUsage,
+    agent: String,
 ) -> RunUsage {
     use futures::StreamExt;
     use kule_acp::Event;
-    let mut at_line_start = true;
-    let line = |text: String, at_line_start: &mut bool| {
-        if !*at_line_start {
-            println!();
+    let tty = paint::on();
+    let spinner = paint::Spinner::new(&agent);
+    // What was printed last: the answer's text, or a line of Kule's.
+    #[derive(PartialEq)]
+    enum Last {
+        Nothing,
+        Answer { line_open: bool },
+        Line,
+    }
+    let mut last = Last::Nothing;
+    let line = |text: String, last: &mut Last| {
+        match last {
+            Last::Answer { line_open } => {
+                // The answer's paragraph ends, and a blank line sets it apart.
+                let end = if *line_open { "\n\n" } else { "\n" };
+                spinner.print(if tty { end } else { &end[1..] }, true);
+            }
+            Last::Nothing | Last::Line => {}
         }
-        println!("{text}");
-        *at_line_start = true;
+        spinner.print(&format!("{text}\n"), true);
+        *last = Last::Line;
     };
     while let Some(event) = rx.next().await {
         event.tally(&mut usage);
         match event {
-            Event::Usage { .. } | Event::Tokens { .. } => {}
+            Event::Usage { .. } | Event::Tokens { .. } | Event::Done { .. } => {}
             Event::Message { text } => {
-                print!("{text}");
-                let _ = std::io::stdout().flush();
-                at_line_start = text.ends_with('\n');
+                if tty && last == Last::Line {
+                    spinner.print("\n", true);
+                }
+                let ends = text.ends_with('\n');
+                spinner.print(&text, ends);
+                last = Last::Answer { line_open: !ends };
             }
-            Event::Thought { .. } | Event::Done { .. } => {}
-            Event::ToolCall { title, .. } => line(format!("· {title}"), &mut at_line_start),
+            Event::Thought { .. } => spinner.doing("thinking"),
+            Event::ToolCall { title, .. } => {
+                spinner.doing(&title);
+                if !tty {
+                    line(format!("· {title}"), &mut last);
+                }
+            }
             Event::ToolDone {
                 title,
                 failed,
                 step,
                 ..
             } => {
-                let mark = if failed { "✗" } else { "✓" };
+                spinner.doing("thinking");
+                let mark = if failed {
+                    paint::red("✗")
+                } else {
+                    paint::green("✓")
+                };
+                let indent = if tty { "  " } else { "" };
                 let Some(step) = step else {
-                    line(format!("{mark} {title}"), &mut at_line_start);
+                    line(format!("{indent}{mark} {title}"), &mut last);
                     continue;
                 };
                 let changed: Vec<&str> = step.changes.iter().map(|c| c.path.as_str()).collect();
@@ -864,23 +901,37 @@ async fn print_events(
                 // and `kule steps` has the rest.
                 const SHOWN: usize = 5;
                 let what = match changed.len() {
-                    0 => "no file changes".to_owned(),
-                    n if n <= SHOWN => changed.join(", "),
-                    n => format!("{} and {} more", changed[..SHOWN].join(", "), n - SHOWN),
+                    0 => paint::dim("no file changes"),
+                    n if n <= SHOWN => paint::yellow(&changed.join(", ")),
+                    n => paint::yellow(&format!(
+                        "{} and {} more",
+                        changed[..SHOWN].join(", "),
+                        n - SHOWN
+                    )),
                 };
-                line(
-                    format!("{mark} {title} → step {}: {what}", step.id),
-                    &mut at_line_start,
-                );
+                let step = paint::dim(&format!("→ step {}:", step.id));
+                line(format!("{indent}{mark} {title} {step} {what}"), &mut last);
             }
-            Event::Permission { title, chosen } => line(
-                format!("· permission \"{title}\": {chosen}"),
-                &mut at_line_start,
+            Event::Permission { title, chosen } => {
+                let granted = chosen.to_ascii_lowercase().starts_with("allow");
+                if !tty {
+                    line(format!("· permission \"{title}\": {chosen}"), &mut last);
+                } else if !granted {
+                    line(
+                        format!("  {} {title}: {chosen}", paint::red("✗ permission")),
+                        &mut last,
+                    );
+                }
+            }
+            Event::Plan { entries } => line(
+                format!("{} {}", paint::cyan("plan:"), entries.join(" / ")),
+                &mut last,
             ),
-            Event::Plan { entries } => {
-                line(format!("plan: {}", entries.join(" / ")), &mut at_line_start)
-            }
         }
+    }
+    spinner.stop();
+    if matches!(last, Last::Answer { line_open: true }) {
+        println!();
     }
     usage
 }
@@ -925,7 +976,7 @@ fn print_spent(task: &Task) -> Result<()> {
             })
         );
     }
-    println!("{line}");
+    println!("{}{}", paint::dim("spent:"), &line["spent:".len()..]);
     Ok(())
 }
 
@@ -947,38 +998,44 @@ fn print_connections(log: &[Connection]) {
         } else {
             String::new()
         };
+        // The command line has nobody to ask: what would wait for a person
+        // is refused at once.
         let what = match c.verdict {
-            Verdict::Allow => c.outcome.clone(),
-            Verdict::Ask => "refused, waits for approval".to_owned(),
-            Verdict::Deny => "refused, denied".to_owned(),
+            Verdict::Allow if c.outcome == "tunneled" => paint::green(&c.outcome),
+            Verdict::Allow => paint::yellow(&c.outcome),
+            Verdict::Ask => {
+                paint::red("refused, would wait for approval; the command line asks no one")
+            }
+            Verdict::Deny => paint::red("refused, denied"),
         };
         let secrets = if c.secrets.is_empty() {
             String::new()
         } else {
-            format!(" · with {}", c.secrets.join(", "))
+            format!(" · with {}", paint::cyan(&c.secrets.join(", ")))
         };
         println!(
-            "net: {}:{}{times} · {what}{secrets} ({})",
+            "{} {}:{}{times} · {what}{secrets} {}",
+            paint::dim("net:"),
             c.host,
             c.port,
-            c.rules.join(", ")
+            paint::dim(&format!("({})", c.rules.join(", ")))
         );
     }
 }
 
 fn print_ruling(ruling: &Ruling) {
     let word = |v: Verdict| match v {
-        Verdict::Allow => "passes on its own",
-        Verdict::Ask => "waits for approval",
-        Verdict::Deny => "denied",
+        Verdict::Allow => paint::green("passes on its own"),
+        Verdict::Ask => paint::yellow("waits for approval"),
+        Verdict::Deny => paint::red("denied"),
     };
-    println!("policy: {}", word(ruling.verdict));
+    println!("{} {}", paint::dim("policy:"), word(ruling.verdict));
     for judgement in ruling.holding() {
         println!(
-            "  {} · {} ({})",
+            "  {} · {} {}",
             judgement.subject,
             word(judgement.verdict),
-            judgement.rules.join(", ")
+            paint::dim(&format!("({})", judgement.rules.join(", ")))
         );
     }
 }
@@ -1145,13 +1202,16 @@ fn print_set(task: &Task, set: &EffectSet) {
         };
         let moves = files.iter().filter(moved).count();
         println!(
-            "{} file changes: +{} ~{} -{}{}",
-            files.len(),
+            "{} {}{} {}{} {}{}{}",
+            paint::bold(&format!("{} file changes:", files.len())),
+            coloured('+'),
             count(Change::Created),
+            coloured('~'),
             count(Change::Modified),
+            coloured('-'),
             count(Change::Deleted),
             if moves > 0 {
-                format!(" »{moves}")
+                format!(" {}{moves}", coloured('»'))
             } else {
                 String::new()
             }
@@ -1171,7 +1231,7 @@ fn print_set(task: &Task, set: &EffectSet) {
                     })
                 });
                 if !with_parent {
-                    println!("  » {from}{slash} → {}{slash}", effect.path);
+                    println!("  {} {from}{slash} → {}{slash}", coloured('»'), effect.path);
                 }
                 continue;
             }
@@ -1179,12 +1239,13 @@ fn print_set(task: &Task, set: &EffectSet) {
             match outline.map(|o| &o.outline) {
                 Some(Outline::Skipped { reason }) if *reason != Skip::Binary => {
                     println!(
-                        "  {mark} {}{slash} ({})",
+                        "  {} {}{slash} ({})",
+                        coloured(mark),
                         effect.path,
                         why_not_outlined(*reason)
                     );
                 }
-                _ => println!("  {mark} {}{slash}", effect.path),
+                _ => println!("  {} {}{slash}", coloured(mark), effect.path),
             }
             if let Some(Outline::Changes { changes }) = outline.map(|o| &o.outline) {
                 print_entity_changes(changes);
@@ -1628,6 +1689,19 @@ fn print_meetings(home: &Path, task: &Task) -> Result<()> {
 }
 
 /// What changed inside one file, under its line.
+/// A change's mark in its colour: added green, changed yellow, removed
+/// red, moved cyan.
+fn coloured(mark: char) -> String {
+    let text = mark.to_string();
+    match mark {
+        '+' => paint::green(&text),
+        '~' => paint::yellow(&text),
+        '-' => paint::red(&text),
+        '»' => paint::cyan(&text),
+        _ => text,
+    }
+}
+
 fn print_entity_changes(changes: &[EntityChange]) {
     const SHOWN: usize = 8;
     for change in changes.iter().take(SHOWN) {
@@ -1637,9 +1711,10 @@ fn print_entity_changes(changes: &[EntityChange]) {
             Edit::Removed => '-',
         };
         let kind = change.kind.label();
+        let mark = coloured(mark);
         match change.name.as_str() {
             "" => println!("      {mark} {kind}"),
-            name => println!("      {mark} {kind} {name}"),
+            name => println!("      {mark} {kind} {}", paint::bold(name)),
         }
     }
     if changes.len() > SHOWN {
