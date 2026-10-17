@@ -77,6 +77,11 @@ pub struct TaskView {
     /// Changes the task's commands made in the home directory, waiting.
     #[serde(default)]
     pub home_changes: usize,
+    /// The name the person gave the task.
+    #[serde(default)]
+    pub label: Option<String>,
+    #[serde(default)]
+    pub color: Option<kule_engine::TaskColor>,
 }
 
 /// The ACP registry as the app shows it.
@@ -427,6 +432,23 @@ impl Service {
         self.view(id)
     }
 
+    /// Names the task in the list; blank or `None` takes the name away.
+    pub fn set_label(&self, id: &str, label: Option<&str>) -> Result<TaskView> {
+        self.open(id)?.set_label(label).map_err(text)?;
+        self.view(id)
+    }
+
+    /// Marks the task with a colour in the list; `None` for none.
+    pub fn set_color(&self, id: &str, color: Option<kule_engine::TaskColor>) -> Result<TaskView> {
+        self.open(id)?.set_color(color).map_err(text)?;
+        self.view(id)
+    }
+
+    /// Puts the task list in the person's order.
+    pub fn set_order(&self, ids: &[String]) -> Result<()> {
+        kule_engine::set_task_order(&self.home, ids).map_err(text)
+    }
+
     /// What every task may spend together in 24 hours, and what they did.
     pub fn daily_budget(&self) -> Result<DailyBudget> {
         Ok(DailyBudget {
@@ -492,11 +514,11 @@ impl Service {
         .map_err(text)
     }
 
-    /// Every task, newest first, from each one's last scan; scans older
-    /// than [`FRESH`] are made again in the background.
+    /// Every task in the person's order, those they have not placed first
+    /// and newest first, from each one's last scan; scans older than
+    /// [`FRESH`] are made again in the background.
     pub fn tasks(self: &Arc<Self>) -> Result<Vec<TaskView>> {
-        let mut infos = Task::list(&self.home).map_err(text)?;
-        infos.sort_by(|a, b| (b.created_unix, &b.id).cmp(&(a.created_unix, &a.id)));
+        let infos = kule_engine::arranged(&self.home).map_err(text)?;
         // One task that cannot be read (being removed, damaged) does not
         // hide the others.
         Ok(infos
@@ -918,6 +940,8 @@ impl Service {
             spent: task.spent().map_err(text)?,
             budget: task.budget().map_err(text)?,
             home_changes: task.home_changes().map_or(0, |c| c.len()),
+            label: task.label().map_err(text)?,
+            color: task.color().map_err(text)?,
         })
     }
 
@@ -1264,6 +1288,31 @@ mod tests {
         let first = get(&first);
         assert_eq!((first.changes, first.verdict), (2, Some(Verdict::Ask)));
         assert!(!first.running);
+    }
+
+    #[test]
+    fn the_list_keeps_the_names_colours_and_order_a_person_gave() {
+        let s = Setup::new();
+        let (a, _) = s.task();
+        let (b, _) = s.task();
+        let view = s.app.set_label(&a, Some(" invoices ")).unwrap();
+        assert_eq!(view.label.as_deref(), Some("invoices"));
+        let view = s
+            .app
+            .set_color(&a, Some(kule_engine::TaskColor::Green))
+            .unwrap();
+        assert_eq!(view.color, Some(kule_engine::TaskColor::Green));
+        assert!(s.app.set_label(&a, Some("a\u{202E}b")).is_err());
+        assert!(s.app.set_label("nope", Some("x")).is_err());
+
+        s.app.set_order(&[a.clone(), b.clone()]).unwrap();
+        let ids = |tasks: Vec<TaskView>| tasks.into_iter().map(|t| t.id).collect::<Vec<_>>();
+        assert_eq!(ids(s.settled()), [a.clone(), b.clone()]);
+        s.app.set_order(&[b.clone(), a.clone()]).unwrap();
+        let tasks = s.settled();
+        assert_eq!(tasks[1].label.as_deref(), Some("invoices"));
+        assert_eq!(ids(tasks), [b.clone(), a.clone()]);
+        assert!(s.app.set_order(&[b.clone(), b]).is_err());
     }
 
     #[test]

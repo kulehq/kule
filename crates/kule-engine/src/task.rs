@@ -17,6 +17,7 @@ use crate::error::{Error, IoContext, Result};
 use crate::fsops::{self, read_json, write_json};
 use crate::git::{self, GitState, Part};
 use crate::history::{Entry as HistoryEntry, Event};
+use crate::labels::{self, TaskColor};
 use crate::manifest::{Baseline, Entry, Kind, Stamp, Tree, relative, scan};
 use crate::meet::{self, Touched};
 use crate::outline::{self, FileOutline};
@@ -50,6 +51,11 @@ struct Settings {
     /// What the task's runs may cost, all of them together.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     budget: Option<Money>,
+    /// The name a person gave the task, shown with its folder's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    label: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    color: Option<TaskColor>,
 }
 
 fn default_timeout() -> u64 {
@@ -757,6 +763,8 @@ impl Task {
             return Ok(Settings {
                 approval_timeout_secs: default_timeout(),
                 budget: None,
+                label: None,
+                color: None,
             });
         }
         read_json(&path)
@@ -775,6 +783,30 @@ impl Task {
         }
         let mut settings = self.settings()?;
         settings.budget = budget;
+        write_json(&self.dir.join("settings.json"), &settings)
+    }
+
+    /// The name a person gave the task; `None` until they do.
+    pub fn label(&self) -> Result<Option<String>> {
+        Ok(self.settings()?.label)
+    }
+
+    /// Sets [`Task::label`], trimmed; an empty one clears it.
+    pub fn set_label(&self, label: Option<&str>) -> Result<()> {
+        let label = labels::clean_label(label)?;
+        let mut settings = self.settings()?;
+        settings.label = label;
+        write_json(&self.dir.join("settings.json"), &settings)
+    }
+
+    /// The colour a person marked the task with.
+    pub fn color(&self) -> Result<Option<TaskColor>> {
+        Ok(self.settings()?.color)
+    }
+
+    pub fn set_color(&self, color: Option<TaskColor>) -> Result<()> {
+        let mut settings = self.settings()?;
+        settings.color = color;
         write_json(&self.dir.join("settings.json"), &settings)
     }
 

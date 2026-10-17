@@ -339,6 +339,9 @@ pub fn dispatch(service: &Arc<Service>, call: Call) -> Result<Value, String> {
             json(service.set_approval_timeout(&task, minutes)?)
         }
         Call::SetBudget { task, budget } => json(service.set_budget(&task, budget)?),
+        Call::SetLabel { task, label } => json(service.set_label(&task, label.as_deref())?),
+        Call::SetColor { task, color } => json(service.set_color(&task, color)?),
+        Call::SetOrder { tasks } => json(service.set_order(&tasks)?),
         Call::DailyBudget => json(service.daily_budget()?),
         Call::SetDailyBudget { budget } => json(service.set_daily_budget(budget)?),
         Call::ApplyHome { task, paths } => json(service.apply_home(&task, &paths)?),

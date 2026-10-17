@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use kule_daemon::{
     AgentProfile, Alert, Alerts, Call, Client, Commit, DailyBudget, Hello, Money, Notice, PROTOCOL,
-    Question, Result, Review, RunEvent, Sequenced, TaskView, Timeline, default_home,
+    Question, Result, Review, RunEvent, Sequenced, TaskColor, TaskView, Timeline, default_home,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -301,6 +301,21 @@ fn set_budget(kule: K<'_>, task: String, budget: Option<Money>) -> Result<TaskVi
 }
 
 #[tauri::command(async)]
+fn set_label(kule: K<'_>, task: String, label: Option<String>) -> Result<TaskView> {
+    kule.call(Call::SetLabel { task, label })
+}
+
+#[tauri::command(async)]
+fn set_color(kule: K<'_>, task: String, color: Option<TaskColor>) -> Result<TaskView> {
+    kule.call(Call::SetColor { task, color })
+}
+
+#[tauri::command(async)]
+fn set_order(kule: K<'_>, tasks: Vec<String>) -> Result<()> {
+    kule.call(Call::SetOrder { tasks })
+}
+
+#[tauri::command(async)]
 fn daily_budget(kule: K<'_>) -> Result<DailyBudget> {
     kule.call(Call::DailyBudget)
 }
@@ -457,6 +472,9 @@ fn main() {
             rule_impact,
             set_approval_timeout,
             set_budget,
+            set_label,
+            set_color,
+            set_order,
             daily_budget,
             set_daily_budget,
             start_run,

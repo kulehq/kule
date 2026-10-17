@@ -10,7 +10,7 @@ use kule_engine::entities::{Change as EntityChange, Edit, Outline, Skip};
 use kule_engine::{
     Change, Connection, DEFAULT_POLICY, Denial, DiffSkip, Effect, EffectSet, Error, GitSummary,
     Kind, LineKind, Money, Network, Policy, Proxy, RefChange, Ruling, RunUsage, Sandbox, Task,
-    TextDiff, Verdict, connections, meet, record_denials,
+    TaskColor, TextDiff, Verdict, connections, meet, record_denials,
 };
 
 /// Kule engine: run commands in a sandbox on a copy-on-write copy of a
@@ -141,8 +141,14 @@ enum AgentsCmd {
 enum Cmd {
     /// Create a task: a copy-on-write copy of WORKSPACE.
     New { workspace: PathBuf },
-    /// List tasks.
+    /// List tasks, in the order the app shows them.
     List,
+    /// Give the task a name, shown with its folder's; without NAME, take
+    /// it away.
+    Name { task: String, name: Option<String> },
+    /// Mark the task with a colour (red, orange, yellow, green, teal, blue,
+    /// purple, pink); without COLOR, take it away.
+    Color { task: String, color: Option<String> },
     /// Open your shell in the task's copy, outside the sandbox. What you
     /// change there is reviewed and committed like the agent's work.
     Shell { task: String },
@@ -318,9 +324,24 @@ fn run() -> Result<ExitCode> {
             println!("task {} · copy at {}", task.id(), task.copy().display());
         }
         Cmd::List => {
-            for info in Task::list(&home)? {
-                println!("{}  {}", info.id, info.workspace.display());
+            for info in kule_engine::arranged(&home)? {
+                let task = Task::open(&home, &info.id)?;
+                let mut line = format!("{}  {}", info.id, info.workspace.display());
+                if let Some(label) = task.label()? {
+                    line += &format!(" · {label}");
+                }
+                if let Some(color) = task.color()? {
+                    line += &format!(" ({})", color.name());
+                }
+                println!("{line}");
             }
+        }
+        Cmd::Name { task, name } => {
+            Task::open(&home, &task)?.set_label(name.as_deref())?;
+        }
+        Cmd::Color { task, color } => {
+            let color = color.as_deref().map(TaskColor::parse).transpose()?;
+            Task::open(&home, &task)?.set_color(color)?;
         }
         Cmd::Shell { task } => {
             let task = Task::open(&home, &task)?;

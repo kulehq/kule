@@ -26,6 +26,7 @@ mod git;
 mod history;
 mod home;
 mod ignore;
+mod labels;
 mod manifest;
 mod meet;
 #[cfg(target_os = "linux")]
@@ -56,6 +57,7 @@ pub use git::{GitState, GitSummary, RefChange};
 pub use history::{Entry as HistoryEntry, Event as HistoryEvent};
 pub use home::{HomeApplied, HomeChange};
 pub use kule_entities as entities;
+pub use labels::{MAX_LABEL, ORDER_FILE, TaskColor, arranged, set_task_order, task_order};
 pub use manifest::Kind;
 pub use meet::{Meeting, Touched, changed_entities, meet, touched};
 pub use network::{Connection, Proxy, connections};

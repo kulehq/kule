@@ -10,7 +10,7 @@ use serde_json::Value;
 
 /// Changes whenever a call, a result or a notice changes shape; a client
 /// and a daemon that disagree on it cannot talk.
-pub const PROTOCOL: u32 = 12;
+pub const PROTOCOL: u32 = 13;
 
 /// What a daemon says about itself.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -109,6 +109,22 @@ pub enum Call {
     SetBudget {
         task: String,
         budget: Option<kule_engine::Money>,
+    },
+    /// A name for the task, shown with its folder's; `None` or blank clears
+    /// it.
+    SetLabel {
+        task: String,
+        label: Option<String>,
+    },
+    /// `None` for no colour.
+    SetColor {
+        task: String,
+        color: Option<kule_engine::TaskColor>,
+    },
+    /// The order the task list comes in, as task ids; tasks left out come
+    /// first.
+    SetOrder {
+        tasks: Vec<String>,
     },
     /// What every task may spend together in 24 hours, and what they did.
     DailyBudget,

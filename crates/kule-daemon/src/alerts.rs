@@ -162,6 +162,8 @@ mod tests {
             spent: Default::default(),
             budget: None,
             home_changes: 0,
+            label: None,
+            color: None,
         }
     }
 

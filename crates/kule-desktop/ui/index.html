@@ -28,25 +28,31 @@
         <p class="nav-empty" id="tasks-empty" hidden>No tasks yet.</p>
       </section>
       <div class="sidebar-foot">
-        <div class="daily">
-          <label
-            class="daily-pick"
-            title="What every task may cost together in any 24 hours, as the agents report it. No run starts anywhere once it is spent; a run is held to what is left. Empty for no limit."
-          >
-            Daily budget
-            <input id="daily-budget" type="number" min="0" step="1" inputmode="decimal" placeholder="none" />
-            <span id="daily-currency">USD</span>
-          </label>
-          <span class="daily-spent" id="daily-spent"></span>
-        </div>
-        <button id="open-rules" class="button ghost wide" type="button">Rules</button>
-        <button id="open-secrets" class="button ghost wide" type="button">Secrets</button>
-        <button id="open-agents" class="button ghost wide" type="button">Agents</button>
+        <button id="open-settings" class="button ghost wide settings-button" type="button">
+          <svg viewBox="0 0 16 16" aria-hidden="true">
+            <path
+              d="M6.6 1.5h2.8l.4 1.9 1.2.7 1.8-.6 1.4 2.4-1.4 1.3v1.6l1.4 1.3-1.4 2.4-1.8-.6-1.2.7-.4 1.9H6.6l-.4-1.9-1.2-.7-1.8.6-1.4-2.4 1.4-1.3V7.2L1.8 5.9l1.4-2.4 1.8.6 1.2-.7z"
+            />
+            <circle cx="8" cy="8" r="2" />
+          </svg>
+          Settings
+        </button>
       </div>
     </aside>
 
     <main class="main">
-      <section class="agents-view" id="agents-view" aria-labelledby="agents-title" hidden></section>
+      <section class="settings" id="settings" aria-labelledby="settings-title" hidden>
+        <header class="settings-head">
+          <h1 id="settings-title">Settings</h1>
+          <nav class="tabs" role="tablist" aria-label="Settings" id="settings-tabs">
+            <button class="tab" role="tab" id="settings-agents" aria-controls="agents-view" data-view="agents" type="button">Agents</button>
+            <button class="tab" role="tab" id="settings-rules" aria-controls="agents-view" data-view="rules" type="button">Rules</button>
+            <button class="tab" role="tab" id="settings-secrets" aria-controls="agents-view" data-view="secrets" type="button">Secrets</button>
+            <button class="tab" role="tab" id="settings-budget" aria-controls="agents-view" data-view="budget" type="button">Budget</button>
+          </nav>
+        </header>
+        <section class="agents-view" id="agents-view" role="tabpanel"></section>
+      </section>
       <section class="empty-state" id="empty">
         <h1>A control room for your agents</h1>
         <p>

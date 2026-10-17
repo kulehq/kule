@@ -104,7 +104,7 @@ const liveCost = new Map();
 const state = {
   tasks: [],
   current: null,
-  /** "tasks", or "agents" or "rules" while those are shown. */
+  /** "tasks", or the section of Settings shown: one of SETTINGS. */
   view: "tasks",
   /** Per task, the held files the person ticked not to be asked about again. */
   remember: new Map(),
@@ -144,50 +144,98 @@ function taskChip(task) {
   return null;
 }
 
+/** The colours a task can be marked with; the daemon takes no others. */
+const COLORS = ["red", "orange", "yellow", "green", "teal", "blue", "purple", "pink"];
+
+/** The folder's name, and the one the person gave the task after it. */
+function taskName(task) {
+  const folder = baseName(task.workspace);
+  return task.label ? `${folder} – ${task.label}` : folder;
+}
+
 function taskItem(task, list) {
   const parts = [task.scanning ? "checking…" : task.changes ? plural(task.changes, "change") : "no changes"];
   if (task.ignored) parts.push(`${task.ignored} ignored`);
   const others = new Set((task.overlaps || []).map((o) => o.task)).size;
   if (others) parts.push(`meets ${plural(others, "task")}`);
   const sub = `${parts.join(", ")} · ${task.id}`;
+  const ordered = list === "tasks";
+  const item = h(
+    "button",
+    {
+      class: "task-item",
+      "data-key": `${list}:${task.id}`,
+      type: "button",
+      "aria-current": task.id === state.current ? "true" : "false",
+      "aria-keyshortcuts": ordered ? "Alt+ArrowUp Alt+ArrowDown" : undefined,
+      title: ordered ? `${task.workspace}\nDrag, or Alt+↑/↓, to move it in the list.` : task.workspace,
+      onclick: (e) => {
+        // The click a drag ends with does not open the task.
+        if (dragged) {
+          e.preventDefault();
+          return;
+        }
+        select(task.id);
+      },
+      oncontextmenu: (e) => {
+        e.preventDefault();
+        taskMenu(task, list, e);
+      },
+      onkeydown: (e) => {
+        if (!ordered || !e.altKey || (e.key !== "ArrowUp" && e.key !== "ArrowDown")) return;
+        e.preventDefault();
+        moveTask(task.id, e.key === "ArrowUp" ? -1 : 1);
+      },
+      onpointerdown: ordered ? (e) => dragStart(e, task.id) : undefined,
+    },
+    h(
+      "span",
+      { class: "task-item-name" },
+      h("span", { class: "task-folder" }, baseName(task.workspace)),
+      task.label ? h("span", { class: "task-label" }, ` – ${task.label}`) : null
+    ),
+    taskChip(task),
+    h("span", { class: "task-item-sub" }, sub)
+  );
+  const more = h(
+    "button",
+    {
+      class: "task-more",
+      type: "button",
+      "data-key": `${list}:${task.id}:more`,
+      "aria-label": `Actions for ${taskName(task)}`,
+      "aria-haspopup": "menu",
+      "aria-expanded": "false",
+      onclick: (e) => taskMenu(task, list, e),
+    },
+    h("span", { "aria-hidden": "true" }, "⋮")
+  );
   return h(
     "li",
-    {},
-    h(
-      "button",
-      {
-        class: "task-item",
-        "data-key": `${list}:${task.id}`,
-        type: "button",
-        "aria-current": task.id === state.current ? "true" : "false",
-        title: task.workspace,
-        onclick: () => select(task.id),
-        oncontextmenu: (e) => {
-          e.preventDefault();
-          taskMenu(task, e);
-        },
-      },
-      h("span", { class: "task-item-name" }, baseName(task.workspace)),
-      taskChip(task),
-      h("span", { class: "task-item-sub" }, sub)
-    )
+    { class: `task-row${task.color ? ` color-${task.color}` : ""}`, "data-task": task.id },
+    item,
+    more
   );
 }
 
-/** The menu a task opens on a right click (or the menu key): the task's
- * actions next to it, Delete armed as the button in the task view is. */
-function taskMenu(task, e) {
+/** A task's actions: from its ⋮ button, a right click or the menu key.
+ * Delete is armed as the button in the task view is. */
+function taskMenu(task, list, e) {
+  const opener = e.currentTarget.closest(".task-row").querySelector(".task-more");
+  const wasOpen = $("task-menu")?.opener === opener;
   closeMenu();
+  // A second click on the ⋮ that opened the menu closes it.
+  if (wasOpen && e.type === "click") return;
+  const name = taskName(task);
+  const item = (label, action, attrs) =>
+    h("button", { class: "menu-item", type: "button", role: "menuitem", onclick: action, ...attrs }, label);
+
   const busy = task.running;
-  const remove = h(
-    "button",
-    { class: "menu-item danger", type: "button", role: "menuitem", disabled: busy },
-    busy ? "Delete task (agent at work)" : "Delete task"
-  );
+  const remove = item(busy ? "Delete task (agent at work)" : "Delete task", null, { class: "menu-item danger", disabled: busy });
   remove.addEventListener("click", async () => {
     if (!remove.classList.contains("armed")) {
       remove.classList.add("armed");
-      remove.textContent = `Click again to delete ${baseName(task.workspace)}`;
+      remove.textContent = `Click again to delete ${name}`;
       setTimeout(() => {
         remove.classList.remove("armed");
         remove.textContent = "Delete task";
@@ -197,45 +245,244 @@ function taskMenu(task, e) {
     closeMenu();
     await removeTask(task);
   });
+
+  const at = state.tasks.findIndex((t) => t.id === task.id);
+  const swatches = [null, ...COLORS].map((color) =>
+    h(
+      "button",
+      {
+        class: `swatch ${color ? `color-${color}` : "swatch-none"}`,
+        type: "button",
+        role: "menuitemradio",
+        "aria-checked": String((task.color || null) === color),
+        "aria-label": color ? `Colour ${color}` : "No colour",
+        title: color || "No colour",
+        onclick: () => (closeMenu(true), setColor(task, color)),
+      }
+    )
+  );
   const items = [
-    h("button", { class: "menu-item", type: "button", role: "menuitem", onclick: () => (closeMenu(), openTerminal(task)) }, "Open terminal"),
+    item("Rename…", () => renameTask(task, menu)),
+    ...swatches,
+    item("Move up", () => (closeMenu(true), moveTask(task.id, -1)), { disabled: list !== "tasks" || at <= 0, "aria-keyshortcuts": "Alt+ArrowUp" }),
+    item("Move down", () => (closeMenu(true), moveTask(task.id, 1)), {
+      disabled: list !== "tasks" || at === state.tasks.length - 1,
+      "aria-keyshortcuts": "Alt+ArrowDown",
+    }),
+    item("Open terminal", () => (closeMenu(), openTerminal(task))),
     remove,
   ];
-  const menu = h("div", { class: "menu", id: "task-menu", role: "menu", "aria-label": `Task ${baseName(task.workspace)}` }, items);
+  const menu = h(
+    "div",
+    { class: "menu", id: "task-menu", role: "menu", "aria-label": `Task ${name}` },
+    items[0],
+    h("div", { class: "menu-swatches", role: "group", "aria-label": "Colour" }, swatches),
+    h("hr", { class: "menu-rule" }),
+    items.slice(swatches.length + 1, swatches.length + 3),
+    h("hr", { class: "menu-rule" }),
+    items.slice(swatches.length + 3)
+  );
+  menu.items = items;
+  menu.opener = opener;
+  opener.setAttribute("aria-expanded", "true");
   document.body.append(menu);
-  // At the pointer, or under the task when the keyboard opened it; kept on screen.
-  const from = e.currentTarget.getBoundingClientRect();
-  const keyboard = e.clientX === 0 && e.clientY === 0;
-  const x = keyboard ? from.left + 8 : e.clientX;
-  const y = keyboard ? from.bottom : e.clientY;
-  menu.style.left = `${Math.min(x, window.innerWidth - menu.offsetWidth - 8)}px`;
-  menu.style.top = `${Math.min(y, window.innerHeight - menu.offsetHeight - 8)}px`;
-  menu.opener = e.currentTarget;
+  placeMenu(menu, e);
   items[0].focus();
   menu.addEventListener("keydown", (k) => {
-    const live = items.filter((i) => !i.disabled);
-    const at = live.indexOf(document.activeElement);
+    if (k.target.tagName === "INPUT") return;
+    const live = menu.items.filter((i) => !i.disabled && i.isConnected);
+    const here = live.indexOf(document.activeElement);
     if (k.key === "Escape") {
       k.preventDefault();
       closeMenu(true);
-    } else if (k.key === "ArrowDown" || k.key === "ArrowUp") {
+    } else if (k.key === "ArrowDown" || k.key === "ArrowUp" || k.key === "ArrowRight" || k.key === "ArrowLeft") {
       k.preventDefault();
-      const step = k.key === "ArrowDown" ? 1 : -1;
-      live[(at + step + live.length) % live.length].focus();
+      const step = k.key === "ArrowDown" || k.key === "ArrowRight" ? 1 : -1;
+      live[(here + step + live.length) % live.length].focus();
     } else if (k.key === "Tab") {
       closeMenu(true);
     }
   });
 }
 
+/** Under the ⋮ that opened it, at the pointer for a right click, under the
+ * task for the menu key; kept on screen. */
+function placeMenu(menu, e) {
+  const target = e.currentTarget.getBoundingClientRect();
+  let x;
+  let y;
+  if (e.type === "click") {
+    x = target.right - menu.offsetWidth;
+    y = target.bottom + 2;
+  } else if (e.clientX === 0 && e.clientY === 0) {
+    x = target.left + 8;
+    y = target.bottom;
+  } else {
+    x = e.clientX;
+    y = e.clientY;
+  }
+  menu.style.left = `${Math.max(8, Math.min(x, window.innerWidth - menu.offsetWidth - 8))}px`;
+  menu.style.top = `${Math.max(8, Math.min(y, window.innerHeight - menu.offsetHeight - 8))}px`;
+}
+
 function closeMenu(refocus) {
   const menu = $("task-menu");
   if (!menu) return;
   menu.remove();
+  menu.opener?.setAttribute("aria-expanded", "false");
   if (refocus && menu.opener?.isConnected) menu.opener.focus();
 }
 
+/** Turns the menu into a field for the task's name. */
+function renameTask(task, menu) {
+  const input = h("input", {
+    id: "task-label",
+    type: "text",
+    maxlength: 60,
+    autocomplete: "off",
+    spellcheck: "false",
+    value: task.label || "",
+    placeholder: "A name for this task",
+  });
+  const save = async () => {
+    closeMenu(true);
+    await setLabel(task, input.value);
+  };
+  input.addEventListener("keydown", (k) => {
+    if (k.key === "Enter") {
+      k.preventDefault();
+      save();
+    } else if (k.key === "Escape") {
+      k.preventDefault();
+      closeMenu(true);
+    }
+  });
+  const saveButton = h("button", { class: "button primary", type: "button", onclick: save }, "Save");
+  const clear = h(
+    "button",
+    { class: "button ghost", type: "button", disabled: !task.label, onclick: () => ((input.value = ""), save()) },
+    "Clear"
+  );
+  menu.items = [saveButton, clear];
+  menu.replaceChildren(
+    h(
+      "label",
+      { class: "menu-field", for: "task-label" },
+      h("span", { class: "menu-field-label" }, `Name, shown after ${baseName(task.workspace)}`),
+      input
+    ),
+    h("div", { class: "menu-field-actions" }, clear, saveButton)
+  );
+  input.focus();
+  input.select();
+}
+
+async function setLabel(task, label) {
+  try {
+    await call("set_label", { task: task.id, label: label.trim() || null });
+  } catch (err) {
+    fail(err);
+  }
+  await refresh();
+}
+
+async function setColor(task, color) {
+  try {
+    await call("set_color", { task: task.id, color });
+  } catch (err) {
+    fail(err);
+  }
+  await refresh();
+}
+
+/** Moves a task `by` places in the list, and keeps the order. */
+async function moveTask(id, by) {
+  const from = state.tasks.findIndex((t) => t.id === id);
+  const to = from + by;
+  if (from === -1 || to < 0 || to >= state.tasks.length) return;
+  await putInOrder(id, to);
+  // The keyboard stays on the task it moved.
+  document.querySelector(`#tasks [data-key="${CSS.escape(`tasks:${id}`)}"]`)?.focus();
+}
+
+/** Puts task `id` at index `to` of the list: drawn at once, then kept. */
+async function putInOrder(id, to) {
+  const tasks = state.tasks.slice();
+  const from = tasks.findIndex((t) => t.id === id);
+  if (from === -1 || from === to) return;
+  tasks.splice(to, 0, ...tasks.splice(from, 1));
+  state.tasks = tasks;
+  // A refresh already on its way would draw the order before this one.
+  refreshToken++;
+  renderSidebar();
+  try {
+    await call("set_order", { tasks: tasks.map((t) => t.id) });
+  } catch (err) {
+    fail(err);
+    await refresh();
+  }
+}
+
+// --- Dragging a task in the list ---------------------------------------------
+
+// Pointer events rather than HTML drag and drop, which the window's own file
+// drop handling can swallow.
+
+/** The task being dragged: { id, startY, row, moved }. */
+let drag = null;
+/** True from a drag's end to the click it ends with. */
+let dragged = false;
+
+function dragStart(e, id) {
+  if (e.button !== 0 || e.pointerType === "touch") return;
+  drag = { id, startY: e.clientY, row: e.currentTarget.closest(".task-row"), moved: false, pointer: e.pointerId };
+}
+
+function dragMove(e) {
+  if (!drag || e.pointerId !== drag.pointer) return;
+  if (!drag.moved) {
+    if (Math.abs(e.clientY - drag.startY) < 6) return;
+    drag.moved = true;
+    closeMenu();
+    drag.row.classList.add("dragging");
+    document.body.classList.add("dragging-task");
+  }
+  const rows = [...$("tasks").querySelectorAll(".task-row")];
+  for (const row of rows) row.classList.remove("drop-before", "drop-after");
+  const over = rows.find((row) => {
+    const r = row.getBoundingClientRect();
+    return e.clientY < r.bottom;
+  });
+  if (over) over.classList.add("drop-before");
+  else if (rows.length) rows[rows.length - 1].classList.add("drop-after");
+}
+
+function dragEnd(e) {
+  if (!drag || e.pointerId !== drag.pointer) return;
+  const { id, moved, row } = drag;
+  drag = null;
+  if (!moved) return;
+  dragged = true;
+  setTimeout(() => (dragged = false), 0);
+  document.body.classList.remove("dragging-task");
+  row.classList.remove("dragging");
+  const rows = [...$("tasks").querySelectorAll(".task-row")];
+  const before = rows.findIndex((r) => r.classList.contains("drop-before"));
+  for (const r of rows) r.classList.remove("drop-before", "drop-after");
+  if (e.type === "pointercancel") {
+    renderSidebar();
+    return;
+  }
+  const from = state.tasks.findIndex((t) => t.id === id);
+  // `before` counts the dragged row itself, which leaves its place.
+  let to = before === -1 ? state.tasks.length : before;
+  if (to > from) to -= 1;
+  putInOrder(id, to);
+}
+
 function renderSidebar() {
+  // A list redrawn under a drag would lose the rows it moves between.
+  if (drag?.moved) return;
   const waiting = state.tasks.filter(
     (t) => questionsOf(t.id).length || (!t.running && (t.verdict === "ask" || t.verdict === "deny"))
   );
@@ -248,12 +495,16 @@ function renderSidebar() {
 // --- Task view -------------------------------------------------------------
 
 function renderTask() {
-  const agents = ["agents", "rules", "secrets"].includes(state.view);
-  $("agents-view").hidden = !agents;
-  $("open-agents").setAttribute("aria-current", state.view === "agents" ? "page" : "false");
-  $("open-rules").setAttribute("aria-current", state.view === "rules" ? "page" : "false");
-  $("open-secrets").setAttribute("aria-current", state.view === "secrets" ? "page" : "false");
-  if (agents) {
+  const settings = SETTINGS.includes(state.view);
+  $("settings").hidden = !settings;
+  $("open-settings").setAttribute("aria-current", settings ? "page" : "false");
+  for (const tab of document.querySelectorAll("#settings-tabs .tab")) {
+    const selected = tab.dataset.view === state.view;
+    tab.setAttribute("aria-selected", String(selected));
+    tab.tabIndex = selected ? 0 : -1;
+    if (selected) $("agents-view").setAttribute("aria-labelledby", tab.id);
+  }
+  if (settings) {
     $("empty").hidden = true;
     $("task").hidden = true;
     return;
@@ -263,7 +514,9 @@ function renderTask() {
   $("task").hidden = !task;
   if (!task) return;
 
-  $("task-name").textContent = baseName(task.workspace);
+  $("task-name").textContent = taskName(task);
+  const mark = $("task-name").closest(".task-header");
+  mark.className = `task-header${task.color ? ` color-${task.color}` : ""}`;
   $("task-path").textContent = `${task.workspace} · task ${task.id} · ${when(task.created_unix)}`;
   const chip = $("task-state");
   chip.className = "chip";
@@ -355,8 +608,61 @@ function renderSpent(task) {
   chip.textContent = parts.join(" · ") || "nothing spent yet";
 }
 
-/** What every task spent in the last 24 hours, against the daily budget. */
+/** Settings' sections, each a value of `state.view`. */
+const SETTINGS = ["agents", "rules", "secrets", "budget"];
+
+async function openSettings(view = SETTINGS.includes(state.view) ? state.view : "agents") {
+  closeMenu();
+  const opening = { agents: openAgents, rules: openRules, secrets: openSecrets, budget: openBudget }[view];
+  await opening();
+}
+
+async function openBudget() {
+  state.view = "budget";
+  renderSidebar();
+  renderTask();
+  replace(
+    $("agents-view"),
+    h(
+      "header",
+      { class: "agents-head" },
+      h("h2", {}, "Budget"),
+      h(
+        "p",
+        { class: "muted" },
+        "What every task may cost together in any 24 hours, as the agents report it. No run starts anywhere once it is spent, and a run is held to what is left. A task's own budget is set under its prompt; the tighter of the two holds."
+      )
+    ),
+    h(
+      "div",
+      { class: "agent-card daily" },
+      h(
+        "label",
+        { class: "daily-pick", for: "daily-budget" },
+        "Daily budget",
+        h("input", {
+          id: "daily-budget",
+          type: "number",
+          min: 0,
+          step: 1,
+          inputmode: "decimal",
+          placeholder: "none",
+          "aria-describedby": "daily-spent",
+          onchange: setDailyBudget,
+        }),
+        h("span", { id: "daily-currency" }, "USD")
+      ),
+      h("span", { class: "daily-spent", id: "daily-spent", "aria-live": "polite" }),
+      h("span", { class: "muted" }, "Empty for no limit.")
+    )
+  );
+  await loadDaily();
+}
+
+/** What every task spent in the last 24 hours, against the daily budget;
+ * shown while Settings has Budget open. */
 function renderDaily(daily) {
+  if (!$("daily-budget")) return;
   const { budget, spent } = daily;
   if (document.activeElement !== $("daily-budget")) {
     $("daily-budget").value = budget ? String(budget.amount) : "";
@@ -377,6 +683,7 @@ function renderDaily(daily) {
 }
 
 async function loadDaily() {
+  if (state.view !== "budget") return;
   try {
     renderDaily(await call("daily_budget"));
   } catch (err) {
@@ -1189,6 +1496,13 @@ function movesGroup(moves) {
  * Files another task on the same folder changes too, and what in them:
  * whichever commits second will meet a conflict there.
  */
+/** " (its name)" for a task the person named; tasks on one folder share
+ * the folder's. */
+function otherLabel(id) {
+  const label = state.tasks.find((t) => t.id === id)?.label;
+  return label ? ` (${label})` : "";
+}
+
 function meetsGroup(task) {
   const overlaps = (task && task.overlaps) || [];
   if (overlaps.length === 0) return [];
@@ -1207,7 +1521,7 @@ function meetsGroup(task) {
             {},
             o.path,
             h("span", { class: "entity-note" }, o.entities.length ? ` ${o.entities.join(", ")}` : " the whole file"),
-            h("span", { class: "entity-note" }, ` · task ${o.task}`)
+            h("span", { class: "entity-note" }, ` · task ${o.task}${otherLabel(o.task)}`)
           )
         )
       )
@@ -1338,7 +1652,7 @@ async function renderRules() {
     h(
       "header",
       { class: "agents-head" },
-      h("h1", { id: "agents-title" }, "Rules"),
+      h("h2", {}, "Rules"),
       h(
         "p",
         { class: "muted" },
@@ -1420,7 +1734,7 @@ async function renderSecrets() {
     h(
       "header",
       { class: "agents-head" },
-      h("h1", { id: "agents-title" }, "Secrets"),
+      h("h2", {}, "Secrets"),
       h(
         "p",
         { class: "muted" },
@@ -1856,7 +2170,7 @@ function renderAgents() {
     h(
       "header",
       { class: "agents-head" },
-      h("h1", { id: "agents-title" }, "Agents"),
+      h("h2", {}, "Agents"),
       h(
         "p",
         { class: "muted" },
@@ -2182,7 +2496,7 @@ async function start() {
     "Delete task",
     () => {
       const task = currentTask();
-      return task ? `Click again to delete ${baseName(task.workspace)} (${task.id})` : "Click again to delete";
+      return task ? `Click again to delete ${taskName(task)} (${task.id})` : "Click again to delete";
     },
     false,
     removeTask
@@ -2197,9 +2511,24 @@ async function start() {
   window.addEventListener("resize", () => closeMenu());
 
   await loadAgentChoices();
-  $("open-agents").addEventListener("click", openAgents);
-  $("open-rules").addEventListener("click", openRules);
-  $("open-secrets").addEventListener("click", openSecrets);
+  $("open-settings").addEventListener("click", () => openSettings());
+  const sections = [...document.querySelectorAll("#settings-tabs .tab")];
+  for (const tab of sections) {
+    tab.addEventListener("click", () => openSettings(tab.dataset.view));
+  }
+  $("settings-tabs").addEventListener("keydown", (e) => {
+    const at = sections.indexOf(document.activeElement);
+    if (at === -1) return;
+    const to = { ArrowRight: at + 1, ArrowLeft: at - 1, Home: 0, End: sections.length - 1 }[e.key];
+    if (to === undefined) return;
+    e.preventDefault();
+    const tab = sections[(to + sections.length) % sections.length];
+    openSettings(tab.dataset.view).then(() => tab.focus());
+  });
+  // Dragging a task in the list.
+  document.addEventListener("pointermove", dragMove);
+  document.addEventListener("pointerup", dragEnd);
+  document.addEventListener("pointercancel", dragEnd);
 
   await backend.onRun(onRun);
   await backend.onQuestions(onQuestions);
@@ -2219,7 +2548,6 @@ async function start() {
   }
   $("timeout").addEventListener("change", setTimeoutFor);
   $("budget").addEventListener("change", setBudgetFor);
-  $("daily-budget").addEventListener("change", setDailyBudget);
   // Counts down the deadlines without re-rendering the cards.
   setInterval(() => {
     for (const el of document.querySelectorAll(".countdown")) {

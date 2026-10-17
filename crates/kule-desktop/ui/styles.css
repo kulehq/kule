@@ -18,6 +18,15 @@
   --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --radius: 8px;
+  /* The colours a person can mark a task with. */
+  --tag-red: #dc2626;
+  --tag-orange: #ea580c;
+  --tag-yellow: #ca8a04;
+  --tag-green: #16a34a;
+  --tag-teal: #0d9488;
+  --tag-blue: #2563eb;
+  --tag-purple: #9333ea;
+  --tag-pink: #db2777;
   color-scheme: light;
 }
 
@@ -39,6 +48,14 @@
     --ask-soft: #3a2c0f;
     --deny: #f87171;
     --deny-soft: #3d1717;
+    --tag-red: #f87171;
+    --tag-orange: #fb923c;
+    --tag-yellow: #facc15;
+    --tag-green: #4ade80;
+    --tag-teal: #2dd4bf;
+    --tag-blue: #60a5fa;
+    --tag-purple: #c084fc;
+    --tag-pink: #f472b6;
     color-scheme: dark;
   }
 }
@@ -163,6 +180,128 @@ p {
   font: 12px var(--mono);
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* The folder's name stays whole; a long name the person gave is cut. */
+.task-item-name {
+  display: flex;
+  min-width: 0;
+}
+
+.task-folder {
+  flex-shrink: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.task-label {
+  min-width: 0;
+  overflow: hidden;
+  font-weight: 450;
+  text-overflow: ellipsis;
+  white-space: pre;
+}
+
+/* A task in the list: the task, its ⋮ menu button, and its colour as a
+   stripe on the left. */
+.task-row {
+  position: relative;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: start;
+  border-radius: 6px;
+}
+
+/* The name has the first line to itself; the state chip goes with the
+   numbers under it. */
+.task-row .task-item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  min-width: 0;
+  padding-right: 4px;
+}
+
+.task-row .task-item-name {
+  flex: 1 0 100%;
+}
+
+.task-row .task-item-sub {
+  min-width: 0;
+  flex: 1 1 0;
+}
+
+.task-row .chip {
+  padding-block: 0;
+  font-size: 11px;
+}
+
+.task-more {
+  width: 24px;
+  height: 28px;
+  margin: 4px 2px 0 0;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--faint);
+  font: 600 16px/1 var(--sans);
+  cursor: pointer;
+}
+
+.task-more:hover,
+.task-more[aria-expanded="true"] {
+  background: var(--sunken);
+  color: var(--text);
+}
+
+.task-more:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.color-red { --tag: var(--tag-red); }
+.color-orange { --tag: var(--tag-orange); }
+.color-yellow { --tag: var(--tag-yellow); }
+.color-green { --tag: var(--tag-green); }
+.color-teal { --tag: var(--tag-teal); }
+.color-blue { --tag: var(--tag-blue); }
+.color-purple { --tag: var(--tag-purple); }
+.color-pink { --tag: var(--tag-pink); }
+
+.task-row[class*="color-"]::before {
+  position: absolute;
+  top: 7px;
+  bottom: 7px;
+  left: 0;
+  width: 3px;
+  border-radius: 2px;
+  background: var(--tag);
+  content: "";
+}
+
+.task-header[class*="color-"] .task-title {
+  padding-left: 10px;
+  border-left: 4px solid var(--tag);
+}
+
+/* Moving a task in the list. */
+body.dragging-task {
+  cursor: grabbing;
+  user-select: none;
+}
+
+.task-row.dragging {
+  opacity: 0.45;
+}
+
+.task-row.drop-before {
+  box-shadow: 0 -2px 0 var(--accent);
+}
+
+.task-row.drop-after {
+  box-shadow: 0 2px 0 var(--accent);
 }
 
 /* Buttons and chips */
@@ -1258,29 +1397,137 @@ select:focus-visible {
   color: var(--deny);
 }
 
-/* What every task may spend in a day, at the foot of the sidebar. */
+.menu-rule {
+  width: 100%;
+  margin: 4px 0;
+  border: 0;
+  border-top: 1px solid var(--border);
+}
+
+.menu-swatches {
+  display: flex;
+  gap: 6px;
+  padding: 6px 10px;
+}
+
+.swatch {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 50%;
+  background: var(--tag);
+  cursor: pointer;
+}
+
+.swatch-none {
+  border-color: var(--border);
+  background: linear-gradient(135deg, transparent 45%, var(--faint) 45% 55%, transparent 55%);
+}
+
+.swatch[aria-checked="true"] {
+  box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--text);
+}
+
+.swatch:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+.menu-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px;
+}
+
+.menu-field-label {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.menu-field input {
+  width: 240px;
+  min-height: 30px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+}
+
+.menu-field-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  padding: 0 6px 6px;
+}
+
+/* Settings: agents, rules, secrets and the daily budget, one section at a time. */
+.settings {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+}
+
+.settings-head {
+  padding: 18px 0 0;
+}
+
+.settings-head h1 {
+  margin: 0 24px 10px;
+  font-size: 20px;
+  font-weight: 650;
+}
+
+.settings-head .tabs {
+  padding: 0 14px;
+}
+
+.agents-head h2 {
+  font-size: 17px;
+  font-weight: 650;
+}
+
+.settings-button svg {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.2;
+  stroke-linejoin: round;
+}
+
 .daily {
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  margin-bottom: 8px;
-  padding: 0 8px;
-  font-size: 12px;
+  align-items: flex-start;
+  gap: 6px;
+  max-width: 420px;
 }
 
 .daily-pick {
   display: flex;
   align-items: center;
-  gap: 6px;
-  color: var(--muted);
+  gap: 8px;
+  font-weight: 550;
 }
 
 .daily-pick input {
-  width: 64px;
+  width: 7em;
+  min-height: 30px;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
 }
 
 .daily-spent {
-  color: var(--faint);
+  color: var(--muted);
 }
 
 .daily-spent.ask {

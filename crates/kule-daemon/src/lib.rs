@@ -13,7 +13,7 @@ use std::path::PathBuf;
 pub use alerts::{Alert, Alerts};
 pub use client::{Client, spawn_daemon};
 pub use kule_acp::Profile as AgentProfile;
-pub use kule_engine::{Money, Question, Spent};
+pub use kule_engine::{Money, Question, Spent, TaskColor};
 pub use protocol::{Call, Hello, PROTOCOL, Redacted, Request, Response};
 pub use server::{MAX_REQUEST, bind, dispatch, new_token, run, serve, socket_path, token_path};
 pub use service::{

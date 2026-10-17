@@ -237,7 +237,7 @@ a draft from the [ACP registry](https://agentclientprotocol.com/registry)
 once in an empty folder, opened no wider than its draft, then lists what
 the sandbox refused it: the directories it wanted to write to and the hosts
 it wanted to reach. `--apply` adds those to the profile, which then waits
-for your approval like any change. The app's **Agents** view does the same
+for your approval like any change. The app's **Agents** settings do the same
 with checkboxes, so a telemetry host can stay out. Linux does not report
 refused files, so there only hosts are suggested.
 
@@ -256,6 +256,13 @@ it writes in Kule reaches it outside; you sign it in there once.
 
 - **Tasks**: pick a folder to make a task; each shows its changes and the
   policy's verdict. Tasks waiting for approval collect under *Needs you*.
+  A task's ⋮ menu (or a right click) names it, shown after its folder's
+  name (`Downloads – march invoices`), marks it with a colour, opens a
+  terminal in its copy or deletes it. Drag a task, or press Alt+↑/↓, to
+  move it in the list; `kule list` keeps that order, and `kule name` and
+  `kule color` do the rest from a terminal.
+- **Settings**: agents, remembered rules, secrets and the daily budget,
+  one section each.
 - **Live**: the agent's answer, tool calls and what each changed, as they
   come.
 - **Review**: the effect set and the ruling, with *Commit*, *Approve and
@@ -302,8 +309,8 @@ its cost as it works is cancelled when it gets there. Claude Code reports
 the cost as each turn ends, so its turn can go over and the next run is
 the one refused. Codex signed in with ChatGPT reports tokens but no cost,
 Gemini reports neither, and a budget does not hold what is not reported.
-`kule daily-budget 20` (or *Daily budget* at the foot of the app's
-sidebar) caps what every task may cost together in any 24 hours, the same
+`kule daily-budget 20` (or *Budget* in the app's Settings) caps what
+every task may cost together in any 24 hours, the same
 way; a run is held to the tighter of the two. The app tells you when a
 task has spent 80% of its budget, and when it has spent it all.
 
@@ -368,8 +375,8 @@ each commit, rollback and undo, and before every run. The folder keeps the
 real ones: a commit puts them back into a settings file the agent changed,
 and merges with the real values. A masked value that is also a kept secret
 gets that secret's placeholder, so it reaches the secret's hosts; any other
-stays where it is. The app has a *Secrets* view; `kule secrets list` and
-`remove` do the rest.
+stays where it is. The app's Settings have a *Secrets* section; `kule
+secrets list` and `remove` do the rest.
 
 What it does not do yet: HTTP/2 (clients fall back to HTTP/1.1), a
 placeholder split by a chunk edge or in a body larger than 1 MiB,

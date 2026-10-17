@@ -136,3 +136,26 @@ fn status_tells_what_the_runs_spent_and_what_is_left() {
         "spent: 0.40 USD, 1500 tokens in 2 runs (1 without a cost)\n"
     );
 }
+
+#[test]
+fn list_shows_a_tasks_name_and_colour() {
+    let (home, ws) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+    let created = kule(home.path(), &["new", ws.path().to_str().unwrap()]);
+    let id = created.split_whitespace().nth(1).unwrap();
+    kule(home.path(), &["name", id, "march invoices"]);
+    kule(home.path(), &["color", id, "teal"]);
+    let list = kule(home.path(), &["list"]);
+    assert!(list.contains(" · march invoices (teal)"), "{list}");
+
+    let refused = Command::new(env!("CARGO_BIN_EXE_kule"))
+        .args(["color", id, "#ff0000"])
+        .env("KULE_HOME", home.path())
+        .output()
+        .unwrap();
+    assert!(!refused.status.success());
+
+    kule(home.path(), &["name", id]);
+    kule(home.path(), &["color", id]);
+    let list = kule(home.path(), &["list"]);
+    assert!(!list.contains('·') && !list.contains('('), "{list}");
+}
