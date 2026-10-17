@@ -332,6 +332,43 @@ impl Service {
         }
     }
 
+    /// [`Service::answer`]; an approval with `remember` lets the host and
+    /// port through on the task's folder from now on.
+    pub fn answer_remembering(&self, id: u64, approve: bool, remember: bool) -> Result<()> {
+        let question = self.approvals.waiting().into_iter().find(|q| q.id == id);
+        self.answer(id, approve)?;
+        if let (true, true, Some(q)) = (approve, remember, question) {
+            let task = self.open(&q.task)?;
+            kule_engine::remember(
+                &self.home,
+                kule_engine::Allowance::Connect {
+                    host: q.host,
+                    port: q.port,
+                },
+                Some(task.workspace()),
+            )
+            .map_err(text)?;
+        }
+        Ok(())
+    }
+
+    /// The approvals a person told Kule to remember.
+    pub fn rules(&self) -> Result<Vec<kule_engine::Remembered>> {
+        kule_engine::remembered::load(&self.home).map_err(text)
+    }
+
+    pub fn forget_rule(&self, id: u64) -> Result<bool> {
+        kule_engine::forget(&self.home, id).map_err(text)
+    }
+
+    pub fn rule_impact(
+        &self,
+        allowance: &kule_engine::Allowance,
+        workspace: Option<&Path>,
+    ) -> Result<kule_engine::Impact> {
+        kule_engine::impact(&self.home, allowance, workspace).map_err(text)
+    }
+
     /// Sets how long the task's questions wait, in minutes.
     pub fn set_approval_timeout(&self, id: &str, minutes: u64) -> Result<TaskView> {
         let task = self.open(id)?;
@@ -515,6 +552,48 @@ impl Service {
     /// puts to a person. Denied changes never pass. Ignored paths stay in
     /// the copy unless `include_ignored`. With `reviewed`, the digest of a
     /// [`Review`], it commits only if that is still exactly what it takes.
+    /// [`Service::commit`]; once an approved commit is in, the files in
+    /// `remember` are not asked about again on the task's folder, under the
+    /// rules that asked about them this time.
+    pub fn commit_remembering(
+        &self,
+        id: &str,
+        approve: bool,
+        include_ignored: bool,
+        reviewed: Option<&str>,
+        remember: &[String],
+    ) -> Result<Commit> {
+        let mut keep = Vec::new();
+        if approve && !remember.is_empty() {
+            let task = self.open(id)?;
+            let pending = task.pending(include_ignored).map_err(text)?;
+            for judgement in self.policy(&task)?.judge(&pending).judgements {
+                let rememberable = judgement.verdict == Verdict::Ask
+                    && remember.contains(&judgement.subject)
+                    && judgement
+                        .rules
+                        .iter()
+                        .all(|r| kule_engine::REMEMBERABLE.contains(&r.as_str()));
+                if rememberable {
+                    for rule in judgement.rules {
+                        keep.push(kule_engine::Allowance::File {
+                            path: judgement.subject.clone(),
+                            rule,
+                        });
+                    }
+                }
+            }
+        }
+        let outcome = self.commit(id, approve, include_ignored, reviewed)?;
+        if matches!(outcome, Commit::Applied { .. }) && !keep.is_empty() {
+            let workspace = self.open(id)?.workspace().to_owned();
+            for allowance in keep {
+                kule_engine::remember(&self.home, allowance, Some(&workspace)).map_err(text)?;
+            }
+        }
+        Ok(outcome)
+    }
+
     pub fn commit(
         &self,
         id: &str,
@@ -1182,6 +1261,51 @@ mod tests {
             s.app.agents().unwrap(),
             ["claude-code", "gemini", "codex", "opencode"]
         );
+    }
+
+    #[test]
+    fn an_approved_commit_remembers_the_files_it_was_told_to() {
+        let s = Setup::new();
+        fs::write(s.ws.path().join("Cargo.toml"), "[package]\n").unwrap();
+        fs::write(s.ws.path().join("package.json"), "{}\n").unwrap();
+        let (id, copy) = s.task();
+        let change = |n: u32| {
+            fs::write(copy.join("Cargo.toml"), format!("[package]\nv = {n}\n")).unwrap();
+            fs::write(copy.join("package.json"), format!("{{\"v\": {n}}}\n")).unwrap();
+        };
+        let verdict = |subject: &str| {
+            let review = s.app.review(&id, false).unwrap();
+            review
+                .ruling
+                .judgements
+                .into_iter()
+                .find(|j| j.subject == subject)
+                .unwrap()
+                .verdict
+        };
+
+        // Not approved: nothing is remembered, nothing is committed.
+        change(1);
+        let held = s
+            .app
+            .commit_remembering(&id, false, false, None, &["Cargo.toml".into()])
+            .unwrap();
+        assert!(matches!(held, Commit::Held { .. }));
+        assert!(s.app.rules().unwrap().is_empty());
+
+        let done = s
+            .app
+            .commit_remembering(&id, true, false, None, &["Cargo.toml".into()])
+            .unwrap();
+        assert!(matches!(done, Commit::Applied { .. }));
+        let rules = s.app.rules().unwrap();
+        assert_eq!(rules.len(), 1);
+
+        change(2);
+        assert_eq!(verdict("Cargo.toml"), Verdict::Allow);
+        assert_eq!(verdict("package.json"), Verdict::Ask);
+        assert!(s.app.forget_rule(rules[0].id).unwrap());
+        assert_eq!(verdict("Cargo.toml"), Verdict::Ask);
     }
 
     #[test]

@@ -166,12 +166,14 @@ fn commit(
     approve: bool,
     include_ignored: bool,
     reviewed: Option<String>,
+    remember: Option<Vec<String>>,
 ) -> Result<Commit> {
     kule.call(Call::Commit {
         task,
         approve,
         include_ignored,
         reviewed,
+        remember: remember.unwrap_or_default(),
     })
 }
 
@@ -207,8 +209,37 @@ fn questions(kule: K<'_>) -> Result<Vec<Question>> {
 }
 
 #[tauri::command(async)]
-fn answer(kule: K<'_>, id: u64, approve: bool) -> Result<()> {
-    kule.call(Call::Answer { id, approve })
+fn answer(kule: K<'_>, id: u64, approve: bool, remember: Option<bool>) -> Result<()> {
+    kule.call(Call::Answer {
+        id,
+        approve,
+        remember: remember.unwrap_or(false),
+    })
+}
+
+// Remembered approvals: passed through as the daemon says them.
+
+#[tauri::command(async)]
+fn rules(kule: K<'_>) -> Result<serde_json::Value> {
+    kule.call(Call::Rules)
+}
+
+#[tauri::command(async)]
+fn forget_rule(kule: K<'_>, id: u64) -> Result<bool> {
+    kule.call(Call::ForgetRule { id })
+}
+
+#[tauri::command(async)]
+fn rule_impact(
+    kule: K<'_>,
+    allowance: serde_json::Value,
+    workspace: Option<PathBuf>,
+) -> Result<serde_json::Value> {
+    let allowance = serde_json::from_value(allowance).map_err(|e| e.to_string())?;
+    kule.call(Call::RuleImpact {
+        allowance,
+        workspace,
+    })
 }
 
 #[tauri::command(async)]
@@ -351,6 +382,9 @@ fn main() {
             open_terminal,
             questions,
             answer,
+            rules,
+            forget_rule,
+            rule_impact,
             set_approval_timeout,
             start_run,
             stream,

@@ -101,8 +101,10 @@ function when(unix) {
 const state = {
   tasks: [],
   current: null,
-  /** "tasks", or "agents" while the agent profiles are shown. */
+  /** "tasks", or "agents" or "rules" while those are shown. */
   view: "tasks",
+  /** Per task, the held files the person ticked not to be asked about again. */
+  remember: new Map(),
   tab: "live",
   agents: [],
   /** Live stream per task: what the window saw since it opened. */
@@ -178,9 +180,10 @@ function renderSidebar() {
 // --- Task view -------------------------------------------------------------
 
 function renderTask() {
-  const agents = state.view === "agents";
+  const agents = state.view === "agents" || state.view === "rules";
   $("agents-view").hidden = !agents;
-  $("open-agents").setAttribute("aria-current", agents ? "page" : "false");
+  $("open-agents").setAttribute("aria-current", state.view === "agents" ? "page" : "false");
+  $("open-rules").setAttribute("aria-current", state.view === "rules" ? "page" : "false");
   if (agents) {
     $("empty").hidden = true;
     $("task").hidden = true;
@@ -289,6 +292,17 @@ function renderQuestions() {
             ),
             h(
               "button",
+              {
+                class: "button ghost",
+                type: "button",
+                "data-key": `remember:${q.id}`,
+                title: `Let ${q.host}:${q.port} through on this folder from now on, without asking`,
+                onclick: (e) => inFlight(e.currentTarget, () => answer(q.id, true, true)),
+              },
+              "Approve and remember"
+            ),
+            h(
+              "button",
               { class: "button ghost danger", type: "button", "data-key": `deny:${q.id}`, "aria-label": `Deny ${q.host}:${q.port}`, onclick: (e) => inFlight(e.currentTarget, () => answer(q.id, false)) },
               "Deny"
             )
@@ -299,9 +313,10 @@ function renderQuestions() {
   replace($("questions"), ...cards);
 }
 
-async function answer(id, approve) {
+async function answer(id, approve, remember) {
   try {
-    await call("answer", { id, approve });
+    await call("answer", { id, approve, remember: Boolean(remember) });
+    if (remember) toast("Approved, and not asked again on this folder");
   } catch (err) {
     fail(err);
   }
@@ -813,7 +828,13 @@ async function loadReview(id) {
             "ul",
             { class: "holding" },
             holding.map((j) =>
-              h("li", {}, `${j.subject} · ${VERDICT[j.verdict].chip} `, h("span", { class: "rules" }, `(${j.rules.join(", ")})`))
+              h(
+                "li",
+                {},
+                `${j.subject} · ${VERDICT[j.verdict].chip} `,
+                h("span", { class: "rules" }, `(${j.rules.join(", ")})`),
+                rememberable(j) ? rememberBox(id, task, j) : null
+              )
             )
           )
         : h("p", { class: "muted" }, `${plural(taken.length, "file")} changed; the policy lets all of it through.`)
@@ -966,6 +987,94 @@ function armed(label, armedLabel, disabled, action) {
     timer = setTimeout(disarm, 4000);
   });
   return button;
+}
+
+// --- Remembered approvals --------------------------------------------------
+
+/** Rules that ask about a file by name: their question can be answered for good. */
+const REMEMBERABLE = ["manifests-and-lockfiles", "project-files", "automation"];
+
+const rememberable = (j) =>
+  j.verdict === "ask" && j.rules.length > 0 && j.rules.every((r) => REMEMBERABLE.includes(r)) && !j.subject.startsWith(".kule/");
+
+/** "Don't ask again here" for one held file, with what it would have let through. */
+function rememberBox(id, task, j) {
+  const picks = state.remember.get(id) || new Set();
+  const note = h("span", { class: "remember-note" });
+  const box = h("input", {
+    type: "checkbox",
+    checked: picks.has(j.subject),
+    "data-key": `remember:${j.subject}`,
+    onchange: async (e) => {
+      const set = state.remember.get(id) || new Set();
+      if (e.currentTarget.checked) set.add(j.subject);
+      else set.delete(j.subject);
+      state.remember.set(id, set);
+      note.textContent = "";
+      if (!e.currentTarget.checked || !task) return;
+      try {
+        const impact = await call("rule_impact", {
+          allowance: { kind: "file", path: j.subject, rule: j.rules[0] },
+          workspace: task.workspace,
+        });
+        note.textContent = ` · would have passed ${plural(impact.changes, "earlier change")} on its own`;
+      } catch (err) {
+        fail(err);
+      }
+    },
+  });
+  return h("label", { class: "check remember" }, box, "Don't ask again in this folder", note);
+}
+
+async function openRules() {
+  state.view = "rules";
+  renderSidebar();
+  renderTask();
+  await renderRules();
+}
+
+async function renderRules() {
+  if (state.view !== "rules") return;
+  let rules = [];
+  try {
+    rules = await call("rules");
+  } catch (err) {
+    fail(err);
+  }
+  const describe = (r) => (r.kind === "connect" ? `Connections to ${r.host}:${r.port}` : `Changes to ${r.path} (${r.rule})`);
+  replace(
+    $("agents-view"),
+    h(
+      "header",
+      { class: "agents-head" },
+      h("h1", { id: "agents-title" }, "Rules"),
+      h(
+        "p",
+        { class: "muted" },
+        "What you told Kule not to ask about again. A denied change is never here, nor anything under .kule/, where a repository keeps its own rules."
+      )
+    ),
+    rules.length === 0
+      ? h("p", { class: "muted" }, "Nothing remembered: every question is asked.")
+      : h(
+          "ul",
+          { class: "rule-list" },
+          ...rules.map((r) => {
+            const forget = armed("Forget", "Click again to be asked again", false, async () => {
+              await call("forget_rule", { id: r.id }).catch(fail);
+              await renderRules();
+            });
+            forget.dataset.key = `forget:${r.id}`;
+            return h(
+              "li",
+              { class: "agent-card" },
+              h("div", {}, h("strong", {}, describe(r))),
+              h("div", { class: "muted" }, r.workspace ? `In ${r.workspace}` : "In every folder", ` · since ${when(r.added_unix)}`),
+              forget
+            );
+          })
+        )
+  );
 }
 
 // --- Agents ----------------------------------------------------------------
@@ -1383,7 +1492,9 @@ async function inFlight(button, action) {
 
 async function commit(id, approve, includeIgnored, reviewed) {
   try {
-    const result = await call("commit", { task: id, approve, includeIgnored, reviewed });
+    const remember = approve ? [...(state.remember.get(id) || [])] : [];
+    const result = await call("commit", { task: id, approve, includeIgnored, reviewed, remember });
+    if (result.outcome === "applied") state.remember.delete(id);
     if (result.outcome === "applied") state.includeIgnored.delete(id);
     if (result.outcome === "applied") {
       const merged = (result.merged || []).length ? ` · merged with the folder's changes in ${result.merged.join(", ")}` : "";
@@ -1681,6 +1792,7 @@ async function start() {
 
   await loadAgentChoices();
   $("open-agents").addEventListener("click", openAgents);
+  $("open-rules").addEventListener("click", openRules);
 
   await backend.onRun(onRun);
   await backend.onQuestions(onQuestions);

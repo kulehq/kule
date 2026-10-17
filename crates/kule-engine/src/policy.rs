@@ -25,6 +25,7 @@ use serde::{Deserialize, Serialize};
 use crate::effects::{Change, EffectSet};
 use crate::error::{Error, Result};
 use crate::git::RefChange;
+use crate::remembered::{Allowance, Remembered};
 
 pub const DEFAULT_POLICY: &str = include_str!("default_policy.cedar");
 
@@ -69,6 +70,9 @@ impl Ruling {
 
 pub struct Policy {
     set: PolicySet,
+    /// Files a person said not to be asked about again, with the rule that
+    /// asked: (rule, path).
+    files: Vec<(String, String)>,
 }
 
 impl Policy {
@@ -90,7 +94,47 @@ impl Policy {
         } else {
             None
         };
-        Policy::from_texts(&base, repo.as_deref())
+        let policy = Policy::from_texts(&base, repo.as_deref())?;
+        // What the person remembered lives next to their policy.
+        match user.and_then(Path::parent) {
+            Some(home) => policy.remembering(&crate::remembered::load(home)?, workspace),
+            None => Ok(policy),
+        }
+    }
+
+    /// The policy with what a person remembered for `workspace` (see
+    /// [`crate::remembered`]): a connection as a `permit`, a file as an
+    /// exception to the rules that ask about it.
+    pub fn remembering(mut self, remembered: &[Remembered], workspace: &Path) -> Result<Policy> {
+        let invalid = |e: &dyn std::fmt::Display| Error::Invalid(format!("remembered: {e}"));
+        // Kept with the folder's real path.
+        let workspace = std::fs::canonicalize(workspace).unwrap_or_else(|_| workspace.to_owned());
+        for kept in remembered.iter().filter(|r| r.holds_for(&workspace)) {
+            match &kept.allowance {
+                Allowance::Connect { host, port } => {
+                    // Checked when it was kept: a plain host name.
+                    if !host
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-'))
+                    {
+                        return Err(invalid(&host));
+                    }
+                    let text = format!(
+                        "@id(\"remembered-{}\") permit (principal, action == Kule::Action::\"auto\", resource) \
+                         when {{ resource.kind == \"net.connect\" && resource.host == \"{host}\" && resource.port == {port} }};",
+                        kept.id
+                    );
+                    let policy = cedar_policy::Policy::parse(
+                        Some(PolicyId::new(format!("remembered-{}", kept.id))),
+                        text,
+                    )
+                    .map_err(|e| invalid(&e))?;
+                    self.set.add(policy).map_err(|e| invalid(&e))?;
+                }
+                Allowance::File { path, rule } => self.files.push((rule.clone(), path.clone())),
+            }
+        }
+        Ok(self)
     }
 
     /// `base` with `repo`'s rules added; `repo` may hold only `forbid` rules.
@@ -114,7 +158,10 @@ impl Policy {
             text.push_str(repo);
         }
         let set = PolicySet::from_str(&text).map_err(|e| invalid("policy", &e))?;
-        Ok(Policy { set })
+        Ok(Policy {
+            set,
+            files: Vec::new(),
+        })
     }
 
     /// A check for [`Task::commit_if`](crate::Task::commit_if): passes what
@@ -185,7 +232,20 @@ impl Policy {
                 Change::Deleted => "fs.delete",
             };
             let subject = Subject::file(kind, &effect.path, effect.change);
-            judgements.push(self.judge_one(effect.path.clone(), &subject, &facts));
+            let mut judgement = self.judge_one(effect.path.clone(), &subject, &facts);
+            // Asked about only by rules a person answered for good here.
+            let remembered = judgement.verdict == Verdict::Ask
+                && !judgement.rules.is_empty()
+                && judgement.rules.iter().all(|rule| {
+                    self.files
+                        .iter()
+                        .any(|(r, path)| r == rule && *path == effect.path)
+                });
+            if remembered {
+                judgement.verdict = Verdict::Allow;
+                judgement.rules = vec!["remembered".to_owned()];
+            }
+            judgements.push(judgement);
         }
         if let Some(git) = &set.git {
             for change in &git.refs {

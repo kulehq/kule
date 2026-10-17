@@ -303,7 +303,14 @@ pub fn dispatch(service: &Arc<Service>, call: Call) -> Result<Value, String> {
             approve,
             include_ignored,
             reviewed,
-        } => json(service.commit(&task, approve, include_ignored, reviewed.as_deref())?),
+            remember,
+        } => json(service.commit_remembering(
+            &task,
+            approve,
+            include_ignored,
+            reviewed.as_deref(),
+            &remember,
+        )?),
         Call::Rollback { task } => json(service.rollback(&task)?),
         Call::Undo { task } => json(service.undo(&task)?),
         Call::Timeline { task } => json(service.timeline(&task)?),
@@ -317,7 +324,17 @@ pub fn dispatch(service: &Arc<Service>, call: Call) -> Result<Value, String> {
         } => json(service.start_run(&task, &agent, &prompt)?),
         Call::Stream { task } => json(service.stream(&task)),
         Call::Questions => json(service.questions()),
-        Call::Answer { id, approve } => json(service.answer(id, approve)?),
+        Call::Answer {
+            id,
+            approve,
+            remember,
+        } => json(service.answer_remembering(id, approve, remember)?),
+        Call::Rules => json(service.rules()?),
+        Call::ForgetRule { id } => json(service.forget_rule(id)?),
+        Call::RuleImpact {
+            allowance,
+            workspace,
+        } => json(service.rule_impact(&allowance, workspace.as_deref())?),
         Call::SetApprovalTimeout { task, minutes } => {
             json(service.set_approval_timeout(&task, minutes)?)
         }

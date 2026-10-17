@@ -112,12 +112,50 @@ fn subscribers_hear_questions_come_and_go() {
         .call::<()>(Call::Answer {
             id: asked[0].id,
             approve: false,
+            remember: true,
         })
         .unwrap();
     match rx.recv_timeout(Duration::from_secs(10)).unwrap() {
         Notice::Questions { waiting } => assert!(waiting.is_empty()),
         other => panic!("expected questions, heard {other:?}"),
     }
+    // Denied: nothing to remember, whatever was asked.
+    let rules: Vec<kule_engine::Remembered> = client.call(Call::Rules).unwrap();
+    assert!(rules.is_empty());
+
+    // Approved and remembered: kept for the task's folder, and the next
+    // proxy on that folder lets it through without asking.
+    let mut again = ProxyClient::connect(proxy.port());
+    again.ask("example.invalid:8443");
+    let asked = loop {
+        match rx.recv_timeout(Duration::from_secs(10)).unwrap() {
+            Notice::Questions { waiting } if !waiting.is_empty() => break waiting,
+            Notice::Questions { .. } => {}
+            other => panic!("expected questions, heard {other:?}"),
+        }
+    };
+    client
+        .call::<()>(Call::Answer {
+            id: asked[0].id,
+            approve: true,
+            remember: true,
+        })
+        .unwrap();
+    let rules: Vec<kule_engine::Remembered> = client.call(Call::Rules).unwrap();
+    assert_eq!(rules.len(), 1);
+    assert_eq!(
+        rules[0].allowance,
+        kule_engine::Allowance::Connect {
+            host: "example.invalid".into(),
+            port: 8443
+        }
+    );
+    assert_eq!(rules[0].workspace.as_deref(), Some(task.workspace()));
+    let policy = Policy::load(Some(&home.path().join("policy.cedar")), task.workspace()).unwrap();
+    assert_eq!(
+        policy.judge_connection("example.invalid", 8443).verdict,
+        kule_engine::Verdict::Allow
+    );
     drop(proxy);
 }
 

@@ -156,6 +156,18 @@ hooks are denied. Save your own as
 in `.kule/policy.cedar`; they are read from the real workspace, never from
 the copy an agent edits.
 
+What you approve can be remembered, so it is asked once: `kule commit
+--approve --remember` (or *Don't ask again in this folder* in the app) lets
+later changes to those manifests, CI or project files through on that
+folder, and *Approve and remember* on a question lets that host and port
+through. `kule rules allow api.example.com:443` shows what an allowance
+would have let through in your past tasks before `--yes` keeps it; `kule
+rules` lists them and `kule rules forget` takes one back. A connection
+becomes a Cedar `permit`; a file, a narrow exception to the rule that
+asked about it. What is denied, what asks for reasons other than a file's
+name (a mass delete, a history rewrite) and anything under `.kule/` are
+never remembered.
+
 ## M1, step 4: the network goes through a proxy
 
 Commands can connect only to the task's proxy; the proxy variables point at

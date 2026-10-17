@@ -34,6 +34,7 @@ mod outline;
 mod policy;
 mod preview;
 mod protect;
+pub mod remembered;
 mod sandbox;
 mod snapshot;
 mod steps;
@@ -56,6 +57,9 @@ pub use outline::FileOutline;
 pub use policy::{DEFAULT_POLICY, Judgement, Policy, REPO_POLICY, Ruling, Verdict};
 pub use preview::{Picture, Preview, previewable};
 pub use protect::{Kept, PutBack};
+pub use remembered::{
+    Allowance, Impact, REMEMBERABLE, REMEMBERED_FILE, Remembered, forget, impact, remember,
+};
 pub use sandbox::{
     Denial, HIDDEN_IN_HOME, Network, PASSED_ENV, Sandbox, denials, isolates_network,
     protects_in_place, record_denials,

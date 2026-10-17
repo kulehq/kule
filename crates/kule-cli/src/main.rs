@@ -26,6 +26,31 @@ struct Cli {
 }
 
 #[derive(Subcommand)]
+enum RulesCmd {
+    /// List them (the default).
+    List,
+    /// Ask again about what rule ID let through.
+    Forget { id: u64 },
+    /// Let a connection (HOST:PORT) or the changes to a file (PATH, with
+    /// --rule) through without asking. Shows what it would have let
+    /// through so far; --yes keeps it.
+    Allow {
+        what: String,
+        /// For a file: the rule that asks about it.
+        #[arg(long, default_value = "manifests-and-lockfiles")]
+        rule: String,
+        /// The folder it holds for (default: the current one).
+        #[arg(long, conflicts_with = "everywhere")]
+        folder: Option<PathBuf>,
+        /// Every folder.
+        #[arg(long)]
+        everywhere: bool,
+        #[arg(long)]
+        yes: bool,
+    },
+}
+
+#[derive(Subcommand)]
 enum AgentsCmd {
     /// List them, and why the ones that cannot run cannot (the default).
     List,
@@ -131,6 +156,15 @@ enum Cmd {
         /// otherwise stay in the copy. The policy judges them too.
         #[arg(long)]
         include_ignored: bool,
+        /// With --approve: do not ask again, on this folder, about the files
+        /// approved now (manifests, CI and project files).
+        #[arg(long, requires = "approve")]
+        remember: bool,
+    },
+    /// What you told Kule not to ask about again.
+    Rules {
+        #[command(subcommand)]
+        action: Option<RulesCmd>,
     },
     /// The agents Kule can run: its own, and yours from
     /// <KULE_HOME>/agents.toml, each of which runs only once approved.
@@ -406,9 +440,35 @@ fn run() -> Result<ExitCode> {
             task,
             approve,
             include_ignored,
+            remember,
         } => {
             let task = Task::open(&home, &task)?;
             let policy = load_policy(&home, &task)?;
+            // What to remember is read before the commit takes the changes.
+            let keep: Vec<kule_engine::Allowance> = if remember {
+                policy
+                    .judge(&task.pending(include_ignored)?)
+                    .judgements
+                    .into_iter()
+                    .filter(|j| {
+                        j.verdict == Verdict::Ask
+                            && j.rules
+                                .iter()
+                                .all(|r| kule_engine::REMEMBERABLE.contains(&r.as_str()))
+                    })
+                    .flat_map(|j| {
+                        let path = j.subject;
+                        j.rules
+                            .into_iter()
+                            .map(move |rule| kule_engine::Allowance::File {
+                                path: path.clone(),
+                                rule,
+                            })
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            };
             match task.commit_with(include_ignored, policy.gate(approve)) {
                 Ok(Some(cp)) => {
                     println!(
@@ -420,6 +480,13 @@ fn run() -> Result<ExitCode> {
                         println!(
                             "merged with what the folder changed meanwhile: {}",
                             cp.merged.join(", ")
+                        );
+                    }
+                    for allowance in keep {
+                        let kept = kule_engine::remember(&home, allowance, Some(task.workspace()))?;
+                        println!(
+                            "not asked again on this folder: {}",
+                            describe_allowance(&kept.allowance)
                         );
                     }
                 }
@@ -439,6 +506,7 @@ fn run() -> Result<ExitCode> {
             }
         }
         Cmd::Agents { action } => agents_cmd(&home, action.unwrap_or(AgentsCmd::List))?,
+        Cmd::Rules { action } => rules_cmd(&home, action.unwrap_or(RulesCmd::List))?,
         Cmd::Policy => print!("{DEFAULT_POLICY}"),
         Cmd::Rollback { task } => {
             let set = Task::open(&home, &task)?.rollback()?;
@@ -709,6 +777,83 @@ fn print_set(task: &Task, set: &EffectSet) {
 
 /// Where the task's work meets that of other tasks on its workspace: the
 /// files both change and, inside them, what both change.
+fn describe_allowance(allowance: &kule_engine::Allowance) -> String {
+    match allowance {
+        kule_engine::Allowance::Connect { host, port } => format!("connections to {host}:{port}"),
+        kule_engine::Allowance::File { path, rule } => format!("changes to {path} ({rule})"),
+    }
+}
+
+fn rules_cmd(home: &Path, action: RulesCmd) -> Result<()> {
+    match action {
+        RulesCmd::List => {
+            let rules = kule_engine::remembered::load(home)?;
+            if rules.is_empty() {
+                println!("nothing remembered: every question is asked");
+            }
+            for r in rules {
+                let place = r
+                    .workspace
+                    .as_ref()
+                    .map_or("every folder".to_owned(), |w| w.display().to_string());
+                println!(
+                    "{:>3}  {}  · {place}",
+                    r.id,
+                    describe_allowance(&r.allowance)
+                );
+            }
+        }
+        RulesCmd::Forget { id } => {
+            if kule_engine::forget(home, id)? {
+                println!("forgot {id}: asked again from now on");
+            } else {
+                println!("nothing remembered as {id}");
+            }
+        }
+        RulesCmd::Allow {
+            what,
+            rule,
+            folder,
+            everywhere,
+            yes,
+        } => {
+            let allowance = match what.rsplit_once(':') {
+                Some((host, port)) if port.parse::<u16>().is_ok() && !host.contains('/') => {
+                    kule_engine::Allowance::Connect {
+                        host: host.to_owned(),
+                        port: port.parse()?,
+                    }
+                }
+                _ => kule_engine::Allowance::File { path: what, rule },
+            };
+            let folder = if everywhere {
+                None
+            } else {
+                Some(match folder {
+                    Some(f) => f,
+                    None => std::env::current_dir()?,
+                })
+            };
+            let impact = kule_engine::impact(home, &allowance, folder.as_deref())?;
+            let place = folder
+                .as_ref()
+                .map_or("every folder".to_owned(), |f| f.display().to_string());
+            println!("{} · {place}", describe_allowance(&allowance));
+            println!(
+                "would have let through so far: {} connections, {} changes, in {} tasks",
+                impact.connections, impact.changes, impact.tasks
+            );
+            if yes {
+                let kept = kule_engine::remember(home, allowance, folder.as_deref())?;
+                println!("kept as {}", kept.id);
+            } else {
+                println!("not kept: rerun with --yes to keep it");
+            }
+        }
+    }
+    Ok(())
+}
+
 fn agents_cmd(home: &Path, action: AgentsCmd) -> Result<()> {
     use kule_acp::{Agents, Origin};
     match action {

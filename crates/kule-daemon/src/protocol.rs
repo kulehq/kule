@@ -10,7 +10,7 @@ use serde_json::Value;
 
 /// Changes whenever a call, a result or a notice changes shape; a client
 /// and a daemon that disagree on it cannot talk.
-pub const PROTOCOL: u32 = 6;
+pub const PROTOCOL: u32 = 7;
 
 /// What a daemon says about itself.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -58,6 +58,10 @@ pub enum Call {
         /// The digest of the review the person saw; refused if it changed.
         #[serde(default)]
         reviewed: Option<String>,
+        /// With an approval: files whose question is not to be asked again
+        /// on this folder, once the commit is in.
+        #[serde(default)]
+        remember: Vec<String>,
     },
     Rollback {
         task: String,
@@ -92,6 +96,10 @@ pub enum Call {
     Answer {
         id: u64,
         approve: bool,
+        /// With an approval: let this host and port through on the task's
+        /// folder from now on.
+        #[serde(default)]
+        remember: bool,
     },
     SetApprovalTimeout {
         task: String,
@@ -119,6 +127,17 @@ pub enum Call {
     /// Runs a draft profile once in an empty folder; what it was refused.
     TryAgent {
         profile: kule_acp::Profile,
+    },
+    /// The approvals a person told Kule to remember.
+    Rules,
+    ForgetRule {
+        id: u64,
+    },
+    /// What an allowance would have let through so far, before it is kept.
+    RuleImpact {
+        allowance: kule_engine::Allowance,
+        #[serde(default)]
+        workspace: Option<PathBuf>,
     },
     /// Turns the connection into a stream of notices.
     Subscribe,
