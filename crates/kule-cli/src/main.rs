@@ -26,6 +26,19 @@ struct Cli {
 }
 
 #[derive(Subcommand)]
+enum AgentsCmd {
+    /// List them, and why the ones that cannot run cannot (the default).
+    List,
+    /// Show what an agent's profile opens in the sandbox.
+    Show { name: String },
+    /// Let one of your profiles run, as it stands now. Changed later, it
+    /// waits for approval again.
+    Approve { name: String },
+    /// Take an approval back.
+    Revoke { name: String },
+}
+
+#[derive(Subcommand)]
 enum Cmd {
     /// Create a task: a copy-on-write copy of WORKSPACE.
     New { workspace: PathBuf },
@@ -103,6 +116,12 @@ enum Cmd {
         /// otherwise stay in the copy. The policy judges them too.
         #[arg(long)]
         include_ignored: bool,
+    },
+    /// The agents Kule can run: its own, and yours from
+    /// <KULE_HOME>/agents.toml, each of which runs only once approved.
+    Agents {
+        #[command(subcommand)]
+        action: Option<AgentsCmd>,
     },
     /// Print the built-in policy. Save it as <KULE_HOME>/policy.cedar to
     /// replace it; a repository adds forbid rules in .kule/policy.cedar.
@@ -203,6 +222,9 @@ fn run() -> Result<ExitCode> {
                 child
             } else {
                 let mut sandbox = Sandbox::for_task(&task)?;
+                if let Some(person) = std::env::var_os("HOME") {
+                    kule_acp::Agents::load(&home)?.hide_logins(&mut sandbox, Path::new(&person))?;
+                }
                 for path in &allow_write {
                     sandbox.allow_write(path)?;
                 }
@@ -268,10 +290,10 @@ fn run() -> Result<ExitCode> {
             prompt,
         } => {
             let task = Task::open(&home, &task)?;
-            let profile = kule_acp::profile(&agent).ok_or_else(|| {
-                let known: Vec<&str> = kule_acp::PROFILES.iter().map(|p| p.name).collect();
-                anyhow!("no agent profile {agent}; known: {}", known.join(", "))
-            })?;
+            let agents = kule_acp::Agents::load(&home)?;
+            let profile = agents
+                .get(&agent)
+                .ok_or_else(|| anyhow!("{}", agents.refusal(&agent)))?;
             let _at_work = task.agent_at_work()?;
             let started = Instant::now();
             let logged_before = connections(&task)?.len();
@@ -286,7 +308,8 @@ fn run() -> Result<ExitCode> {
             let (tx, rx) = futures::channel::mpsc::unbounded();
             let runtime = tokio::runtime::Runtime::new()?;
             let printer = runtime.spawn(print_events(rx));
-            let outcome = runtime.block_on(kule_acp::run(&task, command, &prompt, mode, tx));
+            let outcome =
+                runtime.block_on(kule_acp::run(&task, command, &prompt, mode.as_deref(), tx));
             let _ = runtime.block_on(printer);
             // The agent's process group is gone by now.
             let put_back = kept.restore()?;
@@ -392,6 +415,7 @@ fn run() -> Result<ExitCode> {
                 Err(e) => return Err(e.into()),
             }
         }
+        Cmd::Agents { action } => agents_cmd(&home, action.unwrap_or(AgentsCmd::List))?,
         Cmd::Policy => print!("{DEFAULT_POLICY}"),
         Cmd::Rollback { task } => {
             let set = Task::open(&home, &task)?.rollback()?;
@@ -662,6 +686,91 @@ fn print_set(task: &Task, set: &EffectSet) {
 
 /// Where the task's work meets that of other tasks on its workspace: the
 /// files both change and, inside them, what both change.
+fn agents_cmd(home: &Path, action: AgentsCmd) -> Result<()> {
+    use kule_acp::{Agents, Origin};
+    match action {
+        AgentsCmd::List => {
+            let agents = Agents::load(home)?;
+            for listed in agents.listed() {
+                let origin = match listed.origin {
+                    Origin::BuiltIn => "built in",
+                    Origin::Person => "yours",
+                };
+                match &listed.held {
+                    None => println!("{:<16} {origin}", listed.profile.name),
+                    Some(why) => println!("{:<16} {origin}, held: {why}", listed.profile.name),
+                }
+            }
+            println!(
+                "\nAdd your own in {} (format: kule agents show claude-code).",
+                home.join(kule_acp::AGENTS_FILE).display()
+            );
+        }
+        AgentsCmd::Show { name } => {
+            let agents = Agents::load(home)?;
+            let listed = agents
+                .listed()
+                .iter()
+                .find(|l| l.profile.name == name)
+                .ok_or_else(|| anyhow!("no agent {name}"))?;
+            print_profile(&listed.profile);
+            if let Some(why) = &listed.held {
+                println!("\nheld: {why}");
+            }
+        }
+        AgentsCmd::Approve { name } => {
+            let profile = Agents::approve(home, &name)?;
+            print_profile(&profile);
+            println!("\napproved {name} as it stands; a change to it needs approval again");
+        }
+        AgentsCmd::Revoke { name } => {
+            if Agents::revoke(home, &name)? {
+                println!("{name} is no longer approved");
+            } else {
+                println!("{name} was not approved");
+            }
+        }
+    }
+    Ok(())
+}
+
+/// A profile as the person approves it: what it runs and what it opens.
+fn print_profile(profile: &kule_acp::Profile) {
+    let list = |items: &[String]| {
+        if items.is_empty() {
+            "nothing".to_owned()
+        } else {
+            items.join(", ")
+        }
+    };
+    println!("[[agent]]  {}", profile.name);
+    println!("runs              {}", profile.command.join(" "));
+    println!("writes in ~/      {}", list(&profile.state));
+    println!("its login         {}", list(&profile.login));
+    println!("read-only         {}", list(&profile.protected));
+    if !profile.reveal_on_macos.is_empty() {
+        println!("reveals (macOS)   {}", list(&profile.reveal_on_macos));
+    }
+    println!("sees your env     {}", list(&profile.pass_env));
+    let env: Vec<String> = profile
+        .env
+        .iter()
+        .map(|(k, v)| format!("{k}={v}"))
+        .collect();
+    if !env.is_empty() {
+        println!("sets env          {}", env.join(" "));
+    }
+    let hosts: Vec<String> = profile
+        .hosts
+        .iter()
+        .map(|h| format!("https://{h}"))
+        .collect();
+    println!("also connects to  {}", list(&hosts));
+    if let Some(mode) = &profile.mode {
+        println!("session mode      {mode}");
+    }
+}
+
 fn print_meetings(home: &Path, task: &Task) -> Result<()> {
     let ours = task.touched()?;
     for info in Task::list(home)? {

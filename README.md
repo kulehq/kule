@@ -180,6 +180,27 @@ Agent Client Protocol inside the sandbox. Its profile opens only the agent's
 own state and login; other agents' logins and transcripts stay hidden. Every
 tool call becomes a step (`kule steps $TASK`).
 
+Claude Code, Codex and Gemini come built in. Any other agent that speaks
+ACP is added as a profile in `~/.kule/agents.toml`, in the format `kule
+agents show claude-code` prints:
+
+```toml
+[[agent]]
+name = "opencode"
+command = ["npx", "-y", "opencode-ai@1.2.3", "acp"]
+state = [".local/share/opencode"]          # what it may write, under ~
+login = [".local/share/opencode/auth.json"] # hidden from every other agent
+pass_env = ["OPENROUTER_API_KEY"]           # of your variables, the ones it sees
+hosts = ["openrouter.ai"]                   # HTTPS hosts it reaches, while it runs
+```
+
+A profile opens holes in the sandbox, so yours runs only once you approve
+it (`kule agents approve opencode`, after `kule agents show opencode`), and
+again after any change to it. It may never open the credentials Kule hides,
+another agent's state, Kule's home or a whole directory like `~/Documents`,
+and a package it fetches must name one exact version. Profiles live in
+Kule's home, which no sandbox can see, and never come from a workspace.
+
 `crates/kule-desktop` is a Tauri app around the same engine:
 
 - **Tasks**: pick a folder to make a task; each shows its changes and the

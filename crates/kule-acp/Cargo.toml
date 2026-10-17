@@ -11,11 +11,13 @@ rust-version.workspace = true
 [dependencies]
 agent-client-protocol = { version = "3.4.0", features = ["stdio"] }
 async-process = "2.5.0"
+blake3.workspace = true
 futures = "0.3.34"
 kule-engine = { version = "0.0.1", path = "../kule-engine" }
 libc = "0.2.190"
 serde.workspace = true
 serde_json.workspace = true
+toml = "1.1.8"
 tokio = { version = "1.53.3", features = ["rt-multi-thread", "macros", "time"] }
 
 [dev-dependencies]

@@ -329,8 +329,9 @@ impl Service {
         self.view(id)
     }
 
-    pub fn agents(&self) -> Vec<&'static str> {
-        kule_acp::PROFILES.iter().map(|p| p.name).collect()
+    /// The agents that can run: Kule's own and the person's approved ones.
+    pub fn agents(&self) -> Result<Vec<String>> {
+        Ok(kule_acp::Agents::load(&self.home).map_err(text)?.names())
     }
 
     /// Every task, newest first, from each one's last scan; scans older
@@ -543,7 +544,11 @@ impl Service {
     /// prompt, the agent's events as they come and [`RunEvent::Finished`]
     /// last, also when the agent could not start.
     pub fn start_run(self: &Arc<Self>, id: &str, agent: &str, prompt: &str) -> Result<()> {
-        let profile = kule_acp::profile(agent).ok_or_else(|| format!("no agent {agent}"))?;
+        let agents = kule_acp::Agents::load(&self.home).map_err(text)?;
+        let profile = agents
+            .get(agent)
+            .cloned()
+            .ok_or_else(|| agents.refusal(agent))?;
         let task = self.open(id)?;
         if !self.running.lock().unwrap().insert(id.to_owned()) {
             return Err(format!("an agent is already at work in task {id}"));
@@ -565,7 +570,7 @@ impl Service {
         );
         let (service, prompt) = (Arc::clone(self), prompt.to_owned());
         std::thread::spawn(move || {
-            let (error, denials) = match service.run(&task, profile, &prompt) {
+            let (error, denials) = match service.run(&task, &profile, &prompt) {
                 Ok(denials) => (None, denials),
                 Err(e) => (Some(e), Vec::new()),
             };
@@ -582,7 +587,7 @@ impl Service {
     fn run(
         self: &Arc<Self>,
         task: &Task,
-        profile: &'static kule_acp::Profile,
+        profile: &kule_acp::Profile,
         prompt: &str,
     ) -> Result<Vec<Denial>> {
         let started = Instant::now();
@@ -600,8 +605,13 @@ impl Service {
                 service.emit(&id, RunEvent::Agent { event });
             }
         });
-        let outcome =
-            runtime.block_on(kule_acp::run(task, launch.command, prompt, launch.mode, tx));
+        let outcome = runtime.block_on(kule_acp::run(
+            task,
+            launch.command,
+            prompt,
+            launch.mode.as_deref(),
+            tx,
+        ));
         let _ = runtime.block_on(forward);
         // The agent's process group is gone by now.
         let put_back = launch.kept.restore().map_err(text)?;
@@ -1089,8 +1099,32 @@ mod tests {
         let s = Setup::new();
         let (id, _) = s.task();
         let e = s.app.start_run(&id, "nobody", "hi").unwrap_err();
-        assert_eq!(e, "no agent nobody");
+        assert_eq!(e, "no agent nobody; known: claude-code, gemini, codex");
         assert!(!s.app.running.lock().unwrap().contains(&id));
+    }
+
+    #[test]
+    fn a_profile_not_approved_is_refused_and_not_offered() {
+        let s = Setup::new();
+        let (id, _) = s.task();
+        fs::write(
+            s.app.home.join(kule_acp::AGENTS_FILE),
+            "[[agent]]\nname = \"opencode\"\ncommand = [\"opencode\", \"acp\"]\nstate = [\".local/share/opencode\"]\n",
+        )
+        .unwrap();
+        assert_eq!(s.app.agents().unwrap(), ["claude-code", "gemini", "codex"]);
+        let e = s.app.start_run(&id, "opencode", "hi").unwrap_err();
+        assert!(
+            e.starts_with("agent opencode cannot run: not approved"),
+            "{e}"
+        );
+        assert!(!s.app.running.lock().unwrap().contains(&id));
+
+        kule_acp::Agents::approve(&s.app.home, "opencode").unwrap();
+        assert_eq!(
+            s.app.agents().unwrap(),
+            ["claude-code", "gemini", "codex", "opencode"]
+        );
     }
 
     #[test]

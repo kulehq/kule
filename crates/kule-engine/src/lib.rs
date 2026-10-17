@@ -57,8 +57,8 @@ pub use policy::{DEFAULT_POLICY, Judgement, Policy, REPO_POLICY, Ruling, Verdict
 pub use preview::{Picture, Preview, previewable};
 pub use protect::{Kept, PutBack};
 pub use sandbox::{
-    Denial, Network, PASSED_ENV, Sandbox, denials, isolates_network, protects_in_place,
-    record_denials,
+    Denial, HIDDEN_IN_HOME, Network, PASSED_ENV, Sandbox, denials, isolates_network,
+    protects_in_place, record_denials,
 };
 pub use steps::{Step, StepChange};
 pub use task::{AgentAtWork, Task, TaskInfo};

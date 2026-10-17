@@ -1,0 +1,56 @@
+# Kule's built-in agent profiles, in the format of `<kule home>/agents.toml`.
+#
+# What a profile opens was found by running the agent in the sandbox and
+# reading what it was refused (`sandbox.jsonl`): its own state and login,
+# nothing of the workspace or of other tools.
+#
+#   name             how the agent is asked for (`kule run --agent <name>`)
+#   command          starts the agent speaking ACP on stdio
+#   state            paths under the home directory it writes its own state to
+#   protected        paths in that state that configure what runs outside the
+#                    sandbox later (hooks, MCP servers): readable, never writable
+#   login            its login in that state, hidden from every other agent
+#   reveal_on_macos  default-hidden paths it needs to read (its keychain)
+#   mode             the ACP session mode to start in, when the agent offers it
+#   env              variables it is started with
+#   pass_env         the person's variables it may see: its own credentials
+#   hosts            HTTPS hosts it needs beyond what the policy lets through,
+#                    open only while it runs
+
+[[agent]]
+name = "claude-code"
+command = ["npx", "-y", "@agentclientprotocol/claude-agent-acp@0.92.0"]
+state = [".claude", ".claude.json", ".local/state/claude", "Library/Caches/claude-cli-nodejs"]
+login = [".claude/.credentials.json"]
+protected = [".claude/settings.json", ".claude/settings.local.json", ".claude/hooks", ".claude.json"]
+reveal_on_macos = ["Library/Keychains"]
+pass_env = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"]
+
+[[agent]]
+name = "gemini"
+command = ["gemini", "--acp"]
+state = [".gemini"]
+login = [".gemini/gemini-credentials.json", ".gemini/oauth_creds.json"]
+protected = [".gemini/settings.json"]
+# The keychain only works for Gemini when it can write a probe item there,
+# which the sandbox refuses; its own encrypted file under ~/.gemini needs no
+# more than the state above. Save the API key once with
+# `GEMINI_FORCE_FILE_STORAGE=true gemini` and `/auth`.
+env = { GEMINI_FORCE_FILE_STORAGE = "true" }
+pass_env = ["GEMINI_API_KEY", "GOOGLE_API_KEY"]
+# With an API key it talks to the public API, which the policy lets through.
+# Google no longer serves its Code Assist sign-in to clients like this one.
+
+[[agent]]
+name = "codex"
+# Codex runs each command in its own Seatbelt or Landlock sandbox, which
+# cannot be set up inside Kule's; Kule's sandbox stands in.
+mode = "agent-full-access"
+command = ["npx", "-y", "@agentclientprotocol/codex-acp@2.2.2", "-c", "sandbox_mode=\"danger-full-access\""]
+state = [".codex"]
+login = [".codex/auth.json"]
+protected = [".codex/config.toml"]
+pass_env = ["OPENAI_API_KEY", "CODEX_HOME"]
+# A ChatGPT sign-in refreshes its token at auth.openai.com and reaches the
+# model through chatgpt.com, not the public API.
+hosts = ["auth.openai.com", "chatgpt.com"]

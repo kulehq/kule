@@ -74,7 +74,9 @@ fn passes(name: &str) -> bool {
     PASSED_ENV.contains(&name) || name.starts_with("LC_")
 }
 
-const HIDDEN_IN_HOME: &[&str] = &[
+/// Credentials under the home directory, hidden from every command: no agent
+/// profile may open them.
+pub const HIDDEN_IN_HOME: &[&str] = &[
     ".ssh",
     ".aws",
     ".azure",

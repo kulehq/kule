@@ -283,7 +283,7 @@ pub fn dispatch(service: &Arc<Service>, call: Call) -> Result<Value, String> {
         serde_json::to_value(value).map_err(|e| e.to_string())
     }
     match call {
-        Call::Agents => json(service.agents()),
+        Call::Agents => json(service.agents()?),
         Call::Tasks => json(service.tasks()?),
         Call::CreateTask { workspace } => json(service.create(&workspace)?),
         Call::Review {
