@@ -54,7 +54,12 @@ pub(crate) fn outline(
         if outlines.len() == MAX_FILES || started.elapsed() > MAX_TIME {
             break;
         }
-        if !kule_entities::supported(&effect.path) {
+        // A moved file holds what it held: nothing changed inside it.
+        let moved = set
+            .moves
+            .iter()
+            .any(|m| m.from == effect.path || m.to == effect.path);
+        if moved || !kule_entities::supported(&effect.path) {
             continue;
         }
         let entry = baseline.entries.get(&effect.path);

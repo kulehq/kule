@@ -1,5 +1,6 @@
 //! Effect sets: what the copy holds that the baseline does not.
 
+use std::collections::HashMap;
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
@@ -8,7 +9,7 @@ use crate::error::Result;
 use crate::fsops::same_bytes;
 use crate::git::{self, GitSummary};
 use crate::ignore;
-use crate::manifest::{Baseline, Entry, Kind, Stamp, scan};
+use crate::manifest::{Baseline, Entry, Kind, Stamp, Tree, scan};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -47,6 +48,22 @@ pub struct EffectSet {
     /// such as an index refresh by `git status`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub git: Option<GitSummary>,
+    /// Deleted paths that live on under another name: the same file (or
+    /// directory) in the copy, renamed. A commit still deletes one path and
+    /// writes the other; a person and the policy see a move.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub moves: Vec<Move>,
+    /// The workspace is a git repository, which can bring back what a
+    /// commit deletes; a plain folder has only the task's own undo.
+    #[serde(default)]
+    pub repository: bool,
+}
+
+/// A path the copy renamed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Move {
+    pub from: String,
+    pub to: String,
 }
 
 impl EffectSet {
@@ -82,16 +99,33 @@ impl EffectSet {
     /// What a commit takes: everything, or everything but the ignored paths.
     /// Git's lock files never go: one in the copy is a crashed process's.
     pub fn to_commit(&self, include_ignored: bool) -> EffectSet {
+        let effects: Vec<Effect> = self
+            .effects
+            .iter()
+            .filter(|e| include_ignored || !e.ignored)
+            .filter(|e| git::classify(&e.path) != Some(git::Part::Lock))
+            .cloned()
+            .collect();
+        let taken = |path: &str| effects.iter().any(|e| e.path == path);
+        let moves = self
+            .moves
+            .iter()
+            .filter(|m| taken(&m.from) && taken(&m.to))
+            .cloned()
+            .collect();
         EffectSet {
-            effects: self
-                .effects
-                .iter()
-                .filter(|e| include_ignored || !e.ignored)
-                .filter(|e| git::classify(&e.path) != Some(git::Part::Lock))
-                .cloned()
-                .collect(),
             git: self.git.clone(),
+            moves,
+            repository: self.repository,
+            effects,
         }
+    }
+
+    /// The deleted paths that are not moves: what is gone for good once
+    /// the commit is in.
+    pub fn deleted(&self) -> impl Iterator<Item = &Effect> {
+        self.files()
+            .filter(|e| e.change == Change::Deleted && !self.moves.iter().any(|m| m.from == e.path))
     }
 }
 
@@ -132,7 +166,54 @@ pub(crate) fn compute(copy: &Path, work: &Path, baseline: &Baseline) -> Result<E
     effects.sort_by(|a, b| a.path.cmp(&b.path));
     ignore::mark(work, &mut effects)?;
     let git = git::summarize(copy, baseline.git.as_ref(), &effects)?;
-    Ok(EffectSet { effects, git })
+    let moves = moves(&effects, baseline, &now);
+    Ok(EffectSet {
+        effects,
+        git,
+        moves,
+        repository: baseline.git.is_some(),
+    })
+}
+
+/// The deleted paths whose file lives on at a created or replaced one: the
+/// same inode, and for a file the same size and modification time, which a
+/// rename keeps and a write does not. Read from metadata alone, so sorting
+/// thousands of photos costs no reading; an agent that means to could pass
+/// a deletion off as a move, which is why a move is still shown as one.
+fn moves(effects: &[Effect], baseline: &Baseline, now: &Tree) -> Vec<Move> {
+    let mut gone: HashMap<u64, (&str, &Stamp)> = HashMap::new();
+    for effect in effects
+        .iter()
+        .filter(|e| e.change == Change::Deleted && !e.in_git())
+    {
+        if let Some(entry) = baseline.entries.get(&effect.path) {
+            gone.insert(entry.copy.ino, (&effect.path, &entry.copy));
+        }
+    }
+    let mut moves = Vec::new();
+    for effect in effects
+        .iter()
+        .filter(|e| e.change != Change::Deleted && !e.in_git())
+    {
+        let Some(stamp) = now.get(&effect.path) else {
+            continue;
+        };
+        let Some((from, before)) = gone.get(&stamp.ino) else {
+            continue;
+        };
+        let same = before.kind == stamp.kind
+            && (stamp.kind == Kind::Dir
+                || (before.size == stamp.size && before.mtime == stamp.mtime));
+        if same {
+            moves.push(Move {
+                from: (*from).to_owned(),
+                to: effect.path.clone(),
+            });
+            gone.remove(&stamp.ino);
+        }
+    }
+    moves.sort_by(|a, b| a.to.cmp(&b.to));
+    moves
 }
 
 /// The copy's stamp moved; decides whether its type, mode or content did.

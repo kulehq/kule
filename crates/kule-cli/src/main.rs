@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
@@ -566,7 +567,16 @@ fn warn_if_network_not_isolated() {
 /// `.git` as what it means, not as object file names.
 fn print_set(task: &Task, set: &EffectSet) {
     const SHOWN: usize = 40;
-    let files: Vec<&Effect> = set.files().filter(|e| !e.ignored).collect();
+    // A move is one line, under its new name.
+    let moved_to: HashMap<&str, &str> = set
+        .moves
+        .iter()
+        .map(|m| (m.to.as_str(), m.from.as_str()))
+        .collect();
+    let files: Vec<&Effect> = set
+        .files()
+        .filter(|e| !e.ignored && !set.moves.iter().any(|m| m.from == e.path))
+        .collect();
     let outlines = task.outline(&set.to_commit(false)).unwrap_or_default();
     let ignored: Vec<&Effect> = set.ignored().collect();
     if !ignored.is_empty() {
@@ -587,13 +597,25 @@ fn print_set(task: &Task, set: &EffectSet) {
         return;
     }
     if !files.is_empty() {
-        let count = |change| files.iter().filter(|e| e.change == change).count();
+        let moved = |e: &&&Effect| moved_to.contains_key(e.path.as_str());
+        let count = |change| {
+            files
+                .iter()
+                .filter(|e| e.change == change && !moved(e))
+                .count()
+        };
+        let moves = files.iter().filter(moved).count();
         println!(
-            "{} file changes: +{} ~{} -{}",
+            "{} file changes: +{} ~{} -{}{}",
             files.len(),
             count(Change::Created),
             count(Change::Modified),
-            count(Change::Deleted)
+            count(Change::Deleted),
+            if moves > 0 {
+                format!(" »{moves}")
+            } else {
+                String::new()
+            }
         );
         for effect in files.iter().take(SHOWN) {
             let mark = match effect.change {
@@ -602,6 +624,18 @@ fn print_set(task: &Task, set: &EffectSet) {
                 Change::Deleted => '-',
             };
             let slash = if effect.kind == Kind::Dir { "/" } else { "" };
+            if let Some(from) = moved_to.get(effect.path.as_str()) {
+                // What moved with its directory goes without saying.
+                let with_parent = set.moves.iter().any(|d| {
+                    effect.path.strip_prefix(d.to.as_str()).is_some_and(|rest| {
+                        rest.starts_with('/') && from.strip_prefix(d.from.as_str()) == Some(rest)
+                    })
+                });
+                if !with_parent {
+                    println!("  » {from}{slash} → {}{slash}", effect.path);
+                }
+                continue;
+            }
             let outline = outlines.iter().find(|o| o.path == effect.path);
             match outline.map(|o| &o.outline) {
                 Some(Outline::Skipped { reason }) if *reason != Skip::Binary => {

@@ -11,7 +11,8 @@
 //   fast_forward  for git.ref: the new value keeps the old one in its history
 //   commits       for git.ref: commits added
 //   host, port    for net.connect: where a command wants to connect
-// Context: deletes (files deleted in the transaction), files (files changed).
+// Context: deletes (paths deleted in the transaction; a move is not one),
+//   files (paths changed), repository (the workspace is a git repository).
 //
 // Network connections (kind "net.connect") are judged while the command
 // waits, so for now only "auto" lets one through; one that would wait for a
@@ -60,6 +61,12 @@ when {
 @id("mass-delete")
 forbid (principal, action == Kule::Action::"auto", resource)
 when { context.deletes > 200 };
+
+// Outside a git repository nothing but the task's own undo brings a deleted
+// file back, and that goes with the task: more than a few deletions wait.
+@id("deletes-outside-git")
+forbid (principal, action == Kule::Action::"auto", resource)
+when { !context.repository && context.deletes > 20 };
 
 // Git: moving a branch forward and creating one pass on their own; rewriting
 // history, deleting a branch or switching HEAD wait for a person.

@@ -154,16 +154,21 @@ fn ci_editor_and_kule_files_wait_for_a_person() {
     }
 }
 
-#[test]
-fn a_mass_delete_waits_for_a_person() {
-    let files: Vec<(String, String)> = (0..201)
+/// `n` files under `data/`, in a git repository or a plain folder.
+fn data(n: usize, repo: bool) -> Setup {
+    let files: Vec<(String, String)> = (0..n)
         .map(|i| (format!("data/{i}.txt"), format!("{i}\n")))
         .collect();
     let refs: Vec<(&str, &str)> = files
         .iter()
         .map(|(p, t)| (p.as_str(), t.as_str()))
         .collect();
-    let s = Setup::new(&refs, false);
+    Setup::new(&refs, repo)
+}
+
+#[test]
+fn a_mass_delete_waits_for_a_person() {
+    let s = data(201, true);
     fs::remove_dir_all(s.copy().join("data")).unwrap();
 
     let ruling = s.judged();
@@ -172,6 +177,68 @@ fn a_mass_delete_waits_for_a_person() {
         on(&ruling, "data/7.txt"),
         (Verdict::Ask, rules(&["mass-delete"]))
     );
+}
+
+#[test]
+fn outside_git_a_few_deletions_already_wait() {
+    // 20 files and their directory: 21 deletions.
+    let s = data(20, false);
+    fs::remove_dir_all(s.copy().join("data")).unwrap();
+    let ruling = s.judged();
+    assert_eq!(
+        on(&ruling, "data/7.txt"),
+        (Verdict::Ask, rules(&["deletes-outside-git"]))
+    );
+
+    // Twenty pass, in a plain folder as in a repository.
+    let s = data(20, false);
+    for i in 0..20 {
+        fs::remove_file(s.copy().join(format!("data/{i}.txt"))).unwrap();
+    }
+    assert_eq!(s.judged().verdict, Verdict::Allow);
+    let s = data(30, true);
+    fs::remove_dir_all(s.copy().join("data")).unwrap();
+    assert_eq!(s.judged().verdict, Verdict::Allow);
+}
+
+#[test]
+fn moving_files_is_not_deleting_them() {
+    // Sorting 250 photos into folders: no deletion, nothing waits.
+    let s = data(250, false);
+    let copy = s.copy();
+    fs::create_dir(copy.join("sorted")).unwrap();
+    for i in 0..250 {
+        let to = copy.join(format!("sorted/{}", i % 2));
+        fs::create_dir_all(&to).unwrap();
+        fs::rename(
+            copy.join(format!("data/{i}.txt")),
+            to.join(format!("{i}.txt")),
+        )
+        .unwrap();
+    }
+    fs::remove_dir(copy.join("data")).unwrap();
+
+    let set = s.task.effects().unwrap();
+    assert_eq!(set.moves.len(), 250);
+    assert!(
+        set.moves
+            .iter()
+            .any(|m| m.from == "data/7.txt" && m.to == "sorted/1/7.txt")
+    );
+    assert_eq!(
+        set.deleted().map(|e| e.path.as_str()).collect::<Vec<_>>(),
+        ["data"]
+    );
+    assert_eq!(s.judged().verdict, Verdict::Allow);
+}
+
+#[test]
+fn a_file_rewritten_under_a_new_name_is_not_a_move() {
+    let s = data(1, false);
+    let copy = s.copy();
+    fs::rename(copy.join("data/0.txt"), copy.join("data/new.txt")).unwrap();
+    write(&copy.join("data/new.txt"), "something else\n");
+    assert!(s.task.effects().unwrap().moves.is_empty());
 }
 
 #[test]

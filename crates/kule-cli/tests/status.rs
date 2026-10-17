@@ -79,3 +79,28 @@ fn status_tells_where_another_task_changes_the_same() {
     let expected = format!("task {b} changes them too:\n  task.rs · method Task::commit\n");
     assert!(status.ends_with(&expected), "{status}");
 }
+
+#[test]
+fn status_shows_moves_as_moves() {
+    let (home, ws) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+    fs::create_dir(ws.path().join("photos")).unwrap();
+    for i in 0..3 {
+        fs::write(ws.path().join(format!("photos/{i}.jpg")), [i; 8]).unwrap();
+    }
+    fs::write(ws.path().join("notes.md"), "# Notes\n").unwrap();
+    let created = kule(home.path(), &["new", ws.path().to_str().unwrap()]);
+    let id = created.split_whitespace().nth(1).unwrap();
+    let copy = home.path().join("tasks").join(id).join("copy");
+    fs::rename(copy.join("photos"), copy.join("2026")).unwrap();
+    fs::create_dir(copy.join("docs")).unwrap();
+    fs::rename(copy.join("notes.md"), copy.join("docs/notes.md")).unwrap();
+
+    let status = kule(home.path(), &["status", id]);
+    assert!(
+        status.starts_with(
+            "6 file changes: +1 ~0 -0 »5\n  » photos/ → 2026/\n  + docs/\n  » notes.md → docs/notes.md\n"
+        ),
+        "{status}"
+    );
+    assert!(status.contains("passes on its own"), "{status}");
+}

@@ -164,13 +164,19 @@ impl Policy {
     /// [`Verdict::Allow`].
     pub fn judge_connection(&self, host: &str, port: u16) -> Judgement {
         let subject = Subject::connection(host, port);
-        self.judge_one(format!("{host}:{port}"), &subject, 0, 0)
+        self.judge_one(format!("{host}:{port}"), &subject, &Facts::default())
     }
 
     /// Judges everything the effect set does.
     pub fn judge(&self, set: &EffectSet) -> Ruling {
-        let deletes = set.files().filter(|e| e.change == Change::Deleted).count();
+        // A move is not a deletion: the file lives on under its new name.
+        let deletes = set.deleted().count();
         let files = set.files().count();
+        let facts = Facts {
+            deletes,
+            files,
+            repository: set.repository,
+        };
         let mut judgements = Vec::new();
         for effect in set.files() {
             let kind = match effect.change {
@@ -179,7 +185,7 @@ impl Policy {
                 Change::Deleted => "fs.delete",
             };
             let subject = Subject::file(kind, &effect.path, effect.change);
-            judgements.push(self.judge_one(effect.path.clone(), &subject, deletes, files));
+            judgements.push(self.judge_one(effect.path.clone(), &subject, &facts));
         }
         if let Some(git) = &set.git {
             for change in &git.refs {
@@ -187,26 +193,20 @@ impl Policy {
                 judgements.push(self.judge_one(
                     format!("git ref {}", change.name),
                     &subject,
-                    deletes,
-                    files,
+                    &facts,
                 ));
             }
             if git.config {
                 let subject = Subject::git("git.config", "config");
-                judgements.push(self.judge_one("git config".into(), &subject, deletes, files));
+                judgements.push(self.judge_one("git config".into(), &subject, &facts));
             }
             for hook in &git.hooks {
                 let subject = Subject::git("git.hook", hook);
-                judgements.push(self.judge_one(
-                    format!("git hook {hook}"),
-                    &subject,
-                    deletes,
-                    files,
-                ));
+                judgements.push(self.judge_one(format!("git hook {hook}"), &subject, &facts));
             }
             for path in &git.other {
                 let subject = Subject::git("git.other", path);
-                judgements.push(self.judge_one(path.clone(), &subject, deletes, files));
+                judgements.push(self.judge_one(path.clone(), &subject, &facts));
             }
         }
         let verdict = judgements
@@ -220,26 +220,20 @@ impl Policy {
         }
     }
 
-    fn judge_one(
-        &self,
-        label: String,
-        subject: &Subject,
-        deletes: usize,
-        files: usize,
-    ) -> Judgement {
+    fn judge_one(&self, label: String, subject: &Subject, facts: &Facts) -> Judgement {
         let judgement = |verdict, rules| Judgement {
             subject: label.clone(),
             verdict,
             rules,
         };
-        let auto = match self.ask(subject, "auto", deletes, files) {
+        let auto = match self.ask(subject, "auto", facts) {
             Ok(answer) => answer,
             Err(error) => return judgement(Verdict::Deny, vec![format!("policy-error: {error}")]),
         };
         if auto.allowed {
             return judgement(Verdict::Allow, auto.rules);
         }
-        match self.ask(subject, "ask", deletes, files) {
+        match self.ask(subject, "ask", facts) {
             Err(error) => judgement(Verdict::Deny, vec![format!("policy-error: {error}")]),
             // Why it does not pass on its own: the forbids that matched, or
             // the lack of any rule letting it through.
@@ -266,8 +260,7 @@ impl Policy {
         &self,
         subject: &Subject,
         action: &str,
-        deletes: usize,
-        files: usize,
+        facts: &Facts,
     ) -> std::result::Result<Answer, String> {
         let resource = uid("Kule::Effect", "effect");
         let entity = Entity::new(resource.clone(), subject.attrs(), HashSet::new())
@@ -276,11 +269,15 @@ impl Policy {
         let context = Context::from_pairs([
             (
                 "deletes".to_owned(),
-                RestrictedExpression::new_long(deletes as i64),
+                RestrictedExpression::new_long(facts.deletes as i64),
             ),
             (
                 "files".to_owned(),
-                RestrictedExpression::new_long(files as i64),
+                RestrictedExpression::new_long(facts.files as i64),
+            ),
+            (
+                "repository".to_owned(),
+                RestrictedExpression::new_bool(facts.repository),
             ),
         ])
         .map_err(|e| e.to_string())?;
@@ -311,6 +308,15 @@ impl Policy {
             rules,
         })
     }
+}
+
+/// What the policy's context says about the whole transaction.
+#[derive(Default)]
+struct Facts {
+    /// Paths deleted for good: moves left out.
+    deletes: usize,
+    files: usize,
+    repository: bool,
 }
 
 struct Answer {

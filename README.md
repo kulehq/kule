@@ -21,8 +21,10 @@ repository, Kule also reads `.git` as one (see M1, step 1).
 - **Notes and documents** (a Markdown or Obsidian vault, reports): let an
   agent restructure them and review the result before anything moves.
 - **Photos, downloads, archives**: "sort these into folders" works on the
-  copy, so your originals stay where they are until you commit; more than
-  200 deletions wait for you, and undo brings back what a commit replaced.
+  copy, so your originals stay where they are until you commit. Moves are
+  shown as moves (`» photos/ → 2026/`); in a folder that is not a git
+  repository more than 20 deletions wait for you, and undo brings back
+  what a commit replaced.
 - **Data**: notebooks, CSV files and large datasets; the copy takes no
   space until files change.
 - **Something you don't trust yet**: run a script or an installer in a task
@@ -50,7 +52,7 @@ Review, and, while its window is not in front, the app also tells through
 the system's notifications when two tasks start to meet, when an agent
 waits for an answer, and when a run is over.
 
-Previews of images and telling moves from deletions come next.
+Previews of images come next.
 
 ## M0: transactions on a copy-on-write copy
 
@@ -129,7 +131,9 @@ policy: waits for approval
 and nothing that is denied (a new git hook, for example). `kule policy`
 prints the built-in rules: source edits and fast-forward branch moves pass;
 manifests, lockfiles, CI and editor configuration, git config, history
-rewrites and mass deletes wait; git hooks are denied. Save your own as
+rewrites and mass deletes wait (more than 200, or more than 20 outside a git
+repository; a file renamed in the copy is a move, not a deletion); git
+hooks are denied. Save your own as
 `~/.kule/policy.cedar` to replace them. A repository can add `forbid` rules
 in `.kule/policy.cedar`; they are read from the real workspace, never from
 the copy an agent edits.

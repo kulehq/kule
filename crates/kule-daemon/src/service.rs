@@ -707,7 +707,7 @@ impl Service {
         }
         let stale = EffectSet {
             effects: stale,
-            git: None,
+            ..EffectSet::default()
         };
         let outlines = task.outline(&stale).unwrap_or_default();
         for effect in &stale.effects {

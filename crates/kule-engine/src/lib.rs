@@ -43,7 +43,7 @@ pub use approvals::{
 };
 pub use caches::Sources as CacheSources;
 pub use checkpoint::{Checkpoint, State as CheckpointState};
-pub use effects::{Change, Effect, EffectSet};
+pub use effects::{Change, Effect, EffectSet, Move};
 pub use error::{Error, Result};
 pub use git::{GitState, GitSummary, RefChange};
 pub use history::{Entry as HistoryEntry, Event as HistoryEvent};

@@ -633,17 +633,39 @@ async function loadReview(id) {
   }
   replace($("review-actions"), ...actions);
 
-  const byChange = (c) => files.filter((e) => e.change === c);
+  const moves = review.effects.moves || [];
+  const moved = new Set(moves.flatMap((m) => [m.from, m.to]));
+  const byChange = (c) => files.filter((e) => e.change === c && !moved.has(e.path));
   const held = new Map(review.ruling.judgements.filter((j) => j.verdict !== "allow").map((j) => [j.subject, j.verdict]));
   const outlines = new Map((review.outline || []).map((o) => [o.path, o]));
   replace($("effects"),
     ...filesGroup("Created", byChange("created"), held, outlines),
     ...filesGroup("Modified", byChange("modified"), held, outlines),
     ...filesGroup("Deleted", byChange("deleted"), held, outlines),
+    ...movesGroup(moves),
     ...gitGroup(review.effects.git),
     ...meetsGroup(task),
     ...ignoredGroup(id, ignored, include, held)
   );
+}
+
+/**
+ * Paths the copy renamed: the same file under a new name, not a deletion.
+ * What moved along with its directory is not listed apart.
+ */
+function movesGroup(moves) {
+  const withParent = (m) =>
+    moves.some((d) => m.to.startsWith(`${d.to}/`) && m.from === d.from + m.to.slice(d.to.length));
+  const shown = moves.filter((m) => !withParent(m));
+  if (shown.length === 0) return [];
+  return [
+    h("h2", { class: "group-title" }, "Moved"),
+    h(
+      "ul",
+      { class: "files" },
+      shown.map((m) => h("li", {}, h("span", { class: "change modified" }, "»"), h("span", {}, `${m.from} → ${m.to}`)))
+    ),
+  ];
 }
 
 /**
