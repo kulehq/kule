@@ -7,6 +7,7 @@ mod client;
 mod protocol;
 mod server;
 mod service;
+pub mod shortcuts;
 
 use std::path::PathBuf;
 

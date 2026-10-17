@@ -10,6 +10,7 @@ mod terminal;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use kule_daemon::shortcuts::Shortcuts;
 use kule_daemon::{
     AgentProfile, Alert, Alerts, Call, Client, Commit, DailyBudget, Hello, Money, Notice, PROTOCOL,
     PolicyChoice, Question, Result, Review, RunEvent, Sequenced, TaskColor, TaskView, Timeline,
@@ -328,6 +329,16 @@ fn choose_policy(kule: K<'_>, choice: PolicyChoice) -> Result<PolicyChoice> {
 }
 
 #[tauri::command(async)]
+fn shortcuts(kule: K<'_>) -> Result<Shortcuts> {
+    kule.call(Call::Shortcuts)
+}
+
+#[tauri::command(async)]
+fn set_shortcuts(kule: K<'_>, shortcuts: Shortcuts) -> Result<Shortcuts> {
+    kule.call(Call::SetShortcuts { shortcuts })
+}
+
+#[tauri::command(async)]
 fn daily_budget(kule: K<'_>) -> Result<DailyBudget> {
     kule.call(Call::DailyBudget)
 }
@@ -495,6 +506,8 @@ fn main() {
             set_order,
             policy,
             choose_policy,
+            shortcuts,
+            set_shortcuts,
             daily_budget,
             set_daily_budget,
             start_run,

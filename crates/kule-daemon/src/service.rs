@@ -260,6 +260,11 @@ pub struct Service {
 }
 
 impl Service {
+    /// Kule's home, which this service keeps everything in.
+    pub fn home(&self) -> &Path {
+        &self.home
+    }
+
     pub fn new(home: PathBuf) -> Service {
         let approvals = Approvals::new();
         let subscribers = Subscribers::default();

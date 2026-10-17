@@ -10,7 +10,7 @@ use serde_json::Value;
 
 /// Changes whenever a call, a result or a notice changes shape; a client
 /// and a daemon that disagree on it cannot talk.
-pub const PROTOCOL: u32 = 15;
+pub const PROTOCOL: u32 = 16;
 
 /// What a daemon says about itself.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -132,6 +132,12 @@ pub enum Call {
     /// person's.
     ChoosePolicy {
         choice: kule_engine::PolicyChoice,
+    },
+    /// The keyboard shortcuts the person chose in the app.
+    Shortcuts,
+    /// Keeps these in place of the ones chosen before.
+    SetShortcuts {
+        shortcuts: crate::shortcuts::Shortcuts,
     },
     /// What every task may spend together in 24 hours, and what they did.
     DailyBudget,

@@ -344,6 +344,11 @@ pub fn dispatch(service: &Arc<Service>, call: Call) -> Result<Value, String> {
         Call::SetOrder { tasks } => json(service.set_order(&tasks)?),
         Call::Policy => json(service.policy_choice()?),
         Call::ChoosePolicy { choice } => json(service.choose_policy(choice)?),
+        Call::Shortcuts => json(crate::shortcuts::load(service.home())?),
+        Call::SetShortcuts { shortcuts } => {
+            crate::shortcuts::save(service.home(), &shortcuts)?;
+            json(crate::shortcuts::load(service.home())?)
+        }
         Call::DailyBudget => json(service.daily_budget()?),
         Call::SetDailyBudget { budget } => json(service.set_daily_budget(budget)?),
         Call::ApplyHome { task, paths } => json(service.apply_home(&task, &paths)?),

@@ -1648,3 +1648,139 @@ select:focus-visible {
   color: var(--muted);
   font-size: 13px;
 }
+
+/* The command palette: every command, found by name. */
+.palette-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  align-items: start;
+  justify-items: center;
+  padding: 12vh 16px 16px;
+  background: rgb(0 0 0 / 0.28);
+}
+
+.palette {
+  display: flex;
+  width: min(620px, 100%);
+  max-height: 62vh;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  box-shadow: 0 18px 48px rgb(0 0 0 / 0.3);
+}
+
+.palette input {
+  padding: 14px 16px;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  background: transparent;
+  color: var(--text);
+  font: 16px var(--sans);
+  outline: none;
+}
+
+.palette-list {
+  margin: 0;
+  padding: 6px;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.palette-item {
+  display: grid;
+  grid-template-columns: 92px 1fr auto;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 7px;
+  cursor: pointer;
+}
+
+.palette-item[aria-selected="true"] {
+  background: var(--accent-soft);
+}
+
+.palette-group {
+  color: var(--faint);
+  font-size: 12px;
+}
+
+.palette-keys,
+.key-combo {
+  padding: 1px 7px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--sunken);
+  color: var(--muted);
+  font: 12px var(--mono);
+  white-space: nowrap;
+}
+
+.palette-empty {
+  padding: 14px 10px;
+  color: var(--faint);
+}
+
+/* Settings → Shortcuts. */
+.key-group {
+  display: grid;
+  gap: 6px;
+}
+
+.key-group h3 {
+  margin: 0;
+  color: var(--faint);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.key-list {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  list-style: none;
+}
+
+.key-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 10px 6px 14px;
+}
+
+.key-row + .key-row {
+  border-top: 1px solid var(--border);
+}
+
+.key-row.recording {
+  background: var(--accent-soft);
+}
+
+.key-combo.none {
+  color: var(--faint);
+  font-style: italic;
+}
+
+.key-wait {
+  color: var(--accent);
+  font-size: 13px;
+}
+
+.key-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.key-actions .button {
+  min-height: 28px;
+}

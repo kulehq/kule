@@ -542,7 +542,7 @@ function renderTask() {
   count.hidden = !waiting;
   count.textContent = String(waiting);
 
-  for (const tab of document.querySelectorAll(".tab")) {
+  for (const tab of document.querySelectorAll("#tabs .tab")) {
     const selected = tab.dataset.tab === state.tab;
     tab.setAttribute("aria-selected", String(selected));
     // One stop for Tab; the arrow keys move between the tabs.
@@ -609,11 +609,11 @@ function renderSpent(task) {
 }
 
 /** Settings' sections, each a value of `state.view`. */
-const SETTINGS = ["agents", "policy", "rules", "secrets", "budget"];
+const SETTINGS = ["agents", "policy", "rules", "secrets", "budget", "shortcuts"];
 
 async function openSettings(view = SETTINGS.includes(state.view) ? state.view : "agents") {
   closeMenu();
-  const opening = { agents: openAgents, policy: openPolicy, rules: openRules, secrets: openSecrets, budget: openBudget }[view];
+  const opening = { agents: openAgents, policy: openPolicy, rules: openRules, secrets: openSecrets, budget: openBudget, shortcuts: openShortcuts }[view];
   await opening();
 }
 
@@ -2598,6 +2598,465 @@ async function removeTask(task = currentTask()) {
   await refresh();
 }
 
+// --- Keyboard --------------------------------------------------------------
+
+// Everything the window does is a command here, with a default shortcut or
+// none; the person can give each one their own in Settings → Shortcuts, and
+// the daemon keeps those choices in Kule's home. Every new feature adds its
+// command to this list.
+
+function showTab(name) {
+  state.view = "tasks";
+  state.tab = name;
+  renderSidebar();
+  renderTask();
+}
+
+/** Clicks the button `selector` names when it is there to click; says why
+ * not otherwise. An armed button (Delete, Roll back, Undo) needs the
+ * shortcut twice, as it needs two clicks. */
+function press(selector, missing) {
+  const button = document.querySelector(selector);
+  if (!button || button.disabled || button.closest("[hidden]")) {
+    toast(missing);
+    return;
+  }
+  button.focus();
+  button.click();
+}
+
+/** Runs `then` with the task shown, or says there is none. */
+function withTask(then) {
+  const task = currentTask();
+  if (!task) {
+    toast("No task is open");
+    return;
+  }
+  if (state.view !== "tasks") showTab(state.tab || "live");
+  then(task);
+}
+
+/** The question to answer first: the open task's oldest, else any. */
+function firstQuestion() {
+  const task = currentTask();
+  return (task && questionsOf(task.id)[0]) || state.questions[0];
+}
+
+async function answerFirst(approve, remember) {
+  const q = firstQuestion();
+  if (!q) {
+    toast("No agent is waiting for an answer");
+    return;
+  }
+  await answer(q.id, approve, remember);
+  toast(`${approve ? "Approved" : "Denied"} ${q.host}:${q.port}`);
+}
+
+/** Moves to the task `by` places away in the list. */
+function stepTask(by) {
+  if (!state.tasks.length) return;
+  const at = state.tasks.findIndex((t) => t.id === state.current);
+  const next = state.tasks[(at + by + state.tasks.length) % state.tasks.length];
+  select(next.id);
+  document.querySelector(`#tasks [data-key="${CSS.escape(`tasks:${next.id}`)}"]`)?.focus();
+}
+
+/** Opens the open task's ⋮ menu, as a click on it would. */
+function openTaskMenu() {
+  const task = currentTask();
+  const more = task && document.querySelector(`#tasks [data-key="${CSS.escape(`tasks:${task.id}:more`)}"]`);
+  if (!more) {
+    toast("No task is open");
+    return null;
+  }
+  more.click();
+  return $("task-menu");
+}
+
+/** Shows `tab` of the open task; the review's buttons are there once it is. */
+function onTab(tab, then) {
+  withTask(() => {
+    if (state.tab !== tab) {
+      showTab(tab);
+      toast(`Showing ${tab === "review" ? "the review" : "the timeline"}; press the shortcut again to go on`);
+      return;
+    }
+    then();
+  });
+}
+
+const COLOR_NAMES = { red: "Red", orange: "Orange", yellow: "Yellow", green: "Green", teal: "Teal", blue: "Blue", purple: "Purple", pink: "Pink" };
+
+/** Every command: id, what it does, its group, its default shortcut, and
+ * whether it fires while the person types in a field. */
+const COMMANDS = [
+  { id: "app.palette", title: "Show all commands", group: "General", keys: "Mod+K", inFields: true, run: () => openPalette() },
+  { id: "app.shortcuts", title: "Keyboard shortcuts", group: "General", keys: "Mod+/", inFields: true, run: () => openSettings("shortcuts") },
+  { id: "app.settings", title: "Open Settings", group: "General", keys: "Mod+,", inFields: true, run: () => openSettings() },
+
+  { id: "task.new", title: "New task…", group: "Tasks", keys: "Mod+N", inFields: true, run: () => newTask() },
+  { id: "task.next", title: "Next task", group: "Tasks", keys: "Ctrl+Tab", inFields: true, run: () => stepTask(1) },
+  { id: "task.prev", title: "Previous task", group: "Tasks", keys: "Ctrl+Shift+Tab", inFields: true, run: () => stepTask(-1) },
+  { id: "task.up", title: "Move the task up the list", group: "Tasks", keys: "Alt+Shift+ArrowUp", run: () => withTask((t) => moveTask(t.id, -1)) },
+  { id: "task.down", title: "Move the task down the list", group: "Tasks", keys: "Alt+Shift+ArrowDown", run: () => withTask((t) => moveTask(t.id, 1)) },
+  { id: "task.menu", title: "Task actions…", group: "Tasks", keys: "Mod+.", run: () => openTaskMenu() },
+  {
+    id: "task.rename", title: "Rename the task…", group: "Tasks", keys: "F2",
+    run: () => withTask((t) => { const menu = openTaskMenu(); if (menu) renameTask(t, menu); }),
+  },
+  { id: "task.terminal", title: "Open a terminal in the task's copy", group: "Tasks", keys: "Mod+T", run: () => withTask((t) => openTerminal(t)) },
+  { id: "task.delete", title: "Delete the task (press twice)", group: "Tasks", keys: "Mod+Backspace", run: () => withTask(() => press("#remove-task", "The task cannot be deleted while its agent works")) },
+  ...[null, ...COLORS].map((color) => ({
+    id: `task.color.${color || "none"}`,
+    title: color ? `Colour the task ${COLOR_NAMES[color].toLowerCase()}` : "Take the task's colour away",
+    group: "Tasks",
+    keys: "",
+    run: () => withTask((t) => setColor(t, color)),
+  })),
+
+  { id: "view.live", title: "Show Live", group: "Task", keys: "Mod+1", inFields: true, run: () => withTask(() => showTab("live")) },
+  { id: "view.review", title: "Show Review", group: "Task", keys: "Mod+2", inFields: true, run: () => withTask(() => showTab("review")) },
+  { id: "view.timeline", title: "Show Timeline", group: "Task", keys: "Mod+3", inFields: true, run: () => withTask(() => showTab("timeline")) },
+  { id: "prompt.focus", title: "Write to the agent", group: "Task", keys: "Mod+L", run: () => withTask(() => { showTab("live"); $("prompt").focus(); }) },
+  {
+    id: "prompt.run", title: "Run the prompt", group: "Task", keys: "Mod+Enter", inFields: true,
+    run: () => withTask(() => { if (!$("send").disabled) $("composer").requestSubmit(); }),
+  },
+  { id: "task.budget", title: "Set the task's budget", group: "Task", keys: "", run: () => withTask(() => { showTab("live"); $("budget").focus(); }) },
+  { id: "task.wait", title: "Set how long the agent waits for you", group: "Task", keys: "", run: () => withTask(() => { showTab("live"); $("timeout").focus(); }) },
+
+  {
+    id: "review.commit", title: "Commit, or approve and commit", group: "Review", keys: "Mod+Shift+Enter", inFields: true,
+    run: () => onTab("review", () => press('#review-actions [data-key="commit"]', "Nothing to commit")),
+  },
+  {
+    id: "review.rollback", title: "Roll back the changes (press twice)", group: "Review", keys: "Mod+Shift+Backspace",
+    run: () => onTab("review", () => press('#review-actions [data-key="rollback"]', "Nothing to roll back")),
+  },
+  {
+    id: "timeline.undo", title: "Undo the last commit (press twice)", group: "Review", keys: "Mod+Shift+U",
+    run: () => onTab("timeline", () => press('#timeline [data-key="undo"]', "No commit to undo")),
+  },
+
+  { id: "question.approve", title: "Approve the waiting connection", group: "Questions", keys: "Mod+Shift+Y", inFields: true, run: () => answerFirst(true, false) },
+  { id: "question.remember", title: "Approve and remember it", group: "Questions", keys: "", inFields: true, run: () => answerFirst(true, true) },
+  { id: "question.deny", title: "Deny the waiting connection", group: "Questions", keys: "Mod+Shift+N", inFields: true, run: () => answerFirst(false, false) },
+
+  ...SETTINGS.map((view) => ({
+    id: `settings.${view}`,
+    title: `Settings: ${view[0].toUpperCase()}${view.slice(1)}`,
+    group: "Settings",
+    keys: "",
+    run: () => openSettings(view),
+  })),
+  { id: "policy.balanced", title: "Use the balanced policy", group: "Settings", keys: "", run: () => choosePolicy("balanced", refreshPolicyViews) },
+  { id: "policy.careful", title: "Use the careful policy", group: "Settings", keys: "", run: () => choosePolicy("careful", refreshPolicyViews) },
+];
+
+async function refreshPolicyViews() {
+  if (state.view === "policy") await renderPolicy();
+  if (!$("empty").hidden) await loadWelcome();
+}
+
+const keys = {
+  /** Command id → the person's own combo; "" for none. */
+  chosen: {},
+  /** The command whose shortcut is being recorded. */
+  recording: null,
+  note: "",
+};
+
+const commandById = (id) => COMMANDS.find((c) => c.id === id);
+
+/** The combo a command answers to: the person's, else its default. */
+function bindingOf(command) {
+  return normalCombo(command.id in keys.chosen ? keys.chosen[command.id] : command.keys);
+}
+
+/** Puts each command's shortcut on the controls that do the same. */
+function labelControls() {
+  const label = (el, id, what) => {
+    const combo = bindingOf(commandById(id));
+    el.title = combo ? `${what} (${formatCombo(combo)})` : what;
+    if (combo) el.setAttribute("aria-keyshortcuts", ariaCombo(combo));
+    else el.removeAttribute("aria-keyshortcuts");
+  };
+  label($("new-task"), "task.new", "New task");
+  label($("open-settings"), "app.settings", "Settings");
+  label($("open-terminal"), "task.terminal", "Opens your terminal in the task's copy, outside the sandbox. What you change there is reviewed like the agent's work.");
+  label($("remove-task"), "task.delete", "Delete task");
+  label($("send"), "prompt.run", "Run");
+  $("send-keys").textContent = formatCombo(bindingOf(commandById("prompt.run")));
+  for (const [view, id] of [["live", "view.live"], ["review", "view.review"], ["timeline", "view.timeline"]]) {
+    const tab = document.querySelector(`#tabs [data-tab="${view}"]`);
+    const combo = bindingOf(commandById(id));
+    if (combo) tab.setAttribute("aria-keyshortcuts", ariaCombo(combo));
+    tab.title = combo ? formatCombo(combo) : "";
+  }
+}
+
+async function loadShortcuts() {
+  try {
+    keys.chosen = await call("shortcuts");
+  } catch (err) {
+    fail(err);
+  }
+  labelControls();
+}
+
+async function saveShortcuts(chosen) {
+  try {
+    keys.chosen = await call("set_shortcuts", { shortcuts: chosen });
+  } catch (err) {
+    fail(err);
+  }
+  labelControls();
+  if (state.view === "shortcuts") renderShortcuts();
+}
+
+function onKey(e) {
+  if (e.defaultPrevented || e.isComposing) return;
+  if (keys.recording) {
+    recordKey(e);
+    return;
+  }
+  // The palette, a task's menu and the recording keep their own keys.
+  if ($("palette") || $("task-menu")) return;
+  const combos = eventCombos(e).map(normalCombo);
+  if (!combos.length) return;
+  const typing = typingIn(document.activeElement);
+  const command = COMMANDS.find((c) => {
+    const combo = bindingOf(c);
+    return combo && combos.includes(combo) && (!typing || c.inFields);
+  });
+  if (!command) return;
+  e.preventDefault();
+  command.run();
+}
+
+// --- The palette: every command, by name.
+
+function openPalette() {
+  if ($("palette")) return;
+  const opener = document.activeElement;
+  const input = h("input", {
+    id: "palette-input",
+    type: "text",
+    autocomplete: "off",
+    spellcheck: "false",
+    placeholder: "Type a command",
+    role: "combobox",
+    "aria-expanded": "true",
+    "aria-controls": "palette-list",
+    "aria-autocomplete": "list",
+  });
+  const list = h("ul", { id: "palette-list", class: "palette-list", role: "listbox", "aria-label": "Commands" });
+  let shown = [];
+  let at = 0;
+  const close = () => {
+    $("palette")?.remove();
+    if (opener && opener.isConnected) opener.focus();
+  };
+  const run = (command) => {
+    close();
+    command.run();
+  };
+  const draw = () => {
+    const words = input.value.toLowerCase().split(/\s+/).filter(Boolean);
+    shown = COMMANDS.filter((c) => words.every((w) => `${c.title} ${c.group}`.toLowerCase().includes(w)));
+    at = Math.min(at, Math.max(0, shown.length - 1));
+    list.replaceChildren(
+      ...shown.map((c, i) =>
+        h(
+          "li",
+          {
+            id: `palette-${c.id}`,
+            class: "palette-item",
+            role: "option",
+            "aria-selected": String(i === at),
+            onclick: () => run(c),
+            onpointermove: () => {
+              if (at !== i) {
+                at = i;
+                draw();
+              }
+            },
+          },
+          h("span", { class: "palette-group" }, c.group),
+          h("span", { class: "palette-title" }, c.title),
+          bindingOf(c) ? h("kbd", { class: "palette-keys" }, formatCombo(bindingOf(c))) : null
+        )
+      )
+    );
+    if (!shown.length) list.append(h("li", { class: "palette-empty" }, "No command by that name"));
+    const current = shown[at] && $(`palette-${shown[at].id}`);
+    if (current) {
+      input.setAttribute("aria-activedescendant", current.id);
+      current.scrollIntoView({ block: "nearest" });
+    } else input.removeAttribute("aria-activedescendant");
+  };
+  input.addEventListener("input", () => {
+    at = 0;
+    draw();
+  });
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      close();
+    } else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      if (shown.length) at = (at + (e.key === "ArrowDown" ? 1 : -1) + shown.length) % shown.length;
+      draw();
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      if (shown[at]) run(shown[at]);
+    } else if (e.key === "Tab") {
+      e.preventDefault();
+    }
+  });
+  const dialog = h(
+    "div",
+    { id: "palette", class: "palette-backdrop", onpointerdown: (e) => e.target === e.currentTarget && close() },
+    h("div", { class: "palette", role: "dialog", "aria-modal": "true", "aria-label": "Commands" }, input, list)
+  );
+  document.body.append(dialog);
+  draw();
+  input.focus();
+}
+
+// --- Settings → Shortcuts.
+
+async function openShortcuts() {
+  state.view = "shortcuts";
+  renderSidebar();
+  renderTask();
+  renderShortcuts();
+}
+
+function renderShortcuts() {
+  if (state.view !== "shortcuts") return;
+  const groups = [...new Set(COMMANDS.map((c) => c.group))];
+  const changed = Object.keys(keys.chosen).length > 0;
+  const row = (c) => {
+    const combo = bindingOf(c);
+    const own = c.id in keys.chosen;
+    const recording = keys.recording === c.id;
+    return h(
+      "li",
+      { class: `key-row${recording ? " recording" : ""}` },
+      h("span", { class: "key-title" }, c.title),
+      recording
+        ? h("span", { class: "key-wait", role: "status" }, keys.note || "Press the keys · Esc cancels · Backspace leaves it without one")
+        : h("kbd", { class: `key-combo${combo ? "" : " none"}` }, combo ? formatCombo(combo) : "none"),
+      h(
+        "span",
+        { class: "key-actions" },
+        h(
+          "button",
+          {
+            class: "button ghost",
+            type: "button",
+            "data-key": `record:${c.id}`,
+            "aria-label": `Change the shortcut for ${c.title}`,
+            onclick: () => startRecording(c.id),
+          },
+          recording ? "Waiting…" : "Change"
+        ),
+        own
+          ? h(
+              "button",
+              {
+                class: "button ghost",
+                type: "button",
+                "data-key": `reset:${c.id}`,
+                "aria-label": `Put back the default for ${c.title}`,
+                onclick: () => {
+                  const next = { ...keys.chosen };
+                  delete next[c.id];
+                  saveShortcuts(next);
+                },
+              },
+              "Default"
+            )
+          : null
+      )
+    );
+  };
+  replace(
+    $("agents-view"),
+    h(
+      "header",
+      { class: "agents-head" },
+      h("h2", {}, "Shortcuts"),
+      h(
+        "p",
+        { class: "muted" },
+        `Every command has a place here; ${formatCombo(bindingOf(commandById("app.palette")))} finds any of them by name. Your own shortcuts are kept in Kule's home and stay after a restart. ${PLATFORM === "mac" ? "⌘ is Command." : "Ctrl is the Control key."}`
+      ),
+      changed
+        ? h("div", { class: "agent-actions" }, h("button", { class: "button ghost", type: "button", "data-key": "reset-all", onclick: () => saveShortcuts({}) }, "Put back every default"))
+        : null
+    ),
+    ...groups.map((g) =>
+      h(
+        "section",
+        { class: "key-group", "aria-label": g },
+        h("h3", {}, g),
+        h("ul", { class: "key-list" }, ...COMMANDS.filter((c) => c.group === g).map(row))
+      )
+    )
+  );
+}
+
+function startRecording(id) {
+  keys.recording = id;
+  keys.note = "";
+  renderShortcuts();
+}
+
+/** Takes the next key press as the shortcut being recorded. */
+function recordKey(e) {
+  const combos = eventCombos(e);
+  if (!combos.length) return;
+  e.preventDefault();
+  e.stopPropagation();
+  const id = keys.recording;
+  const stop = () => {
+    keys.recording = null;
+    keys.note = "";
+    renderShortcuts();
+    document.querySelector(`[data-key="record:${CSS.escape(id)}"]`)?.focus();
+  };
+  if (combos[0] === "Escape") return stop();
+  if (combos[0] === "Backspace" || combos[0] === "Delete") {
+    keys.recording = null;
+    saveShortcuts({ ...keys.chosen, [id]: "" });
+    return;
+  }
+  const combo = normalCombo(combos[0]);
+  if (isReserved(combo)) {
+    keys.note = `${formatCombo(combo)} belongs to the system or to editing text; try another`;
+    renderShortcuts();
+    return;
+  }
+  if (!isUsable(combo)) {
+    keys.note = `${formatCombo(combo)} would be typed; add ${PLATFORM === "mac" ? "⌘, ⌃ or ⌥" : "Ctrl or Alt"}, or use a function key`;
+    renderShortcuts();
+    return;
+  }
+  // One command per combo: the one that had it gives it up.
+  const next = { ...keys.chosen, [id]: combo };
+  const other = COMMANDS.find((c) => c.id !== id && bindingOf(c) === combo);
+  if (other) {
+    next[other.id] = "";
+    toast(`${formatCombo(combo)} moved here from “${other.title}”`);
+  }
+  // A choice equal to the default is no choice.
+  if (combo === normalCombo(commandById(id).keys)) delete next[id];
+  keys.recording = null;
+  saveShortcuts(next);
+}
+
 // --- Start -----------------------------------------------------------------
 
 async function start() {
@@ -2605,25 +3064,12 @@ async function start() {
   $("open-terminal").addEventListener("click", () => openTerminal());
   $("empty-new-task").addEventListener("click", newTask);
   $("composer").addEventListener("submit", submitPrompt);
-  // Ctrl+Enter, or ⌘+Enter on a Mac, runs the prompt; Enter alone is a new line.
-  const mac = /Mac/.test(navigator.platform);
-  $("send").title = `Run (${mac ? "⌘" : "Ctrl"}+Enter)`;
-  $("send").append(h("kbd", { class: "shortcut", "aria-hidden": "true" }, mac ? "⌘↵" : "Ctrl+↵"));
-  $("prompt").addEventListener("keydown", (e) => {
-    if (e.key !== "Enter" || !(e.ctrlKey || e.metaKey) || e.isComposing) return;
-    e.preventDefault();
-    if (!$("send").disabled) $("composer").requestSubmit();
-  });
-  $("prompt").addEventListener("keydown", (e) => {
-    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) $("composer").requestSubmit();
-  });
-  const tabs = [...document.querySelectorAll(".tab")];
-  const showTab = (tab) => {
-    state.tab = tab.dataset.tab;
-    renderTask();
-  };
+  // Enter alone is a new line in the prompt; running it is a shortcut
+  // (prompt.run, ⌘/Ctrl+Enter by default).
+  $("send").append(h("kbd", { class: "shortcut", "aria-hidden": "true", id: "send-keys" }));
+  const tabs = [...document.querySelectorAll("#tabs .tab")];
   for (const tab of tabs) {
-    tab.addEventListener("click", () => showTab(tab));
+    tab.addEventListener("click", () => showTab(tab.dataset.tab));
   }
   $("tabs").addEventListener("keydown", (e) => {
     const at = tabs.indexOf(document.activeElement);
@@ -2632,7 +3078,7 @@ async function start() {
     if (to === undefined) return;
     e.preventDefault();
     const tab = tabs[(to + tabs.length) % tabs.length];
-    showTab(tab);
+    showTab(tab.dataset.tab);
     tab.focus();
   });
   const remove = armed(
@@ -2652,6 +3098,10 @@ async function start() {
   });
   window.addEventListener("blur", () => closeMenu());
   window.addEventListener("resize", () => closeMenu());
+  // Every shortcut; first in line, so a key being recorded goes nowhere else.
+  document.addEventListener("keydown", onKey, true);
+  labelControls();
+  loadShortcuts();
 
   await loadAgentChoices();
   $("open-settings").addEventListener("click", () => openSettings());
