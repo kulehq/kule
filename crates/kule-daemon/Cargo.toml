@@ -10,8 +10,8 @@ rust-version.workspace = true
 
 [dependencies]
 futures = "0.3.34"
-kule-acp = { version = "0.0.1", path = "../kule-acp" }
-kule-engine = { version = "0.0.1", path = "../kule-engine" }
+kule-acp = { version = "0.2.0", path = "../kule-acp" }
+kule-engine = { version = "0.2.0", path = "../kule-engine" }
 libc = "0.2.190"
 serde.workspace = true
 serde_json.workspace = true

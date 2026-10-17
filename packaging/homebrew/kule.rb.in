@@ -1,0 +1,19 @@
+# The Homebrew cask for Kule. The release workflow fills in @VERSION@ and
+# @SHA256@ and attaches the result to the release as kule.rb, for the tap.
+cask "kule" do
+  version "@VERSION@"
+  sha256 "@SHA256@"
+
+  url "https://github.com/kulehq/kule/releases/download/v#{version}/Kule_#{version}_universal.dmg"
+  name "Kule"
+  desc "Control room for AI agents that work on your folders"
+  homepage "https://github.com/kulehq/kule"
+
+  depends_on macos: ">= :ventura"
+
+  app "Kule.app"
+  binary "#{appdir}/Kule.app/Contents/MacOS/kule"
+
+  # ~/.kule holds the tasks' copies and checkpoints: work not yet committed
+  # to its folder. It stays unless you remove it yourself.
+end

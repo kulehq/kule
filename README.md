@@ -7,9 +7,29 @@ copy-on-write copy of the folder it works on (the *workspace*), and what
 reaches the real folder is decided by the effects the command had, not by
 its text.
 
-**Status:** M0–M3 done: engine, git, sandbox, policy, proxy, agents over ACP
+**Status:** 0.2.0: engine, git, sandbox, policy, proxy, agents over ACP
 (Claude Code, Codex, Gemini), the desktop app and its daemon, live approvals,
-checkpoints on Lonca with a signed history. macOS and Linux.
+checkpoints on Lonca with a signed history, secrets, cost and the home
+directory caught for review. macOS and Linux. See [CHANGELOG.md](CHANGELOG.md).
+
+## Install
+
+From [the releases](https://github.com/kulehq/kule/releases):
+
+- **macOS 13 or later:** `Kule_<version>_universal.dmg`, signed and
+  notarized. The `kule` command is inside the app: link
+  `/Applications/Kule.app/Contents/MacOS/kule` onto your `PATH`. Each
+  release also carries `kule.rb`, a Homebrew cask that installs the app
+  and links the command.
+- **Linux (x86_64):** `kule_<version>_amd64.deb` puts `kule-desktop` and
+  `kule` in `/usr/bin`; `kule-<version>-linux-x86_64.tar.gz` is the command
+  alone.
+- **From source:** `cargo build --release -p kule -p kule-desktop` (Linux
+  needs `libwebkit2gtk-4.1-dev`).
+
+The agents are installed and signed in the way they are without Kule:
+Claude Code and Codex need Node.js (`npx`), Gemini its CLI. The app's
+first screen says which of them can start.
 
 ## Any folder, not only repositories
 

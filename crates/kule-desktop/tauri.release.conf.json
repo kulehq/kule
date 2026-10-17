@@ -1,0 +1,20 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "active": true,
+    "category": "DeveloperTool",
+    "shortDescription": "A control room for AI agents that work on your folders",
+    "longDescription": "Kule runs AI coding and file agents in a sandboxed copy-on-write copy of a folder, shows every change as it happens, and lets through only what its policy and you approve.",
+    "copyright": "Apache-2.0",
+    "externalBin": ["binaries/kule"],
+    "macOS": {
+      "minimumSystemVersion": "13.0",
+      "hardenedRuntime": true
+    },
+    "linux": {
+      "deb": {
+        "depends": ["libwebkit2gtk-4.1-0", "libgtk-3-0"]
+      }
+    }
+  }
+}

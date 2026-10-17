@@ -3307,7 +3307,7 @@ dependencies = [
 
 [[package]]
 name = "kule"
-version = "0.0.1"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -3323,7 +3323,7 @@ dependencies = [
 
 [[package]]
 name = "kule-acp"
-version = "0.0.1"
+version = "0.2.0"
 dependencies = [
  "agent-client-protocol",
  "async-process",
@@ -3342,7 +3342,7 @@ dependencies = [
 
 [[package]]
 name = "kule-daemon"
-version = "0.0.1"
+version = "0.2.0"
 dependencies = [
  "futures",
  "kule-acp",
@@ -3356,7 +3356,7 @@ dependencies = [
 
 [[package]]
 name = "kule-desktop"
-version = "0.0.1"
+version = "0.2.0"
 dependencies = [
  "kule-daemon",
  "libc",
@@ -3371,7 +3371,7 @@ dependencies = [
 
 [[package]]
 name = "kule-engine"
-version = "0.0.1"
+version = "0.2.0"
 dependencies = [
  "base64 0.22.1",
  "blake3",
@@ -3399,7 +3399,7 @@ dependencies = [
 
 [[package]]
 name = "kule-entities"
-version = "0.0.1"
+version = "0.2.0"
 dependencies = [
  "serde",
  "serde_json",

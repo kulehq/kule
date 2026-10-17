@@ -1,0 +1,162 @@
+name: release
+
+# A tag vX.Y.Z builds the macOS app (universal, signed and notarized) and the
+# Linux .deb, each with the kule CLI inside, and opens a draft release with
+# them, their checksums and the Homebrew cask. Run by hand, it builds the
+# same unsigned and publishes nothing.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  TAURI_CLI_VERSION: 2.11.5
+  CARGO_TERM_COLOR: never
+
+jobs:
+  macos:
+    runs-on: macos-latest
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "13.0"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: The tag names the version being built
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          TAG: ${{ github.ref_name }}
+        run: grep -qx "version = \"${TAG#v}\"" Cargo.toml || { echo "Cargo.toml is not at ${TAG#v}"; exit 1; }
+      - name: Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal -t aarch64-apple-darwin,x86_64-apple-darwin
+          rustup default stable
+      - name: Tauri CLI
+        run: cargo install tauri-cli --version "$TAURI_CLI_VERSION" --locked
+      - name: The kule CLI for both architectures, as one binary
+        run: |
+          cargo build --release --locked -p kule --target aarch64-apple-darwin
+          cargo build --release --locked -p kule --target x86_64-apple-darwin
+          mkdir -p crates/kule-desktop/binaries
+          lipo -create -output crates/kule-desktop/binaries/kule-universal-apple-darwin \
+            target/aarch64-apple-darwin/release/kule target/x86_64-apple-darwin/release/kule
+      - name: Build, sign and notarize
+        working-directory: crates/kule-desktop
+        env:
+          RELEASE: ${{ startsWith(github.ref, 'refs/tags/v') }}
+          CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          NOTARY_ID: ${{ secrets.APPLE_ID }}
+          NOTARY_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          if [ -n "$CERTIFICATE" ]; then
+            export APPLE_CERTIFICATE="$CERTIFICATE" APPLE_CERTIFICATE_PASSWORD="$CERTIFICATE_PASSWORD"
+            export APPLE_SIGNING_IDENTITY="$SIGNING_IDENTITY"
+            export APPLE_ID="$NOTARY_ID" APPLE_PASSWORD="$NOTARY_PASSWORD" APPLE_TEAM_ID="$TEAM_ID"
+          elif [ "$RELEASE" = "true" ]; then
+            echo "A release is signed and notarized: set the APPLE_* secrets."
+            exit 1
+          fi
+          cargo tauri build --target universal-apple-darwin --bundles app,dmg \
+            --config tauri.release.conf.json
+      - name: Check what was built
+        env:
+          RELEASE: ${{ startsWith(github.ref, 'refs/tags/v') }}
+        run: |
+          bundle=target/universal-apple-darwin/release/bundle
+          app="$bundle/macos/Kule.app"
+          "$app/Contents/MacOS/kule" --version
+          lipo -archs "$app/Contents/MacOS/kule-desktop" | grep -q arm64
+          lipo -archs "$app/Contents/MacOS/kule-desktop" | grep -q x86_64
+          if [ "$RELEASE" = "true" ]; then
+            codesign --verify --deep --strict --verbose=2 "$app"
+            spctl --assess --type execute --verbose=2 "$app"
+            xcrun stapler validate "$app"
+          fi
+          mkdir dist
+          cp "$bundle"/dmg/*.dmg dist/
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)
+          tar -C "$app/Contents/MacOS" -czf "dist/kule-$version-macos-universal.tar.gz" kule
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: macos
+          path: dist/
+          if-no-files-found: error
+
+  linux:
+    # The oldest supported Ubuntu, so the .deb runs on the glibc it has.
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+      - name: Desktop app dependencies (WebKitGTK)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev
+      - name: Tauri CLI
+        run: cargo install tauri-cli --version "$TAURI_CLI_VERSION" --locked
+      - name: The kule CLI
+        run: |
+          cargo build --release --locked -p kule
+          mkdir -p crates/kule-desktop/binaries
+          cp target/release/kule crates/kule-desktop/binaries/kule-x86_64-unknown-linux-gnu
+      - name: Build the .deb
+        working-directory: crates/kule-desktop
+        run: cargo tauri build --bundles deb --config tauri.release.conf.json
+      - name: Check what was built
+        run: |
+          mkdir dist
+          cp target/release/bundle/deb/*.deb dist/
+          dpkg-deb --contents dist/*.deb | grep -q '/usr/bin/kule$'
+          dpkg-deb --contents dist/*.deb | grep -q '/usr/bin/kule-desktop$'
+          target/release/kule --version
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)
+          tar -C target/release -czf "dist/kule-$version-linux-x86_64.tar.gz" kule
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: linux
+          path: dist/
+          if-no-files-found: error
+
+  publish:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [macos, linux]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums, the Homebrew cask and the notes
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          version="${TAG#v}"
+          dmg="dist/Kule_${version}_universal.dmg"
+          test -f "$dmg"
+          sed -e "s/@VERSION@/$version/" -e "s/@SHA256@/$(sha256sum "$dmg" | cut -d' ' -f1)/" \
+            packaging/homebrew/kule.rb.in > dist/kule.rb
+          (cd dist && sha256sum -- * > SHA256SUMS)
+          awk -v v="$version" '$0 ~ "^## " v "( |$)" {on=1; next} /^## / {on=0} on' CHANGELOG.md > notes.md
+          test -s notes.md || { echo "CHANGELOG.md has no section for $version"; exit 1; }
+      - name: Draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft --verify-tag --title "Kule ${TAG#v}" --notes-file notes.md dist/*
