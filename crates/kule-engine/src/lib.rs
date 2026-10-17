@@ -41,6 +41,7 @@ mod secrets;
 mod snapshot;
 mod steps;
 mod task;
+mod textdiff;
 mod tls;
 mod usage;
 
@@ -72,4 +73,5 @@ pub use sandbox::{
 pub use secrets::{SECRETS_FILE, SecretInfo, Vault, add_secret, remove_secret, secrets};
 pub use steps::{Step, StepChange};
 pub use task::{AgentAtWork, Task, TaskInfo};
+pub use textdiff::{DiffSkip, Hunk, Line, LineKind, TextDiff};
 pub use usage::{Money, RunUsage, Spent};

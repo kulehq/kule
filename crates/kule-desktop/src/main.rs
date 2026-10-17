@@ -268,6 +268,16 @@ fn discard_home(kule: K<'_>, task: String, paths: Vec<String>) -> Result<Vec<Str
 }
 
 #[tauri::command(async)]
+fn home_diff(kule: K<'_>, task: String, path: String) -> Result<serde_json::Value> {
+    kule.call(Call::HomeDiff { task, path })
+}
+
+#[tauri::command(async)]
+fn undo_home(kule: K<'_>, task: String) -> Result<serde_json::Value> {
+    kule.call(Call::UndoHome { task })
+}
+
+#[tauri::command(async)]
 fn rule_impact(
     kule: K<'_>,
     allowance: serde_json::Value,
@@ -432,6 +442,8 @@ fn main() {
             remove_secret,
             apply_home,
             discard_home,
+            home_diff,
+            undo_home,
             rule_impact,
             set_approval_timeout,
             set_budget,

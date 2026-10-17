@@ -145,6 +145,9 @@ pub struct Review {
     /// task's home layer; never part of a commit.
     #[serde(default)]
     pub home: Vec<kule_engine::HomeChange>,
+    /// The last apply of home changes, which an undo takes back.
+    #[serde(default)]
+    pub home_applied: Option<kule_engine::HomeApplied>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -580,6 +583,7 @@ impl Service {
             digest: pending.digest(),
             outline,
             home: task.home_changes().map_err(text)?,
+            home_applied: task.home_last_applied().map_err(text)?,
         })
     }
 
@@ -597,6 +601,19 @@ impl Service {
         let gone = self.open(id)?.discard_home(paths).map_err(text)?;
         notify(&self.subscribers, Notice::Tasks);
         Ok(gone)
+    }
+
+    /// What the home change at `path` would do to the person's file.
+    pub fn home_diff(&self, id: &str, path: &str) -> Result<kule_engine::TextDiff> {
+        self.open(id)?.home_diff(path).map_err(text)
+    }
+
+    /// Takes the task's last apply of home changes back.
+    pub fn undo_home(&self, id: &str) -> Result<kule_engine::HomeApplied> {
+        self.not_at_work(id)?;
+        let undone = self.open(id)?.undo_home().map_err(text)?;
+        notify(&self.subscribers, Notice::Tasks);
+        Ok(undone)
     }
 
     fn not_at_work(&self, id: &str) -> Result<()> {
@@ -1352,7 +1369,28 @@ mod tests {
             fs::read_to_string(person.path().join(".zshrc")).unwrap(),
             "a\nb\n"
         );
-        assert!(s.app.review(&id, false).unwrap().home.is_empty());
+        let review = s.app.review(&id, false).unwrap();
+        assert!(review.home.is_empty());
+        assert_eq!(review.home_applied.unwrap().paths, [".zshrc"]);
+
+        s.app.running.lock().unwrap().insert(id.clone());
+        let e = s.app.undo_home(&id).unwrap_err();
+        assert!(e.contains("at work"), "{e}");
+        s.app.running.lock().unwrap().remove(&id);
+
+        assert_eq!(s.app.undo_home(&id).unwrap().paths, [".zshrc"]);
+        assert_eq!(
+            fs::read_to_string(person.path().join(".zshrc")).unwrap(),
+            "a\n"
+        );
+        let review = s.app.review(&id, false).unwrap();
+        assert!(review.home[0].startup);
+        assert!(review.home_applied.is_none());
+        let kule_engine::TextDiff::Lines { hunks, .. } = s.app.home_diff(&id, ".zshrc").unwrap()
+        else {
+            panic!("no lines");
+        };
+        assert_eq!(hunks[0].lines.last().unwrap().text, "b");
     }
 
     #[test]

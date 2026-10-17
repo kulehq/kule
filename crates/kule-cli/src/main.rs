@@ -8,9 +8,9 @@ use anyhow::{Context, Result, anyhow, bail};
 use clap::{Parser, Subcommand};
 use kule_engine::entities::{Change as EntityChange, Edit, Outline, Skip};
 use kule_engine::{
-    Change, Connection, DEFAULT_POLICY, Denial, Effect, EffectSet, Error, GitSummary, Kind, Money,
-    Network, Policy, Proxy, RefChange, Ruling, RunUsage, Sandbox, Task, Verdict, connections, meet,
-    record_denials,
+    Change, Connection, DEFAULT_POLICY, Denial, DiffSkip, Effect, EffectSet, Error, GitSummary,
+    Kind, LineKind, Money, Network, Policy, Proxy, RefChange, Ruling, RunUsage, Sandbox, Task,
+    TextDiff, Verdict, connections, meet, record_denials,
 };
 
 /// Kule engine: run commands in a sandbox on a copy-on-write copy of a
@@ -68,6 +68,14 @@ enum HomeCmd {
         #[arg(long, conflicts_with = "paths")]
         all: bool,
     },
+    /// Show what a file's change would do to yours, line by line.
+    Diff {
+        /// As listed, like ~/.zshrc.
+        path: String,
+    },
+    /// Take the last apply back, if nothing changed at those paths since;
+    /// the changes wait for review again.
+    Undo,
 }
 
 #[derive(Subcommand)]
@@ -884,8 +892,6 @@ fn warn_if_network_not_isolated() {
     }
 }
 
-/// Files one per line, each with what changed inside it when Kule can tell;
-/// `.git` as what it means, not as object file names.
 /// What the task's commands wrote in the home directory, waiting for a
 /// person; nothing when there is none.
 fn print_home(task: &Task) -> Result<()> {
@@ -905,7 +911,12 @@ fn print_home(task: &Task) -> Result<()> {
             Change::Deleted => "-",
         };
         let slash = if c.kind == Kind::Dir { "/" } else { "" };
-        println!("  {mark} ~/{}{slash}", c.path);
+        let runs = if c.startup {
+            "  (runs every time a shell or tool starts)"
+        } else {
+            ""
+        };
+        println!("  {mark} ~/{}{slash}{runs}", c.path);
     }
     Ok(())
 }
@@ -948,10 +959,48 @@ fn home_cmd(home: &Path, task: &str, action: HomeCmd) -> Result<()> {
             let gone = task.discard_home(&pick(paths, all)?)?;
             println!("discarded {} changes", gone.len());
         }
+        HomeCmd::Diff { path } => {
+            let path = path.trim_start_matches("~/").trim_end_matches('/');
+            match task.home_diff(path)? {
+                TextDiff::Skipped { reason } => println!(
+                    "~/{path}: {}",
+                    match reason {
+                        DiffSkip::Binary => "not text, so not shown",
+                        DiffSkip::TooLarge => "too large to show",
+                    }
+                ),
+                TextDiff::Lines { hunks, cut } => {
+                    println!("--- ~/{path} (yours)\n+++ ~/{path} (the task's)");
+                    for hunk in hunks {
+                        println!("@@ line {} @@", hunk.before);
+                        for line in hunk.lines {
+                            let mark = match line.kind {
+                                LineKind::Same => ' ',
+                                LineKind::Added => '+',
+                                LineKind::Removed => '-',
+                            };
+                            println!("{mark}{}", line.text);
+                        }
+                    }
+                    if cut {
+                        println!("(cut here: the change is longer)");
+                    }
+                }
+            }
+        }
+        HomeCmd::Undo => {
+            let undone = task.undo_home()?;
+            for path in &undone.paths {
+                println!("undid ~/{path}");
+            }
+            println!("the changes wait for review again");
+        }
     }
     Ok(())
 }
 
+/// Files one per line, each with what changed inside it when Kule can tell;
+/// `.git` as what it means, not as object file names.
 fn print_set(task: &Task, set: &EffectSet) {
     const SHOWN: usize = 40;
     // A move is one line, under its new name.

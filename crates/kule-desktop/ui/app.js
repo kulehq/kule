@@ -998,8 +998,38 @@ async function loadReview(id) {
     ...gitGroup(review.effects.git),
     ...meetsGroup(task),
     ...ignoredGroup(id, ignored, include, held),
-    ...homeGroup(id, review.home || [], busy)
+    ...homeGroup(id, review.home || [], busy, review.home_applied)
   );
+}
+
+/** Per task, home paths whose diff the person opened (true) or closed (false). */
+const homeShown = new Map();
+
+/** What a home change does to the person's file, line by line. */
+function homeDiff(id, path) {
+  const box = h("pre", { class: "diff" }, "Loading…");
+  call("home_diff", { task: id, path })
+    .then((d) => {
+      if (d.diff === "skipped") {
+        box.textContent = d.reason === "binary" ? "Not text, so not shown." : "Too large to show.";
+        return;
+      }
+      const sign = { same: " ", added: "+", removed: "−" };
+      const rows = [];
+      for (const hunk of d.hunks) {
+        rows.push(h("span", { class: "diff-hunk" }, `line ${hunk.before}`));
+        for (const line of hunk.lines) {
+          rows.push(h("span", { class: `diff-${line.kind}` }, `${sign[line.kind]} ${line.text}`));
+        }
+      }
+      if (d.cut) rows.push(h("span", { class: "diff-hunk" }, "cut here: the change is longer"));
+      if (rows.length === 0) rows.push(h("span", { class: "diff-hunk" }, "same text; only its details changed"));
+      box.replaceChildren(...rows);
+    })
+    .catch((err) => {
+      box.textContent = String(err);
+    });
+  return box;
 }
 
 /**
@@ -1007,15 +1037,29 @@ async function loadReview(id) {
  * task's home layer. Never part of a commit: each is applied to the real
  * home, or thrown away, on its own.
  */
-function homeGroup(id, changes, busy) {
-  if (changes.length === 0) return [];
-  const mark = { created: "+", modified: "~", deleted: "−" };
-  const act = async (verb, paths) => {
-    const done = await call(verb, { task: id, paths });
+function homeGroup(id, changes, busy, applied) {
+  const act = async (verb, args) => {
+    const done = await call(verb, { task: id, ...args });
     if (verb === "apply_home" && done.kept) toast(`Applied; what it replaced is kept in ${done.kept}`);
+    if (verb === "undo_home") toast(`Undid ${plural(done.paths.length, "change")} in ~; they wait for review again`);
     await refresh();
     await loadReview(id);
   };
+  const undo = applied
+    ? h(
+        "div",
+        { class: "home-applied" },
+        h("span", { class: "muted" }, `Last applied: ${applied.paths.map((p) => `~/${p}`).join(", ")}`),
+        Object.assign(
+          armed("Undo", "Click again to put back what was there", busy, () => act("undo_home", {}).catch(fail)),
+          { title: "Puts back what your home held there, if you have not changed it since" }
+        )
+      )
+    : null;
+  if (changes.length === 0) return undo ? [h("h2", { class: "group-title" }, "In your home (~)"), undo] : [];
+  const mark = { created: "+", modified: "~", deleted: "−" };
+  if (!homeShown.has(id)) homeShown.set(id, new Map());
+  const shown = homeShown.get(id);
   const all = changes.map((c) => c.path);
   return [
     h("h2", { class: "group-title" }, `In your home (~) · ${plural(changes.length, "change")}, caught for you`),
@@ -1027,30 +1071,57 @@ function homeGroup(id, changes, busy) {
     h(
       "ul",
       { class: "files" },
-      changes.map((c) => {
-        const apply = armed("Apply", "Click again to write it in ~", busy, () => act("apply_home", [c.path]).catch(fail));
+      changes.flatMap((c) => {
+        const apply = armed("Apply", "Click again to write it in ~", busy, () => act("apply_home", { paths: [c.path] }).catch(fail));
         apply.dataset.key = `home-apply:${c.path}`;
-        return h(
-          "li",
-          { class: "home-change" },
-          h("span", { class: `change ${c.change}` }, mark[c.change] || "~"),
-          h("span", {}, `~/${c.path}${c.kind === "dir" ? "/" : ""}`),
+        const file = c.kind === "file";
+        // A file that runs as shells start is open from the first look.
+        const open = file && (shown.has(c.path) ? shown.get(c.path) : c.startup);
+        const toggle = file
+          ? h(
+              "button",
+              {
+                class: "button ghost",
+                type: "button",
+                "data-key": `home-diff:${c.path}`,
+                "aria-expanded": String(open),
+                onclick: () => {
+                  shown.set(c.path, !open);
+                  loadReview(id);
+                },
+              },
+              open ? "Hide" : "Show"
+            )
+          : null;
+        return [
           h(
-            "span",
-            { class: "home-actions" },
-            apply,
-            h("button", { class: "button ghost", type: "button", "data-key": `home-discard:${c.path}`, disabled: busy, onclick: (e) => inFlight(e.currentTarget, () => act("discard_home", [c.path]).catch(fail)) }, "Discard")
-          )
-        );
+            "li",
+            { class: "home-change" },
+            h("span", { class: `change ${c.change}` }, mark[c.change] || "~"),
+            h("span", {}, `~/${c.path}${c.kind === "dir" ? "/" : ""}`),
+            c.startup
+              ? h("span", { class: "chip ask", title: "Shells or tools read and run this file as they start: what it says runs every time." }, "runs at every start")
+              : null,
+            h(
+              "span",
+              { class: "home-actions" },
+              toggle,
+              apply,
+              h("button", { class: "button ghost", type: "button", "data-key": `home-discard:${c.path}`, disabled: busy, onclick: (e) => inFlight(e.currentTarget, () => act("discard_home", { paths: [c.path] }).catch(fail)) }, "Discard")
+            )
+          ),
+          open ? h("li", { class: "home-diff" }, homeDiff(id, c.path)) : null,
+        ];
       })
     ),
     changes.length > 1
       ? h(
           "div",
           { class: "review-actions" },
-          h("button", { class: "button ghost", type: "button", "data-key": "home-discard-all", disabled: busy, onclick: (e) => inFlight(e.currentTarget, () => act("discard_home", all).catch(fail)) }, "Discard all")
+          h("button", { class: "button ghost", type: "button", "data-key": "home-discard-all", disabled: busy, onclick: (e) => inFlight(e.currentTarget, () => act("discard_home", { paths: all }).catch(fail)) }, "Discard all")
         )
       : null,
+    undo,
   ];
 }
 

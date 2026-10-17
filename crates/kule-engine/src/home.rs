@@ -29,6 +29,7 @@ use crate::error::{Error, IoContext, Result};
 use crate::fsops::{self, read_json, write_json};
 use crate::manifest::{Entry, Kind, Stamp, scan};
 use crate::task::Task;
+use crate::textdiff::{self, TextDiff};
 
 /// Directories cloned whole into the layer, where tools keep settings.
 const CAPTURED_DIRS: &[&str] = &[".config"];
@@ -58,6 +59,44 @@ const NOISE: &[&str] = &[
     ".CFUserTextEncoding",
 ];
 
+/// Files that shells, the session or everyday tools read and run as they
+/// start: a change there runs every time, not once. A path matches a name
+/// here exactly, or lies under one ending in `/`.
+const STARTUP: &[&str] = &[
+    ".zshrc",
+    ".zshenv",
+    ".zprofile",
+    ".zlogin",
+    ".zlogout",
+    ".bashrc",
+    ".bash_profile",
+    ".bash_login",
+    ".bash_logout",
+    ".profile",
+    ".kshrc",
+    ".cshrc",
+    ".tcshrc",
+    ".xprofile",
+    ".xinitrc",
+    ".xsession",
+    ".gitconfig",
+    ".vimrc",
+    ".config/git/config",
+    ".config/fish/",
+    ".config/nvim/",
+    ".config/autostart/",
+    ".config/systemd/user/",
+    ".config/environment.d/",
+];
+
+/// Whether the file at `rel` runs as something starts (see [`STARTUP`]).
+fn startup(rel: &str) -> bool {
+    STARTUP.iter().any(|s| match s.strip_suffix('/') {
+        Some(dir) => rel.starts_with(s) || rel == dir,
+        None => rel == *s,
+    })
+}
+
 /// What the layer started from.
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct Layer {
@@ -80,6 +119,10 @@ pub struct HomeChange {
     pub path: String,
     pub change: Change,
     pub kind: Kind,
+    /// A file read and run as shells, the session or tools start
+    /// (`.zshrc`, `.gitconfig`): what it says runs every time.
+    #[serde(default)]
+    pub startup: bool,
 }
 
 /// What [`Task::apply_home`] did.
@@ -359,11 +402,13 @@ impl Task {
             match layer.entries.get(&rel) {
                 Some(was) if was.copy.unchanged(&now) => {}
                 Some(_) => changes.push(HomeChange {
+                    startup: startup(&rel),
                     path: rel,
                     change: Change::Modified,
                     kind: now.kind,
                 }),
                 None => changes.push(HomeChange {
+                    startup: startup(&rel),
                     path: rel,
                     change: Change::Created,
                     kind: now.kind,
@@ -376,6 +421,7 @@ impl Task {
                     path: rel.clone(),
                     change: Change::Deleted,
                     kind: was.copy.kind,
+                    startup: startup(rel),
                 });
             }
         }
@@ -418,11 +464,21 @@ impl Task {
                 moved.join(", ")
             )));
         }
-        let stamp = SystemTime::now()
+        let kept_root = self.dir().join("home-kept");
+        fs::create_dir_all(&kept_root).at(&kept_root)?;
+        // Named so they sort by when: the last one is what an undo takes back.
+        let mut id = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .map_or(0, |d| d.as_secs());
-        let kept = self.dir().join("home-kept").join(stamp.to_string());
+            .map_or(0, |d| d.as_millis());
+        while kept_root.join(format!("{id:020}")).exists()
+            || kept_root.join(format!("{id:020}.json")).exists()
+        {
+            id += 1;
+        }
+        let id = format!("{id:020}");
+        let kept = kept_root.join(&id);
         let mut kept_any = false;
+        let mut record = Vec::new();
         // Parents before what is in them, and removals deepest first.
         let (mut removals, mut writes): (Vec<&HomeChange>, Vec<&HomeChange>) =
             wanted.iter().partition(|c| c.change == Change::Deleted);
@@ -430,14 +486,14 @@ impl Task {
         removals.sort_by(|a, b| b.path.cmp(&a.path));
         for c in writes.iter().chain(&removals) {
             let (from, to) = (dir.join(&c.path), layer.real.join(&c.path));
-            if c.change != Change::Created && Stamp::of(&to)?.is_some_and(|s| s.kind != Kind::Dir) {
-                let save = kept.join(&c.path);
-                if let Some(parent) = save.parent() {
-                    fs::create_dir_all(parent).at(parent)?;
-                }
-                fs::copy(&to, &save).at(&save)?;
+            let held = Stamp::of(&to)?;
+            let keeps =
+                c.change != Change::Created && held.as_ref().is_some_and(|s| s.kind != Kind::Dir);
+            if keeps {
+                keep(&to, &kept.join(&c.path))?;
                 kept_any = true;
             }
+            let before = layer.entries.get(&c.path).cloned();
             match c.change {
                 Change::Deleted => match Stamp::of(&to)?.map(|s| s.kind) {
                     Some(Kind::Dir) => fs::remove_dir(&to).at(&to)?,
@@ -459,26 +515,34 @@ impl Task {
                     Kind::File => {
                         let bytes = fs::read(&from).at(&from)?;
                         let mode = fs::metadata(&from).at(&from)?.permissions();
-                        let tmp = to.with_file_name(format!(
-                            ".{}.kule-{}",
-                            to.file_name().and_then(|n| n.to_str()).unwrap_or("new"),
-                            std::process::id()
-                        ));
-                        fs::write(&tmp, bytes).at(&tmp)?;
-                        fs::set_permissions(&tmp, mode).at(&tmp)?;
-                        fs::rename(&tmp, &to).at(&to)?;
+                        put(&to, &bytes, mode)?;
                     }
                 },
             }
-            match (Stamp::of(&to)?, Stamp::of(&from)?) {
+            let left = Stamp::of(&to)?;
+            match (&left, Stamp::of(&from)?) {
                 (Some(work), Some(copy)) => {
+                    let work = work.clone();
                     layer.entries.insert(c.path.clone(), Entry { work, copy });
                 }
                 _ => {
                     layer.entries.remove(&c.path);
                 }
             }
+            record.push(AppliedPath {
+                path: c.path.clone(),
+                change: c.change,
+                kind: c.kind,
+                before,
+                held: held.map(|s| s.kind),
+                kept: keeps,
+                left,
+            });
         }
+        write_json(
+            &kept_root.join(format!("{id}.json")),
+            &Applied { paths: record },
+        )?;
         write_json(&self.layer_path(), &layer)?;
         let mut applied: Vec<String> = wanted.into_iter().map(|c| c.path).collect();
         applied.sort();
@@ -517,6 +581,210 @@ impl Task {
         }
         write_json(&self.layer_path(), &layer)?;
         Ok(wanted.into_iter().map(|c| c.path).collect())
+    }
+}
+
+/// What one [`Task::apply_home`] did, for an undo: kept next to what it
+/// replaced, as `home-kept/<id>.json` beside `home-kept/<id>/`.
+#[derive(Debug, Serialize, Deserialize)]
+struct Applied {
+    paths: Vec<AppliedPath>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct AppliedPath {
+    path: String,
+    change: Change,
+    kind: Kind,
+    /// The layer's entry before: an undo offers the change again from it.
+    before: Option<Entry>,
+    /// What the real home held there, if anything.
+    held: Option<Kind>,
+    /// Whether that was kept (a file or a link).
+    kept: bool,
+    /// What the apply left there; an undo needs it unchanged.
+    left: Option<Stamp>,
+}
+
+/// Saves the file or link at `from` as `to`.
+fn keep(from: &Path, to: &Path) -> Result<()> {
+    if let Some(parent) = to.parent() {
+        fs::create_dir_all(parent).at(parent)?;
+    }
+    if fs::symlink_metadata(from)
+        .at(from)?
+        .file_type()
+        .is_symlink()
+    {
+        let target = fs::read_link(from).at(from)?;
+        std::os::unix::fs::symlink(target, to).at(to)?;
+    } else {
+        fs::copy(from, to).at(to)?;
+    }
+    Ok(())
+}
+
+/// Puts `bytes` at `to` in one step, with `mode`; the content is never
+/// readable with wider permissions than that on the way.
+fn put(to: &Path, bytes: &[u8], mode: fs::Permissions) -> Result<()> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    let tmp = to.with_file_name(format!(
+        ".{}.kule-{}",
+        to.file_name().and_then(|n| n.to_str()).unwrap_or("new"),
+        std::process::id()
+    ));
+    let _ = fs::remove_file(&tmp);
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&tmp)
+        .at(&tmp)?;
+    file.write_all(bytes).at(&tmp)?;
+    drop(file);
+    fs::set_permissions(&tmp, mode).at(&tmp)?;
+    fs::rename(&tmp, to).at(to)
+}
+
+impl Task {
+    /// What the change waiting at `path` would do to the file in the
+    /// person's home, line by line.
+    pub fn home_diff(&self, path: &str) -> Result<TextDiff> {
+        let Some(layer) = self.load_layer()? else {
+            return Err(Error::Invalid(format!("~/{path} has no change waiting")));
+        };
+        let change = self
+            .home_changes()?
+            .into_iter()
+            .find(|c| c.path == path)
+            .ok_or_else(|| Error::Invalid(format!("~/{path} has no change waiting")))?;
+        if change.kind != Kind::File {
+            return Err(Error::Invalid(format!("~/{path} is not a file")));
+        }
+        let (real, copy) = (layer.real.join(path), self.home_layer().join(path));
+        let before = textdiff::side(&real).at(&real)?;
+        let after = textdiff::side(&copy).at(&copy)?;
+        Ok(textdiff::diff(before.as_deref(), after.as_deref()))
+    }
+
+    /// The last apply from this task's layer not undone yet.
+    fn last_applied(&self) -> Result<Option<(PathBuf, Applied)>> {
+        let root = self.dir().join("home-kept");
+        let mut records: Vec<PathBuf> = match fs::read_dir(&root) {
+            Ok(dir) => dir
+                .filter_map(|e| e.ok())
+                .map(|e| e.path())
+                .filter(|p| p.extension().is_some_and(|e| e == "json"))
+                .collect(),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(e).at(&root),
+        };
+        records.sort();
+        let Some(last) = records.pop() else {
+            return Ok(None);
+        };
+        let applied = read_json(&last)?;
+        Ok(Some((last, applied)))
+    }
+
+    /// What [`Task::undo_home`] would take back.
+    pub fn home_last_applied(&self) -> Result<Option<HomeApplied>> {
+        Ok(self.last_applied()?.map(|(record, applied)| {
+            let kept = record.with_extension("");
+            HomeApplied {
+                paths: applied.paths.into_iter().map(|p| p.path).collect(),
+                kept: kept.is_dir().then_some(kept),
+            }
+        }))
+    }
+
+    /// Takes the last apply back: the person's home gets what it held
+    /// before, and the changes wait in the layer again. Refused when any of
+    /// those paths changed in the home since.
+    pub fn undo_home(&self) -> Result<HomeApplied> {
+        let nothing = || Error::Invalid("nothing applied from this task's home to undo".into());
+        let mut layer = self.load_layer()?.ok_or_else(nothing)?;
+        let (record, applied) = self.last_applied()?.ok_or_else(nothing)?;
+        let kept = record.with_extension("");
+        let made: BTreeSet<&str> = applied
+            .paths
+            .iter()
+            .filter(|p| p.held.is_none())
+            .map(|p| p.path.as_str())
+            .collect();
+        let mut moved = Vec::new();
+        for p in &applied.paths {
+            let to = layer.real.join(&p.path);
+            let now = Stamp::of(&to)?;
+            let mut same = match (&p.left, &now) {
+                (Some(left), Some(now)) => left.unchanged(now),
+                (None, None) => true,
+                _ => false,
+            };
+            // A directory the apply made goes only with nothing else in it.
+            if same && p.held.is_none() && p.kind == Kind::Dir {
+                same = fs::read_dir(&to).at(&to)?.filter_map(|e| e.ok()).all(|e| {
+                    let name = e.file_name();
+                    name.to_str()
+                        .is_some_and(|n| made.contains(format!("{}/{n}", p.path).as_str()))
+                });
+            }
+            if !same {
+                moved.push(format!("~/{}", p.path));
+            }
+        }
+        if !moved.is_empty() {
+            return Err(Error::Invalid(format!(
+                "changed in your home since it was applied, so not undone: {}",
+                moved.join(", ")
+            )));
+        }
+        // The apply's order backwards: what is in a directory goes before it.
+        for p in applied.paths.iter().rev() {
+            let to = layer.real.join(&p.path);
+            match p.held {
+                _ if p.kept => {
+                    let from = kept.join(&p.path);
+                    fsops::remove(&to)?;
+                    if fs::symlink_metadata(&from)
+                        .at(&from)?
+                        .file_type()
+                        .is_symlink()
+                    {
+                        let target = fs::read_link(&from).at(&from)?;
+                        std::os::unix::fs::symlink(target, &to).at(&to)?;
+                    } else {
+                        let bytes = fs::read(&from).at(&from)?;
+                        put(&to, &bytes, fs::metadata(&from).at(&from)?.permissions())?;
+                    }
+                }
+                Some(Kind::Dir) => {
+                    if Stamp::of(&to)?.is_none() {
+                        fs::create_dir(&to).at(&to)?;
+                    }
+                }
+                Some(_) => {}
+                None if p.kind == Kind::Dir => fs::remove_dir(&to).at(&to)?,
+                None => fsops::remove(&to)?,
+            }
+            match (&p.before, Stamp::of(&to)?) {
+                (Some(before), Some(work)) => {
+                    let copy = before.copy.clone();
+                    layer.entries.insert(p.path.clone(), Entry { work, copy });
+                }
+                _ => {
+                    layer.entries.remove(&p.path);
+                }
+            }
+        }
+        write_json(&self.layer_path(), &layer)?;
+        fsops::remove(&kept)?;
+        fs::remove_file(&record).at(&record)?;
+        Ok(HomeApplied {
+            paths: applied.paths.into_iter().map(|p| p.path).collect(),
+            kept: None,
+        })
     }
 }
 

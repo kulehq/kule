@@ -313,10 +313,17 @@ a directory you cannot read whole is linked. Shell histories and
 completion dumps are not offered either.
 
 `kule status` and the app's Review tab list what waits (`in your home,
-caught for review`). `kule home TASK apply ~/.zshrc` (or *Apply*) takes
-one change to your home after checking your file is still as it was when
-the layer was made, and keeps what it replaced in the task's
-`home-kept/`; `kule home TASK discard --all` throws them away. A home
+caught for review`). `kule home TASK diff ~/.zshrc` (or *Show*) shows
+what a change would do to your file, line by line. A file that shells or
+tools read and run as they start (`.zshrc`, `.profile`, `.gitconfig`,
+`~/.config/fish`, `~/.config/autostart`, systemd user units, …) is marked
+*runs at every start*, and the app opens its diff from the first look.
+`kule home TASK apply ~/.zshrc` (or *Apply*) takes one change to your
+home after checking your file is still as it was when the layer was
+made, and keeps what it replaced in the task's `home-kept/`;
+`kule home TASK undo` takes the last apply back, if you have not changed
+those paths since, and the changes wait for review again.
+`kule home TASK discard --all` throws them away. A home
 change is never part of a commit. While changes wait, the layer stays as
 it is from run to run; once none do, the next run starts from your home as
 it is then. `kule exec` uses the layer too; a trial of an agent profile

@@ -4,7 +4,7 @@
 use std::fs;
 use std::path::Path;
 
-use kule_engine::{CacheSources, Change, HomeChange, Kind, Sandbox, Task};
+use kule_engine::{CacheSources, Change, HomeChange, Kind, LineKind, Sandbox, Task, TextDiff};
 use tempfile::TempDir;
 
 struct Setup {
@@ -84,6 +84,7 @@ fn change(path: &str, change: Change, kind: Kind) -> HomeChange {
         path: path.into(),
         change,
         kind,
+        startup: path == ".zshrc",
     }
 }
 
@@ -231,4 +232,126 @@ fn what_shells_rewrite_on_their_own_is_not_offered() {
     let s = Setup::new();
     s.run(r#"echo dump > "$HOME/.zcompdump-host-5.9"; echo ls >> "$HOME/.zsh_history"; mkdir -p "$HOME/.config/tool" && touch "$HOME/.config/tool/.DS_Store""#);
     assert!(s.task.home_changes().unwrap().is_empty());
+}
+
+fn lines(d: TextDiff) -> Vec<(LineKind, String)> {
+    let TextDiff::Lines { hunks, .. } = d else {
+        panic!("{d:?}");
+    };
+    hunks
+        .into_iter()
+        .flat_map(|h| h.lines)
+        .map(|l| (l.kind, l.text))
+        .collect()
+}
+
+#[test]
+fn a_change_shows_what_it_does_to_the_real_file_line_by_line() {
+    let s = Setup::new();
+    s.run(SCRIPT);
+    assert_eq!(
+        lines(s.task.home_diff(".zshrc").unwrap()),
+        [
+            (LineKind::Same, "export A=1".into()),
+            (LineKind::Added, "export B=2".into()),
+        ]
+    );
+    assert_eq!(
+        lines(s.task.home_diff(".newrc").unwrap()),
+        [(LineKind::Added, "hi".into())]
+    );
+    // Only a change waiting, and only a file: never any path in the home.
+    for path in [
+        ".ssh/id_ed25519",
+        "Documents/notes.txt",
+        "../etc/passwd",
+        ".config/new",
+    ] {
+        assert!(s.task.home_diff(path).is_err(), "{path}");
+    }
+}
+
+#[test]
+fn an_apply_is_undone_and_its_changes_wait_again() {
+    let s = Setup::new();
+    s.run(SCRIPT);
+    let before = s.task.home_changes().unwrap();
+    s.task
+        .apply_home(&[
+            ".zshrc".into(),
+            ".config/new".into(),
+            ".config/new/n.toml".into(),
+        ])
+        .unwrap();
+    s.task.apply_home(&[".newrc".into()]).unwrap();
+    assert_eq!(
+        s.task.home_last_applied().unwrap().unwrap().paths,
+        [".newrc"]
+    );
+
+    // The last apply first.
+    assert_eq!(s.task.undo_home().unwrap().paths, [".newrc"]);
+    assert!(!s.person.path().join(".newrc").exists());
+    assert_eq!(s.real(".zshrc"), "export A=1\nexport B=2\n");
+
+    let undone = s.task.undo_home().unwrap();
+    assert_eq!(
+        undone.paths,
+        [".config/new", ".config/new/n.toml", ".zshrc"]
+    );
+    assert_eq!(s.real(".zshrc"), "export A=1\n");
+    assert!(!s.person.path().join(".config/new").exists());
+    assert_eq!(s.task.home_changes().unwrap(), before);
+    assert!(s.task.home_last_applied().unwrap().is_none());
+    assert!(s.task.undo_home().is_err());
+
+    // And they apply again.
+    s.task.apply_home(&[".zshrc".into()]).unwrap();
+    assert_eq!(s.real(".zshrc"), "export A=1\nexport B=2\n");
+}
+
+#[test]
+fn an_undo_never_takes_what_the_person_changed_since() {
+    let s = Setup::new();
+    s.run(SCRIPT);
+    s.task
+        .apply_home(&[
+            ".zshrc".into(),
+            ".config/new".into(),
+            ".config/new/n.toml".into(),
+        ])
+        .unwrap();
+    fs::write(s.person.path().join(".zshrc"), "mine\n").unwrap();
+    let e = s.task.undo_home().unwrap_err();
+    assert!(e.to_string().contains("~/.zshrc"), "{e}");
+    assert_eq!(s.real(".zshrc"), "mine\n");
+    assert_eq!(s.real(".config/new/n.toml"), "n\n");
+
+    // A directory the apply made, with the person's file in it now.
+    let s = Setup::new();
+    s.run(SCRIPT);
+    s.task.apply_home(&[".config/new".into()]).unwrap();
+    fs::write(s.person.path().join(".config/new/theirs"), "x").unwrap();
+    let e = s.task.undo_home().unwrap_err();
+    assert!(e.to_string().contains("~/.config/new"), "{e}");
+    assert_eq!(s.real(".config/new/theirs"), "x");
+}
+
+#[test]
+fn a_replaced_link_comes_back_a_link() {
+    let s = Setup::new();
+    let p = s.person.path();
+    fs::write(p.join(".config/tool/real.toml"), "r\n").unwrap();
+    fs::remove_file(p.join(".config/tool/settings.toml")).unwrap();
+    std::os::unix::fs::symlink("real.toml", p.join(".config/tool/settings.toml")).unwrap();
+    s.run("rm \"$HOME/.config/tool/settings.toml\" && echo own > \"$HOME/.config/tool/settings.toml\"");
+    s.task
+        .apply_home(&[".config/tool/settings.toml".into()])
+        .unwrap();
+    assert!(!p.join(".config/tool/settings.toml").is_symlink());
+    s.task.undo_home().unwrap();
+    assert_eq!(
+        fs::read_link(p.join(".config/tool/settings.toml")).unwrap(),
+        Path::new("real.toml")
+    );
 }

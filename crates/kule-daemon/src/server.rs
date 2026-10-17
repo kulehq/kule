@@ -341,6 +341,8 @@ pub fn dispatch(service: &Arc<Service>, call: Call) -> Result<Value, String> {
         Call::SetBudget { task, budget } => json(service.set_budget(&task, budget)?),
         Call::ApplyHome { task, paths } => json(service.apply_home(&task, &paths)?),
         Call::DiscardHome { task, paths } => json(service.discard_home(&task, &paths)?),
+        Call::HomeDiff { task, path } => json(service.home_diff(&task, &path)?),
+        Call::UndoHome { task } => json(service.undo_home(&task)?),
         Call::Secrets => json(service.secrets()?),
         Call::AddSecret {
             name,

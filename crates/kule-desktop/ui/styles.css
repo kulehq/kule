@@ -1171,6 +1171,52 @@ select:focus-visible {
   margin-left: auto;
 }
 
+.home-change .chip {
+  font-family: var(--sans);
+}
+
+.files li.home-diff {
+  display: block;
+  padding: 2px 0 10px 22px;
+}
+
+.diff {
+  margin: 0;
+  padding: 6px 0;
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--sunken);
+  font: 12px/1.6 var(--mono);
+  white-space: pre;
+}
+
+.diff > span {
+  display: block;
+  padding: 0 10px;
+}
+
+.diff-added {
+  background: var(--ok-soft);
+}
+
+.diff-removed {
+  background: var(--deny-soft);
+}
+
+.diff-hunk {
+  color: var(--faint);
+  font-family: var(--sans);
+}
+
+.home-applied {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+  font-size: 12px;
+}
+
 /* A task's right-click menu. */
 .menu {
   position: fixed;

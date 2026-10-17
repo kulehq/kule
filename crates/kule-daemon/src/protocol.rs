@@ -10,7 +10,7 @@ use serde_json::Value;
 
 /// Changes whenever a call, a result or a notice changes shape; a client
 /// and a daemon that disagree on it cannot talk.
-pub const PROTOCOL: u32 = 10;
+pub const PROTOCOL: u32 = 11;
 
 /// What a daemon says about itself.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -152,6 +152,15 @@ pub enum Call {
     DiscardHome {
         task: String,
         paths: Vec<String>,
+    },
+    /// What the home change at `path` would do, line by line.
+    HomeDiff {
+        task: String,
+        path: String,
+    },
+    /// Takes the task's last apply of home changes back.
+    UndoHome {
+        task: String,
     },
     /// The person's secrets, without their values.
     Secrets,
