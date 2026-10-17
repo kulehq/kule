@@ -912,8 +912,11 @@ async fn print_events(
                 let step = paint::dim(&format!("→ step {}:", step.id));
                 line(format!("{indent}{mark} {title} {step} {what}"), &mut last);
             }
-            Event::Permission { title, chosen } => {
-                let granted = chosen.to_ascii_lowercase().starts_with("allow");
+            Event::Permission {
+                title,
+                chosen,
+                granted,
+            } => {
                 if !tty {
                     line(format!("· permission \"{title}\": {chosen}"), &mut last);
                 } else if !granted {

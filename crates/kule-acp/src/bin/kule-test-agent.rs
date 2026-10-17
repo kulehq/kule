@@ -7,6 +7,7 @@
 //! - `say <text>`: a message;
 //! - `sleep <ms>`: waits, the way a real agent waits for its model;
 //! - `ask`: asks the client for permission and says what it chose;
+//! - `ask-reject-only`: the same, with no option that allows;
 //! - `background <file>`: leaves a process running, its pid in the file;
 //! - `reviewed-write <path> <text>`: an edit that writes the file while a
 //!   review (a `think` call) runs inside it, the review ending first, as
@@ -198,7 +199,20 @@ async fn perform(
             tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
             Ok(())
         }
-        "ask" => {
+        "ask" | "ask-reject-only" => {
+            // Worded as Claude Code words it; the kind says what it does.
+            let mut options = vec![PermissionOption::new(
+                "reject",
+                "No",
+                PermissionOptionKind::RejectOnce,
+            )];
+            if verb == "ask" {
+                options.push(PermissionOption::new(
+                    "allow",
+                    "Yes",
+                    PermissionOptionKind::AllowOnce,
+                ));
+            }
             let response = cx
                 .send_request(RequestPermissionRequest::new(
                     session.clone(),
@@ -206,10 +220,7 @@ async fn perform(
                         format!("call-{n}"),
                         ToolCallUpdateFields::new().title("delete everything".to_owned()),
                     ),
-                    vec![
-                        PermissionOption::new("reject", "Reject", PermissionOptionKind::RejectOnce),
-                        PermissionOption::new("allow", "Allow", PermissionOptionKind::AllowOnce),
-                    ],
+                    options,
                 ))
                 .block_task()
                 .await?;

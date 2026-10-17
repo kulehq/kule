@@ -199,10 +199,19 @@ fn permission_requests_are_answered_with_the_allow_option() {
 
     assert!(events.contains(&Event::Permission {
         title: "delete everything".into(),
-        chosen: "Allow".into()
+        chosen: "Yes".into(),
+        granted: true,
     }));
     assert!(events.contains(&Event::Message {
         text: "permission: allow".into()
+    }));
+
+    // Told apart by what the option does, not by its words.
+    let events = s.run("ask-reject-only");
+    assert!(events.contains(&Event::Permission {
+        title: "delete everything".into(),
+        chosen: "No".into(),
+        granted: false,
     }));
 }
 

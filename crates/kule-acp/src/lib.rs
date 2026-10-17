@@ -53,7 +53,14 @@ pub enum Event {
         step: Option<Step>,
     },
     /// The agent asked for permission and Kule answered.
-    Permission { title: String, chosen: String },
+    Permission {
+        title: String,
+        /// The option's name, as the agent words it ("Yes", "Allow").
+        chosen: String,
+        /// Whether that option lets the call go ahead.
+        #[serde(default = "granted_by_default")]
+        granted: bool,
+    },
     /// The agent's plan, one line per entry.
     Plan { entries: Vec<String> },
     /// What the session has used so far, as the agent reports it: its
@@ -232,6 +239,11 @@ pub async fn run_limited(
                             let _ = events.unbounded_send(Event::Permission {
                                 title,
                                 chosen: option.name.clone(),
+                                granted: matches!(
+                                    option.kind,
+                                    PermissionOptionKind::AllowOnce
+                                        | PermissionOptionKind::AllowAlways
+                                ),
                             });
                             responder.respond(RequestPermissionResponse::new(
                                 RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(
@@ -464,4 +476,10 @@ fn text_of(content: &ContentBlock) -> Option<String> {
         ContentBlock::Text(text) => Some(text.text.clone()),
         _ => None,
     }
+}
+
+/// Events kept before `granted` was recorded were all answered with an
+/// allowing option when the agent offered one.
+fn granted_by_default() -> bool {
+    true
 }
