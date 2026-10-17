@@ -14,7 +14,7 @@ use walkdir::WalkDir;
 
 use crate::clock::Clock;
 use crate::error::{Error, IoContext, Result};
-use crate::manifest::{Kind, Stamp, Tree, relative, vanished};
+use crate::manifest::{Kind, Stamp, Tree, relative, scan, vanished};
 
 /// Clones the tree under `src` into `dst`, which must not exist yet, and
 /// returns the stamp each entry of `src` had when it was cloned. Files are
@@ -38,38 +38,15 @@ use crate::manifest::{Kind, Stamp, Tree, relative, vanished};
 /// that is never pinned down gets a stamp that matches nothing.
 pub(crate) fn clone_tree(src: &Path, dst: &Path, clock: &Clock) -> Result<Tree> {
     const ROUNDS: usize = 5;
-    fs::create_dir(dst).at(dst)?;
     let start = clock.now()?;
-    let mut taken = Tree::new();
-    let mut dirs = Vec::new();
-    let mut racy = Vec::new();
-    for entry in WalkDir::new(src)
-        .min_depth(1)
-        .follow_links(false)
-        .sort_by_file_name()
-    {
-        let entry = match entry {
-            Ok(entry) => entry,
-            Err(e) if vanished(&e) => continue,
-            Err(e) => {
-                return Err(Error::Io {
-                    path: e.path().unwrap_or(src).to_path_buf(),
-                    source: e.into(),
-                });
-            }
-        };
-        let rel = relative(src, entry.path())?;
-        let to = dst.join(&rel);
-        let Some(stamp) = clone_entry(entry.path(), &to)? else {
-            continue;
-        };
-        match stamp.kind {
-            Kind::Dir => dirs.push((to, stamp.clone())),
-            Kind::File if stamp.ctime >= start => racy.push(rel.clone()),
-            _ => {}
-        }
-        taken.insert(rel, stamp);
-    }
+    let Cloned {
+        mut taken,
+        mut dirs,
+        mut racy,
+    } = match clone_at_once(src, dst, start)? {
+        Some(cloned) => cloned,
+        None => clone_one_by_one(src, dst, start)?,
+    };
 
     for round in 1..=ROUNDS {
         let Some(latest) = racy.iter().map(|rel| taken[rel].ctime).max() else {
@@ -118,6 +95,147 @@ pub(crate) fn clone_tree(src: &Path, dst: &Path, clock: &Clock) -> Result<Tree> 
         finish(dst, &root)?;
     }
     Ok(taken)
+}
+
+/// What a first pass of [`clone_tree`] made: the stamp of each entry it
+/// took, the directories whose times are set last, and the files written
+/// so recently that a write in the same tick could hide behind their stamp.
+#[derive(Default)]
+struct Cloned {
+    taken: Tree,
+    dirs: Vec<(PathBuf, Stamp)>,
+    racy: Vec<String>,
+}
+
+impl Cloned {
+    fn take(&mut self, rel: String, to: PathBuf, stamp: Stamp, start: (i64, i64)) {
+        match stamp.kind {
+            Kind::Dir => self.dirs.push((to, stamp.clone())),
+            Kind::File if stamp.ctime >= start => self.racy.push(rel.clone()),
+            _ => {}
+        }
+        self.taken.insert(rel, stamp);
+    }
+}
+
+/// Clones each entry on its own, parents first.
+fn clone_one_by_one(src: &Path, dst: &Path, start: (i64, i64)) -> Result<Cloned> {
+    fs::create_dir(dst).at(dst)?;
+    let mut cloned = Cloned::default();
+    for entry in WalkDir::new(src)
+        .min_depth(1)
+        .follow_links(false)
+        .sort_by_file_name()
+    {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(e) if vanished(&e) => continue,
+            Err(e) => {
+                return Err(Error::Io {
+                    path: e.path().unwrap_or(src).to_path_buf(),
+                    source: e.into(),
+                });
+            }
+        };
+        let rel = relative(src, entry.path())?;
+        let to = dst.join(&rel);
+        if let Some(stamp) = clone_entry(entry.path(), &to)? {
+            cloned.take(rel, to, stamp, start);
+        }
+    }
+    Ok(cloned)
+}
+
+/// Clones the whole tree in one call where the system can (a directory
+/// `clonefile` on APFS: a fraction of a second where one call per entry
+/// takes most of a minute), then makes it what [`clone_one_by_one`] would
+/// have: an entry whose stamp was the same before and after the call was
+/// cloned as that stamp says; any other is cloned again on its own, or
+/// removed when it is gone. `None` when the call is not possible here.
+fn clone_at_once(src: &Path, dst: &Path, start: (i64, i64)) -> Result<Option<Cloned>> {
+    let before = scan(src)?;
+    if !clone_dir_at_once(src, dst) {
+        // Nothing may be left of a call that failed half way.
+        remove(dst)?;
+        return Ok(None);
+    }
+    reconcile(src, dst, &before, start).map(Some)
+}
+
+/// Makes `dst`, cloned from `src` while `src` was `before`, what cloning
+/// each entry on its own would have made.
+fn reconcile(src: &Path, dst: &Path, before: &Tree, start: (i64, i64)) -> Result<Cloned> {
+    let after = scan(src)?;
+    let copied = scan(dst)?;
+    let mut paths: Vec<&String> = before
+        .keys()
+        .chain(after.keys())
+        .chain(copied.keys())
+        .collect();
+    // Sorted, a parent comes before what is in it.
+    paths.sort();
+    paths.dedup();
+    let mut cloned = Cloned::default();
+    for rel in paths {
+        let (from, to) = (src.join(rel), dst.join(rel));
+        let held = match (before.get(rel), after.get(rel), copied.get(rel)) {
+            (Some(b), Some(a), Some(c)) if b.unchanged(a) && b.kind == c.kind => Some(b.clone()),
+            _ => None,
+        };
+        let stamp = match held {
+            Some(stamp) => stamp,
+            None => {
+                // Changed, come or gone while the call ran: on its own.
+                match after.get(rel) {
+                    None => {
+                        remove(&to)?;
+                        continue;
+                    }
+                    Some(a)
+                        if a.kind == Kind::Dir
+                            && copied.get(rel).is_some_and(|c| c.kind == Kind::Dir) =>
+                    {
+                        // What is in it is reconciled entry by entry.
+                        match Stamp::of(&from)? {
+                            Some(stamp) => stamp,
+                            None => continue,
+                        }
+                    }
+                    Some(_) => {
+                        remove(&to)?;
+                        match clone_entry(&from, &to)? {
+                            Some(stamp) => stamp,
+                            None => continue,
+                        }
+                    }
+                }
+            }
+        };
+        cloned.take(rel.clone(), to, stamp, start);
+    }
+    Ok(cloned)
+}
+
+/// Clones directory `src` to `dst`, which must not exist, in one call.
+#[cfg(target_os = "macos")]
+fn clone_dir_at_once(src: &Path, dst: &Path) -> bool {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+
+    let c = |p: &Path| CString::new(p.as_os_str().as_bytes()).ok();
+    let (Some(from), Some(to)) = (c(src), c(dst)) else {
+        return false;
+    };
+    // From <sys/clonefile.h>: links inside are cloned as links, not followed.
+    const CLONE_NOFOLLOW: u32 = 0x0001;
+    // SAFETY: both are valid NUL-terminated paths for the call's duration.
+    unsafe { libc::clonefile(from.as_ptr(), to.as_ptr(), CLONE_NOFOLLOW) == 0 }
+}
+
+/// Linux has no call that clones a directory.
+#[cfg(not(target_os = "macos"))]
+fn clone_dir_at_once(_src: &Path, _dst: &Path) -> bool {
+    false
 }
 
 /// Clones one entry to `to`, which must not exist, until its stamp is the
@@ -368,4 +486,43 @@ pub fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<()> {
     let tmp = temp_beside(path);
     fs::write(&tmp, text).at(&tmp)?;
     fs::rename(&tmp, path).at(path)
+}
+
+#[cfg(test)]
+mod tests {
+    use tempfile::TempDir;
+
+    use super::*;
+
+    #[test]
+    fn a_tree_cloned_at_once_is_put_right_where_it_changed_meanwhile() {
+        let dir = TempDir::new().unwrap();
+        let (src, dst) = (dir.path().join("src"), dir.path().join("dst"));
+        fs::create_dir_all(src.join("a")).unwrap();
+        for name in ["a/same", "a/changed", "a/gone"] {
+            fs::write(src.join(name), name).unwrap();
+        }
+        let before = scan(&src).unwrap();
+        // The clone holds the tree as it was; then the tree moves on.
+        clone_one_by_one(&src, &dst, (0, 0)).unwrap();
+        fs::write(src.join("a/changed"), "changed again").unwrap();
+        fs::remove_file(src.join("a/gone")).unwrap();
+        fs::write(src.join("a/new"), "new").unwrap();
+
+        let cloned = reconcile(&src, &dst, &before, (0, 0)).unwrap();
+        let read = |rel: &str| fs::read_to_string(dst.join(rel)).ok();
+        assert_eq!(read("a/same").as_deref(), Some("a/same"));
+        assert_eq!(read("a/changed").as_deref(), Some("changed again"));
+        assert_eq!(read("a/gone"), None);
+        assert_eq!(read("a/new").as_deref(), Some("new"));
+        // Each entry holds what its stamp says.
+        for rel in ["a/same", "a/changed", "a/new"] {
+            assert_eq!(
+                Some(&cloned.taken[rel]),
+                Stamp::of(&src.join(rel)).unwrap().as_ref(),
+                "{rel}"
+            );
+        }
+        assert!(!cloned.taken.contains_key("a/gone"));
+    }
 }
