@@ -1,0 +1,6 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "icon": ["icons/windows/32x32.png", "icons/windows/icon.ico"]
+  }
+}

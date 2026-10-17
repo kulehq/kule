@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- Kule's app icon for Windows and Linux: a rounded plate that fills the
+       canvas, no shadow (the desktop draws its own). The glyph is the same as
+       on macOS, scaled with the plate. -->
+  <rect x="32" y="32" width="960" height="960" rx="192" fill="#ff5a3c"/>
+  <g fill="#ffffff" transform="translate(512 512) scale(1.165) translate(-512 -512)">
+    <circle cx="512" cy="262" r="30"/>
+    <rect x="336" y="318" width="352" height="112" rx="56"/>
+    <path d="M466 470 L558 470 L588 806 Q590 826 570 826 L454 826 Q434 826 436 806 Z"/>
+  </g>
+</svg>

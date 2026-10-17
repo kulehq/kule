@@ -108,10 +108,15 @@ p {
   padding: 0 4px;
 }
 
+/* The app icon in small: the tower in white on Kule's coral. */
 .brand-mark {
   width: 24px;
   height: 24px;
-  fill: var(--text);
+  fill: #ff5a3c;
+}
+
+.brand-mark .brand-glyph {
+  fill: #ffffff;
 }
 
 .brand-name {

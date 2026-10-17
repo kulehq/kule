@@ -1,0 +1,11 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "icon": [
+      "icons/linux/32x32.png",
+      "icons/linux/128x128.png",
+      "icons/linux/128x128@2x.png",
+      "icons/linux/icon.png"
+    ]
+  }
+}
