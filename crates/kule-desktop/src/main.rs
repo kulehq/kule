@@ -115,6 +115,12 @@ fn review(kule: K<'_>, task: String, include_ignored: bool) -> Result<Review> {
     })
 }
 
+/// What a changed picture was and is, passed through as the daemon says it.
+#[tauri::command(async)]
+fn preview(kule: K<'_>, task: String, path: String) -> Result<serde_json::Value> {
+    kule.call(Call::Preview { task, path })
+}
+
 #[tauri::command(async)]
 fn commit(
     kule: K<'_>,
@@ -291,6 +297,7 @@ fn main() {
             pick_workspace,
             create_task,
             review,
+            preview,
             commit,
             rollback,
             undo,

@@ -290,6 +290,7 @@ pub fn dispatch(service: &Arc<Service>, call: Call) -> Result<Value, String> {
             task,
             include_ignored,
         } => json(service.review(&task, include_ignored)?),
+        Call::Preview { task, path } => json(service.preview(&task, &path)?),
         Call::Commit {
             task,
             approve,

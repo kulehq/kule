@@ -668,6 +668,44 @@ select:focus-visible {
   font-size: 12px;
 }
 
+.show-picture {
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--accent);
+  font: 12px var(--sans);
+  cursor: pointer;
+}
+
+.files li.preview {
+  gap: 16px;
+  padding: 6px 0 10px 22px;
+}
+
+.picture {
+  margin: 0;
+  font: 12px var(--sans);
+  color: var(--muted);
+}
+
+.picture img,
+.picture-none {
+  display: block;
+  max-width: 240px;
+  max-height: 180px;
+  margin-bottom: 4px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--sunken);
+}
+
+.picture-none {
+  width: 120px;
+  padding: 24px 8px;
+  text-align: center;
+}
+
 .change {
   flex: none;
   width: 12px;

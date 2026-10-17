@@ -52,7 +52,9 @@ Review, and, while its window is not in front, the app also tells through
 the system's notifications when two tasks start to meet, when an agent
 waits for an answer, and when a run is over.
 
-Previews of images come next.
+A changed picture (PNG, JPEG, GIF, WebP) shows what it was and what it is
+under Review. Only what its header proves to be such a picture, under
+8 MiB and 40 megapixels, reaches the window.
 
 ## M0: transactions on a copy-on-write copy
 

@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 use kule_entities::{MAX_BYTES, Outline, Skip};
 use serde::{Deserialize, Serialize};
 
-use crate::effects::{Change, EffectSet};
+use crate::effects::EffectSet;
 use crate::error::{IoContext, Result};
 use crate::manifest::{Baseline, Kind, Stamp};
 
@@ -36,10 +36,30 @@ pub struct FileOutline {
 }
 
 /// One side of a file.
-enum Side {
+pub(crate) enum Side {
     Bytes(Vec<u8>),
     Absent,
     Skipped(Skip),
+}
+
+/// The two sides of the file at `path`, each read up to `limit` bytes:
+/// what the workspace held at the last sync (known while the workspace's
+/// file is unchanged since), and what the copy holds now.
+pub(crate) fn sides(
+    copy: &Path,
+    work: &Path,
+    baseline: &Baseline,
+    path: &str,
+    limit: usize,
+) -> Result<(Side, Side)> {
+    let before = match baseline.entries.get(path) {
+        Some(entry) if entry.work.kind == Kind::File => match Stamp::of(&work.join(path))? {
+            Some(now) if entry.work.unchanged(&now) => read_beneath(work, path, limit)?,
+            _ => Side::Skipped(Skip::BeforeUnknown),
+        },
+        _ => Side::Absent,
+    };
+    Ok((before, read_beneath(copy, path, limit)?))
 }
 
 pub(crate) fn outline(
@@ -62,23 +82,7 @@ pub(crate) fn outline(
         if moved || !kule_entities::supported(&effect.path) {
             continue;
         }
-        let entry = baseline.entries.get(&effect.path);
-        let before = match (effect.change, entry) {
-            (Change::Created, _) | (_, None) => Side::Absent,
-            (_, Some(entry)) if entry.work.kind != Kind::File => Side::Absent,
-            (_, Some(entry)) => {
-                let path = work.join(&effect.path);
-                match Stamp::of(&path)? {
-                    Some(now) if entry.work.unchanged(&now) => read_beneath(work, &effect.path)?,
-                    _ => Side::Skipped(Skip::BeforeUnknown),
-                }
-            }
-        };
-        let after = match effect.change {
-            Change::Deleted => Side::Absent,
-            _ if effect.kind != Kind::File => Side::Absent,
-            _ => read_beneath(copy, &effect.path)?,
-        };
+        let (before, after) = sides(copy, work, baseline, &effect.path, MAX_BYTES)?;
         let outline = match (before, after) {
             (Side::Absent, Side::Absent) => continue,
             (Side::Skipped(reason), _) | (_, Side::Skipped(reason)) => Outline::Skipped { reason },
@@ -104,8 +108,8 @@ pub(crate) fn outline(
 
 /// Reads `rel` under `root` without following a link anywhere on the way:
 /// absent when something else than a regular file is there now, skipped
-/// when it is larger than Kule outlines.
-fn read_beneath(root: &Path, rel: &str) -> Result<Side> {
+/// when it holds more than `limit` bytes.
+fn read_beneath(root: &Path, rel: &str, limit: usize) -> Result<Side> {
     let path = root.join(rel);
     match open_beneath(root, rel) {
         Ok(Some(file)) => {
@@ -114,9 +118,9 @@ fn read_beneath(root: &Path, rel: &str) -> Result<Side> {
                 return Ok(Side::Absent);
             }
             let mut bytes = Vec::new();
-            let limit = u64::try_from(MAX_BYTES).unwrap_or(u64::MAX) + 1;
-            file.take(limit).read_to_end(&mut bytes).at(&path)?;
-            if bytes.len() > MAX_BYTES {
+            let most = u64::try_from(limit).unwrap_or(u64::MAX).saturating_add(1);
+            file.take(most).read_to_end(&mut bytes).at(&path)?;
+            if bytes.len() > limit {
                 return Ok(Side::Skipped(Skip::TooLarge));
             }
             Ok(Side::Bytes(bytes))
@@ -179,23 +183,26 @@ mod tests {
         symlink(dir.path(), root.join("up")).unwrap();
 
         assert!(
-            matches!(read_beneath(&root, "src/a.rs").unwrap(), Side::Bytes(b) if b == b"fn a() {}\n")
+            matches!(read_beneath(&root, "src/a.rs", MAX_BYTES).unwrap(), Side::Bytes(b) if b == b"fn a() {}\n")
         );
         assert!(matches!(
-            read_beneath(&root, "src/link.rs").unwrap(),
+            read_beneath(&root, "src/link.rs", MAX_BYTES).unwrap(),
             Side::Absent
         ));
         assert!(matches!(
-            read_beneath(&root, "up/secret.rs").unwrap(),
+            read_beneath(&root, "up/secret.rs", MAX_BYTES).unwrap(),
             Side::Absent
         ));
         assert!(matches!(
-            read_beneath(&root, "../secret.rs").unwrap(),
+            read_beneath(&root, "../secret.rs", MAX_BYTES).unwrap(),
             Side::Absent
         ));
-        assert!(matches!(read_beneath(&root, "src").unwrap(), Side::Absent));
         assert!(matches!(
-            read_beneath(&root, "src/none.rs").unwrap(),
+            read_beneath(&root, "src", MAX_BYTES).unwrap(),
+            Side::Absent
+        ));
+        assert!(matches!(
+            read_beneath(&root, "src/none.rs", MAX_BYTES).unwrap(),
             Side::Absent
         ));
     }
@@ -207,7 +214,7 @@ mod tests {
         // SAFETY: mkfifo reads the path.
         assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
         assert!(matches!(
-            read_beneath(dir.path(), "a.rs").unwrap(),
+            read_beneath(dir.path(), "a.rs", MAX_BYTES).unwrap(),
             Side::Absent
         ));
     }
@@ -217,7 +224,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         fs::write(dir.path().join("a.rs"), vec![b' '; MAX_BYTES + 10]).unwrap();
         assert!(matches!(
-            read_beneath(dir.path(), "a.rs").unwrap(),
+            read_beneath(dir.path(), "a.rs", MAX_BYTES).unwrap(),
             Side::Skipped(Skip::TooLarge)
         ));
     }

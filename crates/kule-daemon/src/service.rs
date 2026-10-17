@@ -13,8 +13,8 @@ use futures::StreamExt;
 use kule_engine::entities;
 use kule_engine::{
     Approvals, Checkpoint, Connection, Denial, Effect, EffectSet, Error, FileOutline, Kind, Policy,
-    Proxy, Question, Ruling, Step, Task, Touched, Verdict, changed_entities, connections, denials,
-    meet, record_denials,
+    Preview, Proxy, Question, Ruling, Step, Task, Touched, Verdict, changed_entities, connections,
+    denials, meet, record_denials,
 };
 use serde::{Deserialize, Serialize};
 
@@ -448,6 +448,11 @@ impl Service {
             digest: pending.digest(),
             outline,
         })
+    }
+
+    /// What the picture at `path` in the task was and is.
+    pub fn preview(&self, id: &str, path: &str) -> Result<Preview> {
+        self.open(id)?.preview(path).map_err(text)
     }
 
     /// Commits what the policy lets through; with `approve`, also what it

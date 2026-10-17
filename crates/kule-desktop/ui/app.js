@@ -520,6 +520,40 @@ function entityLines(outline) {
   );
 }
 
+/** Files the daemon previews; it reads the bytes to decide in the end. */
+const PICTURE = /\.(png|jpe?g|gif|webp)$/i;
+
+/** Opens or closes the picture's before and after under its line. */
+async function togglePreview(button, path) {
+  const line = button.closest("li");
+  const open = line.nextElementSibling;
+  if (open && open.classList.contains("preview")) {
+    open.remove();
+    button.textContent = "Show";
+    button.setAttribute("aria-expanded", "false");
+    return;
+  }
+  let preview;
+  try {
+    preview = await call("preview", { task: state.current, path });
+  } catch (err) {
+    fail(err);
+    return;
+  }
+  const side = (label, p) =>
+    h(
+      "figure",
+      { class: "picture" },
+      p.side === "image"
+        ? h("img", { src: `data:${p.mime};base64,${p.data}`, alt: `${path}, ${label}` })
+        : h("div", { class: "picture-none" }, p.side === "absent" ? "none" : p.reason),
+      h("figcaption", {}, p.side === "image" ? `${label} · ${p.width}×${p.height}` : label)
+    );
+  line.after(h("li", { class: "preview" }, side("before", preview.before), side("after", preview.after)));
+  button.textContent = "Hide";
+  button.setAttribute("aria-expanded", "true");
+}
+
 function filesGroup(title, effects, holding, outlines) {
   if (effects.length === 0) return [];
   return [
@@ -538,7 +572,21 @@ function filesGroup(title, effects, holding, outlines) {
             h("span", { class: `change ${e.change}` }, CHANGE_MARK[e.change]),
             h("span", {}, e.kind === "dir" ? `${e.path}/` : e.path),
             held ? h("span", { class: "held-mark" }, VERDICT[held].chip) : null,
-            why ? h("span", { class: "entity-note" }, why) : null
+            why ? h("span", { class: "entity-note" }, why) : null,
+            e.kind === "file" && PICTURE.test(e.path)
+              ? h(
+                  "button",
+                  {
+                    class: "show-picture",
+                    type: "button",
+                    "data-key": `preview:${e.path}`,
+                    "aria-expanded": "false",
+                    "aria-label": `Show ${e.path}`,
+                    onclick: (ev) => togglePreview(ev.currentTarget, e.path),
+                  },
+                  "Show"
+                )
+              : null
           ),
           ...entityLines(outline),
         ];

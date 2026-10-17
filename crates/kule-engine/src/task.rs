@@ -20,6 +20,7 @@ use crate::history::{Entry as HistoryEntry, Event};
 use crate::manifest::{Baseline, Entry, Kind, Stamp, Tree, relative, scan};
 use crate::meet::{self, Touched};
 use crate::outline::{self, FileOutline};
+use crate::preview::{self, Preview};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskInfo {
@@ -191,6 +192,29 @@ impl Task {
     /// and the like, for the files Kule outlines (see [`crate::entities`]).
     pub fn outline(&self, set: &EffectSet) -> Result<Vec<FileOutline>> {
         outline::outline(&self.copy(), self.workspace(), &self.load_baseline()?, set)
+    }
+
+    /// What the picture at `path` (relative to the workspace) was at the
+    /// last sync and is in the copy now; see [`crate::preview`].
+    pub fn preview(&self, path: &str) -> Result<Preview> {
+        if !preview::previewable(path) {
+            return Err(Error::Invalid(format!(
+                "{path} is not a picture Kule shows"
+            )));
+        }
+        let baseline = self.load_baseline()?;
+        let (before, after) = outline::sides(
+            &self.copy(),
+            self.workspace(),
+            &baseline,
+            path,
+            preview::MAX_IMAGE,
+        )?;
+        Ok(Preview {
+            path: path.to_owned(),
+            before: preview::picture(before),
+            after: preview::picture(after),
+        })
     }
 
     /// What the work a commit would take changes, file by file and inside

@@ -8,10 +8,12 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+base64 = "0.22.1"
 blake3.workspace = true
 cedar-policy.workspace = true
 filetime.workspace = true
 gix.workspace = true
+imagesize = "0.15.0"
 kule-entities = { version = "0.0.1", path = "../kule-entities" }
 libc = "0.2.190"
 # Shared with Lonca. Builds use the pinned commit; a crates.io publish uses

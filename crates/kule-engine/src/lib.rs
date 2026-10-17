@@ -32,6 +32,7 @@ mod namespace;
 mod network;
 mod outline;
 mod policy;
+mod preview;
 mod protect;
 mod sandbox;
 mod snapshot;
@@ -53,6 +54,7 @@ pub use meet::{Meeting, Touched, changed_entities, meet, touched};
 pub use network::{Connection, Proxy, connections};
 pub use outline::FileOutline;
 pub use policy::{DEFAULT_POLICY, Judgement, Policy, REPO_POLICY, Ruling, Verdict};
+pub use preview::{Picture, Preview, previewable};
 pub use protect::{Kept, PutBack};
 pub use sandbox::{
     Denial, Network, PASSED_ENV, Sandbox, denials, isolates_network, protects_in_place,
