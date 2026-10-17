@@ -10,13 +10,14 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use kule_daemon::{
-    Call, Client, Commit, Hello, Notice, PROTOCOL, Question, Result, Review, RunEvent, Sequenced,
-    TaskView, Timeline, default_home,
+    Alert, Alerts, Call, Client, Commit, Hello, Notice, PROTOCOL, Question, Result, Review,
+    RunEvent, Sequenced, TaskView, Timeline, default_home,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_dialog::DialogExt;
+use tauri_plugin_notification::NotificationExt;
 
 /// How the window reaches the daemon.
 struct Kule {
@@ -195,25 +196,55 @@ struct RunMessage {
 }
 
 /// Passes the daemon's notices on to the window for as long as the app
-/// runs, starting the daemon again if it goes away.
+/// runs, starting the daemon again if it goes away. While the window is
+/// not in front, what needs the person also goes to the system's
+/// notifications.
 fn relay(app: AppHandle, home: &Path) {
     let kule = Kule {
         home: home.to_owned(),
         client: Client::new(home),
+    };
+    let mut alerts = Alerts::new();
+    let tell = |app: &AppHandle, told: Vec<Alert>| {
+        let in_front = app
+            .get_webview_window("main")
+            .and_then(|w| w.is_focused().ok())
+            .unwrap_or(false);
+        if in_front {
+            return;
+        }
+        for alert in told {
+            let _ = app
+                .notification()
+                .builder()
+                .title(alert.title)
+                .body(alert.body)
+                .show();
+        }
     };
     loop {
         if kule.start().is_ok() {
             // Connected (again): the window reloads what it shows, since it
             // may have missed notices while the daemon was away.
             let _ = app.emit("daemon", ());
+            if let Ok(views) = kule.client.call::<Vec<TaskView>>(Call::Tasks) {
+                tell(&app, alerts.tasks(&views));
+            }
             let _ = kule.client.subscribe(|notice| match notice {
                 Notice::Run { task, seq, event } => {
+                    if let RunEvent::Finished { error, .. } = &event {
+                        tell(&app, vec![alerts.finished(&task, error.as_deref())]);
+                    }
                     let _ = app.emit("run", RunMessage { task, seq, event });
                 }
                 Notice::Questions { waiting } => {
+                    tell(&app, alerts.questions(&waiting));
                     let _ = app.emit("questions", waiting);
                 }
                 Notice::Tasks => {
+                    if let Ok(views) = kule.client.call::<Vec<TaskView>>(Call::Tasks) {
+                        tell(&app, alerts.tasks(&views));
+                    }
                     let _ = app.emit("tasks", ());
                 }
             });
@@ -247,6 +278,7 @@ fn main() {
     }
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
         .setup(move |app| {
             let handle = app.handle().clone();
             std::thread::spawn(move || relay(handle, &home));

@@ -26,6 +26,7 @@ mod git;
 mod history;
 mod ignore;
 mod manifest;
+mod meet;
 #[cfg(target_os = "linux")]
 mod namespace;
 mod network;
@@ -48,6 +49,7 @@ pub use git::{GitState, GitSummary, RefChange};
 pub use history::{Entry as HistoryEntry, Event as HistoryEvent};
 pub use kule_entities as entities;
 pub use manifest::Kind;
+pub use meet::{Meeting, Touched, changed_entities, meet, touched};
 pub use network::{Connection, Proxy, connections};
 pub use outline::FileOutline;
 pub use policy::{DEFAULT_POLICY, Judgement, Policy, REPO_POLICY, Ruling, Verdict};

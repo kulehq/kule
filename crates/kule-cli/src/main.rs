@@ -8,7 +8,8 @@ use clap::{Parser, Subcommand};
 use kule_engine::entities::{Change as EntityChange, Edit, Outline, Skip};
 use kule_engine::{
     Change, Connection, DEFAULT_POLICY, Denial, Effect, EffectSet, Error, GitSummary, Kind,
-    Network, Policy, Proxy, RefChange, Ruling, Sandbox, Task, Verdict, connections, record_denials,
+    Network, Policy, Proxy, RefChange, Ruling, Sandbox, Task, Verdict, connections, meet,
+    record_denials,
 };
 
 /// Kule engine: run commands in a sandbox on a copy-on-write copy of a
@@ -358,6 +359,7 @@ fn run() -> Result<ExitCode> {
                 print_set(&task, &set);
                 if !committed.is_empty() {
                     print_ruling(&ruling);
+                    print_meetings(&home, &task)?;
                 }
             }
         }
@@ -622,6 +624,33 @@ fn print_set(task: &Task, set: &EffectSet) {
     if let Some(git) = &set.git {
         print_git(git);
     }
+}
+
+/// Where the task's work meets that of other tasks on its workspace: the
+/// files both change and, inside them, what both change.
+fn print_meetings(home: &Path, task: &Task) -> Result<()> {
+    let ours = task.touched()?;
+    for info in Task::list(home)? {
+        if info.id == task.id() || info.workspace != task.workspace() {
+            continue;
+        }
+        // A task being removed meanwhile meets nobody.
+        let Ok(theirs) = Task::open(home, &info.id).and_then(|t| t.touched()) else {
+            continue;
+        };
+        let meetings = meet(&ours, &theirs);
+        if meetings.is_empty() {
+            continue;
+        }
+        println!("task {} changes them too:", info.id);
+        for m in meetings {
+            match m.entities.as_slice() {
+                [] => println!("  {}", m.path),
+                entities => println!("  {} · {}", m.path, entities.join(", ")),
+            }
+        }
+    }
+    Ok(())
 }
 
 /// What changed inside one file, under its line.

@@ -2,16 +2,19 @@
 //! and the questions they wait on. The server only carries calls to it over
 //! the socket, so its tests run on real tasks without one.
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use futures::StreamExt;
+use kule_engine::entities;
 use kule_engine::{
-    Approvals, Checkpoint, Connection, Denial, EffectSet, Error, FileOutline, Policy, Proxy,
-    Question, Ruling, Step, Task, Verdict, connections, denials, record_denials,
+    Approvals, Checkpoint, Connection, Denial, Effect, EffectSet, Error, FileOutline, Kind, Policy,
+    Proxy, Question, Ruling, Step, Task, Touched, Verdict, changed_entities, connections, denials,
+    meet, record_denials,
 };
 use serde::{Deserialize, Serialize};
 
@@ -54,6 +57,20 @@ pub struct TaskView {
     /// `verdict` are not known. A [`Notice::Tasks`] follows when they are.
     #[serde(default)]
     pub scanning: bool,
+    /// Where its work meets that of other tasks on the same workspace.
+    #[serde(default)]
+    pub overlaps: Vec<Overlap>,
+}
+
+/// A file this task and another one both change, and what in it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Overlap {
+    /// The other task.
+    pub task: String,
+    pub path: String,
+    /// What both change inside the file (`method Task::commit`); empty when
+    /// Kule cannot tell, and then it is the file as a whole.
+    pub entities: Vec<String>,
 }
 
 /// The part of a task's view that takes a walk through its copy.
@@ -63,7 +80,20 @@ struct Scan {
     ignored: usize,
     verdict: Option<Verdict>,
     workspace_gone: bool,
+    workspace: PathBuf,
+    /// What the work a commit would take changes, inside the files too.
+    touched: Touched,
 }
+
+/// A changed file as last outlined: the metadata of its two sides then
+/// (the copy's, the workspace's) and the entities it changed.
+struct Outlined {
+    stamps: (Option<FileStamp>, Option<FileStamp>),
+    entities: Option<BTreeSet<String>>,
+}
+
+/// Size, modification and change times, inode: any write moves one.
+type FileStamp = (u64, i64, i64, u64, i64, i64);
 
 /// A task's last scan, and whether a newer one is under way.
 struct Cached {
@@ -181,6 +211,8 @@ pub struct Service {
     next_seq: std::sync::atomic::AtomicU64,
     /// Each task's last scan, for the task list.
     scans: Mutex<HashMap<String, Cached>>,
+    /// Each task's changed files as last outlined, by path.
+    outlined: Mutex<HashMap<String, HashMap<String, Outlined>>>,
 }
 
 impl Service {
@@ -197,6 +229,7 @@ impl Service {
             streams: Mutex::new(HashMap::new()),
             next_seq: std::sync::atomic::AtomicU64::new(1),
             scans: Mutex::new(HashMap::new()),
+            outlined: Mutex::new(HashMap::new()),
         }
     }
 
@@ -300,7 +333,6 @@ impl Service {
         kule_acp::PROFILES.iter().map(|p| p.name).collect()
     }
 
-    /// Every task, newest first.
     /// Every task, newest first, from each one's last scan; scans older
     /// than [`FRESH`] are made again in the background.
     pub fn tasks(self: &Arc<Self>) -> Result<Vec<TaskView>> {
@@ -391,6 +423,8 @@ impl Service {
             ignored: all.ignored().count(),
             verdict: verdict.transpose()?.map(|r| r.verdict),
             workspace_gone: !task.workspace_exists(),
+            workspace: task.workspace().to_owned(),
+            touched: self.touched(task, &effects),
         })
     }
 
@@ -490,6 +524,7 @@ impl Service {
         self.idle(id)?.remove().map_err(text)?;
         self.streams.lock().unwrap().remove(id);
         self.scans.lock().unwrap().remove(id);
+        self.outlined.lock().unwrap().remove(id);
         let home = self.home.clone();
         std::thread::spawn(move || {
             if let Err(e) = Task::empty_trash(&home) {
@@ -610,7 +645,99 @@ impl Service {
             approval_timeout_secs: task.approval_timeout().map_err(text)?.as_secs(),
             workspace_gone: scan.workspace_gone,
             scanning,
+            overlaps: self.overlaps(id, &scan),
         })
+    }
+
+    /// Where the task's work meets that of the other tasks on its
+    /// workspace, as their last scans have it.
+    fn overlaps(&self, id: &str, scan: &Scan) -> Vec<Overlap> {
+        let scans = self.scans.lock().unwrap();
+        let mut overlaps: Vec<Overlap> = scans
+            .iter()
+            .filter(|(other, _)| other.as_str() != id)
+            .filter_map(|(other, cached)| Some((other, cached.scan.as_ref()?)))
+            .filter(|(_, theirs)| theirs.workspace == scan.workspace)
+            .flat_map(|(other, theirs)| {
+                meet(&scan.touched, &theirs.touched)
+                    .into_iter()
+                    .map(|m| Overlap {
+                        task: other.clone(),
+                        path: m.path,
+                        entities: m.entities,
+                    })
+            })
+            .collect();
+        overlaps.sort_by(|a, b| (&a.task, &a.path).cmp(&(&b.task, &b.path)));
+        overlaps
+    }
+
+    /// What the work a commit would take changes, inside the files too.
+    /// A file is outlined again only when either side of it changed since
+    /// the last time.
+    fn touched(&self, task: &Task, set: &EffectSet) -> Touched {
+        let stamp = |root: &Path, path: &str| {
+            std::fs::symlink_metadata(root.join(path)).ok().map(|m| {
+                (
+                    m.len(),
+                    m.mtime(),
+                    m.mtime_nsec(),
+                    m.ino(),
+                    m.ctime(),
+                    m.ctime_nsec(),
+                )
+            })
+        };
+        let (copy, work) = (task.copy(), task.workspace().to_owned());
+        let mut known = self
+            .outlined
+            .lock()
+            .unwrap()
+            .remove(task.id())
+            .unwrap_or_default();
+        let files: Vec<&Effect> = set.files().filter(|e| e.kind != Kind::Dir).collect();
+        let mut stale = Vec::new();
+        let mut stamps = HashMap::new();
+        for effect in &files {
+            let now = (stamp(&copy, &effect.path), stamp(&work, &effect.path));
+            if known.get(&effect.path).is_none_or(|o| o.stamps != now) {
+                stale.push((*effect).clone());
+            }
+            stamps.insert(effect.path.as_str(), now);
+        }
+        let stale = EffectSet {
+            effects: stale,
+            git: None,
+        };
+        let outlines = task.outline(&stale).unwrap_or_default();
+        for effect in &stale.effects {
+            let outline = outlines.iter().find(|o| o.path == effect.path);
+            // A file left out for time or number is read again next scan.
+            if outline.is_none() && entities::supported(&effect.path) {
+                known.remove(&effect.path);
+                continue;
+            }
+            known.insert(
+                effect.path.clone(),
+                Outlined {
+                    stamps: stamps[effect.path.as_str()],
+                    entities: outline.and_then(|o| changed_entities(&o.outline)),
+                },
+            );
+        }
+        known.retain(|path, _| stamps.contains_key(path.as_str()));
+        let touched = files
+            .iter()
+            .map(|e| {
+                let inside = known.get(&e.path).and_then(|o| o.entities.clone());
+                (e.path.clone(), inside)
+            })
+            .collect();
+        self.outlined
+            .lock()
+            .unwrap()
+            .insert(task.id().to_owned(), known);
+        touched
     }
 
     fn open(&self, id: &str) -> Result<Task> {
@@ -694,6 +821,91 @@ mod tests {
             }
             self.app.tasks().unwrap()
         }
+    }
+
+    #[test]
+    fn tasks_on_one_workspace_tell_where_they_meet() {
+        let s = Setup::new();
+        let code = "impl Task {\n    fn commit(&self) {}\n    fn undo(&self) {}\n}\n";
+        fs::write(s.ws.path().join("task.rs"), code).unwrap();
+        let (a, copy_a) = s.task();
+        let (b, copy_b) = s.task();
+        let (c, copy_c) = s.task();
+        // a and b change the same method; c another one in the same file.
+        let commit = "impl Task {\n    fn commit(&self) { 1; }\n    fn undo(&self) {}\n}\n";
+        fs::write(copy_a.join("task.rs"), commit).unwrap();
+        fs::write(copy_b.join("task.rs"), commit.replace("1;", "2;")).unwrap();
+        let undo = "impl Task {\n    fn commit(&self) {}\n    fn undo(&self) { 3; }\n}\n";
+        fs::write(copy_c.join("task.rs"), undo).unwrap();
+        // a and c both change a file Kule does not read inside.
+        fs::write(copy_a.join("a.txt"), "x\n").unwrap();
+        fs::write(copy_c.join("a.txt"), "y\n").unwrap();
+
+        let views = s.settled();
+        let view = |id: &str| views.iter().find(|v| v.id == id).unwrap().clone();
+        let meets = |id: &str| -> Vec<(String, String, Vec<String>)> {
+            view(id)
+                .overlaps
+                .into_iter()
+                .map(|o| (o.task, o.path, o.entities))
+                .collect()
+        };
+        let mut expect_a = vec![
+            (
+                b.clone(),
+                "task.rs".to_owned(),
+                vec!["method Task::commit".to_owned()],
+            ),
+            (c.clone(), "a.txt".to_owned(), vec![]),
+        ];
+        expect_a.sort();
+        assert_eq!(meets(&a), expect_a);
+        assert_eq!(
+            meets(&b),
+            [(
+                a.clone(),
+                "task.rs".to_owned(),
+                vec!["method Task::commit".to_owned()]
+            )]
+        );
+        assert_eq!(meets(&c), [(a.clone(), "a.txt".to_owned(), vec![])]);
+
+        // b's agent moves on to undo: it meets c there now, and a no more.
+        fs::write(copy_b.join("task.rs"), undo.replace("3;", "4;")).unwrap();
+        let views = s.settled();
+        let b_meets: Vec<(String, Vec<String>)> = views
+            .iter()
+            .find(|v| v.id == b)
+            .unwrap()
+            .overlaps
+            .iter()
+            .map(|o| (o.task.clone(), o.entities.clone()))
+            .collect();
+        assert_eq!(b_meets, [(c.clone(), vec!["method Task::undo".to_owned()])]);
+
+        // A task on another workspace meets nobody.
+        let elsewhere = TempDir::new().unwrap();
+        fs::write(elsewhere.path().join("task.rs"), code).unwrap();
+        let other = s.app.create(elsewhere.path()).unwrap().id;
+        let other_copy = Task::open(&s.app.home, &other).unwrap().copy();
+        fs::write(other_copy.join("task.rs"), commit).unwrap();
+        let views = s.settled();
+        assert!(
+            views
+                .iter()
+                .find(|v| v.id == other)
+                .unwrap()
+                .overlaps
+                .is_empty()
+        );
+
+        // Once a rolls back, nobody meets it any more.
+        s.app.rollback(&a).unwrap();
+        assert!(
+            s.settled()
+                .iter()
+                .all(|v| v.overlaps.iter().all(|o| o.task != a))
+        );
     }
 
     /// A large copy takes seconds to walk: the list answers at once from

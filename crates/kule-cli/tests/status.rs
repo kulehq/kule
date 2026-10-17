@@ -51,3 +51,31 @@ fn status_lists_what_changed_inside_each_file() {
         "{status}"
     );
 }
+
+#[test]
+fn status_tells_where_another_task_changes_the_same() {
+    let (home, ws) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+    let code = "impl Task {\n    fn commit(&self) {}\n    fn undo(&self) {}\n}\n";
+    fs::write(ws.path().join("task.rs"), code).unwrap();
+    let new_task = || {
+        let created = kule(home.path(), &["new", ws.path().to_str().unwrap()]);
+        let id = created.split_whitespace().nth(1).unwrap().to_owned();
+        let copy = home.path().join("tasks").join(&id).join("copy");
+        (id, copy)
+    };
+    let (a, copy_a) = new_task();
+    let (b, copy_b) = new_task();
+    let (_, copy_c) = new_task();
+    let commit = code.replace("commit(&self) {}", "commit(&self) { 1; }");
+    fs::write(copy_a.join("task.rs"), &commit).unwrap();
+    fs::write(copy_b.join("task.rs"), commit.replace("1;", "2;")).unwrap();
+    fs::write(
+        copy_c.join("task.rs"),
+        code.replace("undo(&self) {}", "undo(&self) { 3; }"),
+    )
+    .unwrap();
+
+    let status = kule(home.path(), &["status", &a]);
+    let expected = format!("task {b} changes them too:\n  task.rs · method Task::commit\n");
+    assert!(status.ends_with(&expected), "{status}");
+}

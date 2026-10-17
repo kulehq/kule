@@ -41,6 +41,15 @@ a file is listed under one of them, or under its top level:
       + method Task::check
 ```
 
+Tasks on the same folder never see each other's work, so Kule tells where
+they meet while both are still going, not when the second commit is
+refused: the same method, section or key, or the same file when it cannot
+look inside. `kule status` lists it (`task 5e6f7a8b changes them too:
+task.rs · method Task::commit`), the app marks the task and lists it under
+Review, and, while its window is not in front, the app also tells through
+the system's notifications when two tasks start to meet, when an agent
+waits for an answer, and when a run is over.
+
 Previews of images and telling moves from deletions come next.
 
 ## M0: transactions on a copy-on-write copy

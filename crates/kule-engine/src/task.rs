@@ -18,6 +18,7 @@ use crate::fsops::{self, read_json, write_json};
 use crate::git::{self, GitState, Part};
 use crate::history::{Entry as HistoryEntry, Event};
 use crate::manifest::{Baseline, Entry, Kind, Stamp, Tree, relative, scan};
+use crate::meet::{self, Touched};
 use crate::outline::{self, FileOutline};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -190,6 +191,14 @@ impl Task {
     /// and the like, for the files Kule outlines (see [`crate::entities`]).
     pub fn outline(&self, set: &EffectSet) -> Result<Vec<FileOutline>> {
         outline::outline(&self.copy(), self.workspace(), &self.load_baseline()?, set)
+    }
+
+    /// What the work a commit would take changes, file by file and inside
+    /// the files, to tell where it meets another task's (see [`crate::meet`]).
+    pub fn touched(&self) -> Result<Touched> {
+        let set = self.pending(false)?;
+        let outlines = self.outline(&set)?;
+        Ok(meet::touched(&set, &outlines))
     }
 
     /// What a commit would take now: [`Task::effects`] but for the paths the

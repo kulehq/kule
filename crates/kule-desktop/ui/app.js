@@ -139,6 +139,8 @@ function taskChip(task) {
 function taskItem(task, list) {
   const parts = [task.scanning ? "checking…" : task.changes ? plural(task.changes, "change") : "no changes"];
   if (task.ignored) parts.push(`${task.ignored} ignored`);
+  const others = new Set((task.overlaps || []).map((o) => o.task)).size;
+  if (others) parts.push(`meets ${plural(others, "task")}`);
   const sub = `${parts.join(", ")} · ${task.id}`;
   return h(
     "li",
@@ -639,8 +641,39 @@ async function loadReview(id) {
     ...filesGroup("Modified", byChange("modified"), held, outlines),
     ...filesGroup("Deleted", byChange("deleted"), held, outlines),
     ...gitGroup(review.effects.git),
+    ...meetsGroup(task),
     ...ignoredGroup(id, ignored, include, held)
   );
+}
+
+/**
+ * Files another task on the same folder changes too, and what in them:
+ * whichever commits second will meet a conflict there.
+ */
+function meetsGroup(task) {
+  const overlaps = (task && task.overlaps) || [];
+  if (overlaps.length === 0) return [];
+  return [
+    h("h2", { class: "group-title" }, "Other tasks change these too"),
+    h(
+      "ul",
+      { class: "files" },
+      overlaps.map((o) =>
+        h(
+          "li",
+          {},
+          h("span", { class: "change modified" }, "!"),
+          h(
+            "span",
+            {},
+            o.path,
+            h("span", { class: "entity-note" }, o.entities.length ? ` ${o.entities.join(", ")}` : " the whole file"),
+            h("span", { class: "entity-note" }, ` · task ${o.task}`)
+          )
+        )
+      )
+    ),
+  ];
 }
 
 /**
