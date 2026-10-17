@@ -143,23 +143,25 @@
           <div class="questions" id="questions" aria-live="assertive"></div>
           <div class="stream" id="stream" aria-live="polite"></div>
           <form class="composer" id="composer">
-            <div class="composer-grip" id="composer-grip" role="separator" aria-orientation="horizontal" aria-label="Resize the prompt" title="Drag to make the prompt taller or shorter" tabindex="0"></div>
-            <textarea
-              id="prompt"
-              aria-label="What the agent should do"
-              rows="3"
-              placeholder="Tell the agent what to do. It works in the task's copy; you review before anything reaches the folder."
-            ></textarea>
+            <div class="prompt-row">
+              <span class="prompt-mark" aria-hidden="true">›</span>
+              <textarea
+                id="prompt"
+                aria-label="What the agent should do"
+                rows="1"
+                placeholder="Tell the agent what to do; it works in the task's copy and you review before anything reaches the folder"
+              ></textarea>
+              <button class="run-button" id="send" type="submit" aria-keyshortcuts="Control+Enter Meta+Enter">Run</button>
+            </div>
             <div class="composer-bar">
-              <label class="agent-pick">
-                Agent
+              <label class="agent-pick" title="The agent that takes the prompt">
                 <select id="agent"></select>
               </label>
               <label
                 class="agent-pick"
                 title="How long the agent waits when it asks for something the policy puts to you. Unanswered, it is refused and the agent goes on without it."
               >
-                Waits for you
+                waits
                 <select id="timeout">
                   <option value="1">1 min</option>
                   <option value="5">5 min</option>
@@ -175,12 +177,11 @@
                 class="agent-pick"
                 title="What the task's runs may cost together, as the agents report it. None starts once it is spent. Claude Code reports the cost as each turn ends, so a turn may go over and the next run is refused; an agent that reports it as it works is stopped when it gets there. Agents that report no cost are not held by it. Empty for no limit."
               >
-                Budget
+                budget
                 <input id="budget" type="number" min="0" step="0.5" inputmode="decimal" placeholder="none" />
                 <span id="budget-currency">USD</span>
               </label>
               <span class="hint" id="composer-hint"></span>
-              <button class="button primary" id="send" type="submit" aria-keyshortcuts="Control+Enter Meta+Enter">Run</button>
             </div>
           </form>
         </section>

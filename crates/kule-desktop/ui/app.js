@@ -567,8 +567,8 @@ function renderComposer(task) {
   $("agent").disabled = busy;
   $("remove-task").disabled = busy;
   $("composer-hint").textContent = busy
-    ? "The agent is at work. Its steps appear here as it goes."
-    : "Runs in the sandbox, network through the task's proxy.";
+    ? "at work · its steps appear above as it goes"
+    : "sandboxed · network through the task's proxy";
   $("timeout").value = String(Math.round(task.approval_timeout_secs / 60));
   // Not while the person is typing in it.
   if (document.activeElement !== $("budget")) {
@@ -1137,7 +1137,7 @@ function renderStream(id) {
       h(
         "p",
         { class: "stream-empty" },
-        "Give the agent a task below. Every tool call it makes becomes a step you can review."
+        "Give the agent a task on the line below. Every tool call it makes becomes a step you can review."
       )
     );
   } else {
@@ -1272,6 +1272,7 @@ async function submitPrompt(e) {
   try {
     await call("start_run", { task: task.id, agent: $("agent").value, prompt });
     $("prompt").value = "";
+    fitPrompt();
     await refresh();
   } catch (err) {
     fail(err);
@@ -2663,9 +2664,7 @@ function normalLayout(kept) {
       }
     }
   }
-  const out = { version: LAYOUT_VERSION, regions };
-  if (Number.isFinite(kept.composer)) out.composer = kept.composer;
-  return out;
+  return { version: LAYOUT_VERSION, regions };
 }
 
 const regionOf = (panel) => Object.keys(layout.regions).find((n) => layout.regions[n].panels.includes(panel));
@@ -2693,7 +2692,6 @@ async function loadLayout() {
   } catch (err) {
     fail(err);
   }
-  if (layout.composer) $("prompt").style.height = `${layout.composer}px`;
   renderTask();
 }
 
@@ -3531,43 +3529,15 @@ function closeFind() {
   }
 }
 
-// --- The prompt's height, set by dragging the edge above it.
+// --- The prompt line: one line, growing with what is written in it, up
+// to a third of the panel, as a terminal's command line wraps.
 
-const composerDrag = { start: 0, height: 0, pointer: null };
-const COMPOSER_LIMITS = [44, 600];
-
-function setComposerHeight(px, keep) {
-  const max = Math.min(COMPOSER_LIMITS[1], Math.round($("panel-live").clientHeight * 0.7) || COMPOSER_LIMITS[1]);
-  const height = Math.round(Math.max(COMPOSER_LIMITS[0], Math.min(max, px)));
-  $("prompt").style.height = `${height}px`;
-  layout.composer = height;
-  if (keep) keepLayout();
-}
-
-function composerStart(e) {
-  if (e.button !== 0) return;
-  e.preventDefault();
-  Object.assign(composerDrag, { start: e.clientY, height: $("prompt").offsetHeight, pointer: e.pointerId });
-  e.currentTarget.setPointerCapture(e.pointerId);
-  document.body.classList.add("resizing-v");
-}
-
-function composerMove(e) {
-  if (composerDrag.pointer !== e.pointerId) return;
-  setComposerHeight(composerDrag.height + (composerDrag.start - e.clientY), false);
-}
-
-function composerEnd(e) {
-  if (composerDrag.pointer !== e.pointerId) return;
-  composerDrag.pointer = null;
-  document.body.classList.remove("resizing-v");
-  keepLayout();
-}
-
-function composerKey(e) {
-  if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
-  e.preventDefault();
-  setComposerHeight($("prompt").offsetHeight + (e.key === "ArrowUp" ? 16 : -16), true);
+function fitPrompt() {
+  const prompt = $("prompt");
+  prompt.style.height = "auto";
+  const max = Math.max(60, Math.round($("panel-live").clientHeight / 3));
+  prompt.style.height = `${Math.min(prompt.scrollHeight, max)}px`;
+  prompt.style.overflowY = prompt.scrollHeight > max ? "auto" : "hidden";
 }
 
 // --- Appearance ------------------------------------------------------------
@@ -4768,12 +4738,8 @@ async function start() {
     const entry = activeTerminal();
     if (entry && !entry.el.hidden && isShown("terminal")) entry.fit.fit();
   }).observe($("terminal-host"));
-  const grip = $("composer-grip");
-  grip.addEventListener("pointerdown", composerStart);
-  grip.addEventListener("pointermove", composerMove);
-  grip.addEventListener("pointerup", composerEnd);
-  grip.addEventListener("pointercancel", composerEnd);
-  grip.addEventListener("keydown", composerKey);
+  $("prompt").addEventListener("input", fitPrompt);
+  new ResizeObserver(fitPrompt).observe($("panel-live"));
   // Changes made outside the window (a terminal in the copy, the CLI) show
   // when the person comes back to it.
   window.addEventListener("focus", () => refresh());

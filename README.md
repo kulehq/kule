@@ -330,7 +330,9 @@ it writes in Kule reaches it outside; you sign it in there once.
   Ctrl+Shift+\` opens another, ⌘F or Ctrl+Shift+F finds text, ⌘/Ctrl+click
   opens an http or https link; outside macOS only Ctrl+Shift shortcuts and
   function keys leave it, so Ctrl+L and the rest stay the shell's). The
-  prompt box grows or shrinks by dragging the edge above it. Drag a panel's tab to another region, or use its menu or the
+  agent's panel reads like the terminal beside it: the conversation fills
+  it and the prompt is a command line at the bottom that grows as you
+  write. Drag a panel's tab to another region, or use its menu or the
   keyboard; open and close the regions from the bar on the left (Mod+B,
   Mod+J, Mod+Alt+B) and resize them by their edges. The layout is kept in
   `layout.json`; *Reset the layout* goes back to Kule's own. Files never
