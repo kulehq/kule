@@ -1497,6 +1497,7 @@ function opens(profile, ownHome) {
     ...row("Read-only", profile.protected),
     ...row("Reveals (macOS)", profile.reveal_on_macos),
     ...row("Sees your env", profile.pass_env),
+    ...row("Keys it never sees", Object.entries(profile.keys || {}).map(([k, hosts]) => `${k} → ${hosts.join(", ")}`)),
     ...row("Sets env", env),
     ...row("Also connects to", (profile.hosts || []).map((host) => `https://${host}`)),
     ...row("Session mode", profile.mode ? [profile.mode] : []),
@@ -1582,7 +1583,7 @@ function editAgent(profile, isNew, note) {
   $("agent-form-name")?.focus();
 }
 
-const BLANK = { name: "", command: [], state: [], login: [], protected: [], reveal_on_macos: [], env: {}, pass_env: [], hosts: [], mode: null, own_home: null };
+const BLANK = { name: "", command: [], state: [], login: [], protected: [], reveal_on_macos: [], env: {}, pass_env: [], keys: {}, hosts: [], mode: null, own_home: null };
 
 /** The profile the form holds now. */
 function formProfile() {
@@ -1591,6 +1592,12 @@ function formProfile() {
   for (const line of lines(value("agent-form-env"))) {
     const at = line.indexOf("=");
     if (at > 0) env[line.slice(0, at).trim()] = line.slice(at + 1).trim();
+  }
+  // NAME host host, one key per line.
+  const keys = {};
+  for (const line of lines(value("agent-form-keys"))) {
+    const [name, ...hosts] = line.split(/[\s,]+/).filter(Boolean);
+    if (name) keys[name] = hosts;
   }
   return {
     name: value("agent-form-name").trim(),
@@ -1602,6 +1609,7 @@ function formProfile() {
     mode: value("agent-form-mode").trim() || null,
     env,
     pass_env: lines(value("agent-form-pass-env")),
+    keys,
     hosts: lines(value("agent-form-hosts")),
     own_home: value("agent-form-own-home").trim() || null,
   };
@@ -1617,6 +1625,7 @@ function field(id, label, hint, value, rows) {
 function agentEditor() {
   const p = agentsView.editing;
   const env = Object.entries(p.env || {}).map(([k, v]) => `${k}=${v}`).join("\n");
+  const keys = Object.entries(p.keys || {}).map(([k, hosts]) => `${k} ${hosts.join(" ")}`).join("\n");
   const trial = agentsView.trial;
   return h(
     "section",
@@ -1631,7 +1640,8 @@ function agentEditor() {
       field("agent-form-state", "Writes in ~", "Its own state, one path per line under your home directory.", p.state.join("\n"), 3),
       field("agent-form-login", "Its login", "In that state; hidden from every other agent.", p.login.join("\n"), 2),
       field("agent-form-protected", "Read-only", "Its settings that run code outside the sandbox later (hooks, MCP servers).", p.protected.join("\n"), 2),
-      field("agent-form-pass-env", "Sees your env", "Your variables it may read: its own key.", p.pass_env.join("\n"), 2),
+      field("agent-form-pass-env", "Sees your env", "Your variables it may read.", p.pass_env.join("\n"), 2),
+      field("agent-form-keys", "Keys it never sees", "NAME host host, one per line: your variable with its API key, and the hosts it is for. The agent gets a placeholder; the task's proxy puts the key into requests to those hosts alone.", keys, 2),
       field("agent-form-env", "Sets env", "NAME=value, one per line.", env, 2),
       field("agent-form-hosts", "Also connects to", "HTTPS hosts beyond what the policy lets through.", p.hosts.join("\n"), 3),
       field("agent-form-mode", "Session mode", "Optional: the ACP mode to start in.", p.mode || ""),
@@ -1967,7 +1977,8 @@ async function loadTimeline(id) {
 function summarizeConnections(log) {
   const seen = new Map();
   for (const c of log) {
-    const key = `${c.host}:${c.port} ${c.verdict} ${c.outcome} ${c.answer || ""}`;
+    const secrets = (c.secrets || []).join(", ");
+    const key = `${c.host}:${c.port} ${c.verdict} ${c.outcome} ${c.answer || ""} ${secrets}`;
     const entry = seen.get(key) || { c, n: 0 };
     entry.n += 1;
     seen.set(key, entry);
@@ -1984,7 +1995,8 @@ function summarizeConnections(log) {
         : c.verdict === "ask"
           ? asked[c.answer] || "refused, waits for approval"
           : "refused, denied";
-    return `${c.host}:${c.port}${n > 1 ? ` ×${n}` : ""} · ${what}`;
+    const secrets = (c.secrets || []).length ? ` · with ${c.secrets.join(", ")}` : "";
+    return `${c.host}:${c.port}${n > 1 ? ` ×${n}` : ""} · ${what}${secrets}`;
   });
 }
 

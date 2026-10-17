@@ -96,6 +96,7 @@ fn subscribers_hear_questions_come_and_go() {
         Policy::builtin(),
         service.approvals(),
         Duration::from_secs(60),
+        &[],
     )
     .unwrap();
     let mut asking = ProxyClient::connect(proxy.port());
@@ -268,6 +269,7 @@ fn shutdown_waits_until_nothing_is_going_on() {
         Policy::builtin(),
         service.approvals(),
         Duration::from_secs(60),
+        &[],
     )
     .unwrap();
     ProxyClient::connect(proxy.port()).ask("example.invalid:443");

@@ -17,7 +17,7 @@ use std::path::{Component, Path};
 use std::process::Command;
 
 use kule_engine::{
-    CacheSources, Error, HIDDEN_IN_HOME, Kept, Policy, Proxy, Result, Sandbox, Task,
+    AgentKey, CacheSources, Error, HIDDEN_IN_HOME, Kept, Policy, Proxy, Result, Sandbox, Task,
 };
 use serde::{Deserialize, Serialize};
 
@@ -135,6 +135,12 @@ pub struct Profile {
     /// credentials, when it signs in by key. Others stay out.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pass_env: Vec<String>,
+    /// The person's variables holding the agent's API keys, each with the
+    /// hosts it is for. The agent never sees the key: its variable holds a
+    /// placeholder, and the task's proxy puts the key into requests to
+    /// those hosts alone, over HTTPS.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub keys: BTreeMap<String, Vec<String>>,
     /// HTTPS hosts the agent needs for its login and model, beyond what the
     /// policy already lets through. Open only while this agent runs.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -559,6 +565,7 @@ impl Profile {
             mode: None,
             env,
             pass_env: Vec::new(),
+            keys: BTreeMap::new(),
             hosts: Vec::new(),
             own_home: None,
             others: Vec::new(),
@@ -764,7 +771,19 @@ impl Profile {
                 ));
             }
         }
-        for name in self.env.keys().chain(&self.pass_env) {
+        for name in self.keys.keys() {
+            if self.env.contains_key(name) || self.pass_env.contains(name) {
+                return Err(format!(
+                    "{name}: a key the agent never sees cannot also be in env or pass_env"
+                ));
+            }
+        }
+        for name in self
+            .env
+            .keys()
+            .chain(&self.pass_env)
+            .chain(self.keys.keys())
+        {
             let ok = !name.is_empty()
                 && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
                 && !name.starts_with(|c: char| c.is_ascii_digit());
@@ -777,7 +796,12 @@ impl Profile {
                 ));
             }
         }
-        for host in &self.hosts {
+        for (name, hosts) in &self.keys {
+            if hosts.is_empty() {
+                return Err(format!("{name}: name the hosts the key is for"));
+            }
+        }
+        for host in self.hosts.iter().chain(self.keys.values().flatten()) {
             let labels: Vec<&str> = host.split('.').collect();
             let ok = labels.len() >= 2
                 && labels.iter().all(|l| {
@@ -853,6 +877,22 @@ impl Profile {
             sandbox.pass_env(name);
         }
         Ok(())
+    }
+
+    /// The agent's keys the person has set, with their values, for the
+    /// task's proxy to put in for it (see [`Profile::keys`]).
+    pub fn agent_keys(&self) -> Vec<AgentKey> {
+        self.keys
+            .iter()
+            .filter_map(|(name, hosts)| {
+                let value = std::env::var(name).ok().filter(|v| !v.is_empty())?;
+                Some(AgentKey {
+                    name: name.clone(),
+                    value,
+                    hosts: hosts.clone(),
+                })
+            })
+            .collect()
     }
 
     /// `policy` with this agent's hosts let through, under `profile-<name>`.
@@ -1311,6 +1351,26 @@ hosts = ["openrouter.ai"]
             ),
             ("ip host", r#"hosts = ["10.0.0.1"]"#, "domain name"),
             (
+                "key also passed",
+                "pass_env = [\"A_KEY\"]\nkeys = { A_KEY = [\"api.example.com\"] }",
+                "never sees",
+            ),
+            (
+                "key without hosts",
+                r#"keys = { A_KEY = [] }"#,
+                "name the hosts",
+            ),
+            (
+                "key host",
+                r#"keys = { A_KEY = ["https://api.example.com"] }"#,
+                "domain name",
+            ),
+            (
+                "key name",
+                r#"keys = { "A-KEY" = ["api.example.com"] }"#,
+                "not an environment variable",
+            ),
+            (
                 "login outside state",
                 r#"login = [".netrc"]"#,
                 "Kule keeps hidden",
@@ -1345,6 +1405,40 @@ hosts = ["openrouter.ai"]
                 .and_then(|l| l.held.clone())
                 .unwrap_or_default();
             assert!(held.contains(reason), "{what}: {line}: held for {held:?}");
+        }
+    }
+
+    #[test]
+    fn an_agents_keys_come_from_the_persons_environment_when_set() {
+        let mut profile = Profile::bare("x", vec!["x".into()], BTreeMap::new());
+        for name in ["KULE_TEST_AGENT_KEY_SET", "KULE_TEST_AGENT_KEY_UNSET"] {
+            profile
+                .keys
+                .insert(name.into(), vec!["api.example.com".into()]);
+        }
+        // SAFETY: no other test reads or writes these names.
+        unsafe { std::env::set_var("KULE_TEST_AGENT_KEY_SET", "sk-1") };
+        assert_eq!(
+            profile.agent_keys(),
+            [AgentKey {
+                name: "KULE_TEST_AGENT_KEY_SET".into(),
+                value: "sk-1".into(),
+                hosts: vec!["api.example.com".into()],
+            }]
+        );
+        // The built-in agents never see their API keys.
+        let home = tempfile::TempDir::new().unwrap();
+        let agents = Agents::load(home.path()).unwrap();
+        for (agent, key) in [
+            ("claude-code", "ANTHROPIC_API_KEY"),
+            ("codex", "OPENAI_API_KEY"),
+            ("gemini", "GEMINI_API_KEY"),
+        ] {
+            let p = agents.get(agent).unwrap();
+            assert!(
+                p.keys.contains_key(key) && !p.pass_env.iter().any(|n| n == key),
+                "{agent}"
+            );
         }
     }
 

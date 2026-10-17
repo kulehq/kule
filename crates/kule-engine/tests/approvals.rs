@@ -42,7 +42,7 @@ impl Setup {
     }
 
     fn asking(&self, approvals: &Approvals, timeout: Duration) -> Proxy {
-        Proxy::start_asking(&self.task, Policy::builtin(), approvals, timeout).unwrap()
+        Proxy::start_asking(&self.task, Policy::builtin(), approvals, timeout, &[]).unwrap()
     }
 
     /// Connects to the upstream through `proxy` from inside the sandbox, on

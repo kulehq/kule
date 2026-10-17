@@ -14,6 +14,9 @@
 #   mode             the ACP session mode to start in, when the agent offers it
 #   env              variables it is started with
 #   pass_env         the person's variables it may see: its own credentials
+#   keys             the person's variables holding its API keys, each with the
+#                    hosts it is for: it gets a placeholder, the proxy puts the
+#                    key into requests to those hosts alone
 #   hosts            HTTPS hosts it needs beyond what the policy lets through,
 #                    open only while it runs
 
@@ -31,7 +34,8 @@ protected = [
   ".claude/plugins", ".claude/skills", ".claude/commands", ".claude/agents", ".claude/CLAUDE.md",
 ]
 reveal_on_macos = ["Library/Keychains"]
-pass_env = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"]
+pass_env = ["ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"]
+keys = { ANTHROPIC_API_KEY = ["api.anthropic.com"] }
 
 [[agent]]
 name = "gemini"
@@ -49,7 +53,7 @@ protected = [
 # more than the state above. Save the API key once with
 # `GEMINI_FORCE_FILE_STORAGE=true gemini` and `/auth`.
 env = { GEMINI_FORCE_FILE_STORAGE = "true" }
-pass_env = ["GEMINI_API_KEY", "GOOGLE_API_KEY"]
+keys = { GEMINI_API_KEY = ["generativelanguage.googleapis.com"], GOOGLE_API_KEY = ["generativelanguage.googleapis.com"] }
 # With an API key it talks to the public API, which the policy lets through.
 # Google no longer serves its Code Assist sign-in to clients like this one.
 
@@ -67,7 +71,8 @@ protected = [
   ".codex/config.toml", ".codex/rules", ".codex/plugins", ".codex/skills",
   ".codex/prompts", ".codex/AGENTS.md",
 ]
-pass_env = ["OPENAI_API_KEY", "CODEX_HOME"]
+pass_env = ["CODEX_HOME"]
+keys = { OPENAI_API_KEY = ["api.openai.com"] }
 # A ChatGPT sign-in refreshes its token at auth.openai.com and reaches the
 # model through chatgpt.com, not the public API.
 hosts = ["auth.openai.com", "chatgpt.com"]

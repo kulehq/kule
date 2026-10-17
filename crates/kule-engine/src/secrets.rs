@@ -262,6 +262,26 @@ struct Held {
     env: bool,
 }
 
+/// An agent's API key from the person's environment, which the agent never
+/// sees: it gets a placeholder of this run, and the task's proxy puts the
+/// key into requests to `hosts` alone.
+#[derive(Clone, PartialEq, Eq)]
+pub struct AgentKey {
+    /// The variable the agent reads it from.
+    pub name: String,
+    pub value: String,
+    pub hosts: Vec<String>,
+}
+
+impl std::fmt::Debug for AgentKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AgentKey")
+            .field("name", &self.name)
+            .field("hosts", &self.hosts)
+            .finish_non_exhaustive()
+    }
+}
+
 /// What a task's proxy holds: every placeholder of the task with its value,
 /// and where each may go.
 #[derive(Debug, Clone, Default)]
@@ -270,6 +290,33 @@ pub struct Vault {
 }
 
 impl Vault {
+    /// Holds an agent's `keys` too, each under a placeholder of its own for
+    /// this run. A kept secret of the same name wins: the person said where
+    /// that one goes.
+    pub(crate) fn with_keys(&mut self, keys: &[AgentKey]) -> Result<()> {
+        for key in keys {
+            check_name(&key.name)?;
+            check_value(&key.value)?;
+            if let Some(host) = key.hosts.iter().find(|h| !plain_host(h)) {
+                return Err(Error::Invalid(format!(
+                    "{}: {host:?} is not a host name",
+                    key.name
+                )));
+            }
+            if self.held.iter().any(|h| h.env && h.name == key.name) {
+                continue;
+            }
+            self.held.push(Held {
+                name: key.name.clone(),
+                placeholder: new_placeholder()?,
+                value: key.value.clone(),
+                hosts: key.hosts.clone(),
+                env: true,
+            });
+        }
+        Ok(())
+    }
+
     /// The secrets kept in `home` for `workspace`, and the values masked in
     /// the task's copy, with the placeholders of the task in `dir`.
     pub(crate) fn load(home: &Path, workspace: &Path, dir: &Path) -> Result<Vault> {
@@ -354,7 +401,14 @@ impl Vault {
             .collect();
         let mut used = BTreeSet::new();
         let mut out = String::with_capacity(head.len());
-        for line in head.split_inclusive('\n') {
+        for (i, line) in head.split_inclusive('\n').enumerate() {
+            if i == 0 {
+                // The request line: a value in its URL is percent-encoded.
+                let (filled, names) = replace_bytes(&going, line.as_bytes(), Encoding::Url);
+                used.extend(names);
+                out.push_str(&String::from_utf8_lossy(&filled));
+                continue;
+            }
             let basic = line
                 .split_once(':')
                 .filter(|(name, _)| name.trim().eq_ignore_ascii_case("authorization"))
@@ -390,13 +444,40 @@ impl Vault {
         (out, used.into_iter().collect())
     }
 
-    /// `text` with every placeholder of the task put back to its value,
-    /// wherever it is bound: for a file going to the folder.
-    /// Every real value the vault holds.
-    pub(crate) fn values(&self) -> Vec<String> {
-        self.held.iter().map(|h| h.value.clone()).collect()
+    /// A request body of `content_type` bound for `host`, with the
+    /// placeholders of the secrets that may go there put back to their
+    /// values, written as that kind of body needs (escaped in JSON,
+    /// percent-encoded in a form); and the names of the secrets that went in.
+    pub(crate) fn fill_body(
+        &self,
+        host: &str,
+        content_type: Option<&str>,
+        body: &[u8],
+    ) -> (Vec<u8>, Vec<String>) {
+        let going: Vec<&Held> = self
+            .held
+            .iter()
+            .filter(|h| h.hosts.iter().any(|h| h == host))
+            .collect();
+        replace_bytes(&going, body, Encoding::of_body(content_type))
     }
 
+    /// Every real value the vault holds, as it is and as it reads in JSON
+    /// and in a URL: the forms a response that repeats it may hold.
+    pub(crate) fn values(&self) -> Vec<String> {
+        let mut forms = BTreeSet::new();
+        for h in &self.held {
+            for encoding in [Encoding::Raw, Encoding::Json, Encoding::Url] {
+                let mut form = Vec::new();
+                encoding.write(&h.value, &mut form);
+                forms.insert(String::from_utf8_lossy(&form).into_owned());
+            }
+        }
+        forms.into_iter().collect()
+    }
+
+    /// `text` with every placeholder of the task put back to its value,
+    /// wherever it is bound: for a file going to the folder.
     pub(crate) fn unmask(&self, text: &str) -> String {
         let all: Vec<&Held> = self.held.iter().collect();
         replace_all(&all, text).0
@@ -404,18 +485,89 @@ impl Vault {
 }
 
 fn replace_all(held: &[&Held], text: &str) -> (String, Vec<String>) {
-    let mut out = text.to_owned();
-    let mut used = Vec::new();
-    if !out.contains(PLACEHOLDER_PREFIX) {
-        return (out, used);
-    }
-    for h in held {
-        if out.contains(&h.placeholder) {
-            out = out.replace(&h.placeholder, &h.value);
-            used.push(h.name.clone());
+    let (out, used) = replace_bytes(held, text.as_bytes(), Encoding::Raw);
+    // Placeholders and values are both text, so text stays text.
+    (
+        String::from_utf8(out).unwrap_or_else(|_| text.to_owned()),
+        used,
+    )
+}
+
+/// How a value is written where its placeholder was, so it means there
+/// what it means as it is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Encoding {
+    Raw,
+    /// In a URL or a form: every byte but letters, digits and `-._~`
+    /// percent-encoded (a `+` would read as a space).
+    Url,
+    /// In a JSON string: `"` and `\` escaped.
+    Json,
+}
+
+impl Encoding {
+    /// For a request body of `content_type`.
+    fn of_body(content_type: Option<&str>) -> Encoding {
+        let kind = content_type.unwrap_or("").to_ascii_lowercase();
+        let kind = kind.split(';').next().unwrap_or("").trim();
+        if kind == "application/json" || kind.ends_with("+json") {
+            Encoding::Json
+        } else if kind == "application/x-www-form-urlencoded" {
+            Encoding::Url
+        } else {
+            Encoding::Raw
         }
     }
-    (out, used)
+
+    fn write(self, value: &str, out: &mut Vec<u8>) {
+        match self {
+            Encoding::Raw => out.extend_from_slice(value.as_bytes()),
+            Encoding::Url => {
+                for &b in value.as_bytes() {
+                    if b.is_ascii_alphanumeric() || b"-._~".contains(&b) {
+                        out.push(b);
+                    } else {
+                        out.extend_from_slice(format!("%{b:02X}").as_bytes());
+                    }
+                }
+            }
+            Encoding::Json => {
+                for &b in value.as_bytes() {
+                    if b == b'"' || b == b'\\' {
+                        out.push(b'\\');
+                    }
+                    out.push(b);
+                }
+            }
+        }
+    }
+}
+
+/// `data` with each placeholder of `held` put back to its value, written
+/// as `encoding` says; and the names of the secrets that went in.
+fn replace_bytes(held: &[&Held], data: &[u8], encoding: Encoding) -> (Vec<u8>, Vec<String>) {
+    let prefix = PLACEHOLDER_PREFIX.as_bytes();
+    let mut used = BTreeSet::new();
+    if !data.windows(prefix.len()).any(|w| w == prefix) {
+        return (data.to_vec(), Vec::new());
+    }
+    let mut out = Vec::with_capacity(data.len());
+    let mut at = 0;
+    'scan: while at < data.len() {
+        if data[at..].starts_with(prefix) {
+            for h in held {
+                if data[at..].starts_with(h.placeholder.as_bytes()) {
+                    encoding.write(&h.value, &mut out);
+                    used.insert(h.name.clone());
+                    at += h.placeholder.len();
+                    continue 'scan;
+                }
+            }
+        }
+        out.push(data[at]);
+        at += 1;
+    }
+    (out, used.into_iter().collect())
 }
 
 /// Whether the file at `path` (relative) holds settings like `KEY=value`
@@ -758,6 +910,64 @@ mod tests {
         // The placeholder stays the same from run to run.
         let again = Vault::load(home.path(), ws.path(), dir.path()).unwrap();
         assert_eq!(again.env()[0].1, p);
+    }
+
+    #[test]
+    fn a_secret_in_a_url_or_a_body_is_written_as_it_needs_there() {
+        let (home, ws, dir) = (
+            TempDir::new().unwrap(),
+            TempDir::new().unwrap(),
+            TempDir::new().unwrap(),
+        );
+        add_secret(
+            home.path(),
+            "KEY",
+            "a+b/c\"d\\e",
+            &["api.example.com".into()],
+            None,
+        )
+        .unwrap();
+        let vault = Vault::load(home.path(), ws.path(), dir.path()).unwrap();
+        let p = vault.env()[0].1.clone();
+        let host = "api.example.com";
+
+        let (filled, used) = vault.fill(
+            host,
+            &format!("GET /v1?key={p} HTTP/1.1\r\nX-Key: {p}\r\n\r\n"),
+        );
+        assert_eq!(
+            filled,
+            "GET /v1?key=a%2Bb%2Fc%22d%5Ce HTTP/1.1\r\nX-Key: a+b/c\"d\\e\r\n\r\n"
+        );
+        assert_eq!(used, ["KEY"]);
+
+        let body = |kind: Option<&str>, text: &str| {
+            let (out, used) = vault.fill_body(host, kind, text.as_bytes());
+            (String::from_utf8(out).unwrap(), used.len())
+        };
+        let json = format!("{{\"key\":\"{p}\",\"n\":1}}");
+        assert_eq!(
+            body(Some("application/json; charset=utf-8"), &json),
+            ("{\"key\":\"a+b/c\\\"d\\\\e\",\"n\":1}".to_owned(), 1)
+        );
+        assert_eq!(
+            body(
+                Some("application/x-www-form-urlencoded"),
+                &format!("key={p}&x=1")
+            ),
+            ("key=a%2Bb%2Fc%22d%5Ce&x=1".to_owned(), 1)
+        );
+        assert_eq!(body(Some("text/plain"), &p), ("a+b/c\"d\\e".to_owned(), 1));
+        assert_eq!(body(None, "no secret"), ("no secret".to_owned(), 0));
+        // Never for another host.
+        let (out, used) = vault.fill_body("evil.example.com", None, p.as_bytes());
+        assert_eq!((out, used.len()), (p.into_bytes(), 0));
+
+        // A response that repeats it may hold any of those forms.
+        assert_eq!(
+            vault.values(),
+            ["a%2Bb%2Fc%22d%5Ce", "a+b/c\"d\\e", "a+b/c\\\"d\\\\e"]
+        );
     }
 
     #[test]

@@ -214,7 +214,7 @@ name = "opencode"
 command = ["npx", "-y", "opencode-ai@1.2.3", "acp"]
 state = [".local/share/opencode"]          # what it may write, under ~
 login = [".local/share/opencode/auth.json"] # hidden from every other agent
-pass_env = ["OPENROUTER_API_KEY"]           # of your variables, the ones it sees
+keys = { OPENROUTER_API_KEY = ["openrouter.ai"] } # your API key, never seen by it
 hosts = ["openrouter.ai"]                   # HTTPS hosts it reaches, while it runs
 ```
 
@@ -224,6 +224,12 @@ again after any change to it. It may never open the credentials Kule hides,
 another agent's state, Kule's home or a whole directory like `~/Documents`,
 and a package it fetches must name one exact version. Profiles live in
 Kule's home, which no sandbox can see, and never come from a workspace.
+
+Under `keys`, the agent's variable holds a placeholder of the run and the
+task's proxy puts your key into requests to the hosts named, as it does
+for a kept secret (see below); the built-in agents take
+`ANTHROPIC_API_KEY`, `OPENAI_API_KEY` and `GEMINI_API_KEY` this way. A
+variable under `pass_env` the agent sees as it is.
 
 To find what a new agent needs, try it: `kule agents add qwen-code` takes
 a draft from the [ACP registry](https://agentclientprotocol.com/registry)
@@ -340,8 +346,13 @@ authority of its own for each run, valid only for those hosts by its name
 constraints, with a key that never leaves its memory, and points
 `SSL_CERT_FILE`, `NODE_EXTRA_CA_CERTS`, `REQUESTS_CA_BUNDLE` and the like
 at it. On the way to `api.stripe.com` the placeholder in the request line
-or a header (`Authorization: Basic` included) becomes the value; sent
-anywhere else it is a string that opens nothing. The connection log names
+(percent-encoded there), a header (`Authorization: Basic` included) or
+the body becomes the value; sent anywhere else it is a string that opens
+nothing. A body is filled whole up to 1 MiB, with its `Content-Length`
+made right, and a chunked one chunk by chunk; in JSON the value is
+escaped, in a form percent-encoded. Requests on a connection follow one
+another (keep-alive); one whose framing two readers could take
+differently is refused. The connection log names
 the secrets that went out (`net: api.stripe.com:443 · tunneled · with
 STRIPE_KEY`). A response that repeats the value has it blanked out with
 `*` (the proxy asks for it uncompressed), as far as it can read it.
@@ -356,10 +367,10 @@ gets that secret's placeholder, so it reaches the secret's hosts; any other
 stays where it is. The app has a *Secrets* view; `kule secrets list` and
 `remove` do the rest.
 
-What it does not do yet: HTTP/2 (clients fall back to HTTP/1.1), one
-request per connection (the proxy asks the host to close after it),
-secrets in request bodies, and Go programs on macOS, which trust the
-system keychain alone.
+What it does not do yet: HTTP/2 (clients fall back to HTTP/1.1), a
+placeholder split by a chunk edge or in a body larger than 1 MiB,
+WebSocket upgrades, and Go programs on macOS, which trust the system
+keychain alone (Kule never adds its authority there).
 
 ## Not yet
 

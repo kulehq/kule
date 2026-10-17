@@ -459,7 +459,8 @@ fn run() -> Result<ExitCode> {
             };
             let logged_before = connections(&task)?.len();
             warn_if_network_not_isolated();
-            let proxy = Proxy::start(&task, profile.open_hosts(load_policy(&home, &task)?)?)?;
+            let policy = profile.open_hosts(load_policy(&home, &task)?)?;
+            let proxy = Proxy::start_with_keys(&task, policy, &profile.agent_keys())?;
             let kule_acp::Launch {
                 command,
                 sandbox,

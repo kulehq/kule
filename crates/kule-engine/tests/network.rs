@@ -8,7 +8,9 @@ use std::net::{IpAddr, Ipv4Addr, TcpListener, TcpStream, UdpSocket};
 use std::process::Output;
 use std::time::Duration;
 
-use kule_engine::{DEFAULT_POLICY, Network, Policy, Proxy, Sandbox, Task, Verdict, connections};
+use kule_engine::{
+    AgentKey, DEFAULT_POLICY, Network, Policy, Proxy, Sandbox, Task, Verdict, connections,
+};
 use tempfile::TempDir;
 
 /// The built-in policy, plus loopback for the tests' upstream.
@@ -407,4 +409,75 @@ fn a_secret_changes_nothing_for_other_hosts() {
     let mut reply = String::new();
     let _ = std::io::Read::read_to_string(&mut s, &mut reply);
     assert!(reply.contains("hello from upstream"), "{reply}");
+}
+
+/// An agent's own key: the agent's commands see a placeholder of the run;
+/// a kept secret of the same name wins; a key needs real host names.
+#[test]
+fn an_agents_key_is_a_placeholder_to_everything_the_run_starts() {
+    let (home, ws) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+    let task = Task::create(home.path(), ws.path()).unwrap();
+    let key = |name: &str, host: &str| AgentKey {
+        name: name.into(),
+        value: "sk-real-key".into(),
+        hosts: vec![host.into()],
+    };
+    let proxy = Proxy::start_with_keys(
+        &task,
+        policy(),
+        &[key("MODEL_API_KEY", "api.model.example")],
+    )
+    .unwrap();
+    let mut sandbox = Sandbox::for_task(&task).unwrap();
+    sandbox.use_proxy(&proxy);
+    let out = sandbox
+        .command(
+            "sh",
+            &[
+                "-c".into(),
+                "echo \"$MODEL_API_KEY\"; test -n \"$SSL_CERT_FILE\" && echo trusts".into(),
+            ],
+        )
+        .unwrap()
+        .output()
+        .unwrap();
+    let out = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.starts_with("kule_secret_") && out.contains("trusts"),
+        "{out}"
+    );
+    assert!(!out.contains("sk-real-key"), "{out}");
+    drop(proxy);
+
+    kule_engine::add_secret(
+        home.path(),
+        "MODEL_API_KEY",
+        "kept-value",
+        &["api.model.example".into()],
+        None,
+    )
+    .unwrap();
+    let kept = Proxy::start(&task, policy()).unwrap();
+    let with_key = Proxy::start_with_keys(
+        &task,
+        policy(),
+        &[key("MODEL_API_KEY", "api.model.example")],
+    )
+    .unwrap();
+    // One value under the name, as the sandbox sets the last one given.
+    let placeholder = |p: &Proxy| {
+        let all: Vec<_> = p
+            .env()
+            .iter()
+            .filter(|(n, _)| n == "MODEL_API_KEY")
+            .map(|(_, v)| v.clone())
+            .collect();
+        assert_eq!(all.len(), 1, "{all:?}");
+        all[0].clone()
+    };
+    assert_eq!(placeholder(&kept), placeholder(&with_key));
+
+    assert!(
+        Proxy::start_with_keys(&task, policy(), &[key("OTHER_KEY", "https://x.example")]).is_err()
+    );
 }

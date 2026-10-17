@@ -117,7 +117,8 @@ fn try_in(
     let profile = agents.draft(draft);
     let started = Instant::now();
     let outcome = (|| {
-        let proxy = Proxy::start(&task, profile.open_hosts(policy)?)?;
+        let policy = profile.open_hosts(policy)?;
+        let proxy = Proxy::start_with_keys(&task, policy, &profile.agent_keys())?;
         let launch = profile.launch_for(&task, &proxy, person)?;
         let (tx, rx) = futures::channel::mpsc::unbounded();
         let runtime = tokio::runtime::Runtime::new().map_err(|e| Error::Invalid(e.to_string()))?;

@@ -70,7 +70,7 @@ pub use sandbox::{
     Denial, HIDDEN_IN_HOME, Network, PASSED_ENV, Sandbox, denials, isolates_network,
     protects_in_place, record_denials,
 };
-pub use secrets::{SECRETS_FILE, SecretInfo, Vault, add_secret, remove_secret, secrets};
+pub use secrets::{AgentKey, SECRETS_FILE, SecretInfo, Vault, add_secret, remove_secret, secrets};
 pub use steps::{Step, StepChange};
 pub use task::{AgentAtWork, Task, TaskInfo};
 pub use textdiff::{DiffSkip, Hunk, Line, LineKind, TextDiff};

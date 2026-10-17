@@ -817,7 +817,9 @@ impl Service {
         // the run returns, which closes it.
         let policy = profile.open_hosts(self.policy(task)?).map_err(text)?;
         let timeout = task.approval_timeout().map_err(text)?;
-        let proxy = Proxy::start_asking(task, policy, &self.approvals, timeout).map_err(text)?;
+        let keys = profile.agent_keys();
+        let proxy =
+            Proxy::start_asking(task, policy, &self.approvals, timeout, &keys).map_err(text)?;
         let launch = profile.launch(task, &proxy).map_err(text)?;
         let (tx, mut rx) = futures::channel::mpsc::unbounded::<kule_acp::Event>();
         let runtime = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
@@ -1613,6 +1615,7 @@ mod tests {
             Policy::builtin(),
             &s.app.approvals,
             task.approval_timeout().unwrap(),
+            &[],
         )
         .unwrap();
         let port = proxy.port();

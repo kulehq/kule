@@ -22,6 +22,7 @@ use serde::{Deserialize, Serialize};
 use crate::approvals::{Answer, Approvals};
 use crate::error::{Error, IoContext, Result};
 use crate::policy::{Judgement, Policy, Verdict};
+use crate::secrets::AgentKey;
 use crate::task::Task;
 use crate::tls::Interceptor;
 
@@ -65,17 +66,23 @@ impl Proxy {
     /// Starts the proxy on a free loopback port. Connections the policy puts
     /// to a person are refused at once: nobody is there to ask.
     pub fn start(task: &Task, policy: Policy) -> Result<Proxy> {
-        Self::serve(task, policy, None)
+        Self::serve(task, policy, None, &[])
+    }
+
+    /// [`Proxy::start`], also putting an agent's `keys` into requests for it.
+    pub fn start_with_keys(task: &Task, policy: Policy, keys: &[AgentKey]) -> Result<Proxy> {
+        Self::serve(task, policy, None, keys)
     }
 
     /// [`Proxy::start`], putting the connections that wait for a person to
     /// `approvals` and holding each until it is answered or `timeout` runs
-    /// out.
+    /// out; an agent's `keys` go into requests for it.
     pub fn start_asking(
         task: &Task,
         policy: Policy,
         approvals: &Approvals,
         timeout: Duration,
+        keys: &[AgentKey],
     ) -> Result<Proxy> {
         let asker = Asker {
             approvals: approvals.clone(),
@@ -83,10 +90,15 @@ impl Proxy {
             task: task.id().to_owned(),
             timeout,
         };
-        Self::serve(task, policy, Some(asker))
+        Self::serve(task, policy, Some(asker), keys)
     }
 
-    fn serve(task: &Task, policy: Policy, asker: Option<Asker>) -> Result<Proxy> {
+    fn serve(
+        task: &Task,
+        policy: Policy,
+        asker: Option<Asker>,
+        keys: &[AgentKey],
+    ) -> Result<Proxy> {
         let addr = Path::new("127.0.0.1:0");
         let listener = lonca_net::bind("127.0.0.1:0").at(addr)?;
         let path = log_path(task);
@@ -95,7 +107,8 @@ impl Proxy {
             .append(true)
             .open(&path)
             .at(&path)?;
-        let vault = task.vault()?;
+        let mut vault = task.vault()?;
+        vault.with_keys(keys)?;
         let mut env: Vec<(String, OsString)> = vault
             .env()
             .into_iter()
