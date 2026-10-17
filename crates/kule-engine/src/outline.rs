@@ -132,7 +132,7 @@ fn read_beneath(root: &Path, rel: &str, limit: usize) -> Result<Side> {
 
 /// Opens `rel` under `root`, each component with `O_NOFOLLOW`; `None` when
 /// a component is missing, is a link, or is not what it must be.
-fn open_beneath(root: &Path, rel: &str) -> io::Result<Option<File>> {
+pub(crate) fn open_beneath(root: &Path, rel: &str) -> io::Result<Option<File>> {
     let mut dir = File::open(root)?;
     let parts: Vec<&str> = rel.split('/').collect();
     for (i, part) in parts.iter().enumerate() {

@@ -4,7 +4,7 @@
 //
 // Attributes of resource (Kule::Effect):
 //   kind          "fs.create" | "fs.modify" | "fs.delete" |
-//                 "git.ref" | "git.config" | "git.hook" | "git.other"
+//                 "git.ref" | "git.config" | "git.hook" | "git.staged" | "git.other"
 //   path, name    workspace path and its last component ("" for git.ref)
 //   change        "created" | "modified" | "deleted"
 //   ref           reference name for git.ref, e.g. "refs/heads/main"

@@ -204,6 +204,10 @@ impl Policy {
                 let subject = Subject::git("git.hook", hook);
                 judgements.push(self.judge_one(format!("git hook {hook}"), &subject, &facts));
             }
+            for path in &git.staged {
+                let subject = Subject::git("git.staged", path);
+                judgements.push(self.judge_one(format!("git staged {path}"), &subject, &facts));
+            }
             for path in &git.other {
                 let subject = Subject::git("git.other", path);
                 judgements.push(self.judge_one(path.clone(), &subject, &facts));

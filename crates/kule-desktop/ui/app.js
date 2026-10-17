@@ -609,6 +609,7 @@ function gitGroup(git) {
   if (git.index) lines.push("index changed");
   if (git.config) lines.push("config changed");
   for (const hook of git.hooks) lines.push(`hook ${hook} changed`);
+  for (const path of git.staged || []) lines.push(`${path} staged unlike the file: the next git commit records what you did not review`);
   for (const other of git.other) lines.push(other);
   if (lines.length === 0) return [];
   return [h("h2", { class: "group-title" }, "Git"), h("ul", { class: "files" }, lines.map((l) => h("li", {}, l)))];

@@ -210,6 +210,11 @@ pub struct GitSummary {
     pub hooks: Vec<String>,
     /// Anything else under `.git` that changed.
     pub other: Vec<String>,
+    /// Paths the task staged with content its file in the copy does not
+    /// hold (or took out of the index while the file stays): the next
+    /// `git commit` would record what the person never reviewed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub staged: Vec<String>,
 }
 
 impl GitSummary {
@@ -222,6 +227,7 @@ impl GitSummary {
 /// from. `None` when nothing meaningful changed.
 pub(crate) fn summarize(
     copy: &Path,
+    work: &Path,
     before: Option<&GitState>,
     effects: &[Effect],
 ) -> Result<Option<GitSummary>> {
@@ -240,6 +246,11 @@ pub(crate) fn summarize(
         index: old_state.index != new_state.index,
         ..GitSummary::default()
     };
+    if summary.index
+        && let Some(repo) = &repo
+    {
+        summary.staged = staged_unlike_files(repo, copy, work)?;
+    }
     let names: BTreeSet<&String> = old_state.refs.keys().chain(new_state.refs.keys()).collect();
     for name in names {
         let (old, new) = (old_state.refs.get(name), new_state.refs.get(name));
@@ -281,6 +292,92 @@ pub(crate) fn summarize(
     }
     Ok((!summary.is_empty()).then_some(summary))
 }
+
+/// The index entries of the copy's repository that differ from the
+/// workspace's (so the task staged them) and that the copy's files do not
+/// hold, plus the entries the task took out while their file stays.
+fn staged_unlike_files(repo: &gix::Repository, copy: &Path, work: &Path) -> Result<Vec<String>> {
+    let fail = |e: &dyn std::fmt::Display| Error::Git {
+        path: copy.to_path_buf(),
+        message: e.to_string(),
+    };
+    let Some(index) = repo.try_index().map_err(|e| fail(&e))? else {
+        return Ok(Vec::new());
+    };
+    let entries =
+        |index: &gix::index::File| -> BTreeMap<String, (gix::ObjectId, gix::index::entry::Mode)> {
+            index
+                .entries()
+                .iter()
+                .filter(|e| e.stage_raw() == 0)
+                .map(|e| (e.path(index).to_string(), (e.id, e.mode)))
+                .collect()
+        };
+    let ours = entries(&index);
+    let theirs = match open(work).ok().and_then(|w| w.try_index().ok().flatten()) {
+        Some(index) => entries(&index),
+        None => BTreeMap::new(),
+    };
+    let mut staged = Vec::new();
+    for (path, (id, mode)) in &ours {
+        if theirs.get(path) == Some(&(*id, *mode)) {
+            continue;
+        }
+        if !holds(copy, path, *id, *mode) {
+            staged.push(path.clone());
+        }
+    }
+    for path in theirs.keys().filter(|p| !ours.contains_key(*p)) {
+        // Out of the index, still a file: the next commit deletes it.
+        if crate::outline::open_beneath(copy, path).is_ok_and(|f| f.is_some()) {
+            staged.push(path.clone());
+        }
+    }
+    staged.sort();
+    Ok(staged)
+}
+
+/// Whether the copy's file at `path` holds the staged object `id`. Read
+/// without following links on the way, like any read of the copy.
+fn holds(copy: &Path, path: &str, id: gix::ObjectId, mode: gix::index::entry::Mode) -> bool {
+    use gix::index::entry::Mode;
+    use std::io::Read;
+
+    if mode == Mode::COMMIT {
+        // A submodule's commit: not a file to compare.
+        return true;
+    }
+    let data = if mode == Mode::SYMLINK {
+        // The link itself is read; its parent must be reached without one.
+        let parent_reached = match path.rsplit_once('/') {
+            None => true,
+            Some((parent, _)) => crate::outline::open_beneath(copy, parent)
+                .is_ok_and(|d| d.is_some_and(|d| d.metadata().is_ok_and(|m| m.is_dir()))),
+        };
+        match std::fs::read_link(copy.join(path)) {
+            Ok(target) if parent_reached => target.into_os_string().into_encoded_bytes(),
+            _ => return false,
+        }
+    } else {
+        let Ok(Some(file)) = crate::outline::open_beneath(copy, path) else {
+            return false;
+        };
+        if !file.metadata().is_ok_and(|m| m.is_file()) {
+            return false;
+        }
+        let mut data = Vec::new();
+        if file.take(MAX_HASHED).read_to_end(&mut data).is_err() || data.len() as u64 == MAX_HASHED
+        {
+            return false;
+        }
+        data
+    };
+    gix::objs::compute_hash(id.kind(), gix::objs::Kind::Blob, &data).is_ok_and(|h| h == id)
+}
+
+/// Larger files are not hashed; one staged from such a file is put to a
+/// person rather than read whole.
+const MAX_HASHED: u64 = 256 << 20;
 
 fn oid(value: &str) -> Option<gix::ObjectId> {
     gix::ObjectId::from_hex(value.as_bytes()).ok()

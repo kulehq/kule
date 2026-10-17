@@ -88,6 +88,10 @@ judges `.git` by what it means:
   is not.
 - The index is compared by its entries, not its stat data, so `git status`
   in the workspace blocks neither commit nor undo.
+- What the task stages must be what its files hold: an entry staged with
+  other content (or taken out of the index while its file stays) waits
+  for a person, since the next `git commit` would record what nobody
+  reviewed.
 - Hooks and `config` changes are reported on their own lines, since they
   make the next `git` command run code.
 

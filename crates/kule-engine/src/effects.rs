@@ -165,7 +165,7 @@ pub(crate) fn compute(copy: &Path, work: &Path, baseline: &Baseline) -> Result<E
     }
     effects.sort_by(|a, b| a.path.cmp(&b.path));
     ignore::mark(work, &mut effects)?;
-    let git = git::summarize(copy, baseline.git.as_ref(), &effects)?;
+    let git = git::summarize(copy, work, baseline.git.as_ref(), &effects)?;
     let moves = moves(&effects, baseline, &now);
     Ok(EffectSet {
         effects,

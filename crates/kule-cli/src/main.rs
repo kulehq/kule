@@ -737,6 +737,11 @@ fn print_git(git: &GitSummary) {
     for hook in &git.hooks {
         println!("git: hook {hook} changed (it runs on the next matching git command)");
     }
+    for path in &git.staged {
+        println!(
+            "git: {path} is staged unlike the file (the next git commit records what you did not review)"
+        );
+    }
     for path in &git.other {
         println!("git: {path} changed");
     }
