@@ -417,6 +417,103 @@ select:focus-visible {
   overflow-wrap: anywhere;
 }
 
+/* An agent's answer, laid out from its Markdown. */
+.msg.md {
+  white-space: normal;
+}
+
+.msg.md > * {
+  margin: 0 0 8px;
+}
+
+.msg.md > :last-child {
+  margin-bottom: 0;
+}
+
+.msg.md p,
+.msg.md li {
+  white-space: pre-wrap;
+}
+
+.msg.md .md-h {
+  margin-top: 12px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.msg.md ul,
+.msg.md ol {
+  padding-left: 22px;
+}
+
+.msg.md li.depth-1 { margin-left: 18px; }
+.msg.md li.depth-2 { margin-left: 36px; }
+.msg.md li.depth-3 { margin-left: 54px; }
+.msg.md li.depth-4 { margin-left: 72px; }
+
+.msg.md code {
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: var(--sunken);
+  font: 12px var(--mono);
+}
+
+.msg.md pre {
+  padding: 10px 12px;
+  overflow-x: auto;
+  border-radius: var(--radius);
+  background: var(--sunken);
+  white-space: pre;
+}
+
+.msg.md pre code {
+  padding: 0;
+  background: none;
+}
+
+.msg.md blockquote {
+  padding-left: 12px;
+  border-left: 3px solid var(--border);
+  color: var(--muted);
+}
+
+.msg.md hr {
+  border: 0;
+  border-top: 1px solid var(--border);
+}
+
+.msg.md .md-url {
+  color: var(--faint);
+  font-size: 12px;
+}
+
+.md-table {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.md-table table {
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.md-table th,
+.md-table td {
+  padding: 5px 10px;
+  border: 1px solid var(--border);
+  vertical-align: top;
+  white-space: pre-wrap;
+}
+
+.md-table th {
+  background: var(--sunken);
+  font-weight: 600;
+}
+
+.md-table .align-center { text-align: center; }
+.md-table .align-right { text-align: right; }
+.md-table .align-left { text-align: left; }
+
 .msg.prompt {
   align-self: flex-end;
   padding: 8px 12px;

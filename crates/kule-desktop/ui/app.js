@@ -319,6 +319,151 @@ async function setTimeoutFor() {
   }
 }
 
+// --- Markdown --------------------------------------------------------------
+
+// An agent answers in Markdown. It is laid out here with DOM calls alone:
+// the text comes from the agent, so nothing of it is ever parsed as HTML,
+// and links are shown, not followed (the window has no business navigating).
+
+/** Inline Markdown: code spans, bold, italics and links, as nodes. */
+function inline(text) {
+  const nodes = [];
+  const pattern = /(`+)([\s\S]*?[^`])\1(?!`)|\*\*([^*]+)\*\*|(?<![\w])__([^_]+)__(?![\w])|\*([^*\s][^*]*)\*|(?<![\w])_([^_\s][^_]*)_(?![\w])|\[([^\]]+)\]\(([^)\s]+)\)/g;
+  let at = 0;
+  for (const m of text.matchAll(pattern)) {
+    if (m.index > at) nodes.push(text.slice(at, m.index));
+    if (m[2] !== undefined) nodes.push(h("code", {}, m[2].trim()));
+    else if (m[3] !== undefined || m[4] !== undefined) nodes.push(h("strong", {}, ...inline(m[3] ?? m[4])));
+    else if (m[5] !== undefined || m[6] !== undefined) nodes.push(h("em", {}, ...inline(m[5] ?? m[6])));
+    else nodes.push(h("span", { class: "md-link", title: m[8] }, ...inline(m[7])), h("span", { class: "md-url" }, ` (${m[8]})`));
+    at = m.index + m[0].length;
+  }
+  if (at < text.length) nodes.push(text.slice(at));
+  return nodes;
+}
+
+/** A table row's cells: split on pipes outside code spans, `\|` kept. */
+function cells(line) {
+  let row = line.trim();
+  if (row.startsWith("|")) row = row.slice(1);
+  if (row.endsWith("|") && !row.endsWith("\\|")) row = row.slice(0, -1);
+  const out = [];
+  let cell = "";
+  let code = false;
+  for (let i = 0; i < row.length; i++) {
+    const c = row[i];
+    if (c === "\\" && row[i + 1] === "|") {
+      cell += "|";
+      i++;
+    } else if (c === "`") {
+      code = !code;
+      cell += c;
+    } else if (c === "|" && !code) {
+      out.push(cell.trim());
+      cell = "";
+    } else {
+      cell += c;
+    }
+  }
+  out.push(cell.trim());
+  return out;
+}
+
+const TABLE_RULE = /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/;
+const LIST_ITEM = /^(\s*)([-*+]|\d{1,9}[.)])\s+(.*)$/;
+
+/** Block Markdown: paragraphs, headings, lists, quotes, code and tables. */
+function markdown(text) {
+  const lines = text.split("\n");
+  const blocks = [];
+  let para = [];
+  const flush = () => {
+    if (para.length) blocks.push(h("p", {}, ...inline(para.join("\n"))));
+    para = [];
+  };
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const fence = line.match(/^\s*(`{3,}|~{3,})\s*([\w+-]*)/);
+    if (fence) {
+      flush();
+      const code = [];
+      i++;
+      while (i < lines.length && !lines[i].trim().startsWith(fence[1])) code.push(lines[i++]);
+      blocks.push(h("pre", {}, h("code", {}, code.join("\n"))));
+      continue;
+    }
+    if (line.includes("|") && i + 1 < lines.length && TABLE_RULE.test(lines[i + 1]) && lines[i + 1].includes("-")) {
+      flush();
+      const align = cells(lines[i + 1]).map((c) => (c.endsWith(":") ? (c.startsWith(":") ? "center" : "right") : "left"));
+      const head = cells(line);
+      const rows = [];
+      i += 2;
+      while (i < lines.length && lines[i].includes("|") && lines[i].trim() !== "") rows.push(cells(lines[i++]));
+      i--;
+      // Classes, not style attributes: the window's CSP allows no inline style.
+      const cell = (tag, text, n) => h(tag, { class: `align-${align[n] || "left"}` }, ...inline(text));
+      blocks.push(
+        h(
+          "div",
+          { class: "md-table" },
+          h(
+            "table",
+            {},
+            h("thead", {}, h("tr", {}, ...head.map((c, n) => cell("th", c, n)))),
+            h("tbody", {}, ...rows.map((r) => h("tr", {}, ...head.map((_, n) => cell("td", r[n] || "", n)))))
+          )
+        )
+      );
+      continue;
+    }
+    const heading = line.match(/^\s{0,3}(#{1,6})\s+(.*?)\s*#*\s*$/);
+    if (heading) {
+      flush();
+      blocks.push(h(`h${Math.min(heading[1].length + 2, 6)}`, { class: "md-h" }, ...inline(heading[2])));
+      continue;
+    }
+    if (/^\s{0,3}([-*_])(\s*\1){2,}\s*$/.test(line)) {
+      flush();
+      blocks.push(h("hr", {}));
+      continue;
+    }
+    const item = line.match(LIST_ITEM);
+    if (item) {
+      flush();
+      const ordered = /\d/.test(item[2]);
+      const items = [];
+      while (i < lines.length) {
+        const m = lines[i].match(LIST_ITEM);
+        if (m && /\d/.test(m[2]) === ordered) {
+          const depth = Math.min(Math.floor(m[1].replace(/\t/g, "  ").length / 2), 4);
+          items.push(h("li", { class: `depth-${depth}` }, ...inline(m[3])));
+        } else if (lines[i].trim() !== "" && /^\s+/.test(lines[i]) && items.length) {
+          // A continued item.
+          items[items.length - 1].append("\n", ...inline(lines[i].trim()));
+        } else {
+          break;
+        }
+        i++;
+      }
+      i--;
+      blocks.push(h(ordered ? "ol" : "ul", {}, ...items));
+      continue;
+    }
+    if (/^\s{0,3}>/.test(line)) {
+      flush();
+      const quoted = [];
+      while (i < lines.length && /^\s{0,3}>/.test(lines[i])) quoted.push(lines[i++].replace(/^\s{0,3}>\s?/, ""));
+      i--;
+      blocks.push(h("blockquote", {}, ...markdown(quoted.join("\n"))));
+      continue;
+    }
+    if (line.trim() === "") flush();
+    else para.push(line);
+  }
+  flush();
+  return blocks;
+}
+
 // --- Live ------------------------------------------------------------------
 
 function streamItem(item) {
@@ -326,7 +471,7 @@ function streamItem(item) {
     case "prompt":
       return h("div", { class: "msg prompt" }, item.text);
     case "message":
-      return h("div", { class: "msg" }, item.text);
+      return h("div", { class: "msg md" }, ...markdown(item.text));
     case "thought":
       return h("div", { class: "msg thought" }, item.text);
     case "tool":
