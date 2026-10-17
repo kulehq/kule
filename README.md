@@ -21,9 +21,9 @@ From [the releases](https://github.com/kulehq/kule/releases):
   `/Applications/Kule.app/Contents/MacOS/kule` onto your `PATH`. Each
   release also carries `kule.rb`, a Homebrew cask that installs the app
   and links the command.
-- **Linux (x86_64):** `kule_<version>_amd64.deb` puts `kule-desktop` and
-  `kule` in `/usr/bin`; `kule-<version>-linux-x86_64.tar.gz` is the command
-  alone.
+- **Linux (x86_64):** the `.deb` (Debian, Ubuntu) or the `.rpm` (Fedora)
+  puts `kule-desktop` and `kule` in `/usr/bin`;
+  `kule-<version>-linux-x86_64.tar.gz` is the command alone.
 - **From source:** `cargo build --release -p kule -p kule-desktop` (Linux
   needs `libwebkit2gtk-4.1-dev`).
 

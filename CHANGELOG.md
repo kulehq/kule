@@ -2,8 +2,8 @@
 
 ## 0.2.0
 
-The first release: the macOS app (universal, signed and notarized), a Linux
-`.deb`, and the `kule` command-line tool inside both.
+The first release: the macOS app (universal, signed and notarized), Linux
+`.deb` and `.rpm` packages, and the `kule` command-line tool inside each.
 
 ### Tasks on a copy of any folder
 

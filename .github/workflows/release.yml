@@ -1,7 +1,7 @@
 name: release
 
 # A tag vX.Y.Z builds the macOS app (universal, signed and notarized) and the
-# Linux .deb, each with the kule CLI inside, and opens a draft release with
+# Linux .deb and .rpm, each with the kule CLI inside, and opens a draft release with
 # them, their checksums and the Homebrew cask. Run by hand, it builds the
 # same unsigned and publishes nothing.
 
@@ -114,17 +114,21 @@ jobs:
           cargo build --release --locked -p kule
           mkdir -p crates/kule-desktop/binaries
           cp target/release/kule crates/kule-desktop/binaries/kule-x86_64-unknown-linux-gnu
-      - name: Build the .deb
+      - name: Build the .deb and the .rpm
         working-directory: crates/kule-desktop
-        run: cargo tauri build --bundles deb --config tauri.release.conf.json
-      - name: Check what was built
+        run: cargo tauri build --bundles deb,rpm --config tauri.release.conf.json
+      - name: Install each where it belongs
         run: |
           mkdir dist
-          cp target/release/bundle/deb/*.deb dist/
-          dpkg-deb --contents dist/*.deb | tee contents.txt
-          grep -Eq ' \./usr/bin/kule$' contents.txt
-          grep -Eq ' \./usr/bin/kule-desktop$' contents.txt
-          target/release/kule --version
+          cp target/release/bundle/deb/*.deb target/release/bundle/rpm/*.rpm dist/
+          # Ubuntu, from the .deb.
+          sudo apt-get install -y ./dist/*.deb
+          kule --version
+          test -x /usr/bin/kule-desktop
+          # Fedora, from the .rpm, with the libraries it names.
+          docker run --rm -v "$PWD/dist:/dist:ro" \
+            fedora@sha256:99e203b80b1c3d8f7e161ec10a68fd02b081ef83a3963553e513c82846b97814 \
+            sh -c 'dnf install -y -q /dist/*.rpm && kule --version && test -x /usr/bin/kule-desktop'
           version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)
           tar -C target/release -czf "dist/kule-$version-linux-x86_64.tar.gz" kule
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
