@@ -609,11 +609,11 @@ function renderSpent(task) {
 }
 
 /** Settings' sections, each a value of `state.view`. */
-const SETTINGS = ["agents", "policy", "rules", "secrets", "budget", "appearance", "shortcuts"];
+const SETTINGS = ["agents", "policy", "rules", "secrets", "budget", "appearance", "shortcuts", "profile"];
 
 async function openSettings(view = SETTINGS.includes(state.view) ? state.view : "agents") {
   closeMenu();
-  const opening = { agents: openAgents, policy: openPolicy, rules: openRules, secrets: openSecrets, budget: openBudget, appearance: openAppearance, shortcuts: openShortcuts }[view];
+  const opening = { agents: openAgents, policy: openPolicy, rules: openRules, secrets: openSecrets, budget: openBudget, appearance: openAppearance, shortcuts: openShortcuts, profile: openProfile }[view];
   await opening();
 }
 
@@ -2880,6 +2880,211 @@ function renderAppearance() {
   );
 }
 
+// --- Profile ---------------------------------------------------------------
+
+// The person's choices in one file: to take to another computer, or keep.
+// Each part goes only when they tick it; secrets, remembered approvals and
+// a policy of their own never go.
+
+const PROFILE_PARTS = [
+  ["appearance", "Appearance", "The theme in use and your own themes"],
+  ["shortcuts", "Shortcuts", "The shortcuts you set yourself"],
+  ["policy", "Policy", "Kule's balanced or careful policy"],
+  ["budget", "Daily budget", "What every task may cost together in a day"],
+  ["agents", "Your agents", "The agent profiles you added; they wait for approval on the other side"],
+];
+
+const profileView = {
+  exportParts: new Set(PROFILE_PARTS.map(([p]) => p)),
+  /** { text, file } of a profile picked to import. */
+  picked: null,
+  importParts: new Set(),
+  /** What the person has now, to say what an export would carry. */
+  now: null,
+};
+
+async function openProfile() {
+  state.view = "profile";
+  renderSidebar();
+  renderTask();
+  renderProfile();
+  const [policy, daily, agents] = await Promise.all([
+    call("policy").catch(() => null),
+    call("daily_budget").catch(() => null),
+    call("agent_list").catch(() => []),
+  ]);
+  profileView.now = { policy, daily, agents: agents.filter((l) => l.origin === "person").map((l) => l.profile.name) };
+  renderProfile();
+}
+
+/** What a part holds, in a few words, from a profile file or from now. */
+function partSummary(part, from) {
+  switch (part) {
+    case "appearance": {
+      const a = from.appearance;
+      if (!a) return null;
+      const inUse = [...BUILT_IN_THEMES, ...a.custom].find((t) => t.id === a.current);
+      return `${plural(a.custom.length, "theme")} of your own; ${inUse ? inUse.name : a.current} in use`;
+    }
+    case "shortcuts":
+      return from.shortcuts ? `${plural(Object.keys(from.shortcuts).length, "shortcut")} of your own` : null;
+    case "policy":
+      return from.policy ? `the ${from.policy} policy` : null;
+    case "budget":
+      if (!from.budget) return null;
+      return from.budget.daily ? `${money(from.budget.daily)} a day` : "no daily budget";
+    case "agents":
+      return from.agents ? (from.agents.length ? from.agents.join(", ") : "none") : null;
+    default:
+      return null;
+  }
+}
+
+function profileNow() {
+  const now = profileView.now;
+  return {
+    appearance: appearance.kept,
+    shortcuts: keys.chosen,
+    policy: now && now.policy,
+    budget: now && now.daily ? { daily: now.daily.budget } : null,
+    agents: now ? now.agents : null,
+  };
+}
+
+function partBox(prefix, part, label, summary, set, disabled, note) {
+  const id = `${prefix}-${part}`;
+  return h(
+    "label",
+    { class: "profile-part", for: id },
+    h("input", {
+      id,
+      type: "checkbox",
+      "data-key": id,
+      checked: set.has(part) && !disabled,
+      disabled,
+      onchange: (e) => (e.target.checked ? set.add(part) : set.delete(part)),
+    }),
+    h("span", { class: "profile-part-label" }, label),
+    h("span", { class: "muted" }, note || summary || "")
+  );
+}
+
+async function exportProfile() {
+  const parts = PROFILE_PARTS.map(([p]) => p).filter((p) => profileView.exportParts.has(p));
+  if (!parts.length) {
+    toast("Tick at least one part to export");
+    return;
+  }
+  try {
+    const path = await call("export_profile", { parts });
+    if (path) toast(`Saved your profile to ${path}`);
+  } catch (err) {
+    fail(err);
+  }
+}
+
+async function importProfile() {
+  let picked;
+  try {
+    picked = await call("import_profile");
+  } catch (err) {
+    fail(err);
+    return;
+  }
+  if (!picked) return;
+  profileView.picked = picked;
+  const f = picked.file;
+  profileView.importParts = new Set(PROFILE_PARTS.map(([p]) => p).filter((p) => f[p] !== undefined && f[p] !== null));
+  if (state.view !== "profile") await openProfile();
+  else renderProfile();
+}
+
+async function applyProfile() {
+  const { text } = profileView.picked;
+  const parts = PROFILE_PARTS.map(([p]) => p).filter((p) => profileView.importParts.has(p));
+  if (!parts.length) {
+    toast("Tick at least one part to apply");
+    return;
+  }
+  try {
+    const said = await call("apply_profile", { text, parts });
+    for (const line of said) toast(line);
+  } catch (err) {
+    fail(err);
+    return;
+  }
+  profileView.picked = null;
+  await Promise.all([loadThemes(), loadShortcuts(), loadAgentChoices(), refreshPolicyViews()]);
+  await openProfile();
+}
+
+function renderProfile() {
+  if (state.view !== "profile") return;
+  const now = profileNow();
+  const ownPolicy = now.policy === "own";
+  const picked = profileView.picked;
+  const exportBlock = h(
+    "section",
+    { class: "agent-card profile-block", "aria-label": "Export" },
+    h("h3", {}, "Export"),
+    h("p", { class: "muted" }, "Writes the parts you tick to a .kule-profile.json file. Secrets, remembered approvals and a policy you wrote yourself are never in it."),
+    h(
+      "div",
+      { class: "profile-parts" },
+      PROFILE_PARTS.map(([part, label, what]) =>
+        partBox(
+          "export",
+          part,
+          label,
+          partSummary(part, now) || what,
+          profileView.exportParts,
+          part === "policy" && ownPolicy,
+          part === "policy" && ownPolicy ? "Your policy is one you wrote; it stays here" : null
+        )
+      )
+    ),
+    h("div", { class: "agent-actions" }, h("button", { class: "button primary", type: "button", "data-key": "profile-export", onclick: exportProfile }, "Export…"))
+  );
+  const importBlock = picked
+    ? h(
+        "section",
+        { class: "agent-card profile-block", "aria-label": "Import" },
+        h("h3", {}, "Import"),
+        h("p", { class: "muted" }, "This profile holds the parts below. Tick the ones to apply: themes join yours, shortcuts, the policy and the budget take the profile's, and its agents wait for your approval before they run."),
+        h(
+          "div",
+          { class: "profile-parts" },
+          PROFILE_PARTS.filter(([part]) => picked.file[part] !== undefined && picked.file[part] !== null).map(([part, label]) =>
+            partBox("import", part, label, partSummary(part, { ...picked.file, agents: picked.file.agents && picked.file.agents.map((a) => a.name) }), profileView.importParts, false, null)
+          )
+        ),
+        h(
+          "div",
+          { class: "agent-actions" },
+          h("button", { class: "button primary", type: "button", "data-key": "profile-apply", onclick: (e) => inFlight(e.currentTarget, applyProfile) }, "Apply"),
+          h("button", { class: "button ghost", type: "button", "data-key": "profile-cancel", onclick: () => ((profileView.picked = null), renderProfile()) }, "Cancel")
+        )
+      )
+    : h(
+        "section",
+        { class: "agent-card profile-block", "aria-label": "Import" },
+        h("h3", {}, "Import"),
+        h("p", { class: "muted" }, "Reads a .kule-profile.json file and shows what is in it before anything changes."),
+        h("div", { class: "agent-actions" }, h("button", { class: "button", type: "button", "data-key": "profile-import", onclick: importProfile }, "Import…"))
+      );
+  replace(
+    $("agents-view"),
+    h(
+      "header",
+      { class: "agents-head" },
+      h("h2", {}, "Profile"),
+      h("p", { class: "muted" }, "Your choices in one file, all of them or the parts you pick: to set up Kule on another computer the way you have it here, or to keep a copy.")
+    ),
+    importBlock,
+    exportBlock
+  );
+}
+
 // --- Keyboard --------------------------------------------------------------
 
 // Everything the window does is a command here, with a default shortcut or
@@ -2973,7 +3178,7 @@ const COLOR_NAMES = { red: "Red", orange: "Orange", yellow: "Yellow", green: "Gr
  * whether it fires while the person types in a field. */
 const COMMANDS = [
   { id: "app.palette", title: "Show all commands", group: "General", keys: "Mod+K", inFields: true, run: () => openPalette() },
-  { id: "app.shortcuts", title: "Keyboard shortcuts", group: "General", keys: "Mod+/", inFields: true, run: () => openSettings("shortcuts") },
+  { id: "app.shortcuts", title: "Keyboard shortcuts", group: "General", keys: "Mod+/", inFields: true, run: () => openShortcuts(true) },
   { id: "app.settings", title: "Open Settings", group: "General", keys: "Mod+,", inFields: true, run: () => openSettings() },
 
   { id: "task.new", title: "New task…", group: "Tasks", keys: "Mod+N", inFields: true, run: () => newTask() },
@@ -3034,6 +3239,10 @@ const COMMANDS = [
   { id: "policy.balanced", title: "Use the balanced policy", group: "Settings", keys: "", run: () => choosePolicy("balanced", refreshPolicyViews) },
   { id: "policy.careful", title: "Use the careful policy", group: "Settings", keys: "", run: () => choosePolicy("careful", refreshPolicyViews) },
 
+  { id: "profile.export", title: "Export your profile…", group: "Settings", keys: "", run: () => openProfile() },
+  { id: "profile.import", title: "Import a profile…", group: "Settings", keys: "", run: () => importProfile() },
+  { id: "shortcuts.search", title: "Search the shortcuts", group: "General", keys: "", inFields: true, run: () => openShortcuts(true) },
+
   { id: "theme.next", title: "Next theme", group: "Appearance", keys: "", inFields: true, run: () => nextTheme() },
   { id: "theme.new", title: "New theme from the one in use…", group: "Appearance", keys: "", run: () => newThemeFrom(currentTheme()) },
   { id: "theme.import", title: "Import a theme…", group: "Appearance", keys: "", run: () => importTheme() },
@@ -3059,6 +3268,8 @@ const keys = {
   /** The command whose shortcut is being recorded. */
   recording: null,
   note: "",
+  /** What the Shortcuts list is narrowed to. */
+  filter: "",
 };
 
 const commandById = (id) => COMMANDS.find((c) => c.id === id);
@@ -3221,11 +3432,30 @@ function openPalette() {
 
 // --- Settings → Shortcuts.
 
-async function openShortcuts() {
+async function openShortcuts(focusSearch) {
   state.view = "shortcuts";
   renderSidebar();
   renderTask();
   renderShortcuts();
+  if (focusSearch) $("shortcut-search")?.focus();
+}
+
+/** Shows the rows whose command, group or keys hold every word typed. */
+function filterShortcuts() {
+  const words = keys.filter.toLowerCase().split(/\s+/).filter(Boolean);
+  let shown = 0;
+  for (const group of document.querySelectorAll("#agents-view .key-group")) {
+    let any = false;
+    for (const row of group.querySelectorAll(".key-row")) {
+      const hit = words.every((w) => row.dataset.search.includes(w));
+      row.hidden = !hit;
+      any ||= hit;
+      if (hit) shown += 1;
+    }
+    group.hidden = !any;
+  }
+  const none = $("shortcut-none");
+  if (none) none.hidden = shown > 0;
 }
 
 function renderShortcuts() {
@@ -3236,9 +3466,10 @@ function renderShortcuts() {
     const combo = bindingOf(c);
     const own = c.id in keys.chosen;
     const recording = keys.recording === c.id;
+    const search = `${c.title} ${c.group} ${combo ? formatCombo(combo) : ""} ${combo}`.toLowerCase();
     return h(
       "li",
-      { class: `key-row${recording ? " recording" : ""}` },
+      { class: `key-row${recording ? " recording" : ""}`, "data-search": search },
       h("span", { class: "key-title" }, c.title),
       recording
         ? h("span", { class: "key-wait", role: "status" }, keys.note || "Press the keys · Esc cancels · Backspace leaves it without one")
@@ -3292,6 +3523,30 @@ function renderShortcuts() {
         ? h("div", { class: "agent-actions" }, h("button", { class: "button ghost", type: "button", "data-key": "reset-all", onclick: () => saveShortcuts({}) }, "Put back every default"))
         : null
     ),
+    h("input", {
+      id: "shortcut-search",
+      class: "key-search",
+      type: "search",
+      "data-key": "shortcut-search",
+      placeholder: "Search by name or keys, like “theme” or “⌘⇧”",
+      "aria-label": "Search the shortcuts",
+      autocomplete: "off",
+      spellcheck: "false",
+      value: keys.filter,
+      oninput: (e) => {
+        keys.filter = e.target.value;
+        filterShortcuts();
+      },
+      onkeydown: (e) => {
+        if (e.key === "Escape" && e.target.value) {
+          e.preventDefault();
+          e.target.value = "";
+          keys.filter = "";
+          filterShortcuts();
+        }
+      },
+    }),
+    h("p", { id: "shortcut-none", class: "muted", hidden: true }, "No command matches. The search looks at names, groups and keys."),
     ...groups.map((g) =>
       h(
         "section",
@@ -3301,6 +3556,7 @@ function renderShortcuts() {
       )
     )
   );
+  filterShortcuts();
 }
 
 function startRecording(id) {

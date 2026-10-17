@@ -1942,3 +1942,51 @@ select:focus-visible {
   list-style: none;
   margin-left: -18px;
 }
+
+.key-search {
+  width: min(460px, 100%);
+  min-height: 34px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+}
+
+.key-search:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* Settings → Profile. */
+.profile-block {
+  display: grid;
+  gap: 10px;
+}
+
+.profile-block h3 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.profile-parts {
+  display: grid;
+  gap: 6px;
+}
+
+.profile-part {
+  display: grid;
+  grid-template-columns: auto 9em minmax(0, 1fr);
+  align-items: baseline;
+  gap: 10px;
+  font-size: 14px;
+}
+
+.profile-part input {
+  accent-color: var(--accent);
+}
+
+.profile-part-label {
+  font-weight: 600;
+}

@@ -10,7 +10,7 @@ use serde_json::Value;
 
 /// Changes whenever a call, a result or a notice changes shape; a client
 /// and a daemon that disagree on it cannot talk.
-pub const PROTOCOL: u32 = 17;
+pub const PROTOCOL: u32 = 18;
 
 /// What a daemon says about itself.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -132,6 +132,19 @@ pub enum Call {
     /// person's.
     ChoosePolicy {
         choice: kule_engine::PolicyChoice,
+    },
+    /// A profile file with these parts of the person's choices.
+    ExportProfile {
+        parts: Vec<crate::settings_profile::Part>,
+    },
+    /// A profile file's contents, checked, for the person to look at.
+    ReadProfile {
+        text: String,
+    },
+    /// Applies these parts of a profile file; says what each did.
+    ApplyProfile {
+        text: String,
+        parts: Vec<crate::settings_profile::Part>,
     },
     /// The theme in use and the person's own themes.
     Themes,

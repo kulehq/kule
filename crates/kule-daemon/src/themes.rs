@@ -152,7 +152,7 @@ pub fn to_file(theme: &ThemeFile) -> Result<String> {
     serde_json::to_string_pretty(&checked).map_err(|e| e.to_string())
 }
 
-fn checked(themes: &Themes) -> Result<Themes> {
+pub(crate) fn checked(themes: &Themes) -> Result<Themes> {
     if !id_ok(&themes.current) {
         return Err(format!("{:?} is not a theme", themes.current));
     }

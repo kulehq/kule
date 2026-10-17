@@ -10,6 +10,7 @@ mod terminal;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use kule_daemon::settings_profile::{Part, ProfileFile};
 use kule_daemon::shortcuts::Shortcuts;
 use kule_daemon::themes::{ThemeFile, Themes};
 use kule_daemon::{
@@ -329,6 +330,62 @@ fn choose_policy(kule: K<'_>, choice: PolicyChoice) -> Result<PolicyChoice> {
     kule.call(Call::ChoosePolicy { choice })
 }
 
+/// Writes a profile with `parts` where the person says; the path, or `None`
+/// when they said nowhere.
+#[tauri::command(async)]
+fn export_profile(app: AppHandle, kule: K<'_>, parts: Vec<Part>) -> Result<Option<String>> {
+    let text: String = kule.call(Call::ExportProfile { parts })?;
+    let Some(path) = app
+        .dialog()
+        .file()
+        .set_title("Save your Kule profile")
+        .set_file_name("kule.kule-profile.json")
+        .add_filter("Kule profile", &["json"])
+        .blocking_save_file()
+        .and_then(|p| p.into_path().ok())
+    else {
+        return Ok(None);
+    };
+    std::fs::write(&path, text).map_err(|e| format!("{}: {e}", path.display()))?;
+    Ok(Some(path.display().to_string()))
+}
+
+/// A profile file the person picks: its text, to apply later, and what is
+/// in it, checked; `None` when they picked none.
+#[derive(Serialize)]
+struct PickedProfile {
+    text: String,
+    file: ProfileFile,
+}
+
+#[tauri::command(async)]
+fn import_profile(app: AppHandle, kule: K<'_>) -> Result<Option<PickedProfile>> {
+    let Some(path) = app
+        .dialog()
+        .file()
+        .set_title("Choose a Kule profile")
+        .add_filter("Kule profile", &["json"])
+        .blocking_pick_file()
+        .and_then(|p| p.into_path().ok())
+    else {
+        return Ok(None);
+    };
+    let len = std::fs::metadata(&path)
+        .map_err(|e| format!("{}: {e}", path.display()))?
+        .len();
+    if len > kule_daemon::settings_profile::MAX_FILE {
+        return Err(format!("{}: a profile is at most 256 KiB", path.display()));
+    }
+    let text = std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let file = kule.call(Call::ReadProfile { text: text.clone() })?;
+    Ok(Some(PickedProfile { text, file }))
+}
+
+#[tauri::command(async)]
+fn apply_profile(kule: K<'_>, text: String, parts: Vec<Part>) -> Result<Vec<String>> {
+    kule.call(Call::ApplyProfile { text, parts })
+}
+
 #[tauri::command(async)]
 fn themes(kule: K<'_>) -> Result<Themes> {
     kule.call(Call::Themes)
@@ -576,6 +633,9 @@ fn main() {
             set_order,
             policy,
             choose_policy,
+            export_profile,
+            import_profile,
+            apply_profile,
             themes,
             set_themes,
             import_theme,

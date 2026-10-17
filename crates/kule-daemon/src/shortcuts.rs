@@ -46,7 +46,7 @@ pub fn save(home: &Path, shortcuts: &Shortcuts) -> Result<()> {
     })
 }
 
-fn check(shortcuts: &Shortcuts) -> Result<()> {
+pub(crate) fn check(shortcuts: &Shortcuts) -> Result<()> {
     if shortcuts.len() > MAX_ENTRIES {
         return Err(format!("at most {MAX_ENTRIES} shortcuts"));
     }

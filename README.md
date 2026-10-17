@@ -316,6 +316,14 @@ it writes in Kule reaches it outside; you sign it in there once.
   comes from a `.kule-theme.json` file that holds colours for the
   window's named parts and nothing else (`#rrggbb`, checked on the way
   in). The theme in use and your own are kept in `themes.json`.
+- **Profile**: your choices in one `.kule-profile.json` file, all of them
+  or the parts you tick: the theme in use and your own themes, your
+  shortcuts, Kule's balanced or careful policy, the daily budget and the
+  agent profiles you added. On import Kule shows what the file holds
+  before anything changes, and you pick the parts to apply; themes join
+  yours, the rest take the profile's, and its agents wait for your
+  approval before they run. Secrets, remembered approvals and a policy
+  you wrote yourself never go into a profile.
 - **Live**: the agent's answer, tool calls and what each changed, as they
   come.
 - **Review**: the effect set and the ruling, with *Commit*, *Approve and

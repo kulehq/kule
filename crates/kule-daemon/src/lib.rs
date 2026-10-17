@@ -7,6 +7,7 @@ mod client;
 mod protocol;
 mod server;
 mod service;
+pub mod settings_profile;
 pub mod shortcuts;
 pub mod themes;
 
