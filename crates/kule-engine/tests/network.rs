@@ -480,4 +480,21 @@ fn an_agents_key_is_a_placeholder_to_everything_the_run_starts() {
     assert!(
         Proxy::start_with_keys(&task, policy(), &[key("OTHER_KEY", "https://x.example")]).is_err()
     );
+
+    // A key pasted into a terminal with its paste markers: refused, naming
+    // the variable and what is wrong, never the value.
+    let pasted = AgentKey {
+        name: "PASTED_KEY".into(),
+        value: "\u{1b}[200~sk-pasted-key\u{1b}[201~".into(),
+        hosts: vec!["api.model.example".into()],
+    };
+    let err = Proxy::start_with_keys(&task, policy(), &[pasted])
+        .err()
+        .expect("a value with escapes is refused")
+        .to_string();
+    assert!(
+        err.starts_with("PASTED_KEY: ") && err.contains("control character"),
+        "{err}"
+    );
+    assert!(!err.contains("sk-pasted-key"), "{err}");
 }

@@ -102,7 +102,7 @@ pub fn add_secret(
     workspace: Option<&Path>,
 ) -> Result<SecretInfo> {
     check_name(name)?;
-    check_value(value)?;
+    check_value(name, value)?;
     if hosts.is_empty() {
         return Err(Error::Invalid(format!(
             "{name}: a secret needs the hosts it is for"
@@ -186,14 +186,22 @@ fn check_name(name: &str) -> Result<()> {
     }
 }
 
-/// What can go into a request header as it is.
-fn check_value(value: &str) -> Result<()> {
-    if value.is_empty() || value.len() > 16 * 1024 || value.chars().any(|c| c.is_control()) {
-        return Err(Error::Invalid(
-            "a secret's value is one line of text, up to 16 KiB".into(),
-        ));
-    }
-    Ok(())
+/// What can go into a request header as it is; refused naming `name` and
+/// what is wrong, never the value.
+fn check_value(name: &str, value: &str) -> Result<()> {
+    let wrong = if value.is_empty() {
+        "it is empty".to_owned()
+    } else if value.len() > 16 * 1024 {
+        format!("it is {} bytes", value.len())
+    } else if value.chars().any(|c| c.is_control()) {
+        // Pasting into a terminal can add escape sequences or a line end.
+        "it holds a control character, such as an escape or a line end a terminal added when it was pasted".to_owned()
+    } else {
+        return Ok(());
+    };
+    Err(Error::Invalid(format!(
+        "{name}: a secret's value is one line of text, up to 16 KiB; {wrong}"
+    )))
 }
 
 /// A placeholder no one can guess: what a task's commands see instead of a
@@ -296,7 +304,7 @@ impl Vault {
     pub(crate) fn with_keys(&mut self, keys: &[AgentKey]) -> Result<()> {
         for key in keys {
             check_name(&key.name)?;
-            check_value(&key.value)?;
+            check_value(&key.name, &key.value)?;
             if let Some(host) = key.hosts.iter().find(|h| !plain_host(h)) {
                 return Err(Error::Invalid(format!(
                     "{}: {host:?} is not a host name",
