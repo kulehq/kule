@@ -316,6 +316,11 @@ it writes in Kule reaches it outside; you sign it in there once.
   comes from a `.kule-theme.json` file that holds colours for the
   window's named parts and nothing else (`#rrggbb`, checked on the way
   in). The theme in use and your own are kept in `themes.json`.
+- **Menu bar**: File, Edit, View, Task and Help (with Kule and Window on
+  macOS), at the top of the screen on macOS and of the window on Windows
+  and Linux. Every item runs the same command as its shortcut and shows
+  the one you set, except shortcuts text editing owns too (⌘⌫, ⌥⇧↑), which
+  stay in the window so they keep working in a text field.
 - **Profile**: your choices in one `.kule-profile.json` file, all of them
   or the parts you tick: the theme in use and your own themes, your
   shortcuts, Kule's balanced or careful policy, the daily budget and the

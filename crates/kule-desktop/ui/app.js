@@ -13,6 +13,7 @@ const backend = window.__TAURI__
       onQuestions: (handler) => window.__TAURI__.event.listen("questions", (e) => handler(e.payload)),
       onDaemon: (handler) => window.__TAURI__.event.listen("daemon", () => handler()),
       onTasks: (handler) => window.__TAURI__.event.listen("tasks", () => handler()),
+      onMenu: (handler) => window.__TAURI__.event.listen("menu", (e) => handler(e.payload)),
     }
   : window.kuleMock;
 
@@ -3308,6 +3309,7 @@ async function loadShortcuts() {
     fail(err);
   }
   labelControls();
+  syncMenu();
 }
 
 async function saveShortcuts(chosen) {
@@ -3317,7 +3319,49 @@ async function saveShortcuts(chosen) {
     fail(err);
   }
   labelControls();
+  syncMenu();
   if (state.view === "shortcuts") renderShortcuts();
+}
+
+/** Keys text editing owns as well; a menu's shortcut would fire in a text
+ * field and take them from it, so the menu shows none for them. */
+const EDITING_KEYS = new Set(["Backspace", "Delete", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Home", "End", "PageUp", "PageDown"]);
+
+function menuSafe(combo) {
+  const parts = normalCombo(combo).split("+");
+  const key = parts.pop();
+  if (EDITING_KEYS.has(key)) return false;
+  // A letter with Mod alone is often an editing command (⌘B, ⌘I in some
+  // fields); the ones Kule uses are its own, the system's are reserved.
+  return !isReserved(combo) && isUsable(combo);
+}
+
+/** The menu's accelerator for a combo: CmdOrCtrl+Shift+K. */
+function accelerator(combo) {
+  return normalCombo(combo)
+    .split("+")
+    .map((p) => ({ Mod: "CmdOrCtrl", Ctrl: "Ctrl", Alt: "Alt", Shift: "Shift", Plus: "Plus" })[p] || p)
+    .join("+");
+}
+
+/** Tells the menu bar which shortcut goes next to each command; none while
+ * one is being recorded, so the keys reach the window. */
+function syncMenu() {
+  if (!window.__TAURI__) return;
+  const keysForMenu = {};
+  if (!keys.recording) {
+    for (const c of COMMANDS) {
+      const combo = bindingOf(c);
+      if (combo && menuSafe(combo)) keysForMenu[c.id] = accelerator(combo);
+    }
+  }
+  call("set_menu_keys", { keys: keysForMenu }).catch(() => {});
+}
+
+/** A command the menu bar chose. */
+function onMenu(id) {
+  const command = commandById(id);
+  if (command) command.run();
 }
 
 function onKey(e) {
@@ -3562,6 +3606,7 @@ function renderShortcuts() {
 function startRecording(id) {
   keys.recording = id;
   keys.note = "";
+  syncMenu();
   renderShortcuts();
 }
 
@@ -3575,6 +3620,7 @@ function recordKey(e) {
   const stop = () => {
     keys.recording = null;
     keys.note = "";
+    syncMenu();
     renderShortcuts();
     document.querySelector(`[data-key="record:${CSS.escape(id)}"]`)?.focus();
   };
@@ -3682,6 +3728,7 @@ async function start() {
   if (backend.onDaemon) await backend.onDaemon(onDaemon);
   // A task's numbers came back from a scan in the background.
   if (backend.onTasks) await backend.onTasks(() => refresh());
+  if (backend.onMenu) await backend.onMenu(onMenu);
   // Changes made outside the window (a terminal in the copy, the CLI) show
   // when the person comes back to it.
   window.addEventListener("focus", () => refresh());

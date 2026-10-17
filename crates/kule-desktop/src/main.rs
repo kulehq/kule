@@ -4,9 +4,11 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod menu;
 mod shell_path;
 mod terminal;
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -386,6 +388,17 @@ fn apply_profile(kule: K<'_>, text: String, parts: Vec<Part>) -> Result<Vec<Stri
     kule.call(Call::ApplyProfile { text, parts })
 }
 
+/// Puts the person's shortcuts next to the menu's items: command id →
+/// accelerator (`CmdOrCtrl+Shift+K`).
+#[tauri::command]
+fn set_menu_keys(app: AppHandle, keys: HashMap<String, String>) -> Result<()> {
+    if keys.len() > 256 || keys.iter().any(|(k, v)| k.len() > 64 || v.len() > 64) {
+        return Err("too many or too long shortcuts for the menu".to_owned());
+    }
+    let bar = menu::build(&app, &keys).map_err(|e| e.to_string())?;
+    app.set_menu(bar).map(|_| ()).map_err(|e| e.to_string())
+}
+
 #[tauri::command(async)]
 fn themes(kule: K<'_>) -> Result<Themes> {
     kule.call(Call::Themes)
@@ -590,8 +603,15 @@ fn main() {
         .plugin(tauri_plugin_notification::init())
         .setup(move |app| {
             let handle = app.handle().clone();
+            // Without shortcuts until the window sends the person's.
+            app.set_menu(menu::build(&handle, &HashMap::new())?)?;
             std::thread::spawn(move || relay(handle, &home));
             Ok(())
+        })
+        .on_menu_event(|app, event| {
+            if let Some(command) = event.id().as_ref().strip_prefix(menu::PREFIX) {
+                let _ = app.emit("menu", command.to_owned());
+            }
         })
         .manage(kule)
         .invoke_handler(tauri::generate_handler![
@@ -633,6 +653,7 @@ fn main() {
             set_order,
             policy,
             choose_policy,
+            set_menu_keys,
             export_profile,
             import_profile,
             apply_profile,
