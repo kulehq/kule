@@ -18,13 +18,26 @@ const MARK: &str = "__KULE_PATH__";
 /// takes longer than `wait`.
 pub fn login_path(shell: &Path, wait: Duration) -> Option<OsString> {
     let script = format!("printf '%s%s%s' {MARK} \"$PATH\" {MARK}");
-    let mut child = Command::new(shell)
-        .args(["-l", "-i", "-c", &script])
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .ok()?;
+    let spawn = || {
+        Command::new(shell)
+            .args(["-l", "-i", "-c", &script])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+    };
+    // A file just written can be busy for a moment: a process forked
+    // elsewhere meanwhile holds it open until it runs what it was forked for.
+    let mut tries = 0;
+    let mut child = loop {
+        match spawn() {
+            Err(e) if e.raw_os_error() == Some(libc::ETXTBSY) && tries < 10 => {
+                tries += 1;
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            other => break other.ok()?,
+        }
+    };
     let started = Instant::now();
     loop {
         match child.try_wait() {
