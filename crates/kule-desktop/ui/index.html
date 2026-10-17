@@ -7,40 +7,35 @@
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
-    <aside class="sidebar">
-      <header class="brand">
-        <svg class="brand-mark" viewBox="100 100 824 824" aria-hidden="true">
-          <rect x="100" y="100" width="824" height="824" rx="185" />
-          <circle class="brand-glyph" cx="512" cy="262" r="30" />
-          <rect class="brand-glyph" x="336" y="318" width="352" height="112" rx="56" />
-          <path class="brand-glyph" d="M466 470 L558 470 L588 806 Q590 826 570 826 L454 826 Q434 826 436 806 Z" />
-        </svg>
-        <span class="brand-name">Kule</span>
-      </header>
-      <button id="new-task" class="button primary wide" type="button">New task…</button>
-      <section class="nav-section" id="inbox-section" hidden>
-        <h2 class="nav-title">Needs you</h2>
-        <ul class="task-list" id="inbox"></ul>
-      </section>
-      <section class="nav-section">
-        <h2 class="nav-title">Tasks</h2>
-        <ul class="task-list" id="tasks"></ul>
-        <p class="nav-empty" id="tasks-empty" hidden>No tasks yet.</p>
-      </section>
-      <div class="sidebar-foot">
-        <button id="open-settings" class="button ghost wide settings-button" type="button">
-          <svg viewBox="0 0 16 16" aria-hidden="true">
+    <nav class="activity" aria-label="Kule">
+      <svg class="brand-mark" viewBox="100 100 824 824" aria-hidden="true">
+        <rect x="100" y="100" width="824" height="824" rx="185" />
+        <circle class="brand-glyph" cx="512" cy="262" r="30" />
+        <rect class="brand-glyph" x="336" y="318" width="352" height="112" rx="56" />
+        <path class="brand-glyph" d="M466 470 L558 470 L588 806 Q590 826 570 826 L454 826 Q434 826 436 806 Z" />
+      </svg>
+      <button id="toggle-left" class="activity-button" type="button" aria-pressed="true" aria-label="Left side"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="11" rx="2"/><rect class="fill" x="1.5" y="2.5" width="4.5" height="11" rx="2"/></svg></button>
+      <button id="toggle-bottom" class="activity-button" type="button" aria-pressed="false" aria-label="Bottom panel"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="11" rx="2"/><rect class="fill" x="1.5" y="9" width="13" height="4.5" rx="2"/></svg></button>
+      <button id="toggle-right" class="activity-button" type="button" aria-pressed="false" aria-label="Right side"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="11" rx="2"/><rect class="fill" x="10" y="2.5" width="4.5" height="11" rx="2"/></svg></button>
+      <span class="activity-spacer"></span>
+      <button id="open-settings" class="activity-button settings-button" type="button" aria-label="Settings">
+            <svg viewBox="0 0 16 16" aria-hidden="true">
             <path
               d="M6.6 1.5h2.8l.4 1.9 1.2.7 1.8-.6 1.4 2.4-1.4 1.3v1.6l1.4 1.3-1.4 2.4-1.8-.6-1.2.7-.4 1.9H6.6l-.4-1.9-1.2-.7-1.8.6-1.4-2.4 1.4-1.3V7.2L1.8 5.9l1.4-2.4 1.8.6 1.2-.7z"
             />
             <circle cx="8" cy="8" r="2" />
           </svg>
-          Settings
-        </button>
-      </div>
-    </aside>
+      </button>
+    </nav>
 
-    <main class="main">
+    <div class="workbench" id="workbench">
+      <section class="region region-side" id="region-left" data-region="left" aria-label="Left side">
+        <div class="region-tabs" role="tablist" aria-label="Left side panels"></div>
+        <div class="region-body"></div>
+      </section>
+      <div class="split split-v" data-split="left" role="separator" aria-orientation="vertical" aria-label="Resize the left side" tabindex="0"></div>
+      <div class="center">
+        <div class="main-area" id="main-area">
       <section class="settings" id="settings" aria-labelledby="settings-title" hidden>
         <header class="settings-head">
           <h1 id="settings-title">Settings</h1>
@@ -109,15 +104,40 @@
             <button id="remove-task" class="button ghost danger" type="button">Delete task</button>
           </div>
         </header>
-        <nav class="tabs" role="tablist" aria-label="Task views" id="tabs">
-          <button class="tab" role="tab" id="tab-live" aria-controls="panel-live" data-tab="live" type="button">Live</button>
-          <button class="tab" role="tab" id="tab-review" aria-controls="panel-review" data-tab="review" type="button">
-            Review <span class="tab-count" id="review-count" hidden></span>
-          </button>
-          <button class="tab" role="tab" id="tab-timeline" aria-controls="panel-timeline" data-tab="timeline" type="button">Timeline</button>
-        </nav>
+      </section>
+          <section class="region region-main" id="region-main" data-region="main" aria-label="Main">
+            <div class="region-tabs" role="tablist" aria-label="Main panels"></div>
+            <div class="region-body"></div>
+          </section>
+        </div>
+        <div class="split split-h" data-split="bottom" role="separator" aria-orientation="horizontal" aria-label="Resize the bottom panel" tabindex="0"></div>
+        <section class="region region-bottom" id="region-bottom" data-region="bottom" aria-label="Bottom panel">
+          <div class="region-tabs" role="tablist" aria-label="Bottom panels"></div>
+          <div class="region-body"></div>
+        </section>
+      </div>
+      <div class="split split-v" data-split="right" role="separator" aria-orientation="vertical" aria-label="Resize the right side" tabindex="0"></div>
+      <section class="region region-side" id="region-right" data-region="right" aria-label="Right side">
+        <div class="region-tabs" role="tablist" aria-label="Right side panels"></div>
+        <div class="region-body"></div>
+      </section>
+    </div>
 
-        <section class="panel" id="panel-live" role="tabpanel" aria-labelledby="tab-live" data-panel="live">
+    <!-- Every panel; the layout moves each into its region. -->
+    <div id="panels" hidden>
+      <section class="panel panel-tasks" id="panel-tasks" data-panel="tasks">
+        <button id="new-task" class="button primary wide" type="button">New task…</button>
+      <section class="nav-section" id="inbox-section" hidden>
+        <h2 class="nav-title">Needs you</h2>
+        <ul class="task-list" id="inbox"></ul>
+      </section>
+      <section class="nav-section">
+        <h2 class="nav-title">Tasks</h2>
+        <ul class="task-list" id="tasks"></ul>
+        <p class="nav-empty" id="tasks-empty" hidden>No tasks yet.</p>
+      </section>
+      </section>
+        <section class="panel" id="panel-live" role="tabpanel" data-panel="live">
           <div class="questions" id="questions" aria-live="assertive"></div>
           <div class="stream" id="stream" aria-live="polite"></div>
           <form class="composer" id="composer">
@@ -162,17 +182,21 @@
           </form>
         </section>
 
-        <section class="panel" id="panel-review" role="tabpanel" aria-labelledby="tab-review" data-panel="review" hidden>
+        <section class="panel" id="panel-review" role="tabpanel" data-panel="review" hidden>
           <div class="ruling" id="ruling"></div>
           <div class="review-actions" id="review-actions"></div>
           <div class="effects" id="effects"></div>
         </section>
 
-        <section class="panel" id="panel-timeline" role="tabpanel" aria-labelledby="tab-timeline" data-panel="timeline" hidden>
+        <section class="panel" id="panel-timeline" role="tabpanel" data-panel="timeline" hidden>
           <div class="timeline" id="timeline"></div>
         </section>
-      </section>
-    </main>
+        <section class="panel panel-files" id="panel-files" data-panel="files">
+          <div class="files-tree" id="files-tree" role="tree" aria-label="Files in the task's copy"></div>
+          <div class="files-preview" id="files-preview"></div>
+        </section>
+    </div>
+
 
     <div class="toasts" id="toasts" aria-live="assertive"></div>
     <script src="themes.js"></script>

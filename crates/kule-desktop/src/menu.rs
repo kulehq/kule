@@ -35,6 +35,8 @@ const FILE: &[Entry] = &[
 const VIEW: &[Entry] = &[
     Command("app.palette", "Command Palette…"),
     Separator,
+    Command("view.tasks", "Tasks"),
+    Command("view.files", "Files"),
     Command("view.live", "Live"),
     Command("view.review", "Review"),
     Command("view.timeline", "Timeline"),
@@ -43,6 +45,11 @@ const VIEW: &[Entry] = &[
     Command("task.prev", "Previous Task"),
     Separator,
     Command("theme.next", "Next Theme"),
+    Separator,
+    Command("layout.left", "Show or Hide the Left Side"),
+    Command("layout.bottom", "Show or Hide the Bottom Panel"),
+    Command("layout.right", "Show or Hide the Right Side"),
+    Command("layout.reset", "Reset the Layout"),
 ];
 
 const TASK: &[Entry] = &[

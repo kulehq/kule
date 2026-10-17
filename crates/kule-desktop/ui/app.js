@@ -109,7 +109,6 @@ const state = {
   view: "tasks",
   /** Per task, the held files the person ticked not to be asked about again. */
   remember: new Map(),
-  tab: "live",
   agents: [],
   /** Live stream per task: what the window saw since it opened. */
   streams: new Map(),
@@ -508,11 +507,13 @@ function renderTask() {
   if (settings) {
     $("empty").hidden = true;
     $("task").hidden = true;
+    renderLayout();
     return;
   }
   const task = currentTask();
   $("empty").hidden = Boolean(task);
   $("task").hidden = !task;
+  renderLayout();
   if (!task) return;
 
   $("task-name").textContent = taskName(task);
@@ -540,25 +541,18 @@ function renderTask() {
 
   const count = $("review-count");
   const waiting = task.changes + (task.home_changes || 0);
-  count.hidden = !waiting;
-  count.textContent = String(waiting);
-
-  for (const tab of document.querySelectorAll("#tabs .tab")) {
-    const selected = tab.dataset.tab === state.tab;
-    tab.setAttribute("aria-selected", String(selected));
-    // One stop for Tab; the arrow keys move between the tabs.
-    tab.tabIndex = selected ? 0 : -1;
-  }
-  for (const panel of document.querySelectorAll(".panel")) {
-    panel.hidden = panel.dataset.panel !== state.tab;
+  if (count) {
+    count.hidden = !waiting;
+    count.textContent = String(waiting);
   }
 
   renderComposer(task);
   renderQuestions();
   renderStream(task.id);
   loadStream(task.id);
-  if (state.tab === "review") loadReview(task.id);
-  if (state.tab === "timeline") loadTimeline(task.id);
+  if (isShown("review")) loadReview(task.id);
+  if (isShown("timeline")) loadTimeline(task.id);
+  if (isShown("files")) loadFiles(task.id);
 }
 
 function renderComposer(task) {
@@ -2565,7 +2559,7 @@ async function newTask() {
   try {
     const task = await call("create_task", { workspace });
     state.current = task.id;
-    state.tab = "live";
+    layout.regions[regionOf("live")].active = "live";
     await refresh();
     $("prompt").focus();
   } catch (err) {
@@ -2597,6 +2591,536 @@ async function removeTask(task = currentTask()) {
     fail(err);
   }
   await refresh();
+}
+
+// --- Layout ----------------------------------------------------------------
+
+// The window is four regions, left, main, right and bottom, and each holds
+// panels as tabs, one showing at a time. A panel moves to another region by
+// dragging its tab, from its tab's menu or from the keyboard; the regions
+// open, close and resize, and the daemon keeps it all in layout.json.
+
+const PANELS = {
+  tasks: { title: "Tasks", needsTask: false },
+  live: { title: "Live", needsTask: true },
+  review: { title: "Review", needsTask: true },
+  timeline: { title: "Timeline", needsTask: true },
+  files: { title: "Files", needsTask: true },
+};
+
+const REGION_NAMES = { left: "the left side", main: "the main area", right: "the right side", bottom: "the bottom panel" };
+
+const SIZE_LIMITS = { left: [180, 640], right: [220, 760], bottom: [120, 900] };
+
+function defaultLayout() {
+  return {
+    version: 1,
+    regions: {
+      left: { panels: ["tasks", "files"], active: "tasks", open: true, size: 272 },
+      main: { panels: ["live", "review", "timeline"], active: "live", open: true, size: 0 },
+      right: { panels: [], active: null, open: false, size: 380 },
+      bottom: { panels: [], active: null, open: false, size: 260 },
+    },
+  };
+}
+
+let layout = defaultLayout();
+
+/** A layout as kept, made whole: unknown panels out, a panel this version
+ * added but the kept layout lacks put where it goes by default. */
+function normalLayout(kept) {
+  const base = defaultLayout();
+  if (!kept || !kept.regions) return base;
+  const seen = new Set();
+  const regions = {};
+  for (const name of Object.keys(base.regions)) {
+    const r = kept.regions[name] || base.regions[name];
+    const panels = (r.panels || []).filter((p) => PANELS[p] && !seen.has(p) && seen.add(p));
+    regions[name] = {
+      panels,
+      active: panels.includes(r.active) ? r.active : panels[0] || null,
+      open: name === "main" ? true : Boolean(r.open),
+      size: Number.isFinite(r.size) ? r.size : base.regions[name].size,
+    };
+  }
+  for (const [name, r] of Object.entries(base.regions)) {
+    for (const p of r.panels) {
+      if (!seen.has(p)) {
+        regions[name].panels.push(p);
+        regions[name].active ||= p;
+        seen.add(p);
+      }
+    }
+  }
+  return { version: 1, regions };
+}
+
+const regionOf = (panel) => Object.keys(layout.regions).find((n) => layout.regions[n].panels.includes(panel));
+
+/** Whether `panel` shows now: the one in front in an open region, and the
+ * main area only while a task is open there. */
+function isShown(panel) {
+  const name = regionOf(panel);
+  const r = name && layout.regions[name];
+  if (!r || !r.open || r.active !== panel) return false;
+  if (name === "main" && (SETTINGS.includes(state.view) || !currentTask())) return false;
+  return !PANELS[panel].needsTask || Boolean(currentTask());
+}
+
+let layoutSave = null;
+
+function keepLayout() {
+  clearTimeout(layoutSave);
+  layoutSave = setTimeout(() => call("set_layout", { layout }).catch(fail), 300);
+}
+
+async function loadLayout() {
+  try {
+    layout = normalLayout(await call("layout"));
+  } catch (err) {
+    fail(err);
+  }
+  renderTask();
+}
+
+function panelTab(name, panel) {
+  const r = layout.regions[name];
+  const command = commandById(`view.${panel}`);
+  const combo = command ? bindingOf(command) : "";
+  const label = [PANELS[panel].title];
+  if (panel === "review") label.push(h("span", { class: "tab-count", id: "review-count", hidden: true }));
+  return h(
+    "button",
+    {
+      class: "tab",
+      role: "tab",
+      type: "button",
+      "data-panel": panel,
+      "data-key": `tab:${panel}`,
+      "aria-selected": String(r.active === panel),
+      "aria-controls": `panel-${panel}`,
+      tabindex: r.active === panel ? 0 : -1,
+      title: combo ? `${PANELS[panel].title} (${formatCombo(combo)}) · drag to move it` : `${PANELS[panel].title} · drag to move it`,
+      onclick: () => {
+        if (panelDrag.moved) return;
+        activatePanel(panel);
+      },
+      oncontextmenu: (e) => {
+        e.preventDefault();
+        panelMenu(panel, e);
+      },
+      onpointerdown: (e) => panelDragStart(e, panel),
+    },
+    ...label
+  );
+}
+
+/** Puts every panel in its region, shows the one in front, sizes the
+ * regions and says which are open. */
+function renderLayout() {
+  const workbench = $("workbench");
+  const side = (n) => (layout.regions[n].open ? layout.regions[n].size : 0);
+  workbench.style.gridTemplateColumns = `${side("left")}px ${layout.regions.left.open ? 5 : 0}px minmax(0, 1fr) ${layout.regions.right.open ? 5 : 0}px ${side("right")}px`;
+  workbench.querySelector(".center").style.gridTemplateRows = `minmax(0, 1fr) ${layout.regions.bottom.open ? 5 : 0}px ${side("bottom")}px`;
+  const task = currentTask();
+  for (const [name, r] of Object.entries(layout.regions)) {
+    const el = $(`region-${name}`);
+    const hideMain = name === "main" && (SETTINGS.includes(state.view) || !task);
+    el.hidden = !r.open || hideMain;
+    const split = document.querySelector(`[data-split="${name}"]`);
+    if (split) split.hidden = !r.open;
+    replace(el.querySelector(".region-tabs"), ...r.panels.map((p) => panelTab(name, p)));
+    const body = el.querySelector(".region-body");
+    for (const p of r.panels) {
+      const node = $(`panel-${p}`);
+      if (node.parentElement !== body) body.append(node);
+      node.hidden = p !== r.active || (PANELS[p].needsTask && !task);
+      node.setAttribute("aria-labelledby", "");
+    }
+    let note = body.querySelector(".region-note");
+    const message = !r.panels.length
+      ? "Drag a panel's tab here, or move one with its menu."
+      : PANELS[r.active] && PANELS[r.active].needsTask && !task
+        ? `Choose a task to see its ${PANELS[r.active].title.toLowerCase()}.`
+        : null;
+    if (message) {
+      if (!note) body.append((note = h("p", { class: "region-note" })));
+      note.textContent = message;
+    } else if (note) note.remove();
+  }
+  for (const n of ["left", "bottom", "right"]) {
+    $(`toggle-${n}`).setAttribute("aria-pressed", String(layout.regions[n].open));
+  }
+}
+
+function activatePanel(panel) {
+  const name = regionOf(panel);
+  if (!name) return;
+  const r = layout.regions[name];
+  r.active = panel;
+  r.open = true;
+  if (name === "main" || PANELS[panel].needsTask) state.view = "tasks";
+  keepLayout();
+  renderSidebar();
+  renderTask();
+}
+
+/** Shows `panel` and puts the keyboard on its tab. */
+function revealPanel(panel) {
+  activatePanel(panel);
+  document.querySelector(`.region-tabs [data-panel="${panel}"]`)?.focus();
+}
+
+/** Moves `panel` into region `to`, before the tab at `at` (the end without). */
+function movePanel(panel, to, at) {
+  const from = regionOf(panel);
+  if (!from) return;
+  const source = layout.regions[from];
+  const target = layout.regions[to];
+  source.panels = source.panels.filter((p) => p !== panel);
+  if (source.active === panel) source.active = source.panels[0] || null;
+  if (!source.panels.length && from !== "main") source.open = false;
+  const index = at === undefined ? target.panels.length : Math.min(at, target.panels.length);
+  target.panels.splice(index, 0, panel);
+  target.active = panel;
+  target.open = true;
+  keepLayout();
+  renderTask();
+  toast(`${PANELS[panel].title} moved to ${REGION_NAMES[to]}`);
+}
+
+function toggleRegion(name) {
+  const r = layout.regions[name];
+  r.open = !r.open;
+  if (r.open && !r.panels.length) toast(`${REGION_NAMES[name][0].toUpperCase()}${REGION_NAMES[name].slice(1)} is empty; drag a panel's tab here`);
+  keepLayout();
+  renderTask();
+}
+
+async function resetLayout() {
+  layout = defaultLayout();
+  try {
+    await call("set_layout", { layout: null });
+  } catch (err) {
+    fail(err);
+  }
+  renderTask();
+  toast("The layout is back to Kule's own");
+}
+
+/** The panel the keyboard is in, else the main area's. */
+function panelInView() {
+  const el = document.activeElement && document.activeElement.closest && document.activeElement.closest("[data-panel]");
+  return (el && el.dataset.panel) || layout.regions.main.active || "live";
+}
+
+function panelMenu(panel, e) {
+  closeMenu();
+  const here = regionOf(panel);
+  const items = Object.keys(REGION_NAMES)
+    .filter((n) => n !== here)
+    .map((n) =>
+      h("button", { class: "menu-item", type: "button", role: "menuitem", onclick: () => (closeMenu(), movePanel(panel, n)) }, `Move to ${REGION_NAMES[n]}`)
+    );
+  const menu = h("div", { class: "menu", id: "task-menu", role: "menu", "aria-label": `${PANELS[panel].title} panel` }, items);
+  menu.items = items;
+  menu.opener = e.currentTarget;
+  document.body.append(menu);
+  placeMenu(menu, e);
+  items[0].focus();
+  menu.addEventListener("keydown", (k) => {
+    const here2 = items.indexOf(document.activeElement);
+    if (k.key === "Escape") {
+      k.preventDefault();
+      closeMenu(true);
+    } else if (k.key === "ArrowDown" || k.key === "ArrowUp") {
+      k.preventDefault();
+      items[(here2 + (k.key === "ArrowDown" ? 1 : -1) + items.length) % items.length].focus();
+    } else if (k.key === "Tab") closeMenu(true);
+  });
+}
+
+// --- Dragging a panel by its tab.
+
+const panelDrag = { panel: null, startX: 0, startY: 0, moved: false, pointer: null, target: null, ghost: null };
+
+function panelDragStart(e, panel) {
+  if (e.button !== 0 || e.pointerType === "touch") return;
+  Object.assign(panelDrag, { panel, startX: e.clientX, startY: e.clientY, moved: false, pointer: e.pointerId, target: null });
+}
+
+/** Where a drop at (x, y) puts the panel: a tab bar it is over, else the
+ * part of the window it is in. */
+function dropTarget(x, y) {
+  for (const name of Object.keys(layout.regions)) {
+    const el = $(`region-${name}`);
+    if (el.hidden) continue;
+    const bar = el.querySelector(".region-tabs").getBoundingClientRect();
+    if (x >= bar.left && x <= bar.right && y >= bar.top && y <= bar.bottom) {
+      const tabs = [...el.querySelectorAll(".region-tabs .tab")].filter((t) => t.dataset.panel !== panelDrag.panel);
+      const at = tabs.findIndex((t) => x < t.getBoundingClientRect().left + t.offsetWidth / 2);
+      return { region: name, at: at === -1 ? tabs.length : at };
+    }
+  }
+  const box = $("workbench").getBoundingClientRect();
+  const fx = (x - box.left) / box.width;
+  const fy = (y - box.top) / box.height;
+  if (fx < 0.2) return { region: "left" };
+  if (fx > 0.8) return { region: "right" };
+  if (fy > 0.72) return { region: "bottom" };
+  return { region: "main" };
+}
+
+function panelDragMove(e) {
+  if (!panelDrag.panel || e.pointerId !== panelDrag.pointer) return;
+  if (!panelDrag.moved) {
+    if (Math.hypot(e.clientX - panelDrag.startX, e.clientY - panelDrag.startY) < 6) return;
+    panelDrag.moved = true;
+    closeMenu();
+    document.body.classList.add("dragging-panel");
+    panelDrag.ghost = h("div", { class: "panel-ghost" }, PANELS[panelDrag.panel].title);
+    panelDrag.zone = h("div", { class: "drop-zone" });
+    document.body.append(panelDrag.ghost, panelDrag.zone);
+  }
+  panelDrag.ghost.style.transform = `translate(${e.clientX + 12}px, ${e.clientY + 8}px)`;
+  const target = dropTarget(e.clientX, e.clientY);
+  panelDrag.target = target;
+  // Shows where it lands: the region's box, or the strip of the window a
+  // closed region would open in.
+  const box = $("workbench").getBoundingClientRect();
+  const el = $(`region-${target.region}`);
+  let r = el.hidden ? null : el.getBoundingClientRect();
+  if (!r) {
+    const w = box.width * 0.22;
+    const hgt = box.height * 0.3;
+    r = {
+      left: { left: box.left, top: box.top, width: w, height: box.height },
+      right: { left: box.right - w, top: box.top, width: w, height: box.height },
+      bottom: { left: box.left, top: box.bottom - hgt, width: box.width, height: hgt },
+      main: { left: box.left, top: box.top, width: box.width, height: box.height },
+    }[target.region];
+  }
+  Object.assign(panelDrag.zone.style, { left: `${r.left}px`, top: `${r.top}px`, width: `${r.width}px`, height: `${r.height}px` });
+  panelDrag.zone.textContent = `Move to ${REGION_NAMES[target.region]}`;
+}
+
+function panelDragEnd(e) {
+  if (!panelDrag.panel || e.pointerId !== panelDrag.pointer) return;
+  const { panel, moved, target } = panelDrag;
+  panelDrag.panel = null;
+  if (!moved) return;
+  document.body.classList.remove("dragging-panel");
+  panelDrag.ghost?.remove();
+  panelDrag.zone?.remove();
+  // The click the drag ends with does not also choose the tab.
+  setTimeout(() => (panelDrag.moved = false), 0);
+  if (e.type === "pointercancel" || !target) return;
+  const from = regionOf(panel);
+  if (from === target.region && target.at === undefined) return;
+  movePanel(panel, target.region, target.at);
+}
+
+// --- Resizing the regions.
+
+const splitDrag = { name: null, start: 0, size: 0 };
+
+function splitStart(e) {
+  const name = e.currentTarget.dataset.split;
+  if (e.button !== 0) return;
+  e.preventDefault();
+  Object.assign(splitDrag, { name, start: name === "bottom" ? e.clientY : e.clientX, size: layout.regions[name].size, pointer: e.pointerId });
+  e.currentTarget.setPointerCapture(e.pointerId);
+  document.body.classList.add(name === "bottom" ? "resizing-v" : "resizing-h");
+}
+
+function resize(name, size) {
+  const [min, max] = SIZE_LIMITS[name];
+  layout.regions[name].size = Math.round(Math.max(min, Math.min(max, size)));
+  renderLayout();
+}
+
+function splitMove(e) {
+  if (!splitDrag.name || e.pointerId !== splitDrag.pointer) return;
+  const at = splitDrag.name === "bottom" ? e.clientY : e.clientX;
+  // The left side grows to the right; the right side and the bottom grow
+  // toward the middle.
+  const delta = splitDrag.name === "left" ? at - splitDrag.start : splitDrag.start - at;
+  resize(splitDrag.name, splitDrag.size + delta);
+}
+
+function splitEnd(e) {
+  if (!splitDrag.name || e.pointerId !== splitDrag.pointer) return;
+  splitDrag.name = null;
+  document.body.classList.remove("resizing-v", "resizing-h");
+  keepLayout();
+}
+
+/** Arrow keys on a split move it 16 pixels at a time. */
+function splitKey(e) {
+  const name = e.currentTarget.dataset.split;
+  const grow = { left: "ArrowRight", right: "ArrowLeft", bottom: "ArrowUp" }[name];
+  const shrink = { left: "ArrowLeft", right: "ArrowRight", bottom: "ArrowDown" }[name];
+  if (e.key !== grow && e.key !== shrink) return;
+  e.preventDefault();
+  resize(name, layout.regions[name].size + (e.key === grow ? 16 : -16));
+  keepLayout();
+}
+
+// --- Files: the task's copy, a directory at a time.
+
+const files = {
+  task: null,
+  /** Directories open in the tree, by path ("" is the top). */
+  open: new Set([""]),
+  listings: new Map(),
+  /** Path → created, modified or deleted, from the task's review. */
+  changes: new Map(),
+  selected: null,
+  token: 0,
+};
+
+const joinPath = (dir, name) => (dir ? `${dir}/${name}` : name);
+
+async function loadFiles(id) {
+  if (files.task !== id) {
+    Object.assign(files, { task: id, open: new Set([""]), listings: new Map(), changes: new Map(), selected: null });
+    replace($("files-preview"));
+  }
+  const token = ++files.token;
+  try {
+    const review = await call("review", { task: id, includeIgnored: false });
+    files.changes = new Map(review.effects.effects.filter((e) => !inGit(e.path)).map((e) => [e.path, e.change]));
+    for (const dir of files.open) files.listings.set(dir, await call("list_dir", { task: id, path: dir }));
+  } catch (err) {
+    fail(err);
+    return;
+  }
+  if (token !== files.token || id !== state.current) return;
+  renderFiles();
+}
+
+/** What changed at or under `path`, for a directory's mark. */
+function changedUnder(path) {
+  for (const p of files.changes.keys()) if (p === path || p.startsWith(`${path}/`)) return true;
+  return false;
+}
+
+function fileRows(dir, depth) {
+  const listing = files.listings.get(dir);
+  if (!listing) return [];
+  const names = new Set(listing.entries.map((e) => e.name));
+  // What the task deleted is not in the copy; it shows where it was.
+  const deleted = [...files.changes]
+    .filter(([p, c]) => c === "deleted" && p.slice(0, p.lastIndexOf("/") === -1 ? 0 : p.lastIndexOf("/")) === dir)
+    .map(([p]) => p.slice(p.lastIndexOf("/") + 1))
+    .filter((n) => !names.has(n))
+    .map((name) => ({ name, kind: "file", gone: true }));
+  const rows = [];
+  for (const entry of [...listing.entries, ...deleted]) {
+    const path = joinPath(dir, entry.name);
+    const change = entry.gone ? "deleted" : files.changes.get(path);
+    const isDir = entry.kind === "dir";
+    const open = isDir && files.open.has(path);
+    rows.push(
+      h(
+        "button",
+        {
+          class: `file-row${files.selected === path ? " selected" : ""}${change ? ` ${change}` : ""}${entry.gone ? " gone" : ""}`,
+          type: "button",
+          role: "treeitem",
+          "data-key": `file:${path}`,
+          "data-path": path,
+          "data-dir": isDir ? "1" : undefined,
+          "aria-expanded": isDir ? String(open) : undefined,
+          "aria-selected": String(files.selected === path),
+          "aria-level": depth + 1,
+          style: `padding-left:${8 + depth * 14}px`,
+          onclick: () => (isDir ? toggleDir(path) : entry.kind === "link" ? toast(`${path} is a link; Files does not follow links`) : openFile(path, change)),
+        },
+        h("span", { class: "file-icon", "aria-hidden": "true" }, isDir ? (open ? "▾" : "▸") : entry.kind === "link" ? "↪" : ""),
+        h("span", { class: "file-name" }, entry.name),
+        change
+          ? h("span", { class: "file-mark", title: change }, CHANGE_MARK[change])
+          : isDir && changedUnder(path)
+            ? h("span", { class: "file-mark dot", title: "changes inside" }, "•")
+            : null
+      )
+    );
+    if (open) rows.push(...fileRows(path, depth + 1));
+  }
+  if (listing.cut) rows.push(h("p", { class: "muted file-cut", style: `padding-left:${8 + depth * 14}px` }, "More files than are shown"));
+  return rows;
+}
+
+function renderFiles() {
+  const tree = $("files-tree");
+  const rows = fileRows("", 0);
+  replace(tree, ...(rows.length ? rows : [h("p", { class: "muted region-note" }, "The copy is empty.")]));
+}
+
+async function toggleDir(path) {
+  if (files.open.has(path)) files.open.delete(path);
+  else {
+    files.open.add(path);
+    if (!files.listings.has(path)) {
+      try {
+        files.listings.set(path, await call("list_dir", { task: files.task, path }));
+      } catch (err) {
+        files.open.delete(path);
+        fail(err);
+      }
+    }
+  }
+  renderFiles();
+}
+
+async function openFile(path, change) {
+  files.selected = path;
+  renderFiles();
+  const head = h(
+    "div",
+    { class: "files-preview-head" },
+    h("span", { class: "path" }, path),
+    change ? h("button", { class: "button ghost", type: "button", onclick: () => revealPanel("review") }, "See it in Review") : null
+  );
+  if (change === "deleted") {
+    replace($("files-preview"), head, h("p", { class: "muted" }, "The task deleted this file; Review shows what it was."));
+    return;
+  }
+  try {
+    const file = await call("read_file", { task: files.task, path });
+    const body =
+      file.kind === "text"
+        ? h("pre", { class: "file-text" }, file.text)
+        : h("p", { class: "muted" }, `A binary file of ${file.size.toLocaleString()} bytes.`);
+    replace($("files-preview"), head, body, file.cut ? h("p", { class: "muted" }, `Only the first ${Math.round(256)} KiB is shown.`) : null);
+  } catch (err) {
+    fail(err);
+  }
+}
+
+/** Arrow keys in the tree move between rows; right opens a directory,
+ * left closes it. */
+function filesKey(e) {
+  const rows = [...$("files-tree").querySelectorAll(".file-row")];
+  const at = rows.indexOf(document.activeElement);
+  if (at === -1) return;
+  const row = rows[at];
+  const move = (to) => {
+    e.preventDefault();
+    rows[Math.max(0, Math.min(rows.length - 1, to))].focus();
+  };
+  if (e.key === "ArrowDown") move(at + 1);
+  else if (e.key === "ArrowUp") move(at - 1);
+  else if (e.key === "Home") move(0);
+  else if (e.key === "End") move(rows.length - 1);
+  else if (e.key === "ArrowRight" && row.dataset.dir && row.getAttribute("aria-expanded") === "false") {
+    e.preventDefault();
+    toggleDir(row.dataset.path);
+  } else if (e.key === "ArrowLeft" && row.dataset.dir && row.getAttribute("aria-expanded") === "true") {
+    e.preventDefault();
+    toggleDir(row.dataset.path);
+  }
 }
 
 // --- Appearance ------------------------------------------------------------
@@ -3095,9 +3619,7 @@ function renderProfile() {
 
 function showTab(name) {
   state.view = "tasks";
-  state.tab = name;
-  renderSidebar();
-  renderTask();
+  revealPanel(name);
 }
 
 /** Clicks the button `selector` names when it is there to click; says why
@@ -3120,7 +3642,11 @@ function withTask(then) {
     toast("No task is open");
     return;
   }
-  if (state.view !== "tasks") showTab(state.tab || "live");
+  if (state.view !== "tasks") {
+    state.view = "tasks";
+    renderSidebar();
+    renderTask();
+  }
   then(task);
 }
 
@@ -3164,7 +3690,7 @@ function openTaskMenu() {
 /** Shows `tab` of the open task; the review's buttons are there once it is. */
 function onTab(tab, then) {
   withTask(() => {
-    if (state.tab !== tab) {
+    if (!isShown(tab)) {
       showTab(tab);
       toast(`Showing ${tab === "review" ? "the review" : "the timeline"}; press the shortcut again to go on`);
       return;
@@ -3201,6 +3727,20 @@ const COMMANDS = [
     keys: "",
     run: () => withTask((t) => setColor(t, color)),
   })),
+
+  { id: "view.tasks", title: "Show Tasks", group: "Layout", keys: "Mod+0", inFields: true, run: () => revealPanel("tasks") },
+  { id: "view.files", title: "Show Files", group: "Layout", keys: "Mod+Shift+E", inFields: true, run: () => revealPanel("files") },
+  { id: "layout.left", title: "Show or hide the left side", group: "Layout", keys: "Mod+B", inFields: true, run: () => toggleRegion("left") },
+  { id: "layout.bottom", title: "Show or hide the bottom panel", group: "Layout", keys: "Mod+J", inFields: true, run: () => toggleRegion("bottom") },
+  { id: "layout.right", title: "Show or hide the right side", group: "Layout", keys: "Mod+Alt+B", inFields: true, run: () => toggleRegion("right") },
+  ...Object.entries(REGION_NAMES).map(([name, words]) => ({
+    id: `panel.to-${name}`,
+    title: `Move the panel in view to ${words}`,
+    group: "Layout",
+    keys: "",
+    run: () => movePanel(panelInView(), name),
+  })),
+  { id: "layout.reset", title: "Reset the layout", group: "Layout", keys: "", run: () => resetLayout() },
 
   { id: "view.live", title: "Show Live", group: "Task", keys: "Mod+1", inFields: true, run: () => withTask(() => showTab("live")) },
   { id: "view.review", title: "Show Review", group: "Task", keys: "Mod+2", inFields: true, run: () => withTask(() => showTab("review")) },
@@ -3294,12 +3834,7 @@ function labelControls() {
   label($("remove-task"), "task.delete", "Delete task");
   label($("send"), "prompt.run", "Run");
   $("send-keys").textContent = formatCombo(bindingOf(commandById("prompt.run")));
-  for (const [view, id] of [["live", "view.live"], ["review", "view.review"], ["timeline", "view.timeline"]]) {
-    const tab = document.querySelector(`#tabs [data-tab="${view}"]`);
-    const combo = bindingOf(commandById(id));
-    if (combo) tab.setAttribute("aria-keyshortcuts", ariaCombo(combo));
-    tab.title = combo ? formatCombo(combo) : "";
-  }
+  renderLayout();
 }
 
 async function loadShortcuts() {
@@ -3664,20 +4199,31 @@ async function start() {
   // Enter alone is a new line in the prompt; running it is a shortcut
   // (prompt.run, ⌘/Ctrl+Enter by default).
   $("send").append(h("kbd", { class: "shortcut", "aria-hidden": "true", id: "send-keys" }));
-  const tabs = [...document.querySelectorAll("#tabs .tab")];
-  for (const tab of tabs) {
-    tab.addEventListener("click", () => showTab(tab.dataset.tab));
+  // A region's tabs: the arrow keys move between them.
+  for (const bar of document.querySelectorAll(".region-tabs")) {
+    bar.addEventListener("keydown", (e) => {
+      const tabs = [...bar.querySelectorAll(".tab")];
+      const at = tabs.indexOf(document.activeElement);
+      if (at === -1) return;
+      const to = { ArrowRight: at + 1, ArrowLeft: at - 1, Home: 0, End: tabs.length - 1 }[e.key];
+      if (to === undefined) return;
+      e.preventDefault();
+      revealPanel(tabs[(to + tabs.length) % tabs.length].dataset.panel);
+    });
   }
-  $("tabs").addEventListener("keydown", (e) => {
-    const at = tabs.indexOf(document.activeElement);
-    if (at === -1) return;
-    const to = { ArrowRight: at + 1, ArrowLeft: at - 1, Home: 0, End: tabs.length - 1 }[e.key];
-    if (to === undefined) return;
-    e.preventDefault();
-    const tab = tabs[(to + tabs.length) % tabs.length];
-    showTab(tab.dataset.tab);
-    tab.focus();
-  });
+  for (const split of document.querySelectorAll(".split")) {
+    split.addEventListener("pointerdown", splitStart);
+    split.addEventListener("pointermove", splitMove);
+    split.addEventListener("pointerup", splitEnd);
+    split.addEventListener("pointercancel", splitEnd);
+    split.addEventListener("keydown", splitKey);
+  }
+  document.addEventListener("pointermove", panelDragMove);
+  document.addEventListener("pointerup", panelDragEnd);
+  document.addEventListener("pointercancel", panelDragEnd);
+  for (const n of ["left", "bottom", "right"]) $(`toggle-${n}`).addEventListener("click", () => toggleRegion(n));
+  $("files-tree").addEventListener("keydown", filesKey);
+  loadLayout();
   const remove = armed(
     "Delete task",
     () => {

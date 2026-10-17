@@ -4,6 +4,8 @@
 
 mod alerts;
 mod client;
+pub mod files;
+pub mod layout;
 mod protocol;
 mod server;
 mod service;

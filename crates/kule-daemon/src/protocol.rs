@@ -10,7 +10,7 @@ use serde_json::Value;
 
 /// Changes whenever a call, a result or a notice changes shape; a client
 /// and a daemon that disagree on it cannot talk.
-pub const PROTOCOL: u32 = 18;
+pub const PROTOCOL: u32 = 19;
 
 /// What a daemon says about itself.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -145,6 +145,22 @@ pub enum Call {
     ApplyProfile {
         text: String,
         parts: Vec<crate::settings_profile::Part>,
+    },
+    /// Where the window's panels are; `null` until it changed them.
+    Layout,
+    /// Keeps the window's layout; `None` goes back to the window's own.
+    SetLayout {
+        layout: Option<crate::layout::Layout>,
+    },
+    /// One directory of the task's copy, for the file explorer.
+    ListDir {
+        task: String,
+        path: String,
+    },
+    /// A file of the task's copy, as text when it is.
+    ReadFile {
+        task: String,
+        path: String,
     },
     /// The theme in use and the person's own themes.
     Themes,

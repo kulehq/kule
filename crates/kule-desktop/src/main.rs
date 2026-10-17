@@ -12,6 +12,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use kule_daemon::layout::Layout;
 use kule_daemon::settings_profile::{Part, ProfileFile};
 use kule_daemon::shortcuts::Shortcuts;
 use kule_daemon::themes::{ThemeFile, Themes};
@@ -388,6 +389,26 @@ fn apply_profile(kule: K<'_>, text: String, parts: Vec<Part>) -> Result<Vec<Stri
     kule.call(Call::ApplyProfile { text, parts })
 }
 
+#[tauri::command(async)]
+fn layout(kule: K<'_>) -> Result<Option<Layout>> {
+    kule.call(Call::Layout)
+}
+
+#[tauri::command(async)]
+fn set_layout(kule: K<'_>, layout: Option<Layout>) -> Result<()> {
+    kule.call(Call::SetLayout { layout })
+}
+
+#[tauri::command(async)]
+fn list_dir(kule: K<'_>, task: String, path: String) -> Result<serde_json::Value> {
+    kule.call(Call::ListDir { task, path })
+}
+
+#[tauri::command(async)]
+fn read_file(kule: K<'_>, task: String, path: String) -> Result<serde_json::Value> {
+    kule.call(Call::ReadFile { task, path })
+}
+
 /// Puts the person's shortcuts next to the menu's items: command id →
 /// accelerator (`CmdOrCtrl+Shift+K`).
 #[tauri::command]
@@ -654,6 +675,10 @@ fn main() {
             policy,
             choose_policy,
             set_menu_keys,
+            layout,
+            set_layout,
+            list_dir,
+            read_file,
             export_profile,
             import_profile,
             apply_profile,

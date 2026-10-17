@@ -102,7 +102,7 @@ body {
 
 body {
   display: grid;
-  grid-template-columns: 272px 1fr;
+  grid-template-columns: 48px minmax(0, 1fr);
   background: var(--bg);
   color: var(--text);
   font: 14px/1.45 var(--sans);
@@ -488,8 +488,7 @@ select:focus-visible {
 
 .task {
   display: flex;
-  min-height: 0;
-  flex: 1;
+  flex: none;
   flex-direction: column;
 }
 
@@ -1990,3 +1989,368 @@ select:focus-visible {
 .profile-part-label {
   font-weight: 600;
 }
+
+/* The activity bar: the mark, the regions' switches, Settings. */
+.activity {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 12px 0;
+  border-right: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.activity .brand-mark {
+  width: 26px;
+  height: 26px;
+  margin-bottom: 10px;
+}
+
+.activity-spacer {
+  flex: 1;
+}
+
+.activity-button {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  place-items: center;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.activity-button svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.2;
+  stroke-linejoin: round;
+}
+
+.activity-button svg .fill {
+  fill: currentColor;
+  opacity: 0.35;
+}
+
+.activity-button[aria-pressed="true"] svg .fill {
+  opacity: 1;
+}
+
+.activity-button:hover,
+.activity-button[aria-current="page"] {
+  background: var(--sunken);
+  color: var(--text);
+}
+
+.activity-button[aria-pressed="true"] {
+  color: var(--text);
+}
+
+.activity-button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* The workbench: left | split | center (main over bottom) | split | right.
+   The script sets the columns and rows from the layout. */
+.workbench {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  height: 100vh;
+  grid-template-columns: 272px 5px minmax(0, 1fr) 0 0;
+}
+
+.center {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  grid-template-rows: minmax(0, 1fr) 0 0;
+}
+
+.main-area {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+}
+
+.region {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  background: var(--bg);
+}
+
+.region-side,
+.region-bottom {
+  background: var(--surface);
+}
+
+.region-main {
+  flex: 1;
+}
+
+.region-tabs {
+  display: flex;
+  flex: none;
+  gap: 2px;
+  padding: 0 10px;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--border);
+  scrollbar-width: none;
+}
+
+.region-side .region-tabs,
+.region-bottom .region-tabs {
+  padding: 0 6px;
+}
+
+.region-tabs .tab {
+  flex: none;
+  cursor: grab;
+}
+
+.region-body {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+}
+
+.region-note {
+  margin: auto;
+  padding: 24px;
+  color: var(--faint);
+  text-align: center;
+}
+
+.split {
+  position: relative;
+  z-index: 2;
+  background: var(--border);
+  background-clip: content-box;
+}
+
+.split-v {
+  padding: 0 2px;
+  cursor: col-resize;
+}
+
+.split-h {
+  padding: 2px 0;
+  cursor: row-resize;
+}
+
+.split:hover,
+.split:focus-visible {
+  background: var(--accent);
+  background-clip: content-box;
+  outline: none;
+}
+
+body.resizing-h,
+body.resizing-h * {
+  cursor: col-resize !important;
+  user-select: none;
+}
+
+body.resizing-v,
+body.resizing-v * {
+  cursor: row-resize !important;
+  user-select: none;
+}
+
+/* The task list as a panel. */
+.panel-tasks {
+  gap: 16px;
+  padding: 14px 12px;
+}
+
+/* Moving a panel by its tab. */
+body.dragging-panel,
+body.dragging-panel * {
+  cursor: grabbing !important;
+  user-select: none;
+}
+
+.panel-ghost {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 30;
+  padding: 4px 10px;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  font-weight: 600;
+  pointer-events: none;
+  box-shadow: 0 6px 18px rgb(0 0 0 / 0.25);
+}
+
+.drop-zone {
+  position: fixed;
+  z-index: 25;
+  display: grid;
+  place-items: center;
+  border: 2px dashed var(--accent);
+  border-radius: 8px;
+  background: var(--accent-soft);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent);
+  font-weight: 600;
+  pointer-events: none;
+}
+
+/* Files: the copy as a tree, and a file to look at. */
+.panel-files {
+  overflow: hidden;
+}
+
+.files-tree {
+  display: flex;
+  min-height: 80px;
+  flex: 1 1 55%;
+  flex-direction: column;
+  padding: 6px 4px;
+  overflow: auto;
+}
+
+.file-row {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text);
+  font: 13px var(--sans);
+  text-align: left;
+  cursor: pointer;
+}
+
+.file-row:hover {
+  background: var(--sunken);
+}
+
+.file-row.selected {
+  background: var(--accent-soft);
+}
+
+.file-row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.file-icon {
+  color: var(--faint);
+  font-size: 11px;
+}
+
+.file-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-row.created .file-name,
+.file-row.created .file-mark {
+  color: var(--ok);
+}
+
+.file-row.modified .file-name,
+.file-row.modified .file-mark {
+  color: var(--ask);
+}
+
+.file-row.deleted .file-name,
+.file-row.deleted .file-mark {
+  color: var(--deny);
+}
+
+.file-row.gone .file-name {
+  text-decoration: line-through;
+}
+
+.file-mark {
+  font: 12px var(--mono);
+}
+
+.file-mark.dot {
+  color: var(--ask);
+}
+
+.file-cut {
+  font-size: 12px;
+}
+
+.files-preview {
+  display: flex;
+  min-height: 0;
+  flex: 1 1 45%;
+  flex-direction: column;
+  border-top: 1px solid var(--border);
+  overflow: auto;
+}
+
+.files-preview:empty {
+  display: none;
+}
+
+.files-preview-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.file-text {
+  margin: 0;
+  padding: 10px 12px;
+  color: var(--text);
+  font: 12px/1.5 var(--mono);
+  white-space: pre;
+  tab-size: 4;
+}
+
+/* The task's header keeps its name on one line and lets its buttons wrap
+   under it when the main area is narrow. */
+.task-header {
+  flex-wrap: wrap;
+}
+
+.task-title {
+  flex: 1 1 240px;
+}
+
+.task-title h1 {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-meta {
+  flex-wrap: wrap;
+}
+
+/* Each part keeps its own column and row, so a closed region leaves its
+   place empty instead of the others sliding into it. */
+#region-left { grid-column: 1; grid-row: 1; }
+[data-split="left"] { grid-column: 2; grid-row: 1; }
+.workbench > .center { grid-column: 3; grid-row: 1; }
+[data-split="right"] { grid-column: 4; grid-row: 1; }
+#region-right { grid-column: 5; grid-row: 1; }
+.center > .main-area { grid-row: 1; }
+.center > [data-split="bottom"] { grid-row: 2; }
+.center > #region-bottom { grid-row: 3; }
