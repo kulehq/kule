@@ -218,7 +218,13 @@ const TYPES: &[Kind] = &[
     Kind::Impl,
 ];
 
-pub(crate) fn entities(lang: Lang, src: &[u8]) -> Result<Vec<Entity>, Skip> {
+/// Whether `src` parses without a syntax error, within the parse time.
+pub(crate) fn parses(lang: Lang, src: &[u8]) -> bool {
+    parse(lang, src).is_ok_and(|tree| !tree.root_node().has_error())
+}
+
+/// `src` parsed, within [`PARSE_TIME`].
+fn parse(lang: Lang, src: &[u8]) -> Result<tree_sitter::Tree, Skip> {
     let mut parser = Parser::new();
     parser
         .set_language(&lang.grammar())
@@ -231,13 +237,17 @@ pub(crate) fn entities(lang: Lang, src: &[u8]) -> Result<Vec<Entity>, Skip> {
             ControlFlow::Continue(())
         }
     };
-    let tree = parser
+    parser
         .parse_with_options(
             &mut |at, _| &src[at.min(src.len())..],
             None,
             Some(ParseOptions::new().progress_callback(&mut progress)),
         )
-        .ok_or(Skip::Unparsed)?;
+        .ok_or(Skip::Unparsed)
+}
+
+pub(crate) fn entities(lang: Lang, src: &[u8]) -> Result<Vec<Entity>, Skip> {
+    let tree = parse(lang, src)?;
 
     let breaks: Vec<usize> = src
         .iter()

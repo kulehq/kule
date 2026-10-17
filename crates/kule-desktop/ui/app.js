@@ -1385,7 +1385,10 @@ async function commit(id, approve, includeIgnored, reviewed) {
   try {
     const result = await call("commit", { task: id, approve, includeIgnored, reviewed });
     if (result.outcome === "applied") state.includeIgnored.delete(id);
-    if (result.outcome === "applied") toast(`Committed ${plural(result.changes, "change")} · checkpoint ${result.checkpoint}`);
+    if (result.outcome === "applied") {
+      const merged = (result.merged || []).length ? ` · merged with the folder's changes in ${result.merged.join(", ")}` : "";
+      toast(`Committed ${plural(result.changes, "change")} · checkpoint ${result.checkpoint}${merged}`);
+    }
     else if (result.outcome === "nothing") toast("Nothing to commit");
     else toast(`Not committed: ${VERDICT[result.ruling.verdict].title.toLowerCase()}`, "error");
   } catch (err) {

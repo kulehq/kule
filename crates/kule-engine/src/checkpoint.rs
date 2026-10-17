@@ -19,7 +19,7 @@ use crate::fsops::{read_json, remove, write_json};
 use crate::git::GitState;
 use crate::history::{Entry, Event, History};
 use crate::manifest::{Baseline, Stamp};
-use crate::snapshot::{Snapshots, lonca};
+use crate::snapshot::{KeptFile, Snapshots, lonca};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -47,6 +47,10 @@ pub struct Checkpoint {
     /// store; `None` for a checkpoint with a `before/` directory.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub snapshot: Option<String>,
+    /// Files the folder had changed too, merged before the commit: what it
+    /// took from each side.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub merged: Vec<String>,
 }
 
 pub(crate) struct Store {
@@ -58,6 +62,17 @@ pub(crate) struct Store {
 impl Store {
     pub fn new(root: PathBuf, key: PathBuf) -> Self {
         Self { root, key }
+    }
+
+    /// What the commit of `checkpoint` replaced at `path`, when it replaced
+    /// a file there: bytes, mode and modification time.
+    pub fn replaced_file(&self, checkpoint: &Checkpoint, path: &str) -> Result<Option<KeptFile>> {
+        match &checkpoint.snapshot {
+            Some(snapshot) if self.root.join("store.git").is_dir() => {
+                self.snapshots()?.file(snapshot, path)
+            }
+            _ => Ok(None),
+        }
     }
 
     fn snapshots(&self) -> Result<Snapshots> {
@@ -112,6 +127,7 @@ impl Store {
             after: BTreeMap::new(),
             git_after: None,
             snapshot: Some(snapshot),
+            merged: Vec::new(),
         };
         self.save(&checkpoint)?;
         Ok(checkpoint)

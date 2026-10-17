@@ -12,7 +12,7 @@ pub enum Error {
     NonUtf8Path(PathBuf),
     /// The workspace no longer looks the way the operation expects, so
     /// applying it would overwrite changes Kule did not make.
-    #[error("the workspace changed outside Kule at: {}", .0.join(", "))]
+    #[error("the workspace changed since Kule last saw it, at: {}", .0.join(", "))]
     Conflict(Vec<String>),
     /// The policy did not let the transaction through: it waits for a
     /// person (`Ask`) or may never pass (`Deny`).

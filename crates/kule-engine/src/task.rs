@@ -29,6 +29,14 @@ pub struct TaskInfo {
     pub created_unix: u64,
 }
 
+/// A file merged before a commit: what goes into the copy, and the folder's
+/// stamp it was merged with.
+struct Merge {
+    path: String,
+    bytes: Vec<u8>,
+    theirs: Stamp,
+}
+
 /// What a person set for the task.
 #[derive(Debug, Serialize, Deserialize)]
 struct Settings {
@@ -279,6 +287,7 @@ impl Task {
         check(&set)?;
         let work_git = git::read(self.workspace())?;
         let mut conflicts = Vec::new();
+        let mut merges = Vec::new();
         for effect in &set.effects {
             let expected = baseline.entries.get(&effect.path).map(|e| &e.work);
             let untouched = self.untouched(
@@ -289,8 +298,19 @@ impl Task {
                 baseline.git.as_ref(),
             )?;
             let replaces_dir = effect.change == Change::Deleted || effect.kind != Kind::Dir;
-            if !untouched || (replaces_dir && self.has_unknown_under(&effect.path, &baseline)?) {
-                conflicts.push(effect.path.clone());
+            if untouched && !(replaces_dir && self.has_unknown_under(&effect.path, &baseline)?) {
+                continue;
+            }
+            // Changed in the folder too: merged, when Kule knows what both
+            // started from and the two changes keep apart.
+            match self.merge(effect, &baseline)? {
+                Some(Ok(merge)) => merges.push(merge),
+                Some(Err(both)) => conflicts.push(format!(
+                    "{} (both changed {})",
+                    effect.path,
+                    both.join(", ")
+                )),
+                None => conflicts.push(effect.path.clone()),
             }
         }
         // A reference deleted in the copy is a loose file gone; in the
@@ -305,8 +325,18 @@ impl Task {
             return Err(Error::Conflict(conflicts));
         }
 
+        // The merges go into the copy, which then starts from what the
+        // folder holds now: the commit takes the merged files.
+        for merge in &merges {
+            fsops::replace_file(&self.copy().join(&merge.path), &merge.bytes)?;
+            if let Some(entry) = baseline.entries.get_mut(&merge.path) {
+                entry.work = merge.theirs.clone();
+            }
+        }
+
         let store = self.store();
         let mut checkpoint = store.begin(self.workspace(), &set.effects)?;
+        checkpoint.merged = merges.iter().map(|m| m.path.clone()).collect();
         let paths = set.paths();
         if let Err(failed) = fsops::mirror(&self.copy(), self.workspace(), &paths, true) {
             // Part of it may be in place: put back what the commit replaced
@@ -369,6 +399,79 @@ impl Task {
             effects: lonca_core::canonical::digest_of(&checkpoint.effects),
         })?;
         Ok(Some(checkpoint))
+    }
+
+    /// Merges what the copy changed in the file of `effect` with what the
+    /// folder changed there since: `None` when that cannot be tried (not a
+    /// changed file on both sides, or what both started from is unknown),
+    /// otherwise the merge or what both changed.
+    fn merge(
+        &self,
+        effect: &Effect,
+        baseline: &Baseline,
+    ) -> Result<Option<std::result::Result<Merge, Vec<String>>>> {
+        if effect.change != Change::Modified || effect.kind != Kind::File || effect.in_git() {
+            return Ok(None);
+        }
+        let Some(entry) = baseline
+            .entries
+            .get(&effect.path)
+            .filter(|e| e.work.kind == Kind::File)
+        else {
+            return Ok(None);
+        };
+        let Some(theirs_stamp) =
+            Stamp::of(&self.workspace().join(&effect.path))?.filter(|s| s.kind == Kind::File)
+        else {
+            return Ok(None);
+        };
+        let Some(base) = self.base_of(&effect.path, &entry.work)? else {
+            return Ok(None);
+        };
+        let read =
+            |root: &Path| -> Result<Option<Vec<u8>>> { outline::read_file(root, &effect.path) };
+        let (Some(theirs), Some(ours)) = (read(self.workspace())?, read(&self.copy())?) else {
+            return Ok(None);
+        };
+        Ok(Some(
+            match crate::entities::merge(&effect.path, &base, &theirs, &ours) {
+                Ok(bytes) => Ok(Merge {
+                    path: effect.path.clone(),
+                    bytes,
+                    theirs: theirs_stamp,
+                }),
+                Err(conflict) => Err(conflict.what),
+            },
+        ))
+    }
+
+    /// What the folder held at `path` when this task's copy was made from
+    /// it, as it stood with `expected`: kept by the commit of another task
+    /// on the same folder that replaced it since.
+    fn base_of(&self, path: &str, expected: &Stamp) -> Result<Option<Vec<u8>>> {
+        let home = self.home();
+        for info in Task::list(&home)? {
+            if info.id == self.id() || info.workspace != self.info.workspace {
+                continue;
+            }
+            // A task being removed meanwhile has nothing to give.
+            let Ok(other) = Task::open(&home, &info.id) else {
+                continue;
+            };
+            let store = other.store();
+            for checkpoint in store.all().unwrap_or_default() {
+                let Some(kept) = store.replaced_file(&checkpoint, path)? else {
+                    continue;
+                };
+                if kept.mtime == expected.mtime
+                    && kept.mode == expected.mode
+                    && kept.bytes.len() as u64 == expected.size
+                {
+                    return Ok(Some(kept.bytes));
+                }
+            }
+        }
+        Ok(None)
     }
 
     /// Throws the copy's changes away: each changed path goes back to what

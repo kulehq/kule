@@ -52,6 +52,16 @@ Review, and, while its window is not in front, the app also tells through
 the system's notifications when two tasks start to meet, when an agent
 waits for an answer, and when a run is over.
 
+When the second of them commits, a file both changed is merged, three ways
+from what both started with (the first commit kept it): changes to
+different methods, sections or keys both go in, two methods added at the
+same place are both kept, and the commit says what it merged. Two changes
+to the same method, section or key are a conflict by name (`task.rs (both
+changed method Task::commit)`), even where their lines do not touch, and so
+is a merge whose parts would not stay where either side put them. A file
+changed by hand in the folder meanwhile is a conflict as before: nothing
+kept what it held.
+
 A changed picture (PNG, JPEG, GIF, WebP) shows what it was and what it is
 under Review. Only what its header proves to be such a picture, under
 8 MiB and 40 megapixels, reaches the window.

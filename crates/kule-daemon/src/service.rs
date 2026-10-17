@@ -24,8 +24,8 @@ pub type Result<T> = std::result::Result<T, String>;
 fn text(e: Error) -> String {
     match e {
         Error::Conflict(paths) => format!(
-            "the workspace changed outside Kule at {}; roll back, or start a new task on \
-             the current workspace",
+            "the folder changed since Kule last saw it, at {}; roll back, or start a new \
+             task on the folder as it is now",
             paths.join(", ")
         ),
         e => e.to_string(),
@@ -140,6 +140,9 @@ pub enum Commit {
     Applied {
         checkpoint: u32,
         changes: usize,
+        /// Files the folder had changed too, merged with them.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        merged: Vec<String>,
     },
     Nothing,
     /// The policy holds the changes: they wait for approval, or are denied.
@@ -536,6 +539,7 @@ impl Service {
             Ok(Some(checkpoint)) => Ok(Commit::Applied {
                 checkpoint: checkpoint.id,
                 changes: checkpoint.effects.len(),
+                merged: checkpoint.merged,
             }),
             Ok(None) => Ok(Commit::Nothing),
             Err(Error::Held(ruling)) => Ok(Commit::Held { ruling }),
@@ -1039,7 +1043,8 @@ mod tests {
             s.app.commit(&id, false, false, None).unwrap(),
             Commit::Applied {
                 checkpoint: 1,
-                changes: 1
+                changes: 1,
+                ..
             }
         ));
         assert!(matches!(
@@ -1119,7 +1124,7 @@ mod tests {
         fs::write(copy.join("a.txt"), "agent\n").unwrap();
         fs::write(s.ws.path().join("a.txt"), "human, a longer line\n").unwrap();
         let e = s.app.commit(&id, false, false, None).unwrap_err();
-        assert!(e.contains("changed outside Kule at a.txt"), "{e}");
+        assert!(e.contains("since Kule last saw it, at a.txt"), "{e}");
     }
 
     #[test]

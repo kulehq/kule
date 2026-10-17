@@ -16,11 +16,14 @@
 mod code;
 mod data;
 mod markdown;
+mod merge;
 
 use std::collections::{BTreeMap, HashSet};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
+
+pub use merge::{Conflict, merge};
 
 /// Larger files are not outlined.
 pub const MAX_BYTES: usize = 1 << 20;
@@ -96,7 +99,7 @@ impl Kind {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Edit {
     Added,
@@ -189,6 +192,19 @@ impl Format {
             "toml" => Format::Toml,
             _ => Format::Code(code::Lang::of(&ext)?),
         })
+    }
+
+    /// Whether `bytes` is well formed in this format: code without syntax
+    /// errors, JSON and TOML that load. Markdown always is.
+    fn parses(self, bytes: &[u8]) -> bool {
+        match self {
+            Format::Code(lang) => code::parses(lang, bytes),
+            Format::Markdown => true,
+            Format::Json => serde_json::from_slice::<serde_json::Value>(bytes).is_ok(),
+            Format::Toml => {
+                std::str::from_utf8(bytes).is_ok_and(|t| t.parse::<toml::Table>().is_ok())
+            }
+        }
     }
 
     fn entities(self, bytes: &[u8]) -> Result<Vec<Entity>, Skip> {
@@ -468,6 +484,18 @@ mod tests {
                 reason: Skip::TooMany
             }
         );
+    }
+
+    #[test]
+    fn well_formed_files_parse_and_broken_ones_do_not() {
+        let parses = |path: &str, text: &str| Format::of(path).unwrap().parses(text.as_bytes());
+        assert!(parses("a.rs", "fn a() {}\n"));
+        assert!(!parses("a.rs", "fn a() {\n"));
+        assert!(parses("a.json", "{\"a\": 1}"));
+        assert!(!parses("a.json", "{\"a\": 1,}"));
+        assert!(parses("a.toml", "a = 1\n"));
+        assert!(!parses("a.toml", "[a]\n[a]\n"));
+        assert!(parses("a.md", "# anything ``` goes"));
     }
 
     #[test]

@@ -410,11 +410,19 @@ fn run() -> Result<ExitCode> {
             let task = Task::open(&home, &task)?;
             let policy = load_policy(&home, &task)?;
             match task.commit_with(include_ignored, policy.gate(approve)) {
-                Ok(Some(cp)) => println!(
-                    "committed {} changes · checkpoint {}",
-                    cp.effects.len(),
-                    cp.id
-                ),
+                Ok(Some(cp)) => {
+                    println!(
+                        "committed {} changes · checkpoint {}",
+                        cp.effects.len(),
+                        cp.id
+                    );
+                    if !cp.merged.is_empty() {
+                        println!(
+                            "merged with what the folder changed meanwhile: {}",
+                            cp.merged.join(", ")
+                        );
+                    }
+                }
                 Ok(None) => println!("nothing to commit"),
                 Err(Error::Held(ruling)) => {
                     print_ruling(&ruling);

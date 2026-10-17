@@ -51,6 +51,13 @@ struct Parent {
     mtime: Option<(i64, i64)>,
 }
 
+/// A file as a snapshot keeps it.
+pub(crate) struct KeptFile {
+    pub bytes: Vec<u8>,
+    pub mode: u32,
+    pub mtime: (i64, i64),
+}
+
 pub(crate) struct Snapshots {
     store: Store,
 }
@@ -168,6 +175,49 @@ impl Snapshots {
     /// Lays snapshot `commit` out at `dst`, which must not exist: the files
     /// with their modes and times, symlinks, directories, and the parents'
     /// times.
+    /// What the snapshot `commit` holds for the file at `path`: its bytes,
+    /// mode and modification time; `None` when it holds no file there.
+    pub fn file(&self, commit: &str, path: &str) -> Result<Option<KeptFile>> {
+        let at = self.store.path().to_owned();
+        let fail = |e| lonca(&at, e);
+        let files = self
+            .store
+            .commit_files(&GitId::parse(commit).map_err(fail)?)
+            .map_err(fail)?;
+        let read = |name: &str| -> Result<Option<Vec<u8>>> {
+            match files.get(name) {
+                Some(entry) => self
+                    .store
+                    .read_blob(&entry.blob)
+                    .map(Some)
+                    .map_err(|e| lonca(&at, e)),
+                None => Ok(None),
+            }
+        };
+        let Some(meta) = read(META)? else {
+            return Ok(None);
+        };
+        let meta: Meta = serde_json::from_slice(&meta).map_err(|source| Error::State {
+            path: at.join(META),
+            source,
+        })?;
+        let Some(entry) = meta
+            .entries
+            .iter()
+            .find(|e| e.path == path && e.kind == Kind::File)
+        else {
+            return Ok(None);
+        };
+        let Some(n) = entry.blob else {
+            return Ok(None);
+        };
+        Ok(read(&format!("files/{n}"))?.map(|bytes| KeptFile {
+            bytes,
+            mode: entry.mode,
+            mtime: entry.mtime,
+        }))
+    }
+
     pub fn restore(&self, commit: &str, dst: &Path) -> Result<()> {
         let at = self.store.path().to_owned();
         let fail = |e| lonca(&at, e);

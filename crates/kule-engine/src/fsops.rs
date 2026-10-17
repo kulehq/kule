@@ -402,6 +402,16 @@ fn temp_beside(path: &Path) -> PathBuf {
     path.with_file_name(format!(".kule-tmp-{}-{n}", std::process::id()))
 }
 
+/// Writes `bytes` to the file at `path` through a rename, keeping its mode;
+/// its modification time moves, as for any write.
+pub(crate) fn replace_file(path: &Path, bytes: &[u8]) -> Result<()> {
+    let mode = fs::symlink_metadata(path).at(path)?.permissions().mode();
+    let tmp = temp_beside(path);
+    fs::write(&tmp, bytes).at(&tmp)?;
+    fs::set_permissions(&tmp, fs::Permissions::from_mode(mode)).at(&tmp)?;
+    fs::rename(&tmp, path).at(path)
+}
+
 /// Removes a file, symlink or whole directory; a missing path is not an error.
 pub fn remove(path: &Path) -> Result<()> {
     match fs::symlink_metadata(path) {

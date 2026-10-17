@@ -130,6 +130,16 @@ fn read_beneath(root: &Path, rel: &str, limit: usize) -> Result<Side> {
     }
 }
 
+/// The regular file at `rel` under `root`, read as [`read_beneath`] reads
+/// (no link followed) up to the size Kule merges; `None` when it is not
+/// there, not a regular file, or larger.
+pub(crate) fn read_file(root: &Path, rel: &str) -> Result<Option<Vec<u8>>> {
+    Ok(match read_beneath(root, rel, MAX_BYTES)? {
+        Side::Bytes(bytes) => Some(bytes),
+        _ => None,
+    })
+}
+
 /// Opens `rel` under `root`, each component with `O_NOFOLLOW`; `None` when
 /// a component is missing, is a link, or is not what it must be.
 pub(crate) fn open_beneath(root: &Path, rel: &str) -> io::Result<Option<File>> {
