@@ -8,6 +8,7 @@ mod protocol;
 mod server;
 mod service;
 pub mod shortcuts;
+pub mod themes;
 
 use std::path::PathBuf;
 

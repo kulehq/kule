@@ -309,6 +309,13 @@ it writes in Kule reaches it outside; you sign it in there once.
   or text editing owns (⌘Q, Alt+F4, Ctrl+Alt+arrows on Linux, copy and
   paste) are never taken, and in a text field only the shortcuts meant
   for it fire.
+- **Appearance**: Kule's themes (System, which follows the computer, Light,
+  Dark, Coral, Nord, Solarized Light and two high-contrast ones) and your
+  own, made from any of them in Settings → Appearance with a live preview
+  and a warning for colour pairs too faint to read. A theme goes to and
+  comes from a `.kule-theme.json` file that holds colours for the
+  window's named parts and nothing else (`#rrggbb`, checked on the way
+  in). The theme in use and your own are kept in `themes.json`.
 - **Live**: the agent's answer, tool calls and what each changed, as they
   come.
 - **Review**: the effect set and the ruling, with *Commit*, *Approve and

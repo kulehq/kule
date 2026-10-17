@@ -609,11 +609,11 @@ function renderSpent(task) {
 }
 
 /** Settings' sections, each a value of `state.view`. */
-const SETTINGS = ["agents", "policy", "rules", "secrets", "budget", "shortcuts"];
+const SETTINGS = ["agents", "policy", "rules", "secrets", "budget", "appearance", "shortcuts"];
 
 async function openSettings(view = SETTINGS.includes(state.view) ? state.view : "agents") {
   closeMenu();
-  const opening = { agents: openAgents, policy: openPolicy, rules: openRules, secrets: openSecrets, budget: openBudget, shortcuts: openShortcuts }[view];
+  const opening = { agents: openAgents, policy: openPolicy, rules: openRules, secrets: openSecrets, budget: openBudget, appearance: openAppearance, shortcuts: openShortcuts }[view];
   await opening();
 }
 
@@ -2598,6 +2598,288 @@ async function removeTask(task = currentTask()) {
   await refresh();
 }
 
+// --- Appearance ------------------------------------------------------------
+
+// Kule's themes and the person's own, kept by the daemon with the one in
+// use, so the window opens the way it was left.
+
+const appearance = {
+  /** { current, custom } as the daemon keeps it. */
+  kept: { current: "system", custom: [] },
+  /** The theme being written: a copy, not yet kept. */
+  editing: null,
+  isNew: false,
+};
+
+const allThemes = () => [...BUILT_IN_THEMES, ...appearance.kept.custom];
+const themeById = (id) => allThemes().find((t) => t.id === id) || BUILT_IN_THEMES[0];
+const currentTheme = () => themeById(appearance.kept.current);
+
+async function loadThemes() {
+  try {
+    appearance.kept = await call("themes");
+  } catch (err) {
+    fail(err);
+  }
+  if (!appearance.editing) applyTheme(currentTheme());
+}
+
+async function keepThemes(next) {
+  try {
+    appearance.kept = await call("set_themes", { themes: next });
+    return true;
+  } catch (err) {
+    fail(err);
+    return false;
+  } finally {
+    if (!appearance.editing) applyTheme(currentTheme());
+    renderAppearance();
+  }
+}
+
+function useTheme(id) {
+  return keepThemes({ ...appearance.kept, current: id });
+}
+
+/** Moves to the next theme in the list, for the keyboard. */
+function nextTheme() {
+  const themes = allThemes();
+  const at = themes.findIndex((t) => t.id === appearance.kept.current);
+  const next = themes[(at + 1) % themes.length];
+  useTheme(next.id).then(() => toast(`Theme: ${next.name}`));
+}
+
+async function openAppearance() {
+  state.view = "appearance";
+  renderSidebar();
+  renderTask();
+  renderAppearance();
+}
+
+/** A small picture of a theme: a panel on its background, text, the
+ * accent and the three verdicts. */
+function themeSwatch(theme) {
+  const c = (p) => themeColor(theme.scheme ? theme : { scheme: matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light" }, p);
+  const box = (style) => h("span", { class: "sw", style });
+  return h(
+    "span",
+    { class: "swatch-preview", style: `background:${c("bg")};border-color:${c("border")}`, "aria-hidden": "true" },
+    h(
+      "span",
+      { class: "sw-panel", style: `background:${c("surface")};border-color:${c("border")}` },
+      box(`background:${c("text")};width:56%`),
+      box(`background:${c("muted")};width:38%`),
+      h(
+        "span",
+        { class: "sw-row" },
+        box(`background:${c("accent")};width:30%;height:9px;border-radius:5px`),
+        box(`background:${c("ok")};width:9px;height:9px;border-radius:50%`),
+        box(`background:${c("ask")};width:9px;height:9px;border-radius:50%`),
+        box(`background:${c("deny")};width:9px;height:9px;border-radius:50%`)
+      )
+    )
+  );
+}
+
+function themeCard(theme) {
+  const current = theme.id === appearance.kept.current;
+  return h(
+    "button",
+    {
+      class: "theme-card",
+      type: "button",
+      role: "radio",
+      "aria-checked": String(current),
+      "data-key": `theme:${theme.id}`,
+      onclick: () => useTheme(theme.id),
+    },
+    themeSwatch(theme),
+    h("span", { class: "theme-name" }, theme.name),
+    h("span", { class: "theme-kind" }, theme.scheme ? (theme.scheme === "dark" ? "dark" : "light") : "follows your computer")
+  );
+}
+
+/** A copy of `theme` to write, under a new id. */
+function newThemeFrom(theme) {
+  const base = theme.scheme ? theme : themeById(matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+  const id = `custom-${Array.from(crypto.getRandomValues(new Uint8Array(4)), (b) => b.toString(16).padStart(2, "0")).join("")}`;
+  appearance.editing = {
+    id,
+    name: `${base.name} (mine)`.slice(0, 40),
+    scheme: base.scheme,
+    colors: Object.fromEntries(THEME_PARTS.map(([p]) => [p, themeColor(base, p)])),
+  };
+  appearance.isNew = true;
+  if (state.view !== "appearance") openAppearance();
+  else renderAppearance();
+}
+
+function editTheme(theme) {
+  appearance.editing = JSON.parse(JSON.stringify(theme));
+  appearance.editing.colors = Object.fromEntries(THEME_PARTS.map(([p]) => [p, themeColor(theme, p)]));
+  appearance.isNew = false;
+  renderAppearance();
+}
+
+function stopEditing() {
+  appearance.editing = null;
+  applyTheme(currentTheme());
+  renderAppearance();
+}
+
+async function saveEditedTheme() {
+  const theme = appearance.editing;
+  const custom = appearance.kept.custom.filter((t) => t.id !== theme.id);
+  custom.push(theme);
+  appearance.editing = null;
+  if (await keepThemes({ current: theme.id, custom })) toast(`Kept ${theme.name}`);
+}
+
+async function importTheme() {
+  let file;
+  try {
+    file = await call("import_theme");
+  } catch (err) {
+    fail(err);
+    return;
+  }
+  if (!file) return;
+  const id = `custom-${Array.from(crypto.getRandomValues(new Uint8Array(4)), (b) => b.toString(16).padStart(2, "0")).join("")}`;
+  const theme = { id, name: file.name, scheme: file.scheme, colors: file.colors };
+  if (await keepThemes({ current: id, custom: [...appearance.kept.custom, theme] })) toast(`Took in ${file.name}`);
+}
+
+async function exportTheme(theme) {
+  if (!theme.scheme) {
+    toast("System follows your computer; export Light or Dark instead");
+    return;
+  }
+  const colors = Object.fromEntries(THEME_PARTS.map(([p]) => [p, themeColor(theme, p)]));
+  try {
+    const path = await call("export_theme", { theme: { kule_theme: 1, name: theme.name, scheme: theme.scheme, colors } });
+    if (path) toast(`Saved ${theme.name} to ${path}`);
+  } catch (err) {
+    fail(err);
+  }
+}
+
+function themeEditor() {
+  const theme = appearance.editing;
+  const preview = () => applyTheme(theme);
+  const checks = () =>
+    readability(theme)
+      .filter((r) => r.ratio < r.need)
+      .map((r) => h("li", {}, `${r.label}: ${r.ratio.toFixed(1)} to 1, needs ${r.need}`));
+  const warnings = h("ul", { class: "theme-warnings", "aria-live": "polite" }, checks());
+  const refresh = () => {
+    preview();
+    replace(warnings, ...checks());
+    if (!warnings.children.length) warnings.append(h("li", { class: "ok" }, "Every pair reads clearly."));
+  };
+  const name = h("input", {
+    id: "theme-name",
+    type: "text",
+    maxlength: 40,
+    value: theme.name,
+    autocomplete: "off",
+    oninput: (e) => (theme.name = e.target.value),
+  });
+  const scheme = h(
+    "select",
+    { id: "theme-scheme", onchange: (e) => ((theme.scheme = e.target.value), refresh()) },
+    h("option", { value: "light", selected: theme.scheme === "light" }, "Light"),
+    h("option", { value: "dark", selected: theme.scheme === "dark" }, "Dark")
+  );
+  const parts = THEME_PARTS.map(([part, label]) => {
+    const id = `theme-part-${part}`;
+    const text = h("input", {
+      type: "text",
+      class: "hex",
+      value: theme.colors[part],
+      maxlength: 7,
+      spellcheck: "false",
+      "aria-label": `${label}, as #rrggbb`,
+    });
+    const picker = h("input", { id, type: "color", value: theme.colors[part] });
+    picker.addEventListener("input", () => {
+      theme.colors[part] = picker.value;
+      text.value = picker.value;
+      refresh();
+    });
+    text.addEventListener("change", () => {
+      const v = text.value.trim().toLowerCase();
+      if (isHex(v)) {
+        theme.colors[part] = v;
+        picker.value = v;
+        refresh();
+      } else {
+        text.value = theme.colors[part];
+        toast("A colour is written like #1b1f27");
+      }
+    });
+    return h("label", { class: "theme-part", for: id }, picker, h("span", {}, label), text);
+  });
+  setTimeout(refresh, 0);
+  return h(
+    "div",
+    { class: "agent-editor theme-editor" },
+    h("h3", {}, appearance.isNew ? "New theme" : `Edit ${theme.name}`),
+    h("p", { class: "muted" }, "The window shows your changes as you make them; nothing is kept until you save."),
+    h(
+      "div",
+      { class: "theme-meta" },
+      h("label", { class: "agent-field", for: "theme-name" }, h("span", { class: "agent-field-label" }, "Name"), name),
+      h("label", { class: "agent-field", for: "theme-scheme" }, h("span", { class: "agent-field-label" }, "Light or dark"), scheme)
+    ),
+    h("div", { class: "theme-parts" }, parts),
+    warnings,
+    h(
+      "div",
+      { class: "agent-actions" },
+      h("button", { class: "button primary", type: "button", "data-key": "theme-save", onclick: saveEditedTheme }, "Save theme"),
+      h("button", { class: "button ghost", type: "button", "data-key": "theme-cancel", onclick: stopEditing }, "Cancel")
+    )
+  );
+}
+
+function renderAppearance() {
+  if (state.view !== "appearance") return;
+  const current = currentTheme();
+  const custom = current.id.startsWith("custom-");
+  const actions = [
+    h("button", { class: "button", type: "button", "data-key": "theme-new", onclick: () => newThemeFrom(current) }, "New theme from this one"),
+    custom ? h("button", { class: "button ghost", type: "button", "data-key": "theme-edit", onclick: () => editTheme(current) }, "Edit") : null,
+    current.scheme ? h("button", { class: "button ghost", type: "button", "data-key": "theme-export", onclick: () => exportTheme(current) }, "Export…") : null,
+    h("button", { class: "button ghost", type: "button", "data-key": "theme-import", onclick: importTheme }, "Import…"),
+  ];
+  if (custom) {
+    const remove = armed("Delete", `Click again to delete ${current.name}`, false, () =>
+      keepThemes({ current: "system", custom: appearance.kept.custom.filter((t) => t.id !== current.id) })
+    );
+    remove.dataset.key = "theme-delete";
+    actions.push(remove);
+  }
+  replace(
+    $("agents-view"),
+    h(
+      "header",
+      { class: "agents-head" },
+      h("h2", {}, "Appearance"),
+      h(
+        "p",
+        { class: "muted" },
+        "Kule's themes and your own. A theme is a set of colours for the window's parts; it can be shared as a .kule-theme.json file, which carries colours and nothing else."
+      )
+    ),
+    appearance.editing ? themeEditor() : null,
+    h("section", { class: "key-group", "aria-label": "Kule's themes" }, h("h3", {}, "Kule's themes"), h("div", { class: "theme-grid", role: "radiogroup", "aria-label": "Kule's themes" }, BUILT_IN_THEMES.map(themeCard))),
+    appearance.kept.custom.length
+      ? h("section", { class: "key-group", "aria-label": "Your themes" }, h("h3", {}, "Your themes"), h("div", { class: "theme-grid", role: "radiogroup", "aria-label": "Your themes" }, appearance.kept.custom.map(themeCard)))
+      : null,
+    appearance.editing ? null : h("div", { class: "agent-actions" }, h("span", { class: "muted" }, `In use: ${current.name}`), ...actions)
+  );
+}
+
 // --- Keyboard --------------------------------------------------------------
 
 // Everything the window does is a command here, with a default shortcut or
@@ -2751,6 +3033,19 @@ const COMMANDS = [
   })),
   { id: "policy.balanced", title: "Use the balanced policy", group: "Settings", keys: "", run: () => choosePolicy("balanced", refreshPolicyViews) },
   { id: "policy.careful", title: "Use the careful policy", group: "Settings", keys: "", run: () => choosePolicy("careful", refreshPolicyViews) },
+
+  { id: "theme.next", title: "Next theme", group: "Appearance", keys: "", inFields: true, run: () => nextTheme() },
+  { id: "theme.new", title: "New theme from the one in use…", group: "Appearance", keys: "", run: () => newThemeFrom(currentTheme()) },
+  { id: "theme.import", title: "Import a theme…", group: "Appearance", keys: "", run: () => importTheme() },
+  { id: "theme.export", title: "Export the theme in use…", group: "Appearance", keys: "", run: () => exportTheme(currentTheme()) },
+  ...BUILT_IN_THEMES.map((t) => ({
+    id: `theme.use.${t.id}`,
+    title: `Theme: ${t.name}`,
+    group: "Appearance",
+    keys: "",
+    inFields: true,
+    run: () => useTheme(t.id).then(() => toast(`Theme: ${t.name}`)),
+  })),
 ];
 
 async function refreshPolicyViews() {
@@ -3102,6 +3397,9 @@ async function start() {
   document.addEventListener("keydown", onKey, true);
   labelControls();
   loadShortcuts();
+  loadThemes();
+  // A theme that follows the computer redraws its pictures when it changes.
+  matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => renderAppearance());
 
   await loadAgentChoices();
   $("open-settings").addEventListener("click", () => openSettings());

@@ -11,7 +11,7 @@
   --accent-soft: #e3ecfd;
   --ok: #15803d;
   --ok-soft: #dcf3e4;
-  --ask: #b45309;
+  --ask: #a14a07;
   --ask-soft: #fdf0d9;
   --deny: #b91c1c;
   --deny-soft: #fbe2e2;
@@ -30,8 +30,10 @@
   color-scheme: light;
 }
 
+/* Dark when the system is, unless a theme says light; and whenever a theme
+   says dark. A theme's own colours go on the root element over these. */
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-scheme="light"]) {
     --bg: #12151b;
     --surface: #191d25;
     --sunken: #10131a;
@@ -58,6 +60,34 @@
     --tag-pink: #f472b6;
     color-scheme: dark;
   }
+}
+
+:root[data-scheme="dark"] {
+  --bg: #12151b;
+  --surface: #191d25;
+  --sunken: #10131a;
+  --border: #2a303b;
+  --text: #e6e9ef;
+  --muted: #9aa3b2;
+  --faint: #8d96a5;
+  --accent: #4f8cff;
+  --accent-text: #0b1020;
+  --accent-soft: #1b2a47;
+  --ok: #4ade80;
+  --ok-soft: #14301f;
+  --ask: #fbbf24;
+  --ask-soft: #3a2c0f;
+  --deny: #f87171;
+  --deny-soft: #3d1717;
+  --tag-red: #f87171;
+  --tag-orange: #fb923c;
+  --tag-yellow: #facc15;
+  --tag-green: #4ade80;
+  --tag-teal: #2dd4bf;
+  --tag-blue: #60a5fa;
+  --tag-purple: #c084fc;
+  --tag-pink: #f472b6;
+  color-scheme: dark;
 }
 
 * {
@@ -1783,4 +1813,132 @@ select:focus-visible {
 
 .key-actions .button {
   min-height: 28px;
+}
+
+/* Settings → Appearance. */
+.theme-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
+  gap: 10px;
+}
+
+.theme-card {
+  display: grid;
+  gap: 4px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.theme-card:hover {
+  border-color: var(--muted);
+}
+
+.theme-card[aria-checked="true"] {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+.theme-card:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.theme-name {
+  font-weight: 600;
+}
+
+.theme-kind {
+  color: var(--faint);
+  font-size: 12px;
+}
+
+.swatch-preview {
+  display: block;
+  height: 72px;
+  padding: 10px;
+  border: 1px solid;
+  border-radius: 6px;
+}
+
+.sw-panel {
+  display: grid;
+  gap: 6px;
+  height: 100%;
+  padding: 8px;
+  border: 1px solid;
+  border-radius: 4px;
+}
+
+.sw {
+  display: block;
+  height: 5px;
+  border-radius: 3px;
+}
+
+.sw-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.theme-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+}
+
+.theme-meta .agent-field {
+  min-width: 220px;
+}
+
+.theme-parts {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  gap: 6px 14px;
+}
+
+.theme-part {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.theme-part input[type="color"] {
+  width: 30px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: none;
+}
+
+.theme-part .hex {
+  width: 6.5em;
+  padding: 3px 6px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg);
+  color: var(--text);
+  font: 12px var(--mono);
+}
+
+.theme-warnings {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--ask);
+  font-size: 13px;
+}
+
+.theme-warnings .ok {
+  color: var(--ok);
+  list-style: none;
+  margin-left: -18px;
 }

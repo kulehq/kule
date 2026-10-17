@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use kule_daemon::shortcuts::Shortcuts;
+use kule_daemon::themes::{ThemeFile, Themes};
 use kule_daemon::{
     AgentProfile, Alert, Alerts, Call, Client, Commit, DailyBudget, Hello, Money, Notice, PROTOCOL,
     PolicyChoice, Question, Result, Review, RunEvent, Sequenced, TaskColor, TaskView, Timeline,
@@ -329,6 +330,75 @@ fn choose_policy(kule: K<'_>, choice: PolicyChoice) -> Result<PolicyChoice> {
 }
 
 #[tauri::command(async)]
+fn themes(kule: K<'_>) -> Result<Themes> {
+    kule.call(Call::Themes)
+}
+
+#[tauri::command(async)]
+fn set_themes(kule: K<'_>, themes: Themes) -> Result<Themes> {
+    kule.call(Call::SetThemes { themes })
+}
+
+/// A theme file the person picks, read and checked; `None` when they
+/// picked none.
+#[tauri::command(async)]
+fn import_theme(app: AppHandle) -> Result<Option<ThemeFile>> {
+    let Some(path) = app
+        .dialog()
+        .file()
+        .set_title("Choose a Kule theme")
+        .add_filter("Kule theme", &["json"])
+        .blocking_pick_file()
+        .and_then(|p| p.into_path().ok())
+    else {
+        return Ok(None);
+    };
+    let len = std::fs::metadata(&path)
+        .map_err(|e| format!("{}: {e}", path.display()))?
+        .len();
+    if len > kule_daemon::themes::MAX_FILE {
+        return Err(format!(
+            "{}: a theme file is at most {} KiB",
+            path.display(),
+            kule_daemon::themes::MAX_FILE / 1024
+        ));
+    }
+    let bytes = std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+    kule_daemon::themes::read_file(&bytes).map(Some)
+}
+
+/// Writes `theme` where the person says; the path, or `None` when they
+/// said nowhere.
+#[tauri::command(async)]
+fn export_theme(app: AppHandle, theme: ThemeFile) -> Result<Option<String>> {
+    let text = kule_daemon::themes::to_file(&theme)?;
+    let slug: String = theme
+        .name
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() {
+                c.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    let Some(path) = app
+        .dialog()
+        .file()
+        .set_title("Save the theme")
+        .set_file_name(format!("{}.kule-theme.json", slug.trim_matches('-')))
+        .add_filter("Kule theme", &["json"])
+        .blocking_save_file()
+        .and_then(|p| p.into_path().ok())
+    else {
+        return Ok(None);
+    };
+    std::fs::write(&path, text).map_err(|e| format!("{}: {e}", path.display()))?;
+    Ok(Some(path.display().to_string()))
+}
+
+#[tauri::command(async)]
 fn shortcuts(kule: K<'_>) -> Result<Shortcuts> {
     kule.call(Call::Shortcuts)
 }
@@ -506,6 +576,10 @@ fn main() {
             set_order,
             policy,
             choose_policy,
+            themes,
+            set_themes,
+            import_theme,
+            export_theme,
             shortcuts,
             set_shortcuts,
             daily_budget,

@@ -344,6 +344,8 @@ pub fn dispatch(service: &Arc<Service>, call: Call) -> Result<Value, String> {
         Call::SetOrder { tasks } => json(service.set_order(&tasks)?),
         Call::Policy => json(service.policy_choice()?),
         Call::ChoosePolicy { choice } => json(service.choose_policy(choice)?),
+        Call::Themes => json(crate::themes::load(service.home())?),
+        Call::SetThemes { themes } => json(crate::themes::save(service.home(), &themes)?),
         Call::Shortcuts => json(crate::shortcuts::load(service.home())?),
         Call::SetShortcuts { shortcuts } => {
             crate::shortcuts::save(service.home(), &shortcuts)?;
