@@ -120,6 +120,7 @@ mod tests {
                 .collect(),
             spent: Default::default(),
             budget: None,
+            home_changes: 0,
         }
     }
 

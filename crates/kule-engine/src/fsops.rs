@@ -311,7 +311,7 @@ fn clone_dir_at_once(_src: &Path, _dst: &Path) -> bool {
 /// same before and after, and returns that stamp; for an entry that never
 /// holds still, the stamp from before its last clone. `None` when the entry
 /// disappeared.
-fn clone_entry(from: &Path, to: &Path) -> Result<Option<Stamp>> {
+pub(crate) fn clone_entry(from: &Path, to: &Path) -> Result<Option<Stamp>> {
     const ATTEMPTS: usize = 5;
     for attempt in 1..=ATTEMPTS {
         let Some(before) = Stamp::of(from)? else {

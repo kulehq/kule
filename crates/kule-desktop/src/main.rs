@@ -258,6 +258,16 @@ fn remove_secret(kule: K<'_>, name: String, workspace: Option<PathBuf>) -> Resul
 }
 
 #[tauri::command(async)]
+fn apply_home(kule: K<'_>, task: String, paths: Vec<String>) -> Result<serde_json::Value> {
+    kule.call(Call::ApplyHome { task, paths })
+}
+
+#[tauri::command(async)]
+fn discard_home(kule: K<'_>, task: String, paths: Vec<String>) -> Result<Vec<String>> {
+    kule.call(Call::DiscardHome { task, paths })
+}
+
+#[tauri::command(async)]
 fn rule_impact(
     kule: K<'_>,
     allowance: serde_json::Value,
@@ -420,6 +430,8 @@ fn main() {
             secrets,
             add_secret,
             remove_secret,
+            apply_home,
+            discard_home,
             rule_impact,
             set_approval_timeout,
             set_budget,

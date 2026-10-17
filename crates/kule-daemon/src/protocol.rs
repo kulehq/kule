@@ -10,7 +10,7 @@ use serde_json::Value;
 
 /// Changes whenever a call, a result or a notice changes shape; a client
 /// and a daemon that disagree on it cannot talk.
-pub const PROTOCOL: u32 = 9;
+pub const PROTOCOL: u32 = 10;
 
 /// What a daemon says about itself.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -143,6 +143,15 @@ pub enum Call {
         allowance: kule_engine::Allowance,
         #[serde(default)]
         workspace: Option<PathBuf>,
+    },
+    /// Takes the task's home changes at `paths` to the person's home.
+    ApplyHome {
+        task: String,
+        paths: Vec<String>,
+    },
+    DiscardHome {
+        task: String,
+        paths: Vec<String>,
     },
     /// The person's secrets, without their values.
     Secrets,

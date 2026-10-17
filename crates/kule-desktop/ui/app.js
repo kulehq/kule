@@ -220,8 +220,9 @@ function renderTask() {
   }
 
   const count = $("review-count");
-  count.hidden = !task.changes;
-  count.textContent = String(task.changes);
+  const waiting = task.changes + (task.home_changes || 0);
+  count.hidden = !waiting;
+  count.textContent = String(waiting);
 
   for (const tab of document.querySelectorAll(".tab")) {
     const selected = tab.dataset.tab === state.tab;
@@ -931,8 +932,61 @@ async function loadReview(id) {
     ...movesGroup(moves),
     ...gitGroup(review.effects.git),
     ...meetsGroup(task),
-    ...ignoredGroup(id, ignored, include, held)
+    ...ignoredGroup(id, ignored, include, held),
+    ...homeGroup(id, review.home || [], busy)
   );
+}
+
+/**
+ * What the task's commands wrote in the home directory, caught in the
+ * task's home layer. Never part of a commit: each is applied to the real
+ * home, or thrown away, on its own.
+ */
+function homeGroup(id, changes, busy) {
+  if (changes.length === 0) return [];
+  const mark = { created: "+", modified: "~", deleted: "−" };
+  const act = async (verb, paths) => {
+    const done = await call(verb, { task: id, paths });
+    if (verb === "apply_home" && done.kept) toast(`Applied; what it replaced is kept in ${done.kept}`);
+    await refresh();
+    await loadReview(id);
+  };
+  const all = changes.map((c) => c.path);
+  return [
+    h("h2", { class: "group-title" }, `In your home (~) · ${plural(changes.length, "change")}, caught for you`),
+    h(
+      "p",
+      { class: "muted home-note" },
+      "Written in the task's layer, not in your home. Apply takes one there, after checking your file is still as it was; what it replaces is kept."
+    ),
+    h(
+      "ul",
+      { class: "files" },
+      changes.map((c) => {
+        const apply = armed("Apply", "Click again to write it in ~", busy, () => act("apply_home", [c.path]).catch(fail));
+        apply.dataset.key = `home-apply:${c.path}`;
+        return h(
+          "li",
+          { class: "home-change" },
+          h("span", { class: `change ${c.change}` }, mark[c.change] || "~"),
+          h("span", {}, `~/${c.path}${c.kind === "dir" ? "/" : ""}`),
+          h(
+            "span",
+            { class: "home-actions" },
+            apply,
+            h("button", { class: "button ghost", type: "button", "data-key": `home-discard:${c.path}`, disabled: busy, onclick: (e) => inFlight(e.currentTarget, () => act("discard_home", [c.path]).catch(fail)) }, "Discard")
+          )
+        );
+      })
+    ),
+    changes.length > 1
+      ? h(
+          "div",
+          { class: "review-actions" },
+          h("button", { class: "button ghost", type: "button", "data-key": "home-discard-all", disabled: busy, onclick: (e) => inFlight(e.currentTarget, () => act("discard_home", all).catch(fail)) }, "Discard all")
+        )
+      : null,
+  ];
 }
 
 /**

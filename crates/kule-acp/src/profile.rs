@@ -873,16 +873,30 @@ impl Profile {
     /// state opened, its network through `proxy` (started with
     /// [`Profile::open_hosts`]).
     pub fn launch(&self, task: &Task, proxy: &Proxy) -> Result<Launch> {
-        self.launch_for(task, proxy, CacheSources::from_env())
+        self.launch_with(task, proxy, CacheSources::from_env(), true)
     }
 
     /// [`Profile::launch`] for the person whose home and caches `person`
-    /// names.
+    /// names, without the home layer: what the agent writes in the home is
+    /// refused, as a trial needs to learn its state directories.
     pub fn launch_for(
         &self,
         task: &Task,
         proxy: &Proxy,
         person: Option<CacheSources>,
+    ) -> Result<Launch> {
+        self.launch_with(task, proxy, person, false)
+    }
+
+    /// [`Profile::launch_for`], with the home layer when `layer` is set:
+    /// what the agent writes in the home is caught for review (see
+    /// [`Task::prepare_home`]).
+    pub fn launch_with(
+        &self,
+        task: &Task,
+        proxy: &Proxy,
+        person: Option<CacheSources>,
+        layer: bool,
     ) -> Result<Launch> {
         let home = person.as_ref().map(|p| p.home.clone());
         let mut sandbox = Sandbox::for_task_with(task, person)?;
@@ -893,6 +907,21 @@ impl Profile {
             self.apply(&mut sandbox, &home)?;
             if let Some(dir) = &own_home {
                 sandbox.allow_write(dir)?;
+            }
+            // An agent whose own home is HOME has its whole home in Kule's
+            // keeping already.
+            if layer && self.own_home.as_deref() != Some("HOME") {
+                let mut linked: Vec<std::path::PathBuf> =
+                    self.state.iter().map(|s| home.join(s)).collect();
+                linked.extend(own_home.clone());
+                let ignored: Vec<String> = self
+                    .state
+                    .iter()
+                    .filter_map(|s| s.split('/').next())
+                    .map(str::to_owned)
+                    .collect();
+                let dir = task.prepare_home(&home, &linked, sandbox.hidden(), &ignored)?;
+                sandbox.use_home(&dir, &home)?;
             }
         }
         sandbox.use_proxy(proxy);

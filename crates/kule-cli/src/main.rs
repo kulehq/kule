@@ -51,6 +51,26 @@ enum RulesCmd {
 }
 
 #[derive(Subcommand)]
+enum HomeCmd {
+    /// List them (the default).
+    List,
+    /// Take changes to your real home, after checking each path there is
+    /// still as it was; what they replace is kept in the task.
+    Apply {
+        /// As listed, like ~/.zshrc.
+        paths: Vec<String>,
+        #[arg(long, conflicts_with = "paths")]
+        all: bool,
+    },
+    /// Throw changes away; the next run starts from your home as it is.
+    Discard {
+        paths: Vec<String>,
+        #[arg(long, conflicts_with = "paths")]
+        all: bool,
+    },
+}
+
+#[derive(Subcommand)]
 enum SecretsCmd {
     /// List them, without their values (the default).
     List,
@@ -210,6 +230,14 @@ enum Cmd {
         #[command(subcommand)]
         action: Option<RulesCmd>,
     },
+    /// What the task's commands wrote in your home directory (~/.zshrc,
+    /// ~/.config, new files at the top): caught in the task's home layer
+    /// for you to apply or discard, never written there on their own.
+    Home {
+        task: String,
+        #[command(subcommand)]
+        action: Option<HomeCmd>,
+    },
     /// Secrets a task's commands use without seeing them: API keys that
     /// go only to their hosts. Values in the copy's .env files that look
     /// like secrets are masked the same way.
@@ -323,7 +351,12 @@ fn run() -> Result<ExitCode> {
             } else {
                 let mut sandbox = Sandbox::for_task(&task)?;
                 if let Some(person) = std::env::var_os("HOME") {
-                    kule_acp::Agents::load(&home)?.hide_logins(&mut sandbox, Path::new(&person))?;
+                    let person = Path::new(&person);
+                    kule_acp::Agents::load(&home)?.hide_logins(&mut sandbox, person)?;
+                    // What the command writes in the home is caught for
+                    // review (`kule home`), not refused.
+                    let layer = task.prepare_home(person, &[], sandbox.hidden(), &[])?;
+                    sandbox.use_home(&layer, person)?;
                 }
                 for path in &allow_write {
                     sandbox.allow_write(path)?;
@@ -370,6 +403,7 @@ fn run() -> Result<ExitCode> {
             }
             print_set(&task, &task.effects()?);
             print_connections(&connections(&task)?[logged_before..]);
+            print_home(&task)?;
             if let Some(sandbox) = used
                 && let Some(denials) = sandbox.denials(started.elapsed())?
             {
@@ -457,6 +491,7 @@ fn run() -> Result<ExitCode> {
             proxy.stop();
             print_set(&task, &task.effects()?);
             print_connections(&connections(&task)?[logged_before..]);
+            print_home(&task)?;
             if let Some(denials) = sandbox.denials(started.elapsed())? {
                 record_denials(&task, &denials)?;
                 for d in &denials {
@@ -529,6 +564,7 @@ fn run() -> Result<ExitCode> {
                     "outline": outline,
                     "spent": task.spent()?,
                     "budget": task.budget()?,
+                    "home": task.home_changes()?,
                 });
                 println!("{}", serde_json::to_string_pretty(&both)?);
             } else {
@@ -539,6 +575,7 @@ fn run() -> Result<ExitCode> {
                     );
                 }
                 print_set(&task, &set);
+                print_home(&task)?;
                 if !committed.is_empty() {
                     print_ruling(&ruling);
                     print_meetings(&home, &task)?;
@@ -618,6 +655,7 @@ fn run() -> Result<ExitCode> {
         Cmd::Agents { action } => agents_cmd(&home, action.unwrap_or(AgentsCmd::List))?,
         Cmd::Rules { action } => rules_cmd(&home, action.unwrap_or(RulesCmd::List))?,
         Cmd::Secrets { action } => secrets_cmd(&home, action.unwrap_or(SecretsCmd::List))?,
+        Cmd::Home { task, action } => home_cmd(&home, &task, action.unwrap_or(HomeCmd::List))?,
         Cmd::Policy => print!("{DEFAULT_POLICY}"),
         Cmd::Rollback { task } => {
             let set = Task::open(&home, &task)?.rollback()?;
@@ -848,6 +886,72 @@ fn warn_if_network_not_isolated() {
 
 /// Files one per line, each with what changed inside it when Kule can tell;
 /// `.git` as what it means, not as object file names.
+/// What the task's commands wrote in the home directory, waiting for a
+/// person; nothing when there is none.
+fn print_home(task: &Task) -> Result<()> {
+    let changes = task.home_changes()?;
+    if changes.is_empty() {
+        return Ok(());
+    }
+    println!(
+        "in your home, caught for review ({}; `kule home {} apply PATH` takes one there):",
+        changes.len(),
+        task.id()
+    );
+    for c in &changes {
+        let mark = match c.change {
+            Change::Created => "+",
+            Change::Modified => "~",
+            Change::Deleted => "-",
+        };
+        let slash = if c.kind == Kind::Dir { "/" } else { "" };
+        println!("  {mark} ~/{}{slash}", c.path);
+    }
+    Ok(())
+}
+
+fn home_cmd(home: &Path, task: &str, action: HomeCmd) -> Result<()> {
+    let task = Task::open(home, task)?;
+    let pick = |paths: Vec<String>, all: bool| -> Result<Vec<String>> {
+        let paths: Vec<String> = paths
+            .into_iter()
+            .map(|p| p.trim_start_matches("~/").trim_end_matches('/').to_owned())
+            .collect();
+        if all {
+            return Ok(task.home_changes()?.into_iter().map(|c| c.path).collect());
+        }
+        if paths.is_empty() {
+            bail!("name the paths (as listed, like ~/.zshrc), or --all");
+        }
+        Ok(paths)
+    };
+    match action {
+        HomeCmd::List => {
+            if task.home_changes()?.is_empty() {
+                println!("nothing written in your home");
+            }
+            print_home(&task)?;
+        }
+        HomeCmd::Apply { paths, all } => {
+            let applied = task.apply_home(&pick(paths, all)?)?;
+            if applied.paths.is_empty() {
+                println!("nothing to apply at those paths");
+            }
+            for path in &applied.paths {
+                println!("applied ~/{path}");
+            }
+            if let Some(kept) = applied.kept {
+                println!("what they replaced is kept in {}", kept.display());
+            }
+        }
+        HomeCmd::Discard { paths, all } => {
+            let gone = task.discard_home(&pick(paths, all)?)?;
+            println!("discarded {} changes", gone.len());
+        }
+    }
+    Ok(())
+}
+
 fn print_set(task: &Task, set: &EffectSet) {
     const SHOWN: usize = 40;
     // A move is one line, under its new name.

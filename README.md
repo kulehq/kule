@@ -297,6 +297,31 @@ the cost as each turn ends, so its turn can go over and the next run is
 the one refused. Codex signed in with ChatGPT reports tokens but no cost,
 Gemini reports neither, and a budget does not hold what is not reported.
 
+## Writes in your home, caught for review
+
+An agent that runs `git config --global`, adds a line to `~/.zshrc` or
+writes a tool's settings under `~/.config` is not refused any more, and
+does not reach your home either. Its `HOME` is the task's home layer
+(`<task>/home`): the small files at the top of your home and `~/.config`
+are clones there (APFS clones them in one go; elsewhere `.config` is
+copied while it stays under 64 MiB), and what is new at the top lands
+there too. Every other entry is a link to your own, so toolchains, caches
+and settings are found where they always are, and a write through a link
+meets the sandbox as before. The agent's own state is linked and never
+offered; hidden paths (`~/.ssh`, `~/.aws`, …) are not in the layer at all;
+a directory you cannot read whole is linked. Shell histories and
+completion dumps are not offered either.
+
+`kule status` and the app's Review tab list what waits (`in your home,
+caught for review`). `kule home TASK apply ~/.zshrc` (or *Apply*) takes
+one change to your home after checking your file is still as it was when
+the layer was made, and keeps what it replaced in the task's
+`home-kept/`; `kule home TASK discard --all` throws them away. A home
+change is never part of a commit. While changes wait, the layer stays as
+it is from run to run; once none do, the next run starts from your home as
+it is then. `kule exec` uses the layer too; a trial of an agent profile
+does not, since it learns the agent's directories from what is refused.
+
 ## Secrets the agent never sees
 
 `kule secrets add STRIPE_KEY --host api.stripe.com` (the value is typed

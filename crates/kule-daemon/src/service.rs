@@ -66,6 +66,9 @@ pub struct TaskView {
     /// What they may cost together; `None` for no limit.
     #[serde(default)]
     pub budget: Option<kule_engine::Money>,
+    /// Changes the task's commands made in the home directory, waiting.
+    #[serde(default)]
+    pub home_changes: usize,
 }
 
 /// The ACP registry as the app shows it.
@@ -138,6 +141,10 @@ pub struct Review {
     /// outlines.
     #[serde(default)]
     pub outline: Vec<FileOutline>,
+    /// What the task's commands wrote in the home directory, caught in the
+    /// task's home layer; never part of a commit.
+    #[serde(default)]
+    pub home: Vec<kule_engine::HomeChange>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -572,7 +579,31 @@ impl Service {
             ruling,
             digest: pending.digest(),
             outline,
+            home: task.home_changes().map_err(text)?,
         })
+    }
+
+    /// Takes the home changes at `paths` to the person's home.
+    pub fn apply_home(&self, id: &str, paths: &[String]) -> Result<kule_engine::HomeApplied> {
+        self.not_at_work(id)?;
+        let applied = self.open(id)?.apply_home(paths).map_err(text)?;
+        notify(&self.subscribers, Notice::Tasks);
+        Ok(applied)
+    }
+
+    /// Throws the home changes at `paths` away.
+    pub fn discard_home(&self, id: &str, paths: &[String]) -> Result<Vec<String>> {
+        self.not_at_work(id)?;
+        let gone = self.open(id)?.discard_home(paths).map_err(text)?;
+        notify(&self.subscribers, Notice::Tasks);
+        Ok(gone)
+    }
+
+    fn not_at_work(&self, id: &str) -> Result<()> {
+        if self.running.lock().unwrap().contains(id) {
+            return Err(format!("an agent is at work in task {id}"));
+        }
+        Ok(())
     }
 
     /// What the picture at `path` in the task was and is.
@@ -843,6 +874,7 @@ impl Service {
             overlaps: self.overlaps(id, &scan),
             spent: task.spent().map_err(text)?,
             budget: task.budget().map_err(text)?,
+            home_changes: task.home_changes().map_or(0, |c| c.len()),
         })
     }
 
@@ -1292,6 +1324,35 @@ mod tests {
         s.app.running.lock().unwrap().remove(&id);
         s.app.remove(&id).unwrap();
         assert!(s.app.tasks().unwrap().is_empty());
+    }
+
+    #[test]
+    fn home_changes_are_reviewed_and_applied_apart_from_the_commit() {
+        let s = Setup::new();
+        let (id, _) = s.task();
+        let person = TempDir::new().unwrap();
+        fs::write(person.path().join(".zshrc"), "a\n").unwrap();
+        let task = s.app.open(&id).unwrap();
+        let layer = task.prepare_home(person.path(), &[], &[], &[]).unwrap();
+        fs::write(layer.join(".zshrc"), "a\nb\n").unwrap();
+
+        let review = s.app.review(&id, false).unwrap();
+        assert_eq!(review.home.len(), 1);
+        assert!(review.effects.is_empty());
+        assert_eq!(s.app.view(&id).unwrap().home_changes, 1);
+
+        s.app.running.lock().unwrap().insert(id.clone());
+        let e = s.app.apply_home(&id, &[".zshrc".into()]).unwrap_err();
+        assert!(e.contains("at work"), "{e}");
+        s.app.running.lock().unwrap().remove(&id);
+
+        let applied = s.app.apply_home(&id, &[".zshrc".into()]).unwrap();
+        assert_eq!(applied.paths, [".zshrc"]);
+        assert_eq!(
+            fs::read_to_string(person.path().join(".zshrc")).unwrap(),
+            "a\nb\n"
+        );
+        assert!(s.app.review(&id, false).unwrap().home.is_empty());
     }
 
     #[test]

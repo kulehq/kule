@@ -130,6 +130,8 @@ pub struct Sandbox {
     env: Vec<(String, OsString)>,
     /// Where Kule notes protected paths it puts back after a run.
     kept: PathBuf,
+    /// The task's home layer, the commands' `HOME` (see [`crate::home`]).
+    layer: Option<PathBuf>,
     /// Marks this sandbox's refusals where the platform reports them (macOS).
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     tag: String,
@@ -182,6 +184,7 @@ impl Sandbox {
             passed_env: Vec::new(),
             env: Vec::new(),
             kept: task.home().join("kept"),
+            layer: None,
             tag: format!("kule-{}-{nanos:x}", task.id()),
         })
     }
@@ -319,6 +322,22 @@ impl Sandbox {
 
     pub fn set_network(&mut self, network: Network) {
         self.network = network;
+    }
+
+    /// Points the commands' `HOME` at the task's home layer over `real`
+    /// (and `XDG_CONFIG_HOME`, where it is the real home's `.config`), and
+    /// lets them write there.
+    pub fn use_home(&mut self, layer: &Path, real_home: &Path) -> Result<()> {
+        let layer = real(layer)?;
+        if let Some(xdg) = std::env::var_os("XDG_CONFIG_HOME")
+            && Path::new(&xdg) == real_home.join(".config")
+        {
+            self.env
+                .push(("XDG_CONFIG_HOME".to_owned(), layer.join(".config").into()));
+        }
+        self.env.push(("HOME".to_owned(), layer.clone().into()));
+        self.layer = Some(layer);
+        Ok(())
     }
 
     /// Sends the network through `proxy`, with what its commands need in
@@ -567,10 +586,15 @@ impl Sandbox {
             params.push((format!("H{i}"), path.as_path()));
         }
         // The copy and tmp sit in Kule's home, which is hidden: they come back
-        // last, so a hidden path never takes them away.
+        // last, so a hidden path never takes them away. So does the home
+        // layer, which is the task's too.
         text.push_str(
             "(allow file-read* file-write* (subpath (param \"C\")) (subpath (param \"T\")))\n",
         );
+        if let Some(layer) = &self.layer {
+            text.push_str("(allow file-read* file-write* (subpath (param \"L\")))\n");
+            params.push(("L".to_owned(), layer.as_path()));
+        }
         for (i, path) in self.protected.iter().enumerate() {
             text.push_str(&format!(
                 "(deny file-write* (subpath (param \"P{i}\")) {tag})\n"
@@ -583,8 +607,9 @@ impl Sandbox {
         let ancestors: std::collections::BTreeSet<&Path> = self
             .copy
             .ancestors()
-            .chain(self.tmp.ancestors())
             .skip(1)
+            .chain(self.tmp.ancestors().skip(1))
+            .chain(self.layer.iter().flat_map(|l| l.ancestors().skip(1)))
             .collect();
         for (i, dir) in ancestors.into_iter().enumerate() {
             text.push_str(&format!(
@@ -747,6 +772,7 @@ impl Sandbox {
                 .collect(),
         );
         writable.extend([self.copy.clone(), self.tmp.clone()]);
+        writable.extend(self.layer.clone());
         let devices = [
             "/dev/null",
             "/dev/zero",

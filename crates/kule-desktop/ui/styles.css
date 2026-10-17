@@ -1155,3 +1155,18 @@ select:focus-visible {
 .agent-pick input {
   width: 5.5em;
 }
+
+.home-note {
+  margin: 0 0 6px;
+  font-size: 12px;
+}
+
+.home-change {
+  align-items: center;
+}
+
+.home-actions {
+  display: flex;
+  gap: 6px;
+  margin-left: auto;
+}
