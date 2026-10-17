@@ -1,6 +1,6 @@
 [package]
 name = "kule-acp"
-description = "Kule's ACP client: runs a coding agent in the sandbox and turns what it says into events"
+description = "Kule's ACP client: runs an agent in the sandbox and turns what it says into events"
 publish = false
 version.workspace = true
 edition.workspace = true

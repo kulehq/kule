@@ -96,7 +96,7 @@ fn tasks(kule: K<'_>) -> Result<Vec<TaskView>> {
 fn pick_workspace(app: AppHandle) -> Option<PathBuf> {
     app.dialog()
         .file()
-        .set_title("Choose the workspace for a new task")
+        .set_title("Choose the folder for a new task")
         .blocking_pick_folder()
         .and_then(|path| path.into_path().ok())
 }

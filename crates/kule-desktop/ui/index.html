@@ -31,12 +31,13 @@
 
     <main class="main">
       <section class="empty-state" id="empty">
-        <h1>A control room for coding agents</h1>
+        <h1>A control room for your agents</h1>
         <p>
-          A task is a copy-on-write copy of a workspace. The agent works there, in a sandbox,
-          and nothing reaches your workspace until you commit what the policy lets through.
+          Give an agent any folder: code, notes, photos or data. A task is a copy-on-write copy
+          of it; the agent works there, in a sandbox, and nothing reaches your folder until you
+          commit what the policy lets through.
         </p>
-        <button id="empty-new-task" class="button primary" type="button">Choose a workspace…</button>
+        <button id="empty-new-task" class="button primary" type="button">Choose a folder…</button>
       </section>
 
       <section class="task" id="task" hidden>
@@ -74,7 +75,7 @@
               id="prompt"
               aria-label="What the agent should do"
               rows="3"
-              placeholder="Tell the agent what to do. It works in the task's copy; you review before anything reaches the workspace."
+              placeholder="Tell the agent what to do. It works in the task's copy; you review before anything reaches the folder."
             ></textarea>
             <div class="composer-bar">
               <label class="agent-pick">

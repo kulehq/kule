@@ -1,13 +1,35 @@
 # Kule
 
-Kule is a control room for coding agents. Agents do the work; people watch,
+Kule is a control room for AI agents that work on your files: code, but
+also notes, documents, photos and data. Agents do the work; people watch,
 approve and steer. Every command an agent runs is a transaction in a
-copy-on-write copy of the workspace, and what reaches the real workspace is
-decided by the effects the command had, not by its text.
+copy-on-write copy of the folder it works on (the *workspace*), and what
+reaches the real folder is decided by the effects the command had, not by
+its text.
 
 **Status:** M0–M3 done: engine, git, sandbox, policy, proxy, agents over ACP
 (Claude Code, Codex, Gemini), the desktop app and its daemon, live approvals,
 checkpoints on Lonca with a signed history. macOS and Linux.
+
+## Any folder, not only repositories
+
+Kule needs no git. A task is a copy of any folder: the agent changes the
+copy, you see what changed, and only a commit applies it to the folder,
+keeping a checkpoint that undo puts back. When the folder is a git
+repository, Kule also reads `.git` as one (see M1, step 1).
+
+- **Notes and documents** (a Markdown or Obsidian vault, reports): let an
+  agent restructure them and review the result before anything moves.
+- **Photos, downloads, archives**: "sort these into folders" works on the
+  copy, so your originals stay where they are until you commit; more than
+  200 deletions wait for you, and undo brings back what a commit replaced.
+- **Data**: notebooks, CSV files and large datasets; the copy takes no
+  space until files change.
+- **Something you don't trust yet**: run a script or an installer in a task
+  first, and see what it would have changed.
+
+Today the review lists which files changed, not yet what changed inside
+them; that, previews of images, and telling moves from deletions come next.
 
 ## M0: transactions on a copy-on-write copy
 

@@ -131,7 +131,7 @@ const questionsOf = (id) => state.questions.filter((q) => q.task === id);
 function taskChip(task) {
   if (questionsOf(task.id).length) return h("span", { class: "chip ask" }, "waiting for you");
   if (task.running) return h("span", { class: "chip running" }, "working");
-  if (task.workspace_gone) return h("span", { class: "chip deny" }, "workspace gone");
+  if (task.workspace_gone) return h("span", { class: "chip deny" }, "folder gone");
   if (task.verdict) return h("span", { class: `chip ${task.verdict}` }, VERDICT[task.verdict].chip);
   return null;
 }
@@ -187,7 +187,7 @@ function renderTask() {
     chip.textContent = "agent at work";
   } else if (task.workspace_gone) {
     chip.classList.add("deny");
-    chip.textContent = "workspace moved or deleted · commit and undo refused";
+    chip.textContent = "folder moved or deleted · commit and undo refused";
   } else if (task.scanning) {
     chip.textContent = "checking the copy…";
   } else if (task.verdict) {
@@ -196,7 +196,7 @@ function renderTask() {
   } else {
     chip.textContent = task.ignored
       ? `in sync · ${task.ignored} ignored in the copy`
-      : "in sync with the workspace";
+      : "in sync with the folder";
   }
 
   const count = $("review-count");
@@ -413,7 +413,7 @@ function fold(task, event) {
     streamOf(task).push({
       kind: "finished",
       error: Boolean(event.error),
-      text: event.error ? `The run failed: ${event.error}` : `Done. Review the changes before they reach the workspace${refused}.`,
+      text: event.error ? `The run failed: ${event.error}` : `Done. Review the changes before they reach the folder${refused}.`,
     });
   }
 }
@@ -565,7 +565,7 @@ async function loadReview(id) {
         { class: "muted" },
         ignored.length
           ? `${plural(ignored.length, "change")} to ignored paths stay in the copy.`
-          : "The copy holds what the workspace holds."
+          : "The copy holds what the folder holds."
       )
     );
   } else {
@@ -587,7 +587,7 @@ async function loadReview(id) {
   const actions = [];
   if (!empty) {
     if (review.ruling.verdict === "allow") {
-      actions.push(h("button", { class: "button primary", type: "button", "data-key": "commit", disabled: busy, onclick: (e) => inFlight(e.currentTarget, () => commit(id, false, include, review.digest)) }, "Commit to workspace"));
+      actions.push(h("button", { class: "button primary", type: "button", "data-key": "commit", disabled: busy, onclick: (e) => inFlight(e.currentTarget, () => commit(id, false, include, review.digest)) }, "Commit to folder"));
     } else if (review.ruling.verdict === "ask") {
       actions.push(
         h("button", { class: "button ask", type: "button", "data-key": "commit", disabled: busy, onclick: (e) => inFlight(e.currentTarget, () => commit(id, true, include, review.digest)) }, "Approve and commit")
@@ -632,7 +632,7 @@ function ignoredGroup(id, ignored, include, held) {
     h(
       "details",
       { class: "ignored-group", open: include },
-      h("summary", { class: "group-title" }, `Ignored by the workspace · ${ignored.length} ${include ? "included" : "stay in the copy"}`),
+      h("summary", { class: "group-title" }, `Ignored by the folder's .gitignore ·${ignored.length} ${include ? "included" : "stay in the copy"}`),
       h("label", { class: "check" }, toggle, "Also commit these"),
       h(
         "ul",
@@ -926,7 +926,7 @@ async function removeTask() {
     state.streams.delete(task.id);
     state.loaded.delete(task.id);
     state.current = null;
-    toast(`Deleted task ${task.id}; the workspace was not touched`);
+    toast(`Deleted task ${task.id}; the folder was not touched`);
   } catch (err) {
     fail(err);
   }

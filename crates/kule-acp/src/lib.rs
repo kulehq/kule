@@ -1,6 +1,6 @@
 //! Kule's ACP client.
 //!
-//! Starts a coding agent inside a task's sandbox, speaks the Agent Client
+//! Starts an agent inside a task's sandbox, speaks the Agent Client
 //! Protocol (v1) with it over stdio, and turns what it reports into
 //! [`Event`]s. Every tool call that ends marks a step, so a person can see
 //! which call changed what.

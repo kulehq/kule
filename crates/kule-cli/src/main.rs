@@ -70,7 +70,7 @@ enum Cmd {
         #[arg(last = true, required = true)]
         command: Vec<String>,
     },
-    /// Give a coding agent a prompt: it runs over ACP inside the sandbox,
+    /// Give an agent a prompt: it runs over ACP inside the sandbox,
     /// with its network through the task's proxy, and every tool call it
     /// makes becomes a step. Nothing reaches the workspace until commit.
     Run {

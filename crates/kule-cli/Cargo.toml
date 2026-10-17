@@ -1,6 +1,6 @@
 [package]
 name = "kule"
-description = "A control room for coding agents: every command runs as a transaction in a sandboxed copy-on-write copy, judged by policy before it reaches the workspace"
+description = "A control room for AI agents that work on your files: every command runs as a transaction in a sandboxed copy-on-write copy of the folder, judged by policy before it reaches the folder"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
