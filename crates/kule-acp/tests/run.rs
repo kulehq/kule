@@ -4,8 +4,8 @@ use std::fs;
 
 use futures::StreamExt;
 use futures::channel::mpsc;
-use kule_acp::{Event, run};
-use kule_engine::{Change, Sandbox, Task};
+use kule_acp::{Cost, Event, run, run_limited};
+use kule_engine::{Change, RunUsage, Sandbox, Task};
 use tempfile::TempDir;
 
 struct Setup {
@@ -42,6 +42,28 @@ impl Setup {
             run(&self.task, agent, script, None, tx).await.unwrap();
         });
         runtime.block_on(rx.collect::<Vec<_>>())
+    }
+
+    /// [`Setup::run`] stopped at `limit`; returns how it ended and the
+    /// events.
+    fn run_limited(&self, script: &str, limit: Cost) -> (Result<String, String>, Vec<Event>) {
+        let sandbox = Sandbox::new(&self.task).unwrap();
+        let agent = sandbox
+            .command(env!("CARGO_BIN_EXE_kule-test-agent"), &[])
+            .unwrap();
+        let (tx, rx) = mpsc::unbounded();
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let outcome = runtime
+            .block_on(run_limited(
+                &self.task,
+                agent,
+                script,
+                None,
+                Some(limit),
+                tx,
+            ))
+            .map_err(|e| e.to_string());
+        (outcome, runtime.block_on(rx.collect::<Vec<_>>()))
     }
 }
 
@@ -204,4 +226,64 @@ fn processes_the_agent_left_running_end_with_the_run() {
         );
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
+}
+
+fn usd(amount: f64) -> Cost {
+    Cost {
+        amount,
+        currency: "USD".into(),
+    }
+}
+
+/// What the agent reports it used adds up to the run's usage: its last
+/// cost (the session's so far) and the turn's tokens.
+#[test]
+fn what_a_run_used_is_what_the_agent_reported() {
+    let s = Setup::new();
+    let events = s.run("cost 0.10; say working; cost 0.25; tokens 1200 300");
+    let mut usage = RunUsage::default();
+    for e in &events {
+        e.tally(&mut usage);
+    }
+    assert_eq!(usage.cost, Some(usd(0.25)));
+    assert_eq!((usage.input_tokens, usage.output_tokens), (1200, 300));
+    assert_eq!((usage.context_used, usage.context_size), (1000, 200_000));
+}
+
+/// Once the reported cost reaches the limit, the turn is cancelled: what
+/// the agent would do next is not done, and the run fails with why.
+#[test]
+fn a_run_stops_when_its_cost_reaches_the_limit() {
+    let s = Setup::new();
+    let script = "cost 0.10; write a.txt one; cost 0.30; sleep 800; write b.txt two";
+    let (outcome, _) = s.run_limited(script, usd(0.25));
+    let error = outcome.unwrap_err();
+    assert!(error.contains("budget"), "{error}");
+    assert!(s.task.copy().join("a.txt").exists());
+    assert!(!s.task.copy().join("b.txt").exists());
+
+    // A limit in another currency cannot be compared, and holds nothing.
+    let s = Setup::new();
+    let eur = Cost {
+        amount: 0.25,
+        currency: "EUR".into(),
+    };
+    let (outcome, _) = s.run_limited(script, eur);
+    assert!(outcome.is_ok(), "{outcome:?}");
+    assert!(s.task.copy().join("b.txt").exists());
+}
+
+/// An agent that reports the cost only as its turn ends has done its work
+/// by then: the run is not called stopped, though it went over.
+#[test]
+fn a_cost_reported_at_the_end_of_the_turn_stops_nothing() {
+    let s = Setup::new();
+    let (outcome, events) = s.run_limited("write a.txt one; cost 0.30", usd(0.25));
+    assert_eq!(outcome, Ok("endturn".to_owned()));
+    assert!(s.task.copy().join("a.txt").exists());
+    let mut usage = RunUsage::default();
+    for e in &events {
+        e.tally(&mut usage);
+    }
+    assert_eq!(usage.cost, Some(usd(0.30)));
 }

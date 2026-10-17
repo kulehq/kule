@@ -16,17 +16,20 @@ pub mod trial;
 
 use std::collections::HashMap;
 use std::process::{Command, Stdio};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
-    ContentBlock, InitializeRequest, NewSessionRequest, PermissionOptionKind, PromptRequest,
-    RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
+    CancelNotification, ContentBlock, InitializeRequest, NewSessionRequest, PermissionOptionKind,
+    PromptRequest, RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
     SelectedPermissionOutcome, SessionNotification, SessionUpdate, SetSessionModeRequest,
     TextContent, ToolCallStatus, ToolKind,
 };
 use agent_client_protocol::{Agent, ByteStreams, ConnectionTo};
 use futures::channel::mpsc::UnboundedSender;
-use kule_engine::{Step, Task};
+use kule_engine::{RunUsage, Step, Task};
 use serde::{Deserialize, Serialize};
 
 pub use profile::{AGENTS_FILE, Agents, Launch, Listed, Origin, Profile, profile};
@@ -53,8 +56,65 @@ pub enum Event {
     Permission { title: String, chosen: String },
     /// The agent's plan, one line per entry.
     Plan { entries: Vec<String> },
+    /// What the session has used so far, as the agent reports it: its
+    /// context window, and what it cost when the agent says.
+    Usage {
+        context_used: u64,
+        context_size: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cost: Option<Cost>,
+    },
+    /// The tokens the turn took, when the agent says at its end.
+    Tokens {
+        input: u64,
+        output: u64,
+        #[serde(default)]
+        thought: u64,
+        #[serde(default)]
+        cached_read: u64,
+        #[serde(default)]
+        cached_write: u64,
+    },
     /// The turn ended.
     Done { stop_reason: String },
+}
+
+/// Money, as an agent reports it.
+pub type Cost = kule_engine::Money;
+
+impl Event {
+    /// Adds what the event says about usage to `usage`. The cost and the
+    /// context an agent reports are the session's so far, and a run is one
+    /// session, so the last report holds.
+    pub fn tally(&self, usage: &mut RunUsage) {
+        match self {
+            Event::Usage {
+                context_used,
+                context_size,
+                cost,
+            } => {
+                usage.context_used = *context_used;
+                usage.context_size = *context_size;
+                if cost.is_some() {
+                    usage.cost = cost.clone();
+                }
+            }
+            Event::Tokens {
+                input,
+                output,
+                thought,
+                cached_read,
+                cached_write,
+            } => {
+                usage.input_tokens += input;
+                usage.output_tokens += output;
+                usage.thought_tokens += thought;
+                usage.cached_read_tokens += cached_read;
+                usage.cached_write_tokens += cached_write;
+            }
+            _ => {}
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -80,6 +140,20 @@ pub async fn run(
     agent: Command,
     prompt: &str,
     mode: Option<&str>,
+    events: UnboundedSender<Event>,
+) -> Result<String, Error> {
+    run_limited(task, agent, prompt, mode, None, events).await
+}
+
+/// [`run`], stopped once what the agent reports it cost reaches `limit`
+/// (in the same currency): the turn is cancelled, as a person cancels it,
+/// and the run fails with why.
+pub async fn run_limited(
+    task: &Task,
+    agent: Command,
+    prompt: &str,
+    mode: Option<&str>,
+    limit: Option<Cost>,
     events: UnboundedSender<Event>,
 ) -> Result<String, Error> {
     let log = task.copy().with_file_name("agent.log");
@@ -113,13 +187,19 @@ pub async fn run(
     let cwd = task.copy();
     let prompt = prompt.to_owned();
     let mode = mode.map(str::to_owned);
+    let over = Arc::new(tokio::sync::Notify::new());
+    let stopped = Arc::new(AtomicBool::new(false));
     let watcher = Watcher {
         task: task.clone(),
         events: events.clone(),
         titles: HashMap::new(),
         kinds: HashMap::new(),
+        limit: limit.clone(),
+        over: Arc::clone(&over),
+        stopped: Arc::clone(&stopped),
     };
     let mut watcher = Some(watcher);
+    let turn_events = events.clone();
     let stop = agent_client_protocol::Client
         .builder()
         .on_receive_notification(
@@ -189,13 +269,35 @@ pub async fn run(
                         .block_task()
                         .await?;
                 }
-                let response = connection
+                let session_id = session.session_id.clone();
+                let prompt = connection
                     .send_request(PromptRequest::new(
                         session.session_id,
                         vec![ContentBlock::Text(TextContent::new(prompt))],
                     ))
-                    .block_task()
-                    .await?;
+                    .block_task();
+                tokio::pin!(prompt);
+                let response = tokio::select! {
+                    response = &mut prompt => response?,
+                    () = over.notified() => {
+                        // Over the budget: cancelled as a person would, and
+                        // given a moment to end the turn.
+                        connection.send_notification(CancelNotification::new(session_id))?;
+                        match tokio::time::timeout(Duration::from_secs(10), &mut prompt).await {
+                            Ok(response) => response?,
+                            Err(_) => return Ok("cancelled".to_owned()),
+                        }
+                    }
+                };
+                if let Some(usage) = &response.usage {
+                    let _ = turn_events.unbounded_send(Event::Tokens {
+                        input: usage.input_tokens,
+                        output: usage.output_tokens,
+                        thought: usage.thought_tokens.unwrap_or(0),
+                        cached_read: usage.cached_read_tokens.unwrap_or(0),
+                        cached_write: usage.cached_write_tokens.unwrap_or(0),
+                    });
+                }
                 Ok(format!("{:?}", response.stop_reason).to_lowercase())
             },
         )
@@ -205,6 +307,18 @@ pub async fn run(
         stop_reason: stop.clone(),
     });
     let _ = child.kill();
+    // An agent may report the cost only as the turn ends (Claude Code
+    // does): then the turn is over before the cancel, nothing was stopped,
+    // and the next run is the one refused.
+    if stopped.load(Ordering::SeqCst)
+        && stop == "cancelled"
+        && let Some(limit) = &limit
+    {
+        return Err(Error(format!(
+            "stopped: what the agent reported it cost reached what was left of the task's budget, {:.2} {}",
+            limit.amount, limit.currency
+        )));
+    }
     Ok(stop)
 }
 
@@ -229,6 +343,10 @@ struct Watcher {
     events: UnboundedSender<Event>,
     titles: HashMap<String, String>,
     kinds: HashMap<String, ToolKind>,
+    /// The cost the run may reach; `over` is told, once, when it does.
+    limit: Option<Cost>,
+    over: Arc<tokio::sync::Notify>,
+    stopped: Arc<AtomicBool>,
 }
 
 impl Watcher {
@@ -269,6 +387,26 @@ impl Watcher {
             SessionUpdate::Plan(plan) => {
                 let entries = plan.entries.into_iter().map(|e| e.content).collect();
                 self.send(Event::Plan { entries });
+            }
+            SessionUpdate::UsageUpdate(usage) => {
+                let cost = usage.cost.map(|c| Cost {
+                    amount: c.amount,
+                    currency: c.currency,
+                });
+                let reached = match (&self.limit, &cost) {
+                    (Some(limit), Some(cost)) => {
+                        cost.currency == limit.currency && cost.amount >= limit.amount
+                    }
+                    _ => false,
+                };
+                self.send(Event::Usage {
+                    context_used: usage.used,
+                    context_size: usage.size,
+                    cost,
+                });
+                if reached && !self.stopped.swap(true, Ordering::SeqCst) {
+                    self.over.notify_one();
+                }
             }
             _ => {}
         }

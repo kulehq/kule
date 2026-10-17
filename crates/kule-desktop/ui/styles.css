@@ -648,7 +648,8 @@ select:focus-visible {
   color: var(--muted);
 }
 
-.agent-pick select {
+.agent-pick select,
+.agent-pick input {
   min-height: 30px;
   padding: 0 6px;
   border: 1px solid var(--border);
@@ -1148,4 +1149,8 @@ select:focus-visible {
   padding-left: 18px;
   color: var(--ask);
   font-size: 13px;
+}
+
+.agent-pick input {
+  width: 5.5em;
 }

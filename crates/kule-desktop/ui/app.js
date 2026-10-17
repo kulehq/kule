@@ -98,6 +98,9 @@ function when(unix) {
 
 // --- State -----------------------------------------------------------------
 
+/** Task id → what its run at work reported it cost so far. */
+const liveCost = new Map();
+
 const state = {
   tasks: [],
   current: null,
@@ -247,6 +250,55 @@ function renderComposer(task) {
     ? "The agent is at work. Its steps appear here as it goes."
     : "Runs in the sandbox, network through the task's proxy.";
   $("timeout").value = String(Math.round(task.approval_timeout_secs / 60));
+  // Not while the person is typing in it.
+  if (document.activeElement !== $("budget")) {
+    $("budget").value = task.budget ? String(task.budget.amount) : "";
+  }
+  $("budget-currency").textContent = task.budget ? task.budget.currency : "USD";
+  renderSpent(task);
+}
+
+function money(m) {
+  return `${m.amount.toFixed(2)} ${m.currency}`;
+}
+
+/** What a task's runs spent, with the run at work now, and what is left. */
+function renderSpent(task) {
+  const spent = task.spent || { runs: 0, tokens: 0, cost: [] };
+  const live = task.running ? liveCost.get(task.id) : null;
+  const cost = spent.cost.map((m) => ({ ...m }));
+  if (live) {
+    const same = cost.find((m) => m.currency === live.currency);
+    if (same) same.amount += live.amount;
+    else cost.push({ ...live });
+  }
+  const chip = $("task-spent");
+  chip.hidden = spent.runs === 0 && !live && !task.budget;
+  chip.className = "chip";
+  const parts = [];
+  if (cost.length > 0) parts.push(`${cost.map(money).join(" + ")} spent`);
+  else if (spent.tokens > 0) parts.push(`${spent.tokens.toLocaleString()} tokens`);
+  if (task.budget) {
+    const used = cost.filter((m) => m.currency === task.budget.currency).reduce((a, m) => a + m.amount, 0);
+    const rest = Math.max(0, task.budget.amount - used);
+    parts.push(`${money({ amount: rest, currency: task.budget.currency })} left`);
+    if (rest <= 0) chip.classList.add("deny");
+    else if (rest < task.budget.amount * 0.2) chip.classList.add("ask");
+  }
+  chip.textContent = parts.join(" · ") || "nothing spent yet";
+}
+
+async function setBudgetFor() {
+  const task = currentTask();
+  if (!task) return;
+  const text = $("budget").value.trim();
+  const budget = text === "" ? null : { amount: Number(text), currency: task.budget ? task.budget.currency : "USD" };
+  try {
+    await call("set_budget", { task: task.id, budget });
+    await refresh();
+  } catch (err) {
+    fail(err);
+  }
 }
 
 // --- Questions -------------------------------------------------------------
@@ -592,6 +644,13 @@ function fold(task, event) {
 }
 
 async function onRun({ task, seq, event }) {
+  // What the run at work has cost so far; in the task's spent once it ends.
+  if (event.type === "prompt" || event.type === "finished") liveCost.delete(task);
+  if (event.type === "agent" && event.event.type === "usage" && event.event.cost) {
+    liveCost.set(task, event.event.cost);
+    const current = currentTask();
+    if (current && current.id === task) renderSpent(current);
+  }
   if (state.loaded.has(task)) {
     // Already in the loaded stream: the daemon sent it before the load.
     if (seq > (state.lastSeq.get(task) || 0)) {
@@ -1811,6 +1870,7 @@ async function start() {
     fail(err);
   }
   $("timeout").addEventListener("change", setTimeoutFor);
+  $("budget").addEventListener("change", setBudgetFor);
   // Counts down the deadlines without re-rendering the cards.
   setInterval(() => {
     for (const el of document.querySelectorAll(".countdown")) {

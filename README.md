@@ -286,6 +286,17 @@ unless set from 1 minute to 8 hours; never off) and the agent is told to
 go on without it. The CLI has nobody to ask and refuses such connections
 at once.
 
+What each run used, as its agent reported it, is kept with the task
+(`usage.jsonl`, outside the copy): tokens, the context window, and the
+cost when the agent says. `kule status` and the app's task header add it
+up. `kule budget TASK 5` (USD unless a currency follows; `off` takes it
+away), or *Budget* in the app, caps what the task's runs may cost
+together: no run starts once it is spent, and a run whose agent reports
+its cost as it works is cancelled when it gets there. Claude Code reports
+the cost as each turn ends, so its turn can go over and the next run is
+the one refused. Codex signed in with ChatGPT reports tokens but no cost,
+Gemini reports neither, and a budget does not hold what is not reported.
+
 ## Not yet
 
 - Linux: Landlock reports refusals only to the audit log, so they are not

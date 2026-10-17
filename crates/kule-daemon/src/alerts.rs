@@ -118,6 +118,8 @@ mod tests {
                     entities: entities.iter().map(|e| (*e).into()).collect(),
                 })
                 .collect(),
+            spent: Default::default(),
+            budget: None,
         }
     }
 

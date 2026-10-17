@@ -39,6 +39,7 @@ mod sandbox;
 mod snapshot;
 mod steps;
 mod task;
+mod usage;
 
 pub use approvals::{
     Answer, Approvals, DEFAULT_TIMEOUT, MAX_TIMEOUT, MAX_WAITING, MIN_TIMEOUT, Question,
@@ -66,3 +67,4 @@ pub use sandbox::{
 };
 pub use steps::{Step, StepChange};
 pub use task::{AgentAtWork, Task, TaskInfo};
+pub use usage::{Money, RunUsage, Spent};

@@ -10,17 +10,23 @@
 //! - `background <file>`: leaves a process running, its pid in the file;
 //! - `reviewed-write <path> <text>`: an edit that writes the file while a
 //!   review (a `think` call) runs inside it, the review ending first, as
-//!   Codex does.
+//!   Codex does;
+//! - `cost <amount>`: reports what the session cost so far, in USD;
+//! - `tokens <input> <output>`: the token counts the turn's end reports.
+//!
+//! A cancelled turn stops before its next command and ends as cancelled.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use agent_client_protocol::schema::v1::{
-    AgentCapabilities, ContentBlock, ContentChunk, InitializeRequest, InitializeResponse,
-    NewSessionRequest, NewSessionResponse, PermissionOption, PermissionOptionKind, PromptRequest,
-    PromptResponse, RequestPermissionOutcome, RequestPermissionRequest, SessionId,
-    SessionNotification, SessionUpdate, StopReason, TextContent, ToolCall, ToolCallStatus,
-    ToolCallUpdate, ToolCallUpdateFields, ToolKind,
+    AgentCapabilities, CancelNotification, ContentBlock, ContentChunk, Cost, InitializeRequest,
+    InitializeResponse, NewSessionRequest, NewSessionResponse, PermissionOption,
+    PermissionOptionKind, PromptRequest, PromptResponse, RequestPermissionOutcome,
+    RequestPermissionRequest, SessionId, SessionNotification, SessionUpdate, StopReason,
+    TextContent, ToolCall, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields, ToolKind, Usage,
+    UsageUpdate,
 };
 use agent_client_protocol::{Agent, Client, ConnectionTo, Responder, Stdio};
 
@@ -28,9 +34,18 @@ use agent_client_protocol::{Agent, Client, ConnectionTo, Responder, Stdio};
 async fn main() -> agent_client_protocol::Result<()> {
     let cwd: Arc<Mutex<PathBuf>> = Arc::new(Mutex::new(PathBuf::from(".")));
     let session_cwd = cwd.clone();
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let on_cancel = cancelled.clone();
     Agent
         .builder()
         .name("kule-test-agent")
+        .on_receive_notification(
+            async move |_: CancelNotification, _cx| {
+                on_cancel.store(true, Ordering::SeqCst);
+                Ok(())
+            },
+            agent_client_protocol::on_receive_notification!(),
+        )
         .on_receive_request(
             async move |request: InitializeRequest, responder, _cx| {
                 responder.respond(
@@ -62,11 +77,23 @@ async fn main() -> agent_client_protocol::Result<()> {
                 let dir = cwd.lock().unwrap().clone();
                 let session = request.session_id.clone();
                 let connection = cx.clone();
+                let cancelled = cancelled.clone();
                 cx.spawn(async move {
+                    let mut usage = None;
                     for (n, command) in script.split(';').map(str::trim).enumerate() {
+                        if cancelled.load(Ordering::SeqCst) {
+                            return responder.respond(PromptResponse::new(StopReason::Cancelled));
+                        }
+                        if let Some(counts) = command.strip_prefix("tokens ") {
+                            let mut counts = counts.split(' ').map(|n| n.parse().unwrap_or(0));
+                            let (input, output) =
+                                (counts.next().unwrap_or(0), counts.next().unwrap_or(0));
+                            usage = Some(Usage::new(input + output, input, output));
+                            continue;
+                        }
                         perform(&connection, &session, &dir, n, command).await?;
                     }
-                    responder.respond(PromptResponse::new(StopReason::EndTurn))
+                    responder.respond(PromptResponse::new(StopReason::EndTurn).usage(usage))
                 })
             },
             agent_client_protocol::on_receive_request!(),
@@ -149,6 +176,12 @@ async fn perform(
             end(&edit)
         }
         "say" => say(rest.to_owned()),
+        "cost" => cx.send_notification(SessionNotification::new(
+            session.clone(),
+            SessionUpdate::UsageUpdate(
+                UsageUpdate::new(1000, 200_000).cost(Cost::new(rest.parse().unwrap_or(0.0), "USD")),
+            ),
+        )),
         // A real agent waits for its model between tool calls.
         // Leaves a process running after the turn, writing its pid to the
         // file, the way an agent's `npm run dev &` would.

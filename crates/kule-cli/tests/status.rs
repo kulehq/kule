@@ -104,3 +104,35 @@ fn status_shows_moves_as_moves() {
     );
     assert!(status.contains("passes on its own"), "{status}");
 }
+
+#[test]
+fn status_tells_what_the_runs_spent_and_what_is_left() {
+    let (home, ws) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+    let created = kule(home.path(), &["new", ws.path().to_str().unwrap()]);
+    let id = created.split_whitespace().nth(1).unwrap();
+    assert!(!kule(home.path(), &["status", id]).contains("spent"));
+
+    let usage = home.path().join("tasks").join(id).join("usage.jsonl");
+    fs::write(
+        &usage,
+        concat!(
+            r#"{"agent":"claude-code","started_unix":1,"input_tokens":1000,"output_tokens":200,"cost":{"amount":0.4,"currency":"USD"}}"#,
+            "\n",
+            r#"{"agent":"codex","started_unix":2,"input_tokens":300}"#,
+            "\n",
+        ),
+    )
+    .unwrap();
+    let set = kule(home.path(), &["budget", id, "1.5"]);
+    assert_eq!(
+        set,
+        "spent: 0.40 USD, 1500 tokens in 2 runs (1 without a cost); budget 1.50 USD, 1.10 USD left\n"
+    );
+    assert!(kule(home.path(), &["status", id]).ends_with(&set));
+
+    let off = kule(home.path(), &["budget", id, "off"]);
+    assert_eq!(
+        off,
+        "spent: 0.40 USD, 1500 tokens in 2 runs (1 without a cost)\n"
+    );
+}

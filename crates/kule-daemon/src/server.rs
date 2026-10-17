@@ -338,6 +338,7 @@ pub fn dispatch(service: &Arc<Service>, call: Call) -> Result<Value, String> {
         Call::SetApprovalTimeout { task, minutes } => {
             json(service.set_approval_timeout(&task, minutes)?)
         }
+        Call::SetBudget { task, budget } => json(service.set_budget(&task, budget)?),
         Call::Hello => json(Hello {
             protocol: PROTOCOL,
             version: env!("CARGO_PKG_VERSION").to_owned(),

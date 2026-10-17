@@ -21,6 +21,7 @@ use crate::manifest::{Baseline, Entry, Kind, Stamp, Tree, relative, scan};
 use crate::meet::{self, Touched};
 use crate::outline::{self, FileOutline};
 use crate::preview::{self, Preview};
+use crate::usage::Money;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskInfo {
@@ -40,7 +41,15 @@ struct Merge {
 /// What a person set for the task.
 #[derive(Debug, Serialize, Deserialize)]
 struct Settings {
+    #[serde(default = "default_timeout")]
     approval_timeout_secs: u64,
+    /// What the task's runs may cost, all of them together.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    budget: Option<Money>,
+}
+
+fn default_timeout() -> u64 {
+    approvals::DEFAULT_TIMEOUT.as_secs()
 }
 
 /// Layout under `<home>/tasks/<id>/`: `task.json`, `baseline.json`, `copy/`
@@ -612,12 +621,41 @@ impl Task {
     /// setting lives outside the copy, where nothing the task runs can
     /// write.
     pub fn approval_timeout(&self) -> Result<Duration> {
+        Ok(Duration::from_secs(self.settings()?.approval_timeout_secs))
+    }
+
+    fn settings(&self) -> Result<Settings> {
         let path = self.dir.join("settings.json");
         if !path.is_file() {
-            return Ok(approvals::DEFAULT_TIMEOUT);
+            return Ok(Settings {
+                approval_timeout_secs: default_timeout(),
+                budget: None,
+            });
         }
-        let settings: Settings = read_json(&path)?;
-        Ok(Duration::from_secs(settings.approval_timeout_secs))
+        read_json(&path)
+    }
+
+    /// What the task's runs may cost, together; `None` for no limit.
+    pub fn budget(&self) -> Result<Option<Money>> {
+        Ok(self.settings()?.budget)
+    }
+
+    /// Sets [`Task::budget`]: a positive amount in an ISO 4217 currency, or
+    /// none.
+    pub fn set_budget(&self, budget: Option<Money>) -> Result<()> {
+        if let Some(b) = &budget {
+            let currency_ok =
+                b.currency.len() == 3 && b.currency.chars().all(|c| c.is_ascii_uppercase());
+            if !(b.amount.is_finite() && b.amount > 0.0) || !currency_ok {
+                return Err(Error::Invalid(format!(
+                    "a budget is a positive amount in a currency like USD, not {} {}",
+                    b.amount, b.currency
+                )));
+            }
+        }
+        let mut settings = self.settings()?;
+        settings.budget = budget;
+        write_json(&self.dir.join("settings.json"), &settings)
     }
 
     /// Sets [`Task::approval_timeout`]; it can be anywhere from
@@ -631,9 +669,8 @@ impl Task {
                 timeout.as_secs()
             )));
         }
-        let settings = Settings {
-            approval_timeout_secs: timeout.as_secs(),
-        };
+        let mut settings = self.settings()?;
+        settings.approval_timeout_secs = timeout.as_secs();
         write_json(&self.dir.join("settings.json"), &settings)
     }
 

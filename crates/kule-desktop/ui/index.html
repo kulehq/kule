@@ -53,6 +53,12 @@
           </div>
           <div class="task-meta">
             <span class="chip" id="task-state"></span>
+            <span
+              class="chip"
+              id="task-spent"
+              title="What the task's runs used, as their agents reported it. An agent signed in with a subscription may report tokens alone."
+              hidden
+            ></span>
             <button
               id="open-terminal"
               class="button"
@@ -102,6 +108,14 @@
                   <option value="240">4 hours</option>
                   <option value="480">8 hours</option>
                 </select>
+              </label>
+              <label
+                class="agent-pick"
+                title="What the task's runs may cost together, as the agents report it. None starts once it is spent. Claude Code reports the cost as each turn ends, so a turn may go over and the next run is refused; an agent that reports it as it works is stopped when it gets there. Agents that report no cost are not held by it. Empty for no limit."
+              >
+                Budget
+                <input id="budget" type="number" min="0" step="0.5" inputmode="decimal" placeholder="none" />
+                <span id="budget-currency">USD</span>
               </label>
               <span class="hint" id="composer-hint"></span>
               <button class="button primary" id="send" type="submit" aria-keyshortcuts="Control+Enter Meta+Enter">Run</button>

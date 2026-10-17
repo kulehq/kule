@@ -9,7 +9,9 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-agent-client-protocol = { version = "3.4.0", features = ["stdio"] }
+# The tokens of a turn, at its end, are still marked unstable in ACP; an
+# agent that sends something else is read as sending nothing.
+agent-client-protocol = { version = "3.4.0", features = ["stdio", "unstable_end_turn_token_usage"] }
 async-process = "2.5.0"
 blake3.workspace = true
 futures = "0.3.34"
@@ -20,7 +22,7 @@ serde_json.workspace = true
 toml = "1.1.8"
 ureq = "3.4.2"
 toml_edit = { version = "0.25.17", features = ["serde"] }
-tokio = { version = "1.53.3", features = ["rt-multi-thread", "macros", "time"] }
+tokio = { version = "1.53.3", features = ["rt-multi-thread", "macros", "time", "sync"] }
 
 [dev-dependencies]
 tempfile.workspace = true

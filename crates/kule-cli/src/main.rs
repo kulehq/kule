@@ -4,12 +4,12 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 use std::time::Instant;
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result, anyhow, bail};
 use clap::{Parser, Subcommand};
 use kule_engine::entities::{Change as EntityChange, Edit, Outline, Skip};
 use kule_engine::{
-    Change, Connection, DEFAULT_POLICY, Denial, Effect, EffectSet, Error, GitSummary, Kind,
-    Network, Policy, Proxy, RefChange, Ruling, Sandbox, Task, Verdict, connections, meet,
+    Change, Connection, DEFAULT_POLICY, Denial, Effect, EffectSet, Error, GitSummary, Kind, Money,
+    Network, Policy, Proxy, RefChange, Ruling, RunUsage, Sandbox, Task, Verdict, connections, meet,
     record_denials,
 };
 
@@ -135,6 +135,19 @@ enum Cmd {
         #[arg(long, default_value = "claude-code")]
         agent: String,
         prompt: String,
+    },
+    /// Set what the task's agent runs may cost together, as the agents
+    /// report it: none starts once it is spent, and a run whose agent
+    /// reports its cost as it works is stopped when it gets there. Claude
+    /// Code reports it as each turn ends, so a turn may go over and the next
+    /// run is refused. `off` takes it away. Agents that report no cost (one
+    /// signed in with a subscription, say) are not held by it.
+    Budget {
+        task: String,
+        /// An amount like 5 or 2.50, or `off`.
+        amount: String,
+        /// ISO 4217 [default: USD]
+        currency: Option<String>,
     },
     /// List the steps of the task's uncommitted work: what each tool call changed.
     Steps { task: String },
@@ -343,8 +356,24 @@ fn run() -> Result<ExitCode> {
             let profile = agents
                 .get(&agent)
                 .ok_or_else(|| anyhow!("{}", agents.refusal(&agent)))?;
+            let limit = task.budget_left()?;
+            if let Some(left) = &limit
+                && left.amount <= 0.0
+            {
+                bail!(
+                    "the task has spent its budget; raise it with `kule budget {} AMOUNT CURRENCY` or turn it off",
+                    task.id()
+                );
+            }
             let _at_work = task.agent_at_work()?;
             let started = Instant::now();
+            let usage = RunUsage {
+                agent: profile.name.clone(),
+                started_unix: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |d| d.as_secs()),
+                ..RunUsage::default()
+            };
             let logged_before = connections(&task)?.len();
             warn_if_network_not_isolated();
             let proxy = Proxy::start(&task, profile.open_hosts(load_policy(&home, &task)?)?)?;
@@ -356,10 +385,25 @@ fn run() -> Result<ExitCode> {
             } = profile.launch(&task, &proxy)?;
             let (tx, rx) = futures::channel::mpsc::unbounded();
             let runtime = tokio::runtime::Runtime::new()?;
-            let printer = runtime.spawn(print_events(rx));
-            let outcome =
-                runtime.block_on(kule_acp::run(&task, command, &prompt, mode.as_deref(), tx));
-            let _ = runtime.block_on(printer);
+            let printer = runtime.spawn(print_events(rx, usage));
+            let outcome = runtime.block_on(kule_acp::run_limited(
+                &task,
+                command,
+                &prompt,
+                mode.as_deref(),
+                limit,
+                tx,
+            ));
+            if let Ok(usage) = runtime.block_on(printer) {
+                // Kept whether the run went well or not: it was spent either way.
+                task.record_usage(&usage)?;
+                if usage.cost.is_none() && task.budget()?.is_some() {
+                    eprintln!(
+                        "kule: {} reported no cost, so the task's budget does not count this run",
+                        profile.name
+                    );
+                }
+            }
             // The agent's process group is gone by now.
             let put_back = kept.restore()?;
             outcome.map_err(|e| {
@@ -396,6 +440,25 @@ fn run() -> Result<ExitCode> {
                 }
             }
             print_ruling(&load_policy(&home, &task)?.judge(&task.effects()?.to_commit(false)));
+            print_spent(&task)?;
+        }
+        Cmd::Budget {
+            task,
+            amount,
+            currency,
+        } => {
+            let task = Task::open(&home, &task)?;
+            let budget = match amount.as_str() {
+                "off" => None,
+                amount => Some(Money {
+                    amount: amount
+                        .parse()
+                        .map_err(|_| anyhow!("{amount}: an amount like 5 or 2.50, or off"))?,
+                    currency: currency.unwrap_or_else(|| "USD".to_owned()),
+                }),
+            };
+            task.set_budget(budget)?;
+            print_spent(&task)?;
         }
         Cmd::Steps { task } => {
             for step in Task::open(&home, &task)?.steps()? {
@@ -419,8 +482,13 @@ fn run() -> Result<ExitCode> {
             let ruling = load_policy(&home, &task)?.judge(&committed);
             if json {
                 let outline = task.outline(&committed).unwrap_or_default();
-                let both =
-                    serde_json::json!({ "effects": set, "ruling": ruling, "outline": outline });
+                let both = serde_json::json!({
+                    "effects": set,
+                    "ruling": ruling,
+                    "outline": outline,
+                    "spent": task.spent()?,
+                    "budget": task.budget()?,
+                });
                 println!("{}", serde_json::to_string_pretty(&both)?);
             } else {
                 if !task.workspace_exists() {
@@ -434,6 +502,7 @@ fn run() -> Result<ExitCode> {
                     print_ruling(&ruling);
                     print_meetings(&home, &task)?;
                 }
+                print_spent(&task)?;
             }
         }
         Cmd::Commit {
@@ -561,8 +630,12 @@ fn load_policy(home: &Path, task: &Task) -> Result<Policy> {
 }
 
 /// Prints an agent's events as they come: its answer as running text, tool
-/// calls and what each changed as their own lines.
-async fn print_events(mut rx: futures::channel::mpsc::UnboundedReceiver<kule_acp::Event>) {
+/// calls and what each changed as their own lines. Returns what the run
+/// used, as the agent reported it.
+async fn print_events(
+    mut rx: futures::channel::mpsc::UnboundedReceiver<kule_acp::Event>,
+    mut usage: RunUsage,
+) -> RunUsage {
     use futures::StreamExt;
     use kule_acp::Event;
     let mut at_line_start = true;
@@ -574,7 +647,9 @@ async fn print_events(mut rx: futures::channel::mpsc::UnboundedReceiver<kule_acp
         *at_line_start = true;
     };
     while let Some(event) = rx.next().await {
+        event.tally(&mut usage);
         match event {
+            Event::Usage { .. } | Event::Tokens { .. } => {}
             Event::Message { text } => {
                 print!("{text}");
                 let _ = std::io::stdout().flush();
@@ -616,6 +691,51 @@ async fn print_events(mut rx: futures::channel::mpsc::UnboundedReceiver<kule_acp
             }
         }
     }
+    usage
+}
+
+fn money(m: &Money) -> String {
+    format!("{:.2} {}", m.amount, m.currency)
+}
+
+/// What the task's runs used, and what is left of its budget; nothing
+/// before a run reported anything.
+fn print_spent(task: &Task) -> Result<()> {
+    let spent = task.spent()?;
+    let budget = task.budget()?;
+    if spent.runs == 0 && budget.is_none() {
+        return Ok(());
+    }
+    let cost = if spent.cost.is_empty() {
+        "no cost reported".to_owned()
+    } else {
+        spent.cost.iter().map(money).collect::<Vec<_>>().join(" + ")
+    };
+    let runs = if spent.runs == 1 { "run" } else { "runs" };
+    let mut line = if spent.cost.is_empty() && spent.tokens == 0 {
+        format!("spent: nothing reported in {} {runs}", spent.runs)
+    } else {
+        format!(
+            "spent: {cost}, {} tokens in {} {runs}",
+            spent.tokens, spent.runs
+        )
+    };
+    if spent.unpriced_runs > 0 && !spent.cost.is_empty() {
+        line += &format!(" ({} without a cost)", spent.unpriced_runs);
+    }
+    if let Some(budget) = budget {
+        let left = budget.amount - spent.in_currency(&budget.currency);
+        line += &format!(
+            "; budget {}, {} left",
+            money(&budget),
+            money(&Money {
+                amount: left.max(0.0),
+                currency: budget.currency.clone()
+            })
+        );
+    }
+    println!("{line}");
+    Ok(())
 }
 
 /// The connections a command made, grouped by host, port and outcome.

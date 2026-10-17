@@ -60,6 +60,12 @@ pub struct TaskView {
     /// Where its work meets that of other tasks on the same workspace.
     #[serde(default)]
     pub overlaps: Vec<Overlap>,
+    /// What the task's runs used, as their agents reported it.
+    #[serde(default)]
+    pub spent: kule_engine::Spent,
+    /// What they may cost together; `None` for no limit.
+    #[serde(default)]
+    pub budget: Option<kule_engine::Money>,
 }
 
 /// The ACP registry as the app shows it.
@@ -377,6 +383,12 @@ impl Service {
         self.view(id)
     }
 
+    /// Sets what the task's runs may cost together; `None` for no limit.
+    pub fn set_budget(&self, id: &str, budget: Option<kule_engine::Money>) -> Result<TaskView> {
+        self.open(id)?.set_budget(budget).map_err(text)?;
+        self.view(id)
+    }
+
     /// The agents that can run: Kule's own and the person's approved ones.
     pub fn agents(&self) -> Result<Vec<String>> {
         Ok(kule_acp::Agents::load(&self.home).map_err(text)?.names())
@@ -685,6 +697,7 @@ impl Service {
             .cloned()
             .ok_or_else(|| agents.refusal(agent))?;
         let task = self.open(id)?;
+        let limit = budget_left(&task)?;
         if !self.running.lock().unwrap().insert(id.to_owned()) {
             return Err(format!("an agent is already at work in task {id}"));
         }
@@ -705,7 +718,7 @@ impl Service {
         );
         let (service, prompt) = (Arc::clone(self), prompt.to_owned());
         std::thread::spawn(move || {
-            let (error, denials) = match service.run(&task, &profile, &prompt) {
+            let (error, denials) = match service.run(&task, &profile, &prompt, limit) {
                 Ok(denials) => (None, denials),
                 Err(e) => (Some(e), Vec::new()),
             };
@@ -724,30 +737,42 @@ impl Service {
         task: &Task,
         profile: &kule_acp::Profile,
         prompt: &str,
+        limit: Option<kule_engine::Money>,
     ) -> Result<Vec<Denial>> {
         let started = Instant::now();
+        let mut usage = kule_engine::RunUsage {
+            agent: profile.name.clone(),
+            started_unix: unix_now(),
+            ..Default::default()
+        };
         // Serves this run only, with the policy as it is now; dropped when
         // the run returns, which closes it.
         let policy = profile.open_hosts(self.policy(task)?).map_err(text)?;
         let timeout = task.approval_timeout().map_err(text)?;
         let proxy = Proxy::start_asking(task, policy, &self.approvals, timeout).map_err(text)?;
         let launch = profile.launch(task, &proxy).map_err(text)?;
-        let (tx, mut rx) = futures::channel::mpsc::unbounded();
+        let (tx, mut rx) = futures::channel::mpsc::unbounded::<kule_acp::Event>();
         let runtime = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
         let (service, id) = (Arc::clone(self), task.id().to_owned());
         let forward = runtime.spawn(async move {
             while let Some(event) = rx.next().await {
+                event.tally(&mut usage);
                 service.emit(&id, RunEvent::Agent { event });
             }
+            usage
         });
-        let outcome = runtime.block_on(kule_acp::run(
+        let outcome = runtime.block_on(kule_acp::run_limited(
             task,
             launch.command,
             prompt,
             launch.mode.as_deref(),
+            limit,
             tx,
         ));
-        let _ = runtime.block_on(forward);
+        if let Ok(usage) = runtime.block_on(forward) {
+            // Kept whether the run went well or not: it was spent either way.
+            task.record_usage(&usage).map_err(text)?;
+        }
         // The agent's process group is gone by now.
         let put_back = launch.kept.restore().map_err(text)?;
         outcome.map_err(|e| {
@@ -796,6 +821,8 @@ impl Service {
             workspace_gone: scan.workspace_gone,
             scanning,
             overlaps: self.overlaps(id, &scan),
+            spent: task.spent().map_err(text)?,
+            budget: task.budget().map_err(text)?,
         })
     }
 
@@ -909,6 +936,23 @@ impl Service {
     fn policy(&self, task: &Task) -> Result<Policy> {
         Policy::load(Some(&self.home.join("policy.cedar")), task.workspace()).map_err(text)
     }
+}
+
+/// What the next run of `task` may cost; refused when its budget is spent.
+fn budget_left(task: &Task) -> Result<Option<kule_engine::Money>> {
+    match task.budget_left().map_err(text)? {
+        Some(left) if left.amount <= 0.0 => Err(format!(
+            "task {} has spent its budget; raise it or turn it off to run again",
+            task.id()
+        )),
+        left => Ok(left),
+    }
+}
+
+fn unix_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
 }
 
 /// Sends `notice` to every subscriber, forgetting the ones that left.
@@ -1228,6 +1272,35 @@ mod tests {
         s.app.running.lock().unwrap().remove(&id);
         s.app.remove(&id).unwrap();
         assert!(s.app.tasks().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_task_that_spent_its_budget_runs_no_agent() {
+        let s = Setup::new();
+        let (id, _) = s.task();
+        let usd = |amount| kule_engine::Money {
+            amount,
+            currency: "USD".into(),
+        };
+        let view = s.app.set_budget(&id, Some(usd(1.0))).unwrap();
+        assert_eq!(view.budget, Some(usd(1.0)));
+        let task = s.app.open(&id).unwrap();
+        task.record_usage(&kule_engine::RunUsage {
+            agent: "claude-code".into(),
+            input_tokens: 500,
+            cost: Some(usd(1.0)),
+            ..Default::default()
+        })
+        .unwrap();
+        let view = s.app.view(&id).unwrap();
+        assert_eq!((view.spent.runs, view.spent.tokens), (1, 500));
+
+        let e = s.app.start_run(&id, "claude-code", "hi").unwrap_err();
+        assert!(e.contains("spent its budget"), "{e}");
+        assert!(!s.app.running.lock().unwrap().contains(&id));
+        assert!(s.app.stream(&id).is_empty());
+
+        assert_eq!(s.app.set_budget(&id, None).unwrap().budget, None);
     }
 
     #[test]
