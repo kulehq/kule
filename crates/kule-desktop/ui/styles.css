@@ -1116,3 +1116,10 @@ select:focus-visible {
 .agent-trial > button {
   align-self: flex-start;
 }
+
+.agent-warnings {
+  margin: 0 0 12px;
+  padding-left: 18px;
+  color: var(--ask);
+  font-size: 13px;
+}

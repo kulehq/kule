@@ -258,13 +258,20 @@ impl Sandbox {
     /// directory that cannot be mounted read-only (see [`Kept`] and
     /// [`protects_in_place`]). Call it before the command starts, and
     /// restore once everything it started is gone.
-    pub fn keep_protected(&self) -> Result<Kept> {
+    ///
+    /// A path too large to note (a plugin directory of hundreds of
+    /// megabytes) is hidden from the command instead: it cannot change what
+    /// it cannot reach, though it does without it.
+    pub fn keep_protected(&mut self) -> Result<Kept> {
         let mounted = self.mounted_read_only();
-        let paths = self
+        let (paths, too_large): (Vec<PathBuf>, Vec<PathBuf>) = self
             .protected_in_writable()
             .filter(|p| cfg!(target_os = "linux") && !mounted.contains(p))
             .cloned()
-            .collect();
+            .partition(|p| crate::protect::fits(p));
+        for path in too_large {
+            self.hidden.push(path);
+        }
         Kept::new(&self.kept, paths)
     }
 

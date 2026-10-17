@@ -22,7 +22,14 @@ name = "claude-code"
 command = ["npx", "-y", "@agentclientprotocol/claude-agent-acp@0.92.0"]
 state = [".claude", ".claude.json", ".local/state/claude", "Library/Caches/claude-cli-nodejs"]
 login = [".claude/.credentials.json"]
-protected = [".claude/settings.json", ".claude/settings.local.json", ".claude/hooks", ".claude.json"]
+# What makes Claude Code run something, or follow instructions, the next
+# time it starts outside Kule: settings and hooks, plugins (which bring
+# hooks and MCP servers), skills, commands, subagents, and the instructions
+# it reads first.
+protected = [
+  ".claude/settings.json", ".claude/settings.local.json", ".claude/hooks", ".claude.json",
+  ".claude/plugins", ".claude/skills", ".claude/commands", ".claude/agents", ".claude/CLAUDE.md",
+]
 reveal_on_macos = ["Library/Keychains"]
 pass_env = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"]
 
@@ -31,7 +38,12 @@ name = "gemini"
 command = ["gemini", "--acp"]
 state = [".gemini"]
 login = [".gemini/gemini-credentials.json", ".gemini/oauth_creds.json"]
-protected = [".gemini/settings.json"]
+# Settings, extensions (which run code), custom commands, the folders it
+# trusts, and the instructions it reads first.
+protected = [
+  ".gemini/settings.json", ".gemini/extensions", ".gemini/commands",
+  ".gemini/trustedFolders.json", ".gemini/GEMINI.md", ".gemini/extension_integrity.json",
+]
 # The keychain only works for Gemini when it can write a probe item there,
 # which the sandbox refuses; its own encrypted file under ~/.gemini needs no
 # more than the state above. Save the API key once with
@@ -49,7 +61,12 @@ mode = "agent-full-access"
 command = ["npx", "-y", "@agentclientprotocol/codex-acp@2.2.2", "-c", "sandbox_mode=\"danger-full-access\""]
 state = [".codex"]
 login = [".codex/auth.json"]
-protected = [".codex/config.toml"]
+# Settings, the rules for which commands run unasked, plugins, skills,
+# prompts, and the instructions it reads first.
+protected = [
+  ".codex/config.toml", ".codex/rules", ".codex/plugins", ".codex/skills",
+  ".codex/prompts", ".codex/AGENTS.md",
+]
 pass_env = ["OPENAI_API_KEY", "CODEX_HOME"]
 # A ChatGPT sign-in refreshes its token at auth.openai.com and reaches the
 # model through chatgpt.com, not the public API.

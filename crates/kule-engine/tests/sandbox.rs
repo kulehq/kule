@@ -171,6 +171,43 @@ fn sandbox_python(sandbox: &Sandbox, script: &str) -> Output {
 /// refusing new files next to them too, so on Linux they are mounted
 /// read-only for the command, or, where the kernel refuses the namespace,
 /// put back after the run.
+/// An agent's plugins can run to hundreds of megabytes, more than Kule
+/// notes to put back. Where they cannot be kept read-only in place, they
+/// are hidden from the command instead: still never changed by it.
+#[test]
+fn a_protected_directory_too_large_to_note_is_still_never_changed() {
+    let s = Setup::new();
+    let state = s.outside().join("agent-state");
+    let plugins = state.join("plugins");
+    fs::create_dir_all(&plugins).unwrap();
+    // Sparse: larger than Kule notes, without the disk.
+    fs::File::create(plugins.join("bundle.js"))
+        .unwrap()
+        .set_len(65 << 20)
+        .unwrap();
+    // Where the plugins are hidden (Linux without user namespaces),
+    // Landlock opens the state by what is in it, so the agent writes in its
+    // directories, not new files next to them.
+    fs::create_dir_all(state.join("sessions")).unwrap();
+    let mut sandbox = s.sandbox();
+    sandbox.allow_write(&state).unwrap();
+    sandbox.protect(&plugins).unwrap();
+    let kept = sandbox.keep_protected().unwrap();
+    let out = sh(
+        &sandbox,
+        &format!(
+            "echo evil > '{0}/plugins/hook.js'; echo session > '{0}/sessions/1.json'",
+            state.display()
+        ),
+    );
+    kept.restore().unwrap();
+    assert!(!plugins.join("hook.js").exists(), "{out:?}");
+    assert_eq!(
+        fs::read_to_string(state.join("sessions/1.json")).unwrap(),
+        "session\n"
+    );
+}
+
 #[test]
 fn a_protected_file_inside_a_writable_directory_stays_read_only() {
     let s = Setup::new();

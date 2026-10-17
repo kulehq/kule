@@ -729,6 +729,12 @@ fn agents_cmd(home: &Path, action: AgentsCmd) -> Result<()> {
                 .find(|l| l.profile.name == name)
                 .ok_or_else(|| anyhow!("no agent {name}"))?;
             print_profile(&listed.profile);
+            if let Some(dir) = &listed.own_home_dir {
+                println!("its own home      {dir}");
+            }
+            for warning in &listed.warnings {
+                println!("\nwarning: {warning}");
+            }
             if let Some(why) = &listed.held {
                 println!("\nheld: {why}");
             }
@@ -736,6 +742,11 @@ fn agents_cmd(home: &Path, action: AgentsCmd) -> Result<()> {
         AgentsCmd::Approve { name } => {
             let profile = Agents::approve(home, &name)?;
             print_profile(&profile);
+            let agents = Agents::load(home)?;
+            let listed = agents.listed().iter().find(|l| l.profile.name == name);
+            for warning in listed.map(|l| l.warnings.as_slice()).unwrap_or_default() {
+                println!("\nwarning: {warning}");
+            }
             println!("\napproved {name} as it stands; a change to it needs approval again");
         }
         AgentsCmd::Revoke { name } => {
@@ -819,11 +830,19 @@ fn agents_cmd(home: &Path, action: AgentsCmd) -> Result<()> {
             }
             println!("suggested state: {}", trial.state.join(", "));
             println!("suggested hosts: {}", trial.hosts.join(", "));
+            println!("suggested read-only: {}", trial.protect.join(", "));
             if cfg!(target_os = "linux") {
                 println!("(Linux does not report refused files: only hosts are suggested)");
             }
-            if apply && !(trial.state.is_empty() && trial.hosts.is_empty()) {
+            let nothing =
+                trial.state.is_empty() && trial.hosts.is_empty() && trial.protect.is_empty();
+            if apply && !nothing {
                 let mut profile = listed.profile.clone();
+                for path in trial.protect {
+                    if !profile.protected.contains(&path) {
+                        profile.protected.push(path);
+                    }
+                }
                 for state in trial.state {
                     if !profile.state.contains(&state) {
                         profile.state.push(state);
@@ -885,6 +904,9 @@ fn print_profile(profile: &kule_acp::Profile) {
     println!("also connects to  {}", list(&hosts));
     if let Some(mode) = &profile.mode {
         println!("session mode      {mode}");
+    }
+    if let Some(var) = &profile.own_home {
+        println!("home of its own   ${var} points at Kule's folder for it; sign it in there once");
     }
 }
 

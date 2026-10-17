@@ -392,6 +392,31 @@ fn remove_tree(path: &Path) -> Result<()> {
     }
 }
 
+/// Whether what is at `path` is small enough to note: a plugin directory
+/// of hundreds of megabytes is not.
+pub(crate) fn fits(path: &Path) -> bool {
+    fn size(path: &Path, left: &mut u64) -> bool {
+        let Ok(meta) = fs::symlink_metadata(path) else {
+            return true;
+        };
+        if meta.is_dir() {
+            let Ok(entries) = fs::read_dir(path) else {
+                return true;
+            };
+            return entries.flatten().all(|e| size(&e.path(), left));
+        }
+        if meta.is_file() {
+            match left.checked_sub(meta.len()) {
+                Some(rest) => *left = rest,
+                None => return false,
+            }
+        }
+        true
+    }
+    let mut left = MAX_KEPT as u64;
+    size(path, &mut left)
+}
+
 fn note(path: &Path) -> Result<Node> {
     let mut budget = MAX_KEPT;
     read(path, &mut budget)
@@ -501,6 +526,20 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
+
+    #[test]
+    fn a_directory_too_large_to_note_is_told_apart() {
+        let dir = TempDir::new().unwrap();
+        let plugins = dir.path().join("plugins");
+        fs::create_dir_all(plugins.join("cache")).unwrap();
+        fs::write(plugins.join("installed.json"), "{}").unwrap();
+        assert!(fits(&plugins));
+        // Sparse: as large as Kule reads, without the disk.
+        let big = fs::File::create(plugins.join("cache/bundle.js")).unwrap();
+        big.set_len(MAX_KEPT as u64 + 1).unwrap();
+        assert!(!fits(&plugins));
+        assert!(fits(&dir.path().join("absent")));
+    }
 
     /// A protected path and where Kule keeps its notes, both on the real
     /// file system.

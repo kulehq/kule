@@ -1030,7 +1030,7 @@ const lines = (text) =>
     .filter(Boolean);
 
 /** What a profile opens, one row each, as the person approves it. */
-function opens(profile) {
+function opens(profile, ownHome) {
   const row = (label, items) =>
     items && items.length ? [h("dt", {}, label), h("dd", {}, items.join(", "))] : [];
   const env = Object.entries(profile.env || {}).map(([k, v]) => `${k}=${v}`);
@@ -1045,12 +1045,13 @@ function opens(profile) {
     ...row("Sees your env", profile.pass_env),
     ...row("Sets env", env),
     ...row("Also connects to", (profile.hosts || []).map((host) => `https://${host}`)),
-    ...row("Session mode", profile.mode ? [profile.mode] : [])
+    ...row("Session mode", profile.mode ? [profile.mode] : []),
+    ...row("Home of its own", profile.own_home ? [`$${profile.own_home} → ${ownHome || "Kule's folder for it"}`] : [])
   );
 }
 
 function agentCard(listed) {
-  const { profile, origin, held, digest } = listed;
+  const { profile, origin, held, digest, warnings, own_home_dir } = listed;
   const yours = origin === "person";
   const actions = [];
   if (yours) {
@@ -1111,7 +1112,8 @@ function agentCard(listed) {
       h("span", { class: `chip ${held ? "ask" : "allow"}` }, held ? "held" : "can run")
     ),
     held ? h("p", { class: "agent-held" }, held) : null,
-    opens(profile),
+    opens(profile, own_home_dir),
+    (warnings || []).length ? h("ul", { class: "agent-warnings" }, ...warnings.map((w) => h("li", {}, w))) : null,
     actions.length ? h("div", { class: "agent-actions" }, ...actions) : null
   );
 }
@@ -1126,7 +1128,7 @@ function editAgent(profile, isNew, note) {
   $("agent-form-name")?.focus();
 }
 
-const BLANK = { name: "", command: [], state: [], login: [], protected: [], reveal_on_macos: [], env: {}, pass_env: [], hosts: [], mode: null };
+const BLANK = { name: "", command: [], state: [], login: [], protected: [], reveal_on_macos: [], env: {}, pass_env: [], hosts: [], mode: null, own_home: null };
 
 /** The profile the form holds now. */
 function formProfile() {
@@ -1147,6 +1149,7 @@ function formProfile() {
     env,
     pass_env: lines(value("agent-form-pass-env")),
     hosts: lines(value("agent-form-hosts")),
+    own_home: value("agent-form-own-home").trim() || null,
   };
 }
 
@@ -1177,7 +1180,13 @@ function agentEditor() {
       field("agent-form-pass-env", "Sees your env", "Your variables it may read: its own key.", p.pass_env.join("\n"), 2),
       field("agent-form-env", "Sets env", "NAME=value, one per line.", env, 2),
       field("agent-form-hosts", "Also connects to", "HTTPS hosts beyond what the policy lets through.", p.hosts.join("\n"), 3),
-      field("agent-form-mode", "Session mode", "Optional: the ACP mode to start in.", p.mode || "")
+      field("agent-form-mode", "Session mode", "Optional: the ACP mode to start in.", p.mode || ""),
+      field(
+        "agent-form-own-home",
+        "Home of its own",
+        "Optional: the variable the agent reads its config directory from (CODEX_HOME, CLAUDE_CONFIG_DIR, or HOME). Kule points it at a folder of the agent's own, so what it writes in Kule never reaches it outside. Sign it in there once.",
+        p.own_home || ""
+      )
     ),
     h(
       "div",
@@ -1199,6 +1208,7 @@ function trialResult(trial) {
   const picks = [
     ...trial.state.map((path) => ({ kind: "state", value: path, label: `Writes in ~: ${path}` })),
     ...trial.hosts.map((host) => ({ kind: "hosts", value: host, label: `Connects to: https://${host}` })),
+    ...(trial.protect || []).map((path) => ({ kind: "protected", value: path, label: `Read-only: ${path} (it runs code or gives instructions later)` })),
   ];
   const boxes = picks.map((pick) => {
     const box = h("input", { type: "checkbox", checked: true });

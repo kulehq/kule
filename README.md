@@ -211,6 +211,17 @@ for your approval like any change. The app's **Agents** view does the same
 with checkboxes, so a telemetry host can stay out. Linux does not report
 refused files, so there only hosts are suggested.
 
+An agent's own directory is outside the sandbox, and what the agent writes
+there in Kule reaches it the next time you start it without Kule. So what
+makes an agent run something or follow instructions when it starts is
+read-only in the sandbox: settings, hooks, plugins, extensions, skills,
+commands, rules, trusted folders and its `CLAUDE.md`/`AGENTS.md`/
+`GEMINI.md`. Kule's own profiles cover these; for yours, a trial suggests
+them and `kule agents show` warns about any left writable. Or give an agent
+a home of its own in Kule: `own_home = "CODEX_HOME"` (or `CLAUDE_CONFIG_DIR`,
+or `HOME`) points that variable at a folder of the agent's own, so nothing
+it writes in Kule reaches it outside; you sign it in there once.
+
 `crates/kule-desktop` is a Tauri app around the same engine:
 
 - **Tasks**: pick a folder to make a task; each shows its changes and the
@@ -264,7 +275,10 @@ at once.
   person makes meanwhile stay. Without user namespaces, and for settings
   that are links or do not exist yet, they are put back after the run
   instead; whatever a put-back replaces is moved to `~/.kule/kept/replaced`,
-  never lost.
+  never lost. A read-only directory too large to put back (plugins can
+  run to hundreds of megabytes) is hidden from the agent instead; Landlock
+  then opens the directory around it by what is in it, so the agent can
+  write in its subdirectories and files but not add new files beside them.
 - Gemini needs an API key from AI Studio (Google no longer serves the
   Code Assist sign-in to clients like this), saved outside the keychain,
   which the sandbox keeps read-only: `GEMINI_FORCE_FILE_STORAGE=true gemini`,

@@ -64,6 +64,10 @@ pub struct Trial {
     pub state: Vec<String>,
     /// HTTPS hosts it was refused, as hosts to open.
     pub hosts: Vec<String>,
+    /// What in its state, the suggested state included, can make it run
+    /// something the next time it starts outside Kule: to make read-only.
+    #[serde(default)]
+    pub protect: Vec<String>,
     /// Everything it was refused, as the sandbox and the proxy said it.
     pub refused: Vec<String>,
     /// The last lines the agent wrote to its error output.
@@ -177,6 +181,11 @@ fn try_in(
     trial.reply = reply.trim().chars().take(500).collect();
     trial.error = error;
     trial.log = log;
+    if let Some(home) = &home {
+        let mut probe = draft.clone();
+        probe.state.extend(trial.state.iter().cloned());
+        trial.protect = probe.unprotected(home);
+    }
     Ok(trial)
 }
 
