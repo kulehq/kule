@@ -9,6 +9,20 @@ The tower as three shapes: the beacon, the cab, the stem. White on coral
 | `kule-icon-square.svg` | The app icon for Windows and Linux: a plate that fills the canvas, no shadow. |
 | `kule-mark.svg` | The glyph alone, in `currentColor`, for anywhere the plate is not wanted. |
 
+Images for the places Kule shows up, all drawn from `sources/` by
+`sources/render.sh` (Chrome and the network, for the fonts):
+
+| File | Where it goes |
+| --- | --- |
+| `avatar.png` | 500 × 500, the kulehq organisation's avatar on GitHub. |
+| `readme-header.png` | 2560 × 640, the top of the repository's README. |
+| `social-preview.png` | 1280 × 640, the repository's social preview (Settings → General). |
+| `linkedin-logo.png` | 400 × 400, the LinkedIn page's logo. |
+| `linkedin-cover.png` | 2256 × 382, the LinkedIn page's cover; the words keep clear of the logo at its lower left. |
+
+The type is Bricolage Grotesque for the name, IBM Plex Sans and IBM Plex
+Mono for the rest; the ground is `#131418`.
+
 The app's icons are made from these with the Tauri CLI:
 
 ```sh

@@ -1,3 +1,5 @@
+<img src="brand/readme-header.png" alt="Kule: a control room for AI agents that work on your folders" width="100%">
+
 # Kule
 
 Kule is a control room for AI agents that work on your files: code, but

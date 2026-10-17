@@ -1,0 +1,23 @@
+<!doctype html><html><head><meta charset="utf-8">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,700;12..96,800&family=IBM+Plex+Sans:wght@400;500&family=IBM+Plex+Mono:wght@400;500&display=block">
+<style>
+:root { --ink:#131418; --coral:#ff5a3c; --white:#f4f5f7; --muted:#9aa0ac; --line:#2a2d35;
+  --display:"Bricolage Grotesque", "Avenir Next", sans-serif; --body:"IBM Plex Sans", sans-serif; --mono:"IBM Plex Mono", monospace; }
+* { box-sizing:border-box; margin:0; }
+html, body { width:1128px; height:191px; overflow:hidden; background:var(--ink); color:var(--white); font-family:var(--body); }
+.plate { background:var(--coral); color:#fff; display:grid; place-items:center; flex:none; }
+.plate svg { height:62%; width:auto; }
+.ghost { position:absolute; color:var(--coral); opacity:.09; }
+.word { font:800 0px/0.9 var(--display); letter-spacing:-0.02em; }
+.tag { font:400 27px/1.3 var(--body); color:var(--white); }
+.mono { font:500 15px var(--mono); color:var(--muted); letter-spacing:.02em; }
+.dot { color:var(--coral); }
+.ghost svg{height:100%;width:auto}
+</style></head><body>
+<div class="ghost" style="left:120px;top:-70px;height:330px;opacity:.07"><svg class="g" viewBox="306 222 412 624" aria-hidden="true"><g fill="currentColor">
+<circle cx="512" cy="262" r="30"/><rect x="336" y="318" width="352" height="112" rx="56"/>
+<path d="M466 470 L558 470 L588 806 Q590 826 570 826 L454 826 Q434 826 436 806 Z"/></g></svg></div>
+<main style="position:absolute;inset:0;padding:0 64px 0 400px;display:flex;flex-direction:column;justify-content:center;gap:10px">
+  <p class="tag">A control room for AI agents that work on your folders.</p>
+  <p class="mono">sandboxed copy <span class="dot">·</span> policy <span class="dot">·</span> review <span class="dot">·</span> commit <span style="margin-left:18px">github.com/kulehq/kule</span></p>
+</main></body></html>
