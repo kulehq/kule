@@ -35,6 +35,9 @@ pub struct Region {
 pub struct Layout {
     pub version: u32,
     pub regions: BTreeMap<String, Region>,
+    /// The height of the box the agent's prompt is written in, in pixels.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub composer: Option<u32>,
 }
 
 /// What is kept; `None` when the window never changed its layout.
@@ -74,6 +77,9 @@ pub fn save(home: &Path, layout: Option<&Layout>) -> Result<()> {
 fn check(layout: &Layout) -> Result<()> {
     if layout.version != 1 {
         return Err(format!("a layout of version {}", layout.version));
+    }
+    if layout.composer.is_some_and(|h| h > MAX_SIZE) {
+        return Err("the prompt is taller than a screen".to_owned());
     }
     let names: HashSet<&str> = layout.regions.keys().map(String::as_str).collect();
     if names != REGIONS.iter().copied().collect() {
@@ -126,6 +132,7 @@ mod tests {
                 ("bottom".to_owned(), region(&[], false, 240)),
             ]
             .into(),
+            composer: Some(96),
         }
     }
 
@@ -163,7 +170,9 @@ mod tests {
         active.regions.get_mut("bottom").unwrap().active = Some("files".into());
         let mut huge = layout();
         huge.regions.get_mut("left").unwrap().size = 99_999;
-        for bad in [unknown, twice, region, active, huge] {
+        let mut tall = layout();
+        tall.composer = Some(99_999);
+        for bad in [unknown, twice, region, active, huge, tall] {
             assert!(save(home.path(), Some(&bad)).is_err(), "{bad:?}");
         }
         assert_eq!(load(home.path()).unwrap(), None);

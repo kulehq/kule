@@ -48,6 +48,25 @@ fn size(cols: u16, rows: u16) -> PtySize {
     }
 }
 
+/// What a terminal is, for its tab: its id and the shell's name.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Opened {
+    pub id: u64,
+    pub shell: String,
+}
+
+/// The name of the shell [`shell`] starts: `zsh`, `bash`, `cmd`.
+pub fn shell_name() -> String {
+    let path = if cfg!(windows) {
+        std::env::var_os("COMSPEC").unwrap_or_else(|| "cmd.exe".into())
+    } else {
+        std::env::var_os("SHELL").unwrap_or_else(|| "/bin/sh".into())
+    };
+    Path::new(&path)
+        .file_stem()
+        .map_or_else(|| "shell".to_owned(), |s| s.to_string_lossy().into_owned())
+}
+
 /// The person's shell, started as a login shell so it sets up what their
 /// terminal app would.
 fn shell() -> CommandBuilder {

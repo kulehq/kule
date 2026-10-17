@@ -789,12 +789,46 @@ select:focus-visible {
 }
 
 .composer {
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: 8px;
   padding: 12px 24px 16px;
   border-top: 1px solid var(--border);
   background: var(--surface);
+}
+
+/* The edge above the prompt: drag it up for a taller box, down for a
+   shorter one, as the regions' edges do. */
+.composer-grip {
+  position: absolute;
+  top: -4px;
+  right: 0;
+  left: 0;
+  height: 8px;
+  cursor: row-resize;
+  z-index: 2;
+}
+
+.composer-grip::after {
+  position: absolute;
+  top: 3px;
+  left: 50%;
+  width: 36px;
+  height: 3px;
+  margin-left: -18px;
+  border-radius: 2px;
+  background: var(--border);
+  content: "";
+}
+
+.composer-grip:hover::after,
+.composer-grip:focus-visible::after {
+  background: var(--accent);
+}
+
+.composer-grip:focus-visible {
+  outline: none;
 }
 
 .composer textarea {
@@ -805,7 +839,7 @@ select:focus-visible {
   background: var(--bg);
   color: var(--text);
   font: inherit;
-  resize: vertical;
+  resize: none;
 }
 
 .composer-bar {
@@ -2355,7 +2389,7 @@ body.dragging-panel * {
 .center > [data-split="bottom"] { grid-row: 2; }
 .center > #region-bottom { grid-row: 3; }
 
-/* Terminal: the shell in the task's copy. */
+/* Terminal: the shells in the task's copy, as tabs. */
 .panel-terminal {
   overflow: hidden;
 }
@@ -2364,21 +2398,123 @@ body.dragging-panel * {
   display: flex;
   flex: none;
   align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 4px 10px;
+  gap: 4px;
+  padding: 4px 8px;
   border-bottom: 1px solid var(--border);
-  font-size: 12px;
+  background: var(--surface);
 }
 
-.terminal-bar .muted {
-  overflow: hidden;
-  text-overflow: ellipsis;
+.terminal-tabs {
+  display: flex;
+  min-width: 0;
+  gap: 2px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.terminal-tab {
+  display: flex;
+  flex: none;
+  align-items: center;
+  border-radius: 6px;
+}
+
+.terminal-tab button {
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font: 12px var(--mono);
+  cursor: pointer;
+}
+
+.terminal-tab [role="tab"] {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 4px 4px 8px;
+}
+
+.terminal-tab.active {
+  background: var(--sunken);
+}
+
+.terminal-tab.active [role="tab"] {
+  color: var(--text);
+}
+
+.terminal-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--ok);
+}
+
+.terminal-tab.ended .terminal-dot {
+  background: var(--faint);
+}
+
+.terminal-close {
+  padding: 2px 7px;
+  border-radius: 4px;
+  font-size: 14px !important;
+  opacity: 0.6;
+}
+
+.terminal-close:hover {
+  background: var(--border) !important;
+  color: var(--text) !important;
+  opacity: 1;
+}
+
+.terminal-tab button:focus-visible,
+.terminal-plus:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.terminal-plus {
+  min-height: 24px;
+  padding: 0 8px;
+  font-size: 16px;
+}
+
+.terminal-note {
+  margin-left: auto;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--ask-soft);
+  color: var(--ask);
+  font-size: 11px;
   white-space: nowrap;
 }
 
-.terminal-bar .button {
-  min-height: 24px;
+.terminal-find {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.terminal-find input {
+  width: min(320px, 100%);
+  min-height: 26px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  font: 12px var(--mono);
+}
+
+.terminal-find input.missing {
+  border-color: var(--deny);
+}
+
+.terminal-find .button {
+  min-height: 26px;
   padding: 0 8px;
 }
 
@@ -2386,11 +2522,24 @@ body.dragging-panel * {
   position: relative;
   min-height: 0;
   flex: 1;
-  padding: 4px 0 0 8px;
-  background: var(--surface);
+  background: var(--sunken);
 }
 
 .terminal-view {
   position: absolute;
-  inset: 4px 0 0 8px;
+  inset: 6px 4px 2px 10px;
+}
+
+/* The pointer shows as a text cursor over the shell's text. */
+.terminal-host .xterm,
+.terminal-host .xterm-screen {
+  cursor: text;
+}
+
+.terminal-empty {
+  display: grid;
+  height: 100%;
+  place-content: center;
+  justify-items: center;
+  gap: 10px;
 }

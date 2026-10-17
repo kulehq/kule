@@ -319,9 +319,12 @@ it writes in Kule reaches it outside; you sign it in there once.
 - **Layout**: the window is four regions, left, main, right and bottom,
   each holding panels as tabs: Tasks, Live, Review, Timeline, Files (the
   task's copy as a tree, changed files marked, any file shown as text)
-  and Terminal (your shell in the copy, outside the sandbox like *Open
-  terminal*; Ctrl+\` shows it; outside macOS only Ctrl+Shift shortcuts
-  and function keys leave it, so Ctrl+L and the rest stay the shell's). Drag a panel's tab to another region, or use its menu or the
+  and Terminal (your shells in the copy, as many as you open, each a tab;
+  outside the sandbox like *Open terminal*; Ctrl+\` shows it,
+  Ctrl+Shift+\` opens another, ⌘F or Ctrl+Shift+F finds text, ⌘/Ctrl+click
+  opens an http or https link; outside macOS only Ctrl+Shift shortcuts and
+  function keys leave it, so Ctrl+L and the rest stay the shell's). The
+  prompt box grows or shrinks by dragging the edge above it. Drag a panel's tab to another region, or use its menu or the
   keyboard; open and close the regions from the bar on the left (Mod+B,
   Mod+J, Mod+Alt+B) and resize them by their edges. The layout is kept in
   `layout.json`; *Reset the layout* goes back to Kule's own. Files never

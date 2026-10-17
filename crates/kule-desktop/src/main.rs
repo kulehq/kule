@@ -222,9 +222,48 @@ fn terminal_open(
     task: String,
     cols: u16,
     rows: u16,
-) -> Result<u64> {
+) -> Result<pty::Opened> {
     let copy: PathBuf = kule.call(Call::TerminalDir { task: task.clone() })?;
-    terms.open(app, &copy, &task, cols, rows)
+    let id = terms.open(app, &copy, &task, cols, rows)?;
+    Ok(pty::Opened {
+        id,
+        shell: pty::shell_name(),
+    })
+}
+
+/// Opens an http or https address in the person's browser: a link clicked
+/// in the terminal. Nothing else, and never through a shell.
+#[tauri::command]
+fn open_url(url: String) -> Result<()> {
+    let url = web_url(&url)?;
+    let opener = if cfg!(target_os = "macos") {
+        "open"
+    } else if cfg!(windows) {
+        "explorer"
+    } else {
+        "xdg-open"
+    };
+    std::process::Command::new(opener)
+        .arg(url)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| format!("{opener}: {e}"))
+}
+
+/// `url` when it is an http or https address a browser can take as it is.
+fn web_url(url: &str) -> Result<&str> {
+    let lower = url.to_ascii_lowercase();
+    let scheme_ok = lower.starts_with("http://") || lower.starts_with("https://");
+    let rest = url.split_once("://").map_or("", |(_, r)| r);
+    let clean = !url.chars().any(|c| c.is_control() || c.is_whitespace());
+    if scheme_ok && clean && url.len() <= 2048 && !rest.is_empty() && !rest.starts_with('/') {
+        Ok(url)
+    } else {
+        Err("only an http or https address is opened".to_owned())
+    }
 }
 
 #[tauri::command]
@@ -708,6 +747,7 @@ fn main() {
             choose_policy,
             set_menu_keys,
             terminal_open,
+            open_url,
             terminal_write,
             terminal_resize,
             terminal_close,
@@ -731,4 +771,34 @@ fn main() {
         ])
         .run(tauri::generate_context!())
         .expect("the window could not start");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::web_url;
+
+    #[test]
+    fn only_web_addresses_are_opened() {
+        for ok in [
+            "https://kule.dev",
+            "http://localhost:3000/a?b=c",
+            "HTTPS://Example.com/x",
+        ] {
+            assert!(web_url(ok).is_ok(), "{ok}");
+        }
+        for bad in [
+            "file:///etc/passwd",
+            "javascript:alert(1)",
+            "ssh://host",
+            "https://",
+            "https:///etc",
+            "https://a b",
+            "https://a\nb",
+            "-a https://x",
+            "",
+        ] {
+            assert!(web_url(bad).is_err(), "{bad}");
+        }
+        assert!(web_url(&format!("https://{}", "a".repeat(2050))).is_err());
+    }
 }

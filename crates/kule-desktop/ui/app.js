@@ -2656,7 +2656,9 @@ function normalLayout(kept) {
       }
     }
   }
-  return { version: 1, regions };
+  const out = { version: 1, regions };
+  if (Number.isFinite(kept.composer)) out.composer = kept.composer;
+  return out;
 }
 
 const regionOf = (panel) => Object.keys(layout.regions).find((n) => layout.regions[n].panels.includes(panel));
@@ -2684,6 +2686,7 @@ async function loadLayout() {
   } catch (err) {
     fail(err);
   }
+  if (layout.composer) $("prompt").style.height = `${layout.composer}px`;
   renderTask();
 }
 
@@ -3129,46 +3132,102 @@ function filesKey(e) {
 
 // --- Terminal --------------------------------------------------------------
 
-// The person's shell in the open task's copy, drawn by xterm.js: one per
-// task, started the first time its panel shows, kept while the window is
-// open. It runs outside the sandbox, as Open terminal does.
+// The person's shells in the open task's copy, drawn by xterm.js, as many
+// as they open, each a tab. They run outside the sandbox, as Open terminal
+// does, and last while the window is open.
 
-/** Task id → { term, fit, el, id (the shell's), ended }. */
+/** Task id → { list: [terminal], active: key }; a terminal is
+ * { key, n, term, fit, search, el, id (the shell's), shell, ended }. */
 const terminals = new Map();
+let terminalKeys = 0;
+
+/** The sixteen ANSI colours for a dark or a light ground: readable on it,
+ * with "bright black" (what shells use for hints and suggestions) clearly
+ * fainter than the text but not lost. */
+const ANSI = {
+  dark: {
+    black: "#3b4048", red: "#f87171", green: "#4ade80", yellow: "#fbbf24", blue: "#60a5fa", magenta: "#c084fc", cyan: "#2dd4bf", white: "#d4d8de",
+    brightBlack: "#7d8696", brightRed: "#fca5a5", brightGreen: "#86efac", brightYellow: "#fde68a", brightBlue: "#93c5fd", brightMagenta: "#d8b4fe", brightCyan: "#5eead4", brightWhite: "#ffffff",
+  },
+  light: {
+    black: "#1b1f27", red: "#b91c1c", green: "#15803d", yellow: "#a16207", blue: "#1d4ed8", magenta: "#9333ea", cyan: "#0e7490", white: "#6b7280",
+    brightBlack: "#8a93a3", brightRed: "#dc2626", brightGreen: "#16a34a", brightYellow: "#ca8a04", brightBlue: "#2563eb", brightMagenta: "#a855f7", brightCyan: "#0891b2", brightWhite: "#374151",
+  },
+};
 
 /** xterm's colours from the theme in use. */
 function terminalTheme() {
   const css = getComputedStyle(document.documentElement);
   const v = (name) => css.getPropertyValue(`--${name}`).trim();
-  return { background: v("surface"), foreground: v("text"), cursor: v("accent"), cursorAccent: v("surface"), selectionBackground: v("accent-soft") };
+  const scheme = document.documentElement.dataset.scheme || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+  return {
+    ...ANSI[scheme],
+    background: v("sunken"),
+    foreground: v("text"),
+    cursor: v("accent"),
+    cursorAccent: v("sunken"),
+    selectionBackground: `${v("accent")}55`,
+    selectionInactiveBackground: `${v("accent")}33`,
+  };
 }
 
 function retheme() {
-  for (const t of terminals.values()) t.term.options.theme = terminalTheme();
+  for (const t of terminals.values()) for (const e of t.list) e.term.options.theme = terminalTheme();
 }
 
 const b64Bytes = (data) => Uint8Array.from(atob(data), (c) => c.charCodeAt(0));
 
-async function startTerminal(taskId) {
-  const host = $("terminal-host");
+function tabsOf(taskId) {
+  if (!terminals.has(taskId)) terminals.set(taskId, { list: [], active: null });
+  return terminals.get(taskId);
+}
+
+const activeTerminal = (taskId = state.current) => {
+  const t = terminals.get(taskId);
+  return t && t.list.find((e) => e.key === t.active);
+};
+
+/** Opens a link from the terminal: with ⌘ (Ctrl elsewhere) held, as
+ * editors do, so a plain click still selects. */
+function terminalLink(event, uri) {
+  if (!(PLATFORM === "mac" ? event.metaKey : event.ctrlKey)) {
+    toast(`${PLATFORM === "mac" ? "⌘" : "Ctrl"}+click opens ${uri}`);
+    return;
+  }
+  call("open_url", { url: uri }).catch(fail);
+}
+
+async function newTerminal(taskId = state.current) {
+  const tabs = tabsOf(taskId);
   const el = h("div", { class: "terminal-view", "data-task": taskId });
-  host.append(el);
+  $("terminal-host").append(el);
   const term = new Terminal({
     fontFamily: getComputedStyle(document.documentElement).getPropertyValue("--mono").trim() || "monospace",
     fontSize: 13,
+    lineHeight: 1.25,
+    fontWeightBold: "600",
     cursorBlink: true,
-    scrollback: 5000,
+    cursorStyle: "block",
+    cursorInactiveStyle: "outline",
+    scrollback: 10000,
+    allowProposedApi: true,
     theme: terminalTheme(),
   });
   const fit = new FitAddon.FitAddon();
+  const search = new SearchAddon.SearchAddon();
   term.loadAddon(fit);
+  term.loadAddon(search);
+  term.loadAddon(new WebLinksAddon.WebLinksAddon(terminalLink));
+  const n = Math.max(0, ...tabs.list.map((e) => e.n)) + 1;
+  const entry = { key: ++terminalKeys, n, term, fit, search, el, id: null, shell: "shell", ended: false };
+  tabs.list.push(entry);
+  tabs.active = entry.key;
   term.open(el);
+  renderTerminals(taskId);
   fit.fit();
-  const entry = { term, fit, el, id: null, ended: false };
-  terminals.set(taskId, entry);
   term.onData((data) => {
     if (entry.ended) {
-      if (data === "\r") restartTerminal(taskId);
+      if (data === "\r") closeTerminal(taskId, entry.key).then(() => newTerminal(taskId));
       return;
     }
     if (entry.id) call("terminal_write", { id: entry.id, data }).catch(() => {});
@@ -3177,55 +3236,192 @@ async function startTerminal(taskId) {
     if (entry.id && !entry.ended) call("terminal_resize", { id: entry.id, cols, rows }).catch(() => {});
   });
   try {
-    entry.id = await call("terminal_open", { task: taskId, cols: term.cols, rows: term.rows });
+    const opened = await call("terminal_open", { task: taskId, cols: term.cols, rows: term.rows });
+    entry.id = opened.id;
+    entry.shell = opened.shell;
   } catch (err) {
     entry.ended = true;
     term.write(`\x1b[31m${String(err)}\x1b[0m\r\n`);
   }
+  renderTerminals(taskId);
+  term.focus();
   return entry;
 }
 
-/** Shows the task's terminal in the panel, starting it the first time. */
+/** The terminal tabs of the open task, and its terminal in front. */
+function renderTerminals(taskId = state.current) {
+  const tabs = terminals.get(taskId) || { list: [], active: null };
+  for (const t of terminals.values()) for (const e of t.list) e.el.hidden = true;
+  const front = tabs.list.find((e) => e.key === tabs.active);
+  if (front) front.el.hidden = false;
+  replace(
+    $("terminal-tabs"),
+    ...tabs.list.map((e) =>
+      h(
+        "span",
+        { class: `terminal-tab${e.key === tabs.active ? " active" : ""}${e.ended ? " ended" : ""}` },
+        h(
+          "button",
+          {
+            type: "button",
+            role: "tab",
+            "aria-selected": String(e.key === tabs.active),
+            "data-key": `term:${e.key}`,
+            onclick: () => focusTerminal(taskId, e.key),
+          },
+          h("span", { class: "terminal-dot", "aria-hidden": "true" }),
+          `${e.n} · ${e.shell}${e.ended ? " (ended)" : ""}`
+        ),
+        h("button", { type: "button", class: "terminal-close", "aria-label": `Close terminal ${e.n}`, title: "Close", onclick: () => closeTerminal(taskId, e.key) }, "×")
+      )
+    )
+  );
+  $("terminal-empty").hidden = tabs.list.length > 0;
+  if (front) requestAnimationFrame(() => front.fit.fit());
+}
+
+function focusTerminal(taskId, key) {
+  const tabs = tabsOf(taskId);
+  tabs.active = key;
+  renderTerminals(taskId);
+  activeTerminal(taskId)?.term.focus();
+}
+
+/** Shows the open task's terminals, starting one the first time. */
 async function showTerminal(taskId) {
-  for (const t of terminals.values()) t.el.hidden = true;
-  let entry = terminals.get(taskId);
-  if (!entry) {
-    if (!window.Terminal) return;
-    entry = await startTerminal(taskId);
+  if (!window.Terminal) return;
+  const tabs = tabsOf(taskId);
+  if (!tabs.list.length && !tabs.started) {
+    tabs.started = true;
+    await newTerminal(taskId);
+    return;
   }
-  entry.el.hidden = false;
-  requestAnimationFrame(() => entry.fit.fit());
+  renderTerminals(taskId);
+}
+
+async function closeTerminal(taskId, key) {
+  const tabs = terminals.get(taskId);
+  const entry = tabs && tabs.list.find((e) => e.key === key);
+  if (!entry) return;
+  if (entry.id && !entry.ended) await call("terminal_close", { id: entry.id }).catch(() => {});
+  entry.term.dispose();
+  entry.el.remove();
+  const at = tabs.list.indexOf(entry);
+  tabs.list.splice(at, 1);
+  if (tabs.active === key) tabs.active = (tabs.list[at] || tabs.list[at - 1] || {}).key ?? null;
+  renderTerminals(taskId);
+  activeTerminal(taskId)?.term.focus();
+}
+
+function stepTerminal(by) {
+  const tabs = terminals.get(state.current);
+  if (!tabs || tabs.list.length < 2) return;
+  const at = tabs.list.findIndex((e) => e.key === tabs.active);
+  focusTerminal(state.current, tabs.list[(at + by + tabs.list.length) % tabs.list.length].key);
 }
 
 function onTerminal(event) {
-  const entry = [...terminals.values()].find((t) => t.id === event.id);
-  if (!entry) return;
-  if (event.kind === "output") entry.term.write(b64Bytes(event.data));
-  else if (event.kind === "exit") {
-    entry.ended = true;
-    entry.term.write("\r\n\x1b[2m[the shell ended; press Enter to start a new one]\x1b[0m\r\n");
+  for (const [taskId, tabs] of terminals) {
+    const entry = tabs.list.find((e) => e.id === event.id);
+    if (!entry) continue;
+    if (event.kind === "output") entry.term.write(b64Bytes(event.data));
+    else if (event.kind === "exit") {
+      entry.ended = true;
+      entry.term.write("\r\n\x1b[2m[the shell ended; press Enter for a new one]\x1b[0m\r\n");
+      if (taskId === state.current) renderTerminals(taskId);
+    }
+    return;
   }
 }
 
-async function restartTerminal(taskId = state.current) {
-  const entry = terminals.get(taskId);
-  if (entry) {
-    if (entry.id && !entry.ended) await call("terminal_close", { id: entry.id }).catch(() => {});
-    entry.term.dispose();
-    entry.el.remove();
-    terminals.delete(taskId);
-  }
-  if (taskId === state.current && isShown("terminal")) await showTerminal(taskId);
-}
-
-/** Ends a deleted task's shell. */
+/** Ends a deleted task's shells. */
 function forgetTerminal(taskId) {
-  const entry = terminals.get(taskId);
-  if (!entry) return;
-  if (entry.id && !entry.ended) call("terminal_close", { id: entry.id }).catch(() => {});
-  entry.term.dispose();
-  entry.el.remove();
+  const tabs = terminals.get(taskId);
+  if (!tabs) return;
+  for (const e of tabs.list) {
+    if (e.id && !e.ended) call("terminal_close", { id: e.id }).catch(() => {});
+    e.term.dispose();
+    e.el.remove();
+  }
   terminals.delete(taskId);
+}
+
+// --- Finding text in the terminal.
+
+const FIND_LOOK = {
+  matchBackground: "#fbbf2455",
+  matchBorder: "#fbbf24",
+  matchOverviewRuler: "#fbbf24",
+  activeMatchBackground: "#ff5a3c88",
+  activeMatchBorder: "#ff5a3c",
+  activeMatchColorOverviewRuler: "#ff5a3c",
+};
+
+function openFind() {
+  const entry = activeTerminal();
+  if (!entry) return;
+  $("terminal-find").hidden = false;
+  const input = $("terminal-find-input");
+  input.focus();
+  input.select();
+}
+
+function find(backward) {
+  const entry = activeTerminal();
+  const text = $("terminal-find-input").value;
+  if (!entry || !text) return;
+  const found = backward
+    ? entry.search.findPrevious(text, { decorations: FIND_LOOK })
+    : entry.search.findNext(text, { decorations: FIND_LOOK });
+  $("terminal-find-input").classList.toggle("missing", !found);
+}
+
+function closeFind() {
+  $("terminal-find").hidden = true;
+  const entry = activeTerminal();
+  if (entry) {
+    entry.search.clearDecorations();
+    entry.term.focus();
+  }
+}
+
+// --- The prompt's height, set by dragging the edge above it.
+
+const composerDrag = { start: 0, height: 0, pointer: null };
+const COMPOSER_LIMITS = [44, 600];
+
+function setComposerHeight(px, keep) {
+  const max = Math.min(COMPOSER_LIMITS[1], Math.round($("panel-live").clientHeight * 0.7) || COMPOSER_LIMITS[1]);
+  const height = Math.round(Math.max(COMPOSER_LIMITS[0], Math.min(max, px)));
+  $("prompt").style.height = `${height}px`;
+  layout.composer = height;
+  if (keep) keepLayout();
+}
+
+function composerStart(e) {
+  if (e.button !== 0) return;
+  e.preventDefault();
+  Object.assign(composerDrag, { start: e.clientY, height: $("prompt").offsetHeight, pointer: e.pointerId });
+  e.currentTarget.setPointerCapture(e.pointerId);
+  document.body.classList.add("resizing-v");
+}
+
+function composerMove(e) {
+  if (composerDrag.pointer !== e.pointerId) return;
+  setComposerHeight(composerDrag.height + (composerDrag.start - e.clientY), false);
+}
+
+function composerEnd(e) {
+  if (composerDrag.pointer !== e.pointerId) return;
+  composerDrag.pointer = null;
+  document.body.classList.remove("resizing-v");
+  keepLayout();
+}
+
+function composerKey(e) {
+  if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
+  e.preventDefault();
+  setComposerHeight($("prompt").offsetHeight + (e.key === "ArrowUp" ? 16 : -16), true);
 }
 
 // --- Appearance ------------------------------------------------------------
@@ -3837,8 +4033,13 @@ const COMMANDS = [
 
   { id: "view.tasks", title: "Show Tasks", group: "Layout", keys: "Mod+0", inFields: true, run: () => revealPanel("tasks") },
   { id: "view.files", title: "Show Files", group: "Layout", keys: "Mod+Shift+E", inFields: true, run: () => revealPanel("files") },
-  { id: "view.terminal", title: "Show the terminal", group: "Layout", keys: "Ctrl+`", inFields: true, run: () => withTask(() => revealPanel("terminal")) },
-  { id: "terminal.restart", title: "Start a new shell in the terminal", group: "Layout", keys: "", run: () => withTask(() => restartTerminal()) },
+  { id: "view.terminal", title: "Show the terminal", group: "Terminal", keys: "Ctrl+`", inFields: true, run: () => withTask(() => revealPanel("terminal")) },
+  { id: "terminal.new", title: "New terminal", group: "Terminal", keys: "Ctrl+Shift+`", inFields: true, run: () => withTask((t) => { revealPanel("terminal"); newTerminal(t.id); }) },
+  { id: "terminal.close", title: "Close the terminal", group: "Terminal", keys: "", run: () => withTask((t) => { const e = activeTerminal(t.id); if (e) closeTerminal(t.id, e.key); }) },
+  { id: "terminal.next", title: "Next terminal", group: "Terminal", keys: "", inFields: true, run: () => stepTerminal(1) },
+  { id: "terminal.prev", title: "Previous terminal", group: "Terminal", keys: "", inFields: true, run: () => stepTerminal(-1) },
+  { id: "terminal.find", title: "Find in the terminal", group: "Terminal", keys: PLATFORM === "mac" ? "Mod+F" : "Mod+Shift+F", inFields: true, run: () => withTask(() => { revealPanel("terminal"); openFind(); }) },
+  { id: "terminal.clear", title: "Clear the terminal", group: "Terminal", keys: "", inFields: false, run: () => activeTerminal()?.term.clear() },
   { id: "layout.left", title: "Show or hide the left side", group: "Layout", keys: "Mod+B", inFields: true, run: () => toggleRegion("left") },
   { id: "layout.bottom", title: "Show or hide the bottom panel", group: "Layout", keys: "Mod+J", inFields: true, run: () => toggleRegion("bottom") },
   { id: "layout.right", title: "Show or hide the right side", group: "Layout", keys: "Mod+Alt+B", inFields: true, run: () => toggleRegion("right") },
@@ -4399,12 +4600,32 @@ async function start() {
   if (backend.onTasks) await backend.onTasks(() => refresh());
   if (backend.onMenu) await backend.onMenu(onMenu);
   if (backend.onTerminal) await backend.onTerminal(onTerminal);
-  $("terminal-restart").addEventListener("click", () => restartTerminal());
+  $("terminal-new").addEventListener("click", () => newTerminal());
+  $("terminal-empty-new").addEventListener("click", () => newTerminal());
+  $("terminal-find-input").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      find(e.shiftKey);
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      closeFind();
+    }
+  });
+  $("terminal-find-input").addEventListener("input", () => find(false));
+  $("terminal-find-next").addEventListener("click", () => find(false));
+  $("terminal-find-prev").addEventListener("click", () => find(true));
+  $("terminal-find-close").addEventListener("click", closeFind);
   // The terminal fills its panel as the panel changes size.
   new ResizeObserver(() => {
-    const entry = terminals.get(state.current);
+    const entry = activeTerminal();
     if (entry && !entry.el.hidden && isShown("terminal")) entry.fit.fit();
   }).observe($("terminal-host"));
+  const grip = $("composer-grip");
+  grip.addEventListener("pointerdown", composerStart);
+  grip.addEventListener("pointermove", composerMove);
+  grip.addEventListener("pointerup", composerEnd);
+  grip.addEventListener("pointercancel", composerEnd);
+  grip.addEventListener("keydown", composerKey);
   // Changes made outside the window (a terminal in the copy, the CLI) show
   // when the person comes back to it.
   window.addEventListener("focus", () => refresh());
