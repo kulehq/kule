@@ -28,8 +28,20 @@ repository, Kule also reads `.git` as one (see M1, step 1).
 - **Something you don't trust yet**: run a script or an installer in a task
   first, and see what it would have changed.
 
-Today the review lists which files changed, not yet what changed inside
-them; that, previews of images, and telling moves from deletions come next.
+The review says what changed inside each file, by the names a person uses:
+functions, methods, fields and types in Rust, C#, TypeScript, JavaScript,
+Python and Go; sections in Markdown; keys in JSON and TOML. Every change in
+a file is listed under one of them, or under its top level:
+
+```
+  ~ notes.md
+      + section Plan › Later
+  ~ src/task.rs
+      ~ method Task::commit
+      + method Task::check
+```
+
+Previews of images and telling moves from deletions come next.
 
 ## M0: transactions on a copy-on-write copy
 

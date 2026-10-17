@@ -10,8 +10,8 @@ use std::time::{Duration, Instant};
 
 use futures::StreamExt;
 use kule_engine::{
-    Approvals, Checkpoint, Connection, Denial, EffectSet, Error, Policy, Proxy, Question, Ruling,
-    Step, Task, Verdict, connections, denials, record_denials,
+    Approvals, Checkpoint, Connection, Denial, EffectSet, Error, FileOutline, Policy, Proxy,
+    Question, Ruling, Step, Task, Verdict, connections, denials, record_denials,
 };
 use serde::{Deserialize, Serialize};
 
@@ -90,6 +90,10 @@ pub struct Review {
     /// The digest of what a commit would take; a commit that names it is
     /// refused if anything changed since.
     pub digest: String,
+    /// What changed inside the files a commit would take, for the ones Kule
+    /// outlines.
+    #[serde(default)]
+    pub outline: Vec<FileOutline>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -401,10 +405,14 @@ impl Service {
         let effects = task.effects().map_err(text)?;
         let pending = task.pending(include_ignored).map_err(text)?;
         let ruling = self.policy(&task)?.judge(&pending);
+        // A help to the review, not part of it: a file Kule cannot read
+        // now is listed without one.
+        let outline = task.outline(&pending).unwrap_or_default();
         Ok(Review {
             effects,
             ruling,
             digest: pending.digest(),
+            outline,
         })
     }
 

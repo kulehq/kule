@@ -5,6 +5,7 @@ use std::time::Instant;
 
 use anyhow::{Context, Result, anyhow};
 use clap::{Parser, Subcommand};
+use kule_engine::entities::{Change as EntityChange, Edit, Outline, Skip};
 use kule_engine::{
     Change, Connection, DEFAULT_POLICY, Denial, Effect, EffectSet, Error, GitSummary, Kind,
     Network, Policy, Proxy, RefChange, Ruling, Sandbox, Task, Verdict, connections, record_denials,
@@ -167,7 +168,7 @@ fn run() -> Result<ExitCode> {
                 .env("KULE_TASK", task.id())
                 .status()
                 .with_context(|| format!("could not start {}", shell.to_string_lossy()))?;
-            print_set(&task.effects()?);
+            print_set(&task, &task.effects()?);
             return Ok(match status.code() {
                 Some(0) => ExitCode::SUCCESS,
                 Some(code) => ExitCode::from(code.clamp(1, 255) as u8),
@@ -240,7 +241,7 @@ fn run() -> Result<ExitCode> {
             if let Some(proxy) = proxy {
                 proxy.stop();
             }
-            print_set(&task.effects()?);
+            print_set(&task, &task.effects()?);
             print_connections(&connections(&task)?[logged_before..]);
             if let Some(sandbox) = used
                 && let Some(denials) = sandbox.denials(started.elapsed())?
@@ -295,7 +296,7 @@ fn run() -> Result<ExitCode> {
             })?;
             println!();
             proxy.stop();
-            print_set(&task.effects()?);
+            print_set(&task, &task.effects()?);
             print_connections(&connections(&task)?[logged_before..]);
             if let Some(denials) = sandbox.denials(started.elapsed())? {
                 record_denials(&task, &denials)?;
@@ -343,7 +344,9 @@ fn run() -> Result<ExitCode> {
             let committed = set.to_commit(false);
             let ruling = load_policy(&home, &task)?.judge(&committed);
             if json {
-                let both = serde_json::json!({ "effects": set, "ruling": ruling });
+                let outline = task.outline(&committed).unwrap_or_default();
+                let both =
+                    serde_json::json!({ "effects": set, "ruling": ruling, "outline": outline });
                 println!("{}", serde_json::to_string_pretty(&both)?);
             } else {
                 if !task.workspace_exists() {
@@ -352,7 +355,7 @@ fn run() -> Result<ExitCode> {
                         task.workspace().display()
                     );
                 }
-                print_set(&set);
+                print_set(&task, &set);
                 if !committed.is_empty() {
                     print_ruling(&ruling);
                 }
@@ -545,7 +548,6 @@ fn print_ruling(ruling: &Ruling) {
     }
 }
 
-/// Files one per line; `.git` as what it means, not as object file names.
 fn warn_if_network_not_isolated() {
     if !kule_engine::isolates_network() {
         eprintln!(
@@ -558,9 +560,12 @@ fn warn_if_network_not_isolated() {
     }
 }
 
-fn print_set(set: &EffectSet) {
+/// Files one per line, each with what changed inside it when Kule can tell;
+/// `.git` as what it means, not as object file names.
+fn print_set(task: &Task, set: &EffectSet) {
     const SHOWN: usize = 40;
     let files: Vec<&Effect> = set.files().filter(|e| !e.ignored).collect();
+    let outlines = task.outline(&set.to_commit(false)).unwrap_or_default();
     let ignored: Vec<&Effect> = set.ignored().collect();
     if !ignored.is_empty() {
         println!(
@@ -595,7 +600,20 @@ fn print_set(set: &EffectSet) {
                 Change::Deleted => '-',
             };
             let slash = if effect.kind == Kind::Dir { "/" } else { "" };
-            println!("  {mark} {}{slash}", effect.path);
+            let outline = outlines.iter().find(|o| o.path == effect.path);
+            match outline.map(|o| &o.outline) {
+                Some(Outline::Skipped { reason }) if *reason != Skip::Binary => {
+                    println!(
+                        "  {mark} {}{slash} ({})",
+                        effect.path,
+                        why_not_outlined(*reason)
+                    );
+                }
+                _ => println!("  {mark} {}{slash}", effect.path),
+            }
+            if let Some(Outline::Changes { changes }) = outline.map(|o| &o.outline) {
+                print_entity_changes(changes);
+            }
         }
         if files.len() > SHOWN {
             println!("  … {} more (kule status --json)", files.len() - SHOWN);
@@ -603,6 +621,36 @@ fn print_set(set: &EffectSet) {
     }
     if let Some(git) = &set.git {
         print_git(git);
+    }
+}
+
+/// What changed inside one file, under its line.
+fn print_entity_changes(changes: &[EntityChange]) {
+    const SHOWN: usize = 8;
+    for change in changes.iter().take(SHOWN) {
+        let mark = match change.edit {
+            Edit::Added => '+',
+            Edit::Modified => '~',
+            Edit::Removed => '-',
+        };
+        let kind = change.kind.label();
+        match change.name.as_str() {
+            "" => println!("      {mark} {kind}"),
+            name => println!("      {mark} {kind} {name}"),
+        }
+    }
+    if changes.len() > SHOWN {
+        println!("      … {} more", changes.len() - SHOWN);
+    }
+}
+
+fn why_not_outlined(reason: Skip) -> &'static str {
+    match reason {
+        Skip::BeforeUnknown => "changed in the workspace too; not outlined",
+        Skip::TooLarge => "too large to outline",
+        Skip::TooMany => "too much in it to outline",
+        Skip::Unparsed => "could not be read to outline",
+        Skip::Binary | Skip::Unsupported => "not outlined",
     }
 }
 

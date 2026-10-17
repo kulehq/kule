@@ -18,6 +18,7 @@ use crate::fsops::{self, read_json, write_json};
 use crate::git::{self, GitState, Part};
 use crate::history::{Entry as HistoryEntry, Event};
 use crate::manifest::{Baseline, Entry, Kind, Stamp, Tree, relative, scan};
+use crate::outline::{self, FileOutline};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskInfo {
@@ -183,6 +184,12 @@ impl Task {
         check: impl FnOnce(&EffectSet) -> Result<()>,
     ) -> Result<Option<Checkpoint>> {
         self.commit_with(false, check)
+    }
+
+    /// What changed inside the files of `set`, as functions, sections, keys
+    /// and the like, for the files Kule outlines (see [`crate::entities`]).
+    pub fn outline(&self, set: &EffectSet) -> Result<Vec<FileOutline>> {
+        outline::outline(&self.copy(), self.workspace(), &self.load_baseline()?, set)
     }
 
     /// What a commit would take now: [`Task::effects`] but for the paths the

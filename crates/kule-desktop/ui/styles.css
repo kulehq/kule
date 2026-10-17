@@ -656,6 +656,18 @@ select:focus-visible {
   overflow-wrap: anywhere;
 }
 
+.files li.entity {
+  padding-left: 22px;
+  font-size: 12px;
+}
+
+.entity-kind,
+.entity-note {
+  color: var(--muted);
+  font-family: var(--sans);
+  font-size: 12px;
+}
+
 .change {
   flex: none;
   width: 12px;

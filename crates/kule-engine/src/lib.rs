@@ -29,6 +29,7 @@ mod manifest;
 #[cfg(target_os = "linux")]
 mod namespace;
 mod network;
+mod outline;
 mod policy;
 mod protect;
 mod sandbox;
@@ -45,8 +46,10 @@ pub use effects::{Change, Effect, EffectSet};
 pub use error::{Error, Result};
 pub use git::{GitState, GitSummary, RefChange};
 pub use history::{Entry as HistoryEntry, Event as HistoryEvent};
+pub use kule_entities as entities;
 pub use manifest::Kind;
 pub use network::{Connection, Proxy, connections};
+pub use outline::FileOutline;
 pub use policy::{DEFAULT_POLICY, Judgement, Policy, REPO_POLICY, Ruling, Verdict};
 pub use protect::{Kept, PutBack};
 pub use sandbox::{

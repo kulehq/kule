@@ -494,22 +494,52 @@ async function submitPrompt(e) {
 
 // --- Review ----------------------------------------------------------------
 
-function filesGroup(title, effects, holding) {
+/** An entity's edit, in the colours of a file's change. */
+const EDIT = { added: "created", modified: "modified", removed: "deleted" };
+
+/** Why a file has no outline, for the reasons worth telling. */
+const NOT_OUTLINED = {
+  before_unknown: "changed in the folder too; not outlined",
+  too_large: "too large to outline",
+  too_many: "too much in it to outline",
+  unparsed: "could not be read to outline",
+};
+
+/** What changed inside a file: one line per function, section or key. */
+function entityLines(outline) {
+  if (!outline || outline.outline !== "changes") return [];
+  return outline.changes.map((c) =>
+    h(
+      "li",
+      { class: "entity" },
+      h("span", { class: `change ${EDIT[c.edit]}` }, CHANGE_MARK[EDIT[c.edit]]),
+      h("span", {}, h("span", { class: "entity-kind" }, c.kind.replace("_", " ")), c.name ? ` ${c.name}` : "")
+    )
+  );
+}
+
+function filesGroup(title, effects, holding, outlines) {
   if (effects.length === 0) return [];
   return [
     h("h2", { class: "group-title" }, title),
     h(
       "ul",
       { class: "files" },
-      effects.map((e) => {
+      effects.flatMap((e) => {
         const held = holding.get(e.path);
-        return h(
-          "li",
-          {},
-          h("span", { class: `change ${e.change}` }, CHANGE_MARK[e.change]),
-          h("span", {}, e.kind === "dir" ? `${e.path}/` : e.path),
-          held ? h("span", { class: "held-mark" }, VERDICT[held].chip) : null
-        );
+        const outline = outlines.get(e.path);
+        const why = outline && outline.outline === "skipped" ? NOT_OUTLINED[outline.reason] : null;
+        return [
+          h(
+            "li",
+            {},
+            h("span", { class: `change ${e.change}` }, CHANGE_MARK[e.change]),
+            h("span", {}, e.kind === "dir" ? `${e.path}/` : e.path),
+            held ? h("span", { class: "held-mark" }, VERDICT[held].chip) : null,
+            why ? h("span", { class: "entity-note" }, why) : null
+          ),
+          ...entityLines(outline),
+        ];
       })
     ),
   ];
@@ -603,10 +633,11 @@ async function loadReview(id) {
 
   const byChange = (c) => files.filter((e) => e.change === c);
   const held = new Map(review.ruling.judgements.filter((j) => j.verdict !== "allow").map((j) => [j.subject, j.verdict]));
+  const outlines = new Map((review.outline || []).map((o) => [o.path, o]));
   replace($("effects"),
-    ...filesGroup("Created", byChange("created"), held),
-    ...filesGroup("Modified", byChange("modified"), held),
-    ...filesGroup("Deleted", byChange("deleted"), held),
+    ...filesGroup("Created", byChange("created"), held, outlines),
+    ...filesGroup("Modified", byChange("modified"), held, outlines),
+    ...filesGroup("Deleted", byChange("deleted"), held, outlines),
     ...gitGroup(review.effects.git),
     ...ignoredGroup(id, ignored, include, held)
   );
@@ -632,7 +663,7 @@ function ignoredGroup(id, ignored, include, held) {
     h(
       "details",
       { class: "ignored-group", open: include },
-      h("summary", { class: "group-title" }, `Ignored by the folder's .gitignore ·${ignored.length} ${include ? "included" : "stay in the copy"}`),
+      h("summary", { class: "group-title" }, `Ignored by the folder's .gitignore · ${ignored.length} ${include ? "included" : "stay in the copy"}`),
       h("label", { class: "check" }, toggle, "Also commit these"),
       h(
         "ul",
