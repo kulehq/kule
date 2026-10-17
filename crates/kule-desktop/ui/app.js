@@ -34,6 +34,9 @@ function h(tag, attrs, ...children) {
     if (value === undefined || value === null || value === false) continue;
     if (key.startsWith("on")) el.addEventListener(key.slice(2), value);
     else if (key === "class") el.className = value;
+    // Through the style object: the window's content security policy
+    // refuses a style attribute, not styles set from script.
+    else if (key === "style") el.style.cssText = value;
     else el.setAttribute(key, value === true ? "" : String(value));
   }
   for (const child of children.flat()) {
@@ -3171,6 +3174,21 @@ function terminalTheme() {
   };
 }
 
+// xterm.js colours its text and blinks its cursor with a <style> element
+// it writes at run time, which the content security policy refuses. The
+// same rules go in through a constructed style sheet, which it allows.
+const terminalSheet = new CSSStyleSheet();
+document.adoptedStyleSheets = [...document.adoptedStyleSheets, terminalSheet];
+
+function mirrorTerminalStyles() {
+  const rules = [...$("terminal-host").querySelectorAll("style")].map((el) => el.textContent).join("\n");
+  try {
+    terminalSheet.replaceSync(rules);
+  } catch (err) {
+    console.error("terminal styles", err);
+  }
+}
+
 function retheme() {
   for (const t of terminals.values()) for (const e of t.list) e.term.options.theme = terminalTheme();
 }
@@ -4615,6 +4633,7 @@ async function start() {
   $("terminal-find-next").addEventListener("click", () => find(false));
   $("terminal-find-prev").addEventListener("click", () => find(true));
   $("terminal-find-close").addEventListener("click", closeFind);
+  new MutationObserver(mirrorTerminalStyles).observe($("terminal-host"), { subtree: true, childList: true, characterData: true });
   // The terminal fills its panel as the panel changes size.
   new ResizeObserver(() => {
     const entry = activeTerminal();

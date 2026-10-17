@@ -121,6 +121,11 @@ impl Terminals {
         cmd.env("KULE_TASK", task);
         cmd.env("TERM", "xterm-256color");
         cmd.env("COLORTERM", "truecolor");
+        // macOS's ls colours only with CLICOLOR; a value of the person's
+        // own stands.
+        if std::env::var_os("CLICOLOR").is_none() {
+            cmd.env("CLICOLOR", "1");
+        }
         let child = pair
             .slave
             .spawn_command(cmd)
@@ -212,16 +217,18 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         let tx = Mutex::new(tx);
         let mut cmd = CommandBuilder::new("/bin/sh");
-        cmd.args(["-c", "printf 'in:%s task:%s\\n' \"$(pwd -P)\" \"$KULE_TASK\"; read line; printf 'got:%s\\n' \"$line\"; stty size"]);
+        cmd.args(["-c", "printf 'in:%s task:%s colour:%s\\n' \"$(pwd -P)\" \"$KULE_TASK\" \"$CLICOLOR\"; read line; printf 'got:%s\\n' \"$line\"; stty size"]);
         let id = terms
             .start(cmd, dir.path(), "t1", 80, 24, move |e| {
                 let _ = tx.lock().unwrap().send(e);
             })
             .unwrap();
         let real = std::fs::canonicalize(dir.path()).unwrap();
-        let out = until(&rx, "task:t1");
+        // The person's CLICOLOR stands; without one, ls is told to colour.
+        let colour = std::env::var("CLICOLOR").unwrap_or_else(|_| "1".to_owned());
+        let out = until(&rx, &format!("colour:{colour}"));
         assert!(
-            out.contains(&format!("in:{} task:t1", real.display())),
+            out.contains(&format!("in:{} task:t1 colour:{colour}", real.display())),
             "{out:?}"
         );
 
