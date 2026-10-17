@@ -37,7 +37,11 @@ fn status_lists_what_changed_inside_each_file() {
         "impl Task {\n    fn commit(&self) { 1; }\n    fn check(&self) {}\n}\n",
     )
     .unwrap();
-    fs::write(copy.join("notes.md"), "# Plan\nFirst.\n\n## Later\nSecond.\n").unwrap();
+    fs::write(
+        copy.join("notes.md"),
+        "# Plan\nFirst.\n\n## Later\nSecond.\n",
+    )
+    .unwrap();
 
     let status = kule(home.path(), &["status", id]);
     assert!(
