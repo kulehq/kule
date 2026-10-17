@@ -5,6 +5,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod menu;
+mod pty;
 mod shell_path;
 mod terminal;
 
@@ -209,6 +210,36 @@ fn remove_task(kule: K<'_>, task: String) -> Result<()> {
 fn open_terminal(kule: K<'_>, task: String) -> Result<()> {
     let copy: PathBuf = kule.call(Call::TerminalDir { task })?;
     terminal::open(&copy)
+}
+
+/// A shell in the task's copy, inside the window; its id. Refused when
+/// what the task ran changed what git would run there (see `TerminalDir`).
+#[tauri::command(async)]
+fn terminal_open(
+    app: AppHandle,
+    kule: K<'_>,
+    terms: State<'_, pty::Terminals>,
+    task: String,
+    cols: u16,
+    rows: u16,
+) -> Result<u64> {
+    let copy: PathBuf = kule.call(Call::TerminalDir { task: task.clone() })?;
+    terms.open(app, &copy, &task, cols, rows)
+}
+
+#[tauri::command]
+fn terminal_write(terms: State<'_, pty::Terminals>, id: u64, data: String) -> Result<()> {
+    terms.write(id, &data)
+}
+
+#[tauri::command]
+fn terminal_resize(terms: State<'_, pty::Terminals>, id: u64, cols: u16, rows: u16) -> Result<()> {
+    terms.resize(id, cols, rows)
+}
+
+#[tauri::command(async)]
+fn terminal_close(terms: State<'_, pty::Terminals>, id: u64) {
+    terms.close(id);
 }
 
 #[tauri::command(async)]
@@ -635,6 +666,7 @@ fn main() {
             }
         })
         .manage(kule)
+        .manage(pty::Terminals::default())
         .invoke_handler(tauri::generate_handler![
             agents,
             agent_list,
@@ -675,6 +707,10 @@ fn main() {
             policy,
             choose_policy,
             set_menu_keys,
+            terminal_open,
+            terminal_write,
+            terminal_resize,
+            terminal_close,
             layout,
             set_layout,
             list_dir,

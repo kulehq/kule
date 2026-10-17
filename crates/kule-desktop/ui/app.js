@@ -14,6 +14,7 @@ const backend = window.__TAURI__
       onDaemon: (handler) => window.__TAURI__.event.listen("daemon", () => handler()),
       onTasks: (handler) => window.__TAURI__.event.listen("tasks", () => handler()),
       onMenu: (handler) => window.__TAURI__.event.listen("menu", (e) => handler(e.payload)),
+      onTerminal: (handler) => window.__TAURI__.event.listen("terminal", (e) => handler(e.payload)),
     }
   : window.kuleMock;
 
@@ -553,6 +554,7 @@ function renderTask() {
   if (isShown("review")) loadReview(task.id);
   if (isShown("timeline")) loadTimeline(task.id);
   if (isShown("files")) loadFiles(task.id);
+  if (isShown("terminal")) showTerminal(task.id);
 }
 
 function renderComposer(task) {
@@ -2580,6 +2582,7 @@ async function removeTask(task = currentTask()) {
   if (!task) return;
   try {
     await call("remove_task", { task: task.id });
+    forgetTerminal(task.id);
     state.streams.delete(task.id);
     state.loaded.delete(task.id);
     if (state.current === task.id) {
@@ -2606,6 +2609,7 @@ const PANELS = {
   review: { title: "Review", needsTask: true },
   timeline: { title: "Timeline", needsTask: true },
   files: { title: "Files", needsTask: true },
+  terminal: { title: "Terminal", needsTask: true },
 };
 
 const REGION_NAMES = { left: "the left side", main: "the main area", right: "the right side", bottom: "the bottom panel" };
@@ -2619,7 +2623,7 @@ function defaultLayout() {
       left: { panels: ["tasks", "files"], active: "tasks", open: true, size: 272 },
       main: { panels: ["live", "review", "timeline"], active: "live", open: true, size: 0 },
       right: { panels: [], active: null, open: false, size: 380 },
-      bottom: { panels: [], active: null, open: false, size: 260 },
+      bottom: { panels: ["terminal"], active: "terminal", open: false, size: 260 },
     },
   };
 }
@@ -3123,6 +3127,107 @@ function filesKey(e) {
   }
 }
 
+// --- Terminal --------------------------------------------------------------
+
+// The person's shell in the open task's copy, drawn by xterm.js: one per
+// task, started the first time its panel shows, kept while the window is
+// open. It runs outside the sandbox, as Open terminal does.
+
+/** Task id → { term, fit, el, id (the shell's), ended }. */
+const terminals = new Map();
+
+/** xterm's colours from the theme in use. */
+function terminalTheme() {
+  const css = getComputedStyle(document.documentElement);
+  const v = (name) => css.getPropertyValue(`--${name}`).trim();
+  return { background: v("surface"), foreground: v("text"), cursor: v("accent"), cursorAccent: v("surface"), selectionBackground: v("accent-soft") };
+}
+
+function retheme() {
+  for (const t of terminals.values()) t.term.options.theme = terminalTheme();
+}
+
+const b64Bytes = (data) => Uint8Array.from(atob(data), (c) => c.charCodeAt(0));
+
+async function startTerminal(taskId) {
+  const host = $("terminal-host");
+  const el = h("div", { class: "terminal-view", "data-task": taskId });
+  host.append(el);
+  const term = new Terminal({
+    fontFamily: getComputedStyle(document.documentElement).getPropertyValue("--mono").trim() || "monospace",
+    fontSize: 13,
+    cursorBlink: true,
+    scrollback: 5000,
+    theme: terminalTheme(),
+  });
+  const fit = new FitAddon.FitAddon();
+  term.loadAddon(fit);
+  term.open(el);
+  fit.fit();
+  const entry = { term, fit, el, id: null, ended: false };
+  terminals.set(taskId, entry);
+  term.onData((data) => {
+    if (entry.ended) {
+      if (data === "\r") restartTerminal(taskId);
+      return;
+    }
+    if (entry.id) call("terminal_write", { id: entry.id, data }).catch(() => {});
+  });
+  term.onResize(({ cols, rows }) => {
+    if (entry.id && !entry.ended) call("terminal_resize", { id: entry.id, cols, rows }).catch(() => {});
+  });
+  try {
+    entry.id = await call("terminal_open", { task: taskId, cols: term.cols, rows: term.rows });
+  } catch (err) {
+    entry.ended = true;
+    term.write(`\x1b[31m${String(err)}\x1b[0m\r\n`);
+  }
+  return entry;
+}
+
+/** Shows the task's terminal in the panel, starting it the first time. */
+async function showTerminal(taskId) {
+  for (const t of terminals.values()) t.el.hidden = true;
+  let entry = terminals.get(taskId);
+  if (!entry) {
+    if (!window.Terminal) return;
+    entry = await startTerminal(taskId);
+  }
+  entry.el.hidden = false;
+  requestAnimationFrame(() => entry.fit.fit());
+}
+
+function onTerminal(event) {
+  const entry = [...terminals.values()].find((t) => t.id === event.id);
+  if (!entry) return;
+  if (event.kind === "output") entry.term.write(b64Bytes(event.data));
+  else if (event.kind === "exit") {
+    entry.ended = true;
+    entry.term.write("\r\n\x1b[2m[the shell ended; press Enter to start a new one]\x1b[0m\r\n");
+  }
+}
+
+async function restartTerminal(taskId = state.current) {
+  const entry = terminals.get(taskId);
+  if (entry) {
+    if (entry.id && !entry.ended) await call("terminal_close", { id: entry.id }).catch(() => {});
+    entry.term.dispose();
+    entry.el.remove();
+    terminals.delete(taskId);
+  }
+  if (taskId === state.current && isShown("terminal")) await showTerminal(taskId);
+}
+
+/** Ends a deleted task's shell. */
+function forgetTerminal(taskId) {
+  const entry = terminals.get(taskId);
+  if (!entry) return;
+  if (entry.id && !entry.ended) call("terminal_close", { id: entry.id }).catch(() => {});
+  entry.term.dispose();
+  entry.el.remove();
+  terminals.delete(taskId);
+}
+
 // --- Appearance ------------------------------------------------------------
 
 // Kule's themes and the person's own, kept by the daemon with the one in
@@ -3147,6 +3252,7 @@ async function loadThemes() {
     fail(err);
   }
   if (!appearance.editing) applyTheme(currentTheme());
+  retheme();
 }
 
 async function keepThemes(next) {
@@ -3158,6 +3264,7 @@ async function keepThemes(next) {
     return false;
   } finally {
     if (!appearance.editing) applyTheme(currentTheme());
+    retheme();
     renderAppearance();
   }
 }
@@ -3730,6 +3837,8 @@ const COMMANDS = [
 
   { id: "view.tasks", title: "Show Tasks", group: "Layout", keys: "Mod+0", inFields: true, run: () => revealPanel("tasks") },
   { id: "view.files", title: "Show Files", group: "Layout", keys: "Mod+Shift+E", inFields: true, run: () => revealPanel("files") },
+  { id: "view.terminal", title: "Show the terminal", group: "Layout", keys: "Ctrl+`", inFields: true, run: () => withTask(() => revealPanel("terminal")) },
+  { id: "terminal.restart", title: "Start a new shell in the terminal", group: "Layout", keys: "", run: () => withTask(() => restartTerminal()) },
   { id: "layout.left", title: "Show or hide the left side", group: "Layout", keys: "Mod+B", inFields: true, run: () => toggleRegion("left") },
   { id: "layout.bottom", title: "Show or hide the bottom panel", group: "Layout", keys: "Mod+J", inFields: true, run: () => toggleRegion("bottom") },
   { id: "layout.right", title: "Show or hide the right side", group: "Layout", keys: "Mod+Alt+B", inFields: true, run: () => toggleRegion("right") },
@@ -3866,6 +3975,10 @@ function menuSafe(combo) {
   const parts = normalCombo(combo).split("+");
   const key = parts.pop();
   if (EDITING_KEYS.has(key)) return false;
+  // Outside macOS a menu's Ctrl or Alt shortcut would reach past the
+  // terminal, whose shell owns those; the menu takes only Ctrl+Shift ones
+  // and function keys there.
+  if (PLATFORM !== "mac" && !(parts.includes("Mod") && parts.includes("Shift")) && !/^F([1-9]|1[0-2])$/.test(key)) return false;
   // A letter with Mod alone is often an editing command (⌘B, ⌘I in some
   // fields); the ones Kule uses are its own, the system's are reserved.
   return !isReserved(combo) && isUsable(combo);
@@ -3910,9 +4023,19 @@ function onKey(e) {
   const combos = eventCombos(e).map(normalCombo);
   if (!combos.length) return;
   const typing = typingIn(document.activeElement);
+  // In the terminal, Ctrl and Alt belong to the shell (Ctrl+L, Ctrl+B,
+  // Alt+F): outside macOS only Ctrl+Shift shortcuts and function keys are
+  // Kule's there.
+  const inTerminal = Boolean(document.activeElement && document.activeElement.closest && document.activeElement.closest(".terminal-host"));
+  const shellOwns = (combo) => {
+    if (!inTerminal || PLATFORM === "mac") return false;
+    const parts = combo.split("+");
+    const key = parts[parts.length - 1];
+    return !(parts.includes("Mod") && parts.includes("Shift")) && !/^F([1-9]|1[0-2])$/.test(key);
+  };
   const command = COMMANDS.find((c) => {
     const combo = bindingOf(c);
-    return combo && combos.includes(combo) && (!typing || c.inFields);
+    return combo && combos.includes(combo) && (!typing || c.inFields) && !shellOwns(combo);
   });
   if (!command) return;
   e.preventDefault();
@@ -4275,6 +4398,13 @@ async function start() {
   // A task's numbers came back from a scan in the background.
   if (backend.onTasks) await backend.onTasks(() => refresh());
   if (backend.onMenu) await backend.onMenu(onMenu);
+  if (backend.onTerminal) await backend.onTerminal(onTerminal);
+  $("terminal-restart").addEventListener("click", () => restartTerminal());
+  // The terminal fills its panel as the panel changes size.
+  new ResizeObserver(() => {
+    const entry = terminals.get(state.current);
+    if (entry && !entry.el.hidden && isShown("terminal")) entry.fit.fit();
+  }).observe($("terminal-host"));
   // Changes made outside the window (a terminal in the copy, the CLI) show
   // when the person comes back to it.
   window.addEventListener("focus", () => refresh());

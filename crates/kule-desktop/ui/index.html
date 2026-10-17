@@ -4,6 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Kule</title>
+    <link rel="stylesheet" href="vendor/xterm/xterm.css" />
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
@@ -191,6 +192,13 @@
         <section class="panel" id="panel-timeline" role="tabpanel" data-panel="timeline" hidden>
           <div class="timeline" id="timeline"></div>
         </section>
+        <section class="panel panel-terminal" id="panel-terminal" data-panel="terminal">
+          <div class="terminal-bar">
+            <span class="muted">Your shell in the task's copy, outside the sandbox; what it changes is reviewed like the agent's work.</span>
+            <button id="terminal-restart" class="button ghost" type="button">Restart</button>
+          </div>
+          <div class="terminal-host" id="terminal-host"></div>
+        </section>
         <section class="panel panel-files" id="panel-files" data-panel="files">
           <div class="files-tree" id="files-tree" role="tree" aria-label="Files in the task's copy"></div>
           <div class="files-preview" id="files-preview"></div>
@@ -199,6 +207,8 @@
 
 
     <div class="toasts" id="toasts" aria-live="assertive"></div>
+    <script src="vendor/xterm/xterm.js"></script>
+    <script src="vendor/xterm/addon-fit.js"></script>
     <script src="themes.js"></script>
     <script src="keys.js"></script>
     <script src="app.js"></script>

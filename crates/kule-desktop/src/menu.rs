@@ -37,6 +37,7 @@ const VIEW: &[Entry] = &[
     Separator,
     Command("view.tasks", "Tasks"),
     Command("view.files", "Files"),
+    Command("view.terminal", "Terminal"),
     Command("view.live", "Live"),
     Command("view.review", "Review"),
     Command("view.timeline", "Timeline"),

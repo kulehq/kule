@@ -2354,3 +2354,43 @@ body.dragging-panel * {
 .center > .main-area { grid-row: 1; }
 .center > [data-split="bottom"] { grid-row: 2; }
 .center > #region-bottom { grid-row: 3; }
+
+/* Terminal: the shell in the task's copy. */
+.panel-terminal {
+  overflow: hidden;
+}
+
+.terminal-bar {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 10px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+}
+
+.terminal-bar .muted {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.terminal-bar .button {
+  min-height: 24px;
+  padding: 0 8px;
+}
+
+.terminal-host {
+  position: relative;
+  min-height: 0;
+  flex: 1;
+  padding: 4px 0 0 8px;
+  background: var(--surface);
+}
+
+.terminal-view {
+  position: absolute;
+  inset: 4px 0 0 8px;
+}
