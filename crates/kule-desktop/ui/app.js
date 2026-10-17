@@ -795,7 +795,17 @@ async function loadTimeline(id) {
       h(
         "ul",
         { class: "files" },
-        timeline.denials.slice(-50).map((d) => h("li", {}, h("span", { class: "change denied" }, "×"), `${d.operation} ${d.path} (${d.process})`))
+        timeline.denials
+          .slice(-50)
+          .map((d) =>
+            h(
+              "li",
+              {},
+              h("span", { class: "change denied" }, "×"),
+              `${d.operation} ${d.path} (${d.process})`,
+              d.saved ? ` · what was there is in ${d.saved}` : null
+            )
+          )
       )
     );
   }

@@ -27,7 +27,7 @@ mod history;
 mod ignore;
 mod manifest;
 #[cfg(target_os = "linux")]
-mod netns;
+mod namespace;
 mod network;
 mod policy;
 mod protect;
@@ -48,9 +48,10 @@ pub use history::{Entry as HistoryEntry, Event as HistoryEvent};
 pub use manifest::Kind;
 pub use network::{Connection, Proxy, connections};
 pub use policy::{DEFAULT_POLICY, Judgement, Policy, REPO_POLICY, Ruling, Verdict};
-pub use protect::Kept;
+pub use protect::{Kept, PutBack};
 pub use sandbox::{
-    Denial, Network, PASSED_ENV, Sandbox, denials, isolates_network, record_denials,
+    Denial, Network, PASSED_ENV, Sandbox, denials, isolates_network, protects_in_place,
+    record_denials,
 };
 pub use steps::{Step, StepChange};
 pub use task::{AgentAtWork, Task, TaskInfo};

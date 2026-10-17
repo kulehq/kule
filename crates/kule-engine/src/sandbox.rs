@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::caches::{self, Sources};
 use crate::error::{Error, IoContext, Result};
-use crate::protect::Kept;
+use crate::protect::{Kept, PutBack};
 use crate::task::Task;
 
 /// Credentials and keys that commands in a task never get to read.
@@ -126,6 +126,8 @@ pub struct Sandbox {
     passed_env: Vec<String>,
     /// Variables the sandbox sets itself, over the person's.
     env: Vec<(String, OsString)>,
+    /// Where Kule notes protected paths it puts back after a run.
+    kept: PathBuf,
     /// Marks this sandbox's refusals where the platform reports them (macOS).
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     tag: String,
@@ -139,16 +141,20 @@ pub struct Denial {
     /// What it tried, in the platform's words (`file-write-create`, …).
     pub operation: String,
     pub path: String,
+    /// For a path Kule put back: where what it held instead was moved.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub saved: Option<String>,
 }
 
 impl Denial {
     /// A protected path the command changed, which Kule put back after the
     /// run (see [`Sandbox::keep_protected`]).
-    pub fn put_back(path: &Path) -> Denial {
+    pub fn put_back(put_back: &PutBack) -> Denial {
         Denial {
             process: "kule".to_owned(),
             operation: "file-write (put back)".to_owned(),
-            path: path.display().to_string(),
+            path: put_back.path.display().to_string(),
+            saved: put_back.saved.as_ref().map(|p| p.display().to_string()),
         }
     }
 }
@@ -173,6 +179,7 @@ impl Sandbox {
             network: Network::Allow,
             passed_env: Vec::new(),
             env: Vec::new(),
+            kept: task.home().join("kept"),
             tag: format!("kule-{}-{nanos:x}", task.id()),
         })
     }
@@ -229,28 +236,60 @@ impl Sandbox {
     /// Keeps `path` readable but not writable, even inside a writable path:
     /// an agent's own settings, where hooks and MCP servers that run outside
     /// the sandbox later are configured. A path that does not exist yet is
-    /// protected too.
+    /// protected too. A link is protected where it is as well as where it
+    /// leads: settings linked in from a dotfiles repository cannot be
+    /// swapped for a file of the command's own.
     pub fn protect(&mut self, path: &Path) -> Result<()> {
-        self.protected.push(real_or_planned(path)?);
+        let resolved = real_or_planned(path)?;
+        if let (Some(parent), Some(name)) = (path.parent(), path.file_name()) {
+            let here = real_or_planned(parent)?.join(name);
+            if here != resolved {
+                self.protected.push(here);
+            }
+        }
+        self.protected.push(resolved);
         Ok(())
     }
 
     /// Notes the protected paths this platform cannot keep read-only, to be
     /// put back when the run is over: on Linux, those inside a writable
-    /// directory (see [`Kept`]). Call it before the command starts, and
+    /// directory that cannot be mounted read-only (see [`Kept`] and
+    /// [`protects_in_place`]). Call it before the command starts, and
     /// restore once everything it started is gone.
     pub fn keep_protected(&self) -> Result<Kept> {
-        let writable = self.writable();
+        let mounted = self.mounted_read_only();
         let paths = self
-            .protected
-            .iter()
-            .filter(|p| {
-                cfg!(target_os = "linux")
-                    && writable.iter().any(|root| p.starts_with(root) && p != root)
-            })
+            .protected_in_writable()
+            .filter(|p| cfg!(target_os = "linux") && !mounted.contains(p))
             .cloned()
             .collect();
-        Kept::new(paths)
+        Kept::new(&self.kept, paths)
+    }
+
+    /// Protected paths strictly inside a writable root, which the sandbox's
+    /// rules alone cannot keep read-only on Linux.
+    fn protected_in_writable(&self) -> impl Iterator<Item = &PathBuf> {
+        let writable = self.writable();
+        self.protected.iter().filter(move |p| {
+            writable
+                .iter()
+                .any(|root| p.starts_with(root) && *p != root)
+        })
+    }
+
+    /// The protected paths a command's mount namespace makes read-only:
+    /// those inside a writable root that exist and are not links, where the
+    /// kernel allows the namespace. Linux only; empty elsewhere.
+    fn mounted_read_only(&self) -> Vec<PathBuf> {
+        #[cfg(target_os = "linux")]
+        if crate::namespace::mounts_available() {
+            return self
+                .protected_in_writable()
+                .filter(|p| std::fs::symlink_metadata(p).is_ok_and(|m| !m.file_type().is_symlink()))
+                .cloned()
+                .collect();
+        }
+        Vec::new()
     }
 
     /// Hides `path` from reading and writing. A path that does not exist yet
@@ -351,7 +390,19 @@ impl Sandbox {
 /// users; there only the port is checked, any address, and datagrams pass.
 pub fn isolates_network() -> bool {
     #[cfg(target_os = "linux")]
-    return crate::netns::available();
+    return crate::namespace::available();
+    #[cfg(not(target_os = "linux"))]
+    return cfg!(target_os = "macos");
+}
+
+/// Whether a protected path inside a writable directory stays read-only
+/// while the command runs, rather than being put back after it. On Linux
+/// that takes a mount namespace of its own, refused where user namespaces
+/// are (see [`isolates_network`]); a protected path that is a link, or does
+/// not exist yet, is put back there either way.
+pub fn protects_in_place() -> bool {
+    #[cfg(target_os = "linux")]
+    return crate::namespace::mounts_available();
     #[cfg(not(target_os = "linux"))]
     return cfg!(target_os = "macos");
 }
@@ -574,6 +625,7 @@ fn parse_denial(message: &str) -> Option<Denial> {
         process: process.to_owned(),
         operation: operation.to_owned(),
         path: path.to_owned(),
+        saved: None,
     })
 }
 
@@ -585,15 +637,18 @@ impl Sandbox {
         let mut ruleset = Some(self.landlock_ruleset()?);
         let mut command = Command::new(program);
         command.args(args);
-        // A network of its own first: its uid map is written under /proc,
-        // which Landlock would refuse afterwards.
-        if self.network != Network::Allow && crate::netns::available() {
-            let port = match self.network {
-                Network::Proxy(port) => Some(port),
-                _ => None,
-            };
-            let isolation =
-                crate::netns::Isolation::new(port).at(Path::new("/proc/self/ns/net"))?;
+        // Namespaces of its own first: its uid map is written under /proc,
+        // and Landlock would refuse that afterwards, and any mount.
+        use crate::namespace::{Isolation, Net};
+        let net = match self.network {
+            Network::Allow => Net::Shared,
+            _ if !crate::namespace::available() => Net::Shared,
+            Network::Deny => Net::Own(None),
+            Network::Proxy(port) => Net::Own(Some(port)),
+        };
+        let read_only = self.mounted_read_only();
+        if matches!(net, Net::Own(_)) || !read_only.is_empty() {
+            let isolation = Isolation::new(net, &read_only).at(Path::new("/proc/self/ns"))?;
             // SAFETY: enter only makes system calls on buffers and
             // descriptors prepared before the fork.
             unsafe {
@@ -659,8 +714,9 @@ impl Sandbox {
         // only inside its existing children. Protected paths are not carved,
         // for that very cost: an agent writes its state next to its
         // settings. A protected path that is a writable root, or holds one,
-        // stays read-only; one inside a writable directory is put back after
-        // the run instead (`keep_protected`).
+        // stays read-only; one inside a writable directory is mounted
+        // read-only for the command, or put back after the run where it
+        // cannot be (`keep_protected`).
         // The copy and tmp sit in Kule's home, which is hidden: they come
         // back after the carving, as on macOS.
         let mut writable = carve_all(

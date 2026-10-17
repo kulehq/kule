@@ -176,7 +176,11 @@ at once.
   24.04 refuses by default (`sysctl
   kernel.apparmor_restrict_unprivileged_userns=0`). Without them only the
   proxy's port is checked, and Kule says so. An agent's settings inside its
-  state directory are put back after the run rather than kept read-only.
+  state directory are mounted read-only for the agent alone, so changes the
+  person makes meanwhile stay. Without user namespaces, and for settings
+  that are links or do not exist yet, they are put back after the run
+  instead; whatever a put-back replaces is moved to `~/.kule/kept/replaced`,
+  never lost.
 - Gemini needs an API key from AI Studio (Google no longer serves the
   Code Assist sign-in to clients like this), saved outside the keychain,
   which the sandbox keeps read-only: `GEMINI_FORCE_FILE_STORAGE=true gemini`,

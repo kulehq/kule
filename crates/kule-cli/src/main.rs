@@ -306,10 +306,19 @@ fn run() -> Result<ExitCode> {
                     );
                 }
             }
-            let put_back: Vec<Denial> = put_back.iter().map(|p| Denial::put_back(p)).collect();
+            let put_back: Vec<Denial> = put_back.iter().map(Denial::put_back).collect();
             record_denials(&task, &put_back)?;
             for d in &put_back {
-                println!("sandbox: the agent changed {}; Kule put it back", d.path);
+                match &d.saved {
+                    Some(saved) => println!(
+                        "sandbox: {} changed during the run; Kule put it back and moved what was there to {saved}",
+                        d.path
+                    ),
+                    None => println!(
+                        "sandbox: {} was removed during the run; Kule put it back",
+                        d.path
+                    ),
+                }
             }
             print_ruling(&load_policy(&home, &task)?.judge(&task.effects()?.to_commit(false)));
         }
@@ -542,7 +551,8 @@ fn warn_if_network_not_isolated() {
         eprintln!(
             "kule: this system refuses unprivileged user namespaces, so the sandbox \
              checks only the proxy's port: a command can reach any address on that \
-             port and send datagrams anywhere. Allow them (on Ubuntu: sysctl \
+             port and send datagrams anywhere. The agent's settings are put back \
+             after the run instead of kept read-only. Allow them (on Ubuntu: sysctl \
              kernel.apparmor_restrict_unprivileged_userns=0) to close that."
         );
     }

@@ -7,7 +7,7 @@ use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::Output;
 
-use kule_engine::{CacheSources, Network, Sandbox, Task};
+use kule_engine::{CacheSources, Network, Sandbox, Task, protects_in_place};
 use tempfile::TempDir;
 
 struct Setup {
@@ -168,8 +168,9 @@ fn sandbox_python(sandbox: &Sandbox, script: &str) -> Output {
 /// An agent's own settings sit inside its writable state; where they name
 /// hooks or MCP servers that run outside the sandbox later, they stay
 /// readable but not writable. Landlock cannot refuse the write without
-/// refusing new files next to them too, so on Linux they are put back
-/// after the run.
+/// refusing new files next to them too, so on Linux they are mounted
+/// read-only for the command, or, where the kernel refuses the namespace,
+/// put back after the run.
 #[test]
 fn a_protected_file_inside_a_writable_directory_stays_read_only() {
     let s = Setup::new();
@@ -198,14 +199,12 @@ fn a_protected_file_inside_a_writable_directory_stays_read_only() {
         ),
     );
     let restored = kept.restore().unwrap();
-    if cfg!(target_os = "macos") {
-        assert!(!ok(&out));
+    if protects_in_place() {
+        assert!(!ok(&out), "{out:?}");
         assert!(restored.is_empty());
     } else {
-        assert_eq!(
-            restored,
-            [fs::canonicalize(state.join("settings.json")).unwrap()]
-        );
+        let paths: Vec<_> = restored.iter().map(|p| p.path.clone()).collect();
+        assert_eq!(paths, [state.join("settings.json")]);
     }
     assert_eq!(
         fs::read_to_string(state.join("settings.json")).unwrap(),
@@ -214,6 +213,85 @@ fn a_protected_file_inside_a_writable_directory_stays_read_only() {
     assert_eq!(
         fs::read_to_string(state.join("session.json")).unwrap(),
         "session\n"
+    );
+}
+
+/// The person may change an agent's settings while a run goes, from the
+/// agent itself outside Kule. Kept read-only in place, the change simply
+/// stays; put back, it is moved aside, never lost.
+#[test]
+fn a_change_made_outside_the_sandbox_during_a_run_is_not_lost() {
+    let s = Setup::new();
+    let state = s.outside().join("agent-state");
+    fs::create_dir_all(&state).unwrap();
+    let settings = state.join("settings.json");
+    fs::write(&settings, "{}\n").unwrap();
+    let mut sandbox = s.sandbox();
+    sandbox.allow_write(&state).unwrap();
+    sandbox.protect(&settings).unwrap();
+    let kept = sandbox.keep_protected().unwrap();
+    let mut command = sandbox
+        .command("sh", &["-c".to_owned(), "read line".to_owned()])
+        .unwrap();
+    let mut running = command.stdin(std::process::Stdio::piped()).spawn().unwrap();
+    // The person's own session, while the command still runs.
+    fs::write(&settings, "{\"theme\":\"mine\"}\n").unwrap();
+    drop(running.stdin.take());
+    running.wait().unwrap();
+
+    let restored = kept.restore().unwrap();
+    if protects_in_place() {
+        assert!(restored.is_empty());
+        assert_eq!(
+            fs::read_to_string(&settings).unwrap(),
+            "{\"theme\":\"mine\"}\n"
+        );
+    } else {
+        assert_eq!(restored.len(), 1);
+        let saved = restored[0].saved.as_ref().unwrap();
+        assert_eq!(fs::read_to_string(saved).unwrap(), "{\"theme\":\"mine\"}\n");
+    }
+}
+
+/// Settings linked in from elsewhere (a dotfiles repository) stay linked:
+/// the command can neither write through the link nor swap it for a file.
+#[test]
+fn a_protected_link_cannot_be_swapped() {
+    let s = Setup::new();
+    let (state, dotfiles) = (
+        s.outside().join("agent-state"),
+        s.outside().join("dotfiles"),
+    );
+    fs::create_dir_all(&state).unwrap();
+    fs::create_dir_all(&dotfiles).unwrap();
+    fs::write(dotfiles.join("settings.json"), "{}\n").unwrap();
+    let settings = state.join("settings.json");
+    std::os::unix::fs::symlink(dotfiles.join("settings.json"), &settings).unwrap();
+    let mut sandbox = s.sandbox();
+    sandbox.allow_write(&state).unwrap();
+    sandbox.protect(&settings).unwrap();
+    let kept = sandbox.keep_protected().unwrap();
+
+    let through = sh(
+        &sandbox,
+        &format!("echo '{{\"hooks\":1}}' > '{}'", settings.display()),
+    );
+    assert!(!ok(&through), "{through:?}");
+    let _ = sh(
+        &sandbox,
+        &format!(
+            "rm -f '{0}' && echo '{{\"hooks\":1}}' > '{0}'",
+            settings.display()
+        ),
+    );
+    kept.restore().unwrap();
+    assert_eq!(
+        fs::read_link(&settings).unwrap(),
+        dotfiles.join("settings.json")
+    );
+    assert_eq!(
+        fs::read_to_string(dotfiles.join("settings.json")).unwrap(),
+        "{}\n"
     );
 }
 

@@ -568,7 +568,7 @@ impl Service {
             .denials(started.elapsed())
             .map_err(text)?
             .unwrap_or_default();
-        refused.extend(put_back.iter().map(|p| Denial::put_back(p)));
+        refused.extend(put_back.iter().map(Denial::put_back));
         record_denials(task, &refused).map_err(text)?;
         Ok(refused)
     }
