@@ -284,6 +284,13 @@ pub fn dispatch(service: &Arc<Service>, call: Call) -> Result<Value, String> {
     }
     match call {
         Call::Agents => json(service.agents()?),
+        Call::AgentList => json(service.agent_list()?),
+        Call::AgentRegistry => json(service.agent_registry()?),
+        Call::SaveAgent { profile } => json(service.save_agent(&profile)?),
+        Call::RemoveAgent { name } => json(service.remove_agent(&name)?),
+        Call::ApproveAgent { name, digest } => json(service.approve_agent(&name, &digest)?),
+        Call::RevokeAgent { name } => json(service.revoke_agent(&name)?),
+        Call::TryAgent { profile } => json(service.try_agent(&profile)?),
         Call::Tasks => json(service.tasks()?),
         Call::CreateTask { workspace } => json(service.create(&workspace)?),
         Call::Review {

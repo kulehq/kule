@@ -201,6 +201,16 @@ another agent's state, Kule's home or a whole directory like `~/Documents`,
 and a package it fetches must name one exact version. Profiles live in
 Kule's home, which no sandbox can see, and never come from a workspace.
 
+To find what a new agent needs, try it: `kule agents add qwen-code` takes
+a draft from the [ACP registry](https://agentclientprotocol.com/registry)
+(`kule agents registry` lists it), and `kule agents try qwen-code` runs it
+once in an empty folder, opened no wider than its draft, then lists what
+the sandbox refused it: the directories it wanted to write to and the hosts
+it wanted to reach. `--apply` adds those to the profile, which then waits
+for your approval like any change. The app's **Agents** view does the same
+with checkboxes, so a telemetry host can stay out. Linux does not report
+refused files, so there only hosts are suggested.
+
 `crates/kule-desktop` is a Tauri app around the same engine:
 
 - **Tasks**: pick a folder to make a task; each shows its changes and the

@@ -18,6 +18,8 @@ libc = "0.2.190"
 serde.workspace = true
 serde_json.workspace = true
 toml = "1.1.8"
+ureq = "3.4.2"
+toml_edit = { version = "0.25.17", features = ["serde"] }
 tokio = { version = "1.53.3", features = ["rt-multi-thread", "macros", "time"] }
 
 [dev-dependencies]

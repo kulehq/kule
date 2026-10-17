@@ -70,36 +70,36 @@ pub struct Profile {
     /// Starts the agent speaking ACP on stdio.
     pub command: Vec<String>,
     /// Paths under the home directory the agent writes its own state to.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub state: Vec<String>,
     /// Paths in that state that configure what runs outside the sandbox
     /// later (hooks, MCP servers, sandbox settings): readable, never
     /// writable.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub protected: Vec<String>,
     /// Its login inside that state, hidden from every other agent and from
     /// commands Kule runs itself.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub login: Vec<String>,
     /// Default-hidden paths under the home directory the agent needs to read
     /// (macOS only: the keychain holding its login).
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub reveal_on_macos: Vec<String>,
     /// The session mode to start in, when the agent offers it: one that
     /// leaves sandboxing to Kule, for an agent whose own sandbox cannot
     /// start inside Kule's.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mode: Option<String>,
     /// Environment variables the agent is started with.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub env: BTreeMap<String, String>,
     /// The person's environment variables the agent may see: its own
     /// credentials, when it signs in by key. Others stay out.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pass_env: Vec<String>,
     /// HTTPS hosts the agent needs for its login and model, beyond what the
     /// policy already lets through. Open only while this agent runs.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub hosts: Vec<String>,
     /// The other agents' state and logins, hidden from this one; filled in
     /// when the profiles are loaded.
@@ -131,6 +131,9 @@ pub struct Listed {
     /// Why it cannot run now: it fails a check, or it was never approved as
     /// it stands. `None` when it can.
     pub held: Option<String>,
+    /// What approval pins; an approval names it, so a profile changed
+    /// since a person looked at it is not approved unseen.
+    pub digest: String,
 }
 
 /// Every profile Kule knows.
@@ -150,6 +153,7 @@ impl Agents {
                 profile,
                 origin: Origin::BuiltIn,
                 held: None,
+                digest: String::new(),
             })
             .collect();
         Agents::complete(listed)
@@ -167,13 +171,12 @@ impl Agents {
         let file: File = toml::from_str(&text)
             .map_err(|e| Error::Invalid(format!("{}: {e}", path.display())))?;
         let approved = approved(kule_home)?;
-        let kule_home_in_home =
-            home_dir().and_then(|home| kule_home.strip_prefix(home).ok().map(Path::to_path_buf));
         let mut listed = std::mem::take(&mut agents.listed);
         for profile in file.agent {
             let held = if listed.iter().any(|l| l.profile.name == profile.name) {
                 Some(format!("another profile is named {}", profile.name))
-            } else if let Err(why) = profile.check(&listed, kule_home_in_home.as_deref()) {
+            } else if let Err(why) = profile.check(&listed, kule_home_in_home(kule_home).as_deref())
+            {
                 Some(why)
             } else if approved.get(&profile.name) != Some(&profile.digest()) {
                 Some(format!(
@@ -187,6 +190,7 @@ impl Agents {
                 profile,
                 origin: Origin::Person,
                 held,
+                digest: String::new(),
             });
         }
         Ok(Agents::complete(listed))
@@ -205,6 +209,7 @@ impl Agents {
             })
             .collect();
         for l in &mut listed {
+            l.digest = l.profile.digest();
             l.profile.others = all
                 .iter()
                 .filter(|(name, _)| *name != l.profile.name)
@@ -212,6 +217,100 @@ impl Agents {
                 .collect();
         }
         Agents { listed }
+    }
+
+    /// `draft` as it would run next to these profiles: what they hold is
+    /// hidden from it. For a trial before it is saved or approved.
+    pub fn draft(&self, draft: &Profile) -> Profile {
+        let mut draft = draft.clone();
+        draft.others = self
+            .listed
+            .iter()
+            .filter(|l| l.profile.name != draft.name)
+            .flat_map(|l| l.profile.state.iter().chain(&l.profile.login).cloned())
+            .collect();
+        draft
+    }
+
+    /// Whether `draft` may be saved next to these profiles; why not, when
+    /// it may not.
+    pub fn check_draft(
+        &self,
+        kule_home: &Path,
+        draft: &Profile,
+    ) -> std::result::Result<(), String> {
+        if self
+            .listed
+            .iter()
+            .any(|l| l.origin == Origin::BuiltIn && l.profile.name == draft.name)
+        {
+            return Err(format!("{} is one of Kule's own agents", draft.name));
+        }
+        let others: Vec<Listed> = self
+            .listed
+            .iter()
+            .filter(|l| l.profile.name != draft.name)
+            .cloned()
+            .collect();
+        draft.check(&others, kule_home_in_home(kule_home).as_deref())
+    }
+
+    /// Writes `profile` into the person's `agents.toml`, in place of the one
+    /// with its name or after the others; the rest of the file, comments
+    /// included, stays as it was. A saved profile is not approved: a
+    /// changed one waits for approval again.
+    pub fn save(kule_home: &Path, profile: &Profile) -> Result<()> {
+        Agents::load(kule_home)?
+            .check_draft(kule_home, profile)
+            .map_err(Error::Invalid)?;
+        let mut doc = person_file(kule_home)?;
+        let table = toml_edit::ser::to_document(profile)
+            .map_err(|e| Error::Invalid(format!("profile {}: {e}", profile.name)))?
+            .as_table()
+            .clone();
+        let agents = agents_array(&mut doc)?;
+        let at = agents
+            .iter()
+            .position(|t| t.get("name").and_then(|n| n.as_str()) == Some(profile.name.as_str()));
+        match at {
+            Some(at) => {
+                if let Some(old) = agents.get_mut(at) {
+                    *old = table;
+                }
+            }
+            None => agents.push(table),
+        }
+        write_person_file(kule_home, &doc)
+    }
+
+    /// Takes `name` out of the person's `agents.toml`, and its approval.
+    pub fn remove(kule_home: &Path, name: &str) -> Result<bool> {
+        let mut doc = person_file(kule_home)?;
+        let agents = agents_array(&mut doc)?;
+        let before = agents.len();
+        agents.retain(|t| t.get("name").and_then(|n| n.as_str()) != Some(name));
+        let removed = agents.len() != before;
+        if removed {
+            write_person_file(kule_home, &doc)?;
+        }
+        Agents::revoke(kule_home, name)?;
+        Ok(removed)
+    }
+
+    /// [`Agents::approve`], but only if the profile still has `digest`: what
+    /// the person looked at is what gets approved.
+    pub fn approve_seen(kule_home: &Path, name: &str, digest: &str) -> Result<Profile> {
+        let agents = Agents::load(kule_home)?;
+        let seen = agents
+            .listed
+            .iter()
+            .any(|l| l.profile.name == name && l.origin == Origin::Person && l.digest == digest);
+        if !seen {
+            return Err(Error::Invalid(format!(
+                "agent {name} changed since you looked at it; look again"
+            )));
+        }
+        Agents::approve(kule_home, name)
     }
 
     /// Every profile, the ones that cannot run included.
@@ -271,8 +370,6 @@ impl Agents {
                     kule_home.join(AGENTS_FILE).display()
                 ))
             })?;
-        let kule_home_in_home =
-            home_dir().and_then(|home| kule_home.strip_prefix(home).ok().map(Path::to_path_buf));
         let others: Vec<Listed> = agents
             .listed
             .iter()
@@ -281,7 +378,7 @@ impl Agents {
             .collect();
         listed
             .profile
-            .check(&others, kule_home_in_home.as_deref())
+            .check(&others, kule_home_in_home(kule_home).as_deref())
             .map_err(Error::Invalid)?;
         let mut approved = approved(kule_home)?;
         approved.insert(name.to_owned(), listed.profile.digest());
@@ -303,8 +400,41 @@ pub fn profile(name: &str) -> Option<Profile> {
     Agents::built_in().get(name).cloned()
 }
 
-fn home_dir() -> Option<std::path::PathBuf> {
-    std::env::var_os("HOME").map(std::path::PathBuf::from)
+/// Kule's home relative to the person's home directory, when it is in there.
+fn kule_home_in_home(kule_home: &Path) -> Option<std::path::PathBuf> {
+    let home = std::env::var_os("HOME").map(std::path::PathBuf::from)?;
+    kule_home.strip_prefix(home).ok().map(Path::to_path_buf)
+}
+
+/// The person's `agents.toml` as written, or an empty one.
+fn person_file(kule_home: &Path) -> Result<toml_edit::DocumentMut> {
+    let path = kule_home.join(AGENTS_FILE);
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(io(&path, e)),
+    };
+    text.parse()
+        .map_err(|e| Error::Invalid(format!("{}: {e}", path.display())))
+}
+
+/// The `[[agent]]` tables of `doc`, made when there are none.
+fn agents_array(doc: &mut toml_edit::DocumentMut) -> Result<&mut toml_edit::ArrayOfTables> {
+    doc.entry("agent")
+        .or_insert_with(|| toml_edit::Item::ArrayOfTables(toml_edit::ArrayOfTables::new()))
+        .as_array_of_tables_mut()
+        .ok_or_else(|| {
+            Error::Invalid(format!(
+                "{AGENTS_FILE}: `agent` is not a list of [[agent]] tables"
+            ))
+        })
+}
+
+fn write_person_file(kule_home: &Path, doc: &toml_edit::DocumentMut) -> Result<()> {
+    let path = kule_home.join(AGENTS_FILE);
+    let tmp = kule_home.join(format!(".{AGENTS_FILE}.{}", std::process::id()));
+    std::fs::write(&tmp, doc.to_string()).map_err(|e| io(&tmp, e))?;
+    std::fs::rename(&tmp, &path).map_err(|e| io(&path, e))
 }
 
 fn io(path: &Path, source: std::io::Error) -> Error {
@@ -340,6 +470,23 @@ fn within(a: &str, b: &str) -> bool {
 }
 
 impl Profile {
+    /// A profile that starts `command` and opens nothing.
+    pub fn bare(name: &str, command: Vec<String>, env: BTreeMap<String, String>) -> Profile {
+        Profile {
+            name: name.to_owned(),
+            command,
+            state: Vec::new(),
+            protected: Vec::new(),
+            login: Vec::new(),
+            reveal_on_macos: Vec::new(),
+            mode: None,
+            env,
+            pass_env: Vec::new(),
+            hosts: Vec::new(),
+            others: Vec::new(),
+        }
+    }
+
     /// What approval pins: the profile exactly as written.
     fn digest(&self) -> String {
         let bytes = serde_json::to_vec(self).unwrap_or_default();
@@ -476,6 +623,31 @@ impl Profile {
         Ok(())
     }
 
+    /// Makes the agent's state directories that are not there yet, which
+    /// the sandbox could not open otherwise: an agent that only ever runs
+    /// in Kule never made them itself. A state path named like a file
+    /// (`.claude.json`) is left to the agent.
+    pub fn make_state(&self, home: &Path) -> Result<()> {
+        use std::os::unix::fs::DirBuilderExt;
+        for state in &self.state {
+            let path = home.join(state);
+            let name = Path::new(state)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or_default();
+            let file_like = name.trim_start_matches('.').contains('.');
+            if file_like || std::fs::symlink_metadata(&path).is_ok() {
+                continue;
+            }
+            std::fs::DirBuilder::new()
+                .recursive(true)
+                .mode(0o700)
+                .create(&path)
+                .map_err(|e| io(&path, e))?;
+        }
+        Ok(())
+    }
+
     /// Opens the agent's own state and login in `sandbox`. Paths that do not
     /// exist are skipped: the agent has never run here.
     /// Other agents' state, their logins and what the person said to them,
@@ -539,6 +711,7 @@ impl Profile {
         let home = person.as_ref().map(|p| p.home.clone());
         let mut sandbox = Sandbox::for_task_with(task, person)?;
         if let Some(home) = home {
+            self.make_state(&home)?;
             self.apply(&mut sandbox, &home)?;
         }
         sandbox.set_network(Network::Proxy(proxy.port()));
@@ -583,7 +756,11 @@ fn check_pinned(program: &str, args: &[String]) -> std::result::Result<(), Strin
                 word = words.next();
             }
             word.map(|p| {
-                let version = p.split_once("==").map(|(_, v)| v);
+                // `name==1.2.3`, or `name@1.2.3` as uvx also takes it.
+                let version = p
+                    .split_once("==")
+                    .or_else(|| p.split_once('@'))
+                    .map(|(_, v)| v);
                 (p.clone(), version.is_some_and(exact_version))
             })
         }
@@ -964,5 +1141,87 @@ hosts = ["openrouter.ai"]
         let agents = Agents::load(home.path()).unwrap();
         let codex = agents.get("codex").unwrap();
         assert_eq!(codex.hosts, ["auth.openai.com", "chatgpt.com"]);
+    }
+
+    #[test]
+    fn saving_keeps_the_rest_of_the_file_and_needs_approval_again() {
+        let file = format!("# My agents, by hand.\n{OPENCODE}");
+        let home = kule_home(&file);
+        Agents::approve(home.path(), "opencode").unwrap();
+
+        // A new one goes after the others.
+        let mut qwen = Profile::bare(
+            "qwen-code",
+            vec![
+                "npx".into(),
+                "-y".into(),
+                "@qwen-code/qwen-code@0.25.2".into(),
+                "--acp".into(),
+            ],
+            BTreeMap::new(),
+        );
+        qwen.state = vec![".qwen".into()];
+        Agents::save(home.path(), &qwen).unwrap();
+        let text = std::fs::read_to_string(home.path().join(AGENTS_FILE)).unwrap();
+        assert!(text.starts_with("# My agents, by hand.\n"), "{text}");
+        let agents = Agents::load(home.path()).unwrap();
+        assert_eq!(
+            agents
+                .listed()
+                .iter()
+                .map(|l| l.profile.name.as_str())
+                .collect::<Vec<_>>(),
+            ["claude-code", "gemini", "codex", "opencode", "qwen-code"]
+        );
+        assert!(agents.get("opencode").is_some(), "the others stay approved");
+        assert!(agents.get("qwen-code").is_none(), "a saved one is not");
+
+        // One with the same name is replaced, and waits again.
+        let mut opencode = agents.listed()[3].profile.clone();
+        opencode.hosts.push("api.openai.com".into());
+        Agents::save(home.path(), &opencode).unwrap();
+        let agents = Agents::load(home.path()).unwrap();
+        assert_eq!(agents.listed().len(), 5);
+        assert_eq!(
+            agents.listed()[3].profile.hosts,
+            ["openrouter.ai", "api.openai.com"]
+        );
+        assert!(agents.get("opencode").is_none());
+
+        // What fails its checks is not written.
+        let mut wide = qwen.clone();
+        wide.state = vec![".ssh".into()];
+        assert!(Agents::save(home.path(), &wide).is_err());
+        assert!(
+            Agents::save(
+                home.path(),
+                &Profile::bare("codex", vec!["x".into()], BTreeMap::new())
+            )
+            .is_err()
+        );
+
+        assert!(Agents::remove(home.path(), "qwen-code").unwrap());
+        assert_eq!(Agents::load(home.path()).unwrap().listed().len(), 4);
+        assert!(!Agents::remove(home.path(), "qwen-code").unwrap());
+    }
+
+    #[test]
+    fn only_what_the_person_looked_at_is_approved() {
+        let home = kule_home(OPENCODE);
+        let seen = Agents::load(home.path()).unwrap().listed()[3]
+            .digest
+            .clone();
+        // Changed after the person looked.
+        let changed =
+            OPENCODE.replace(r#"hosts = ["openrouter.ai"]"#, r#"hosts = ["example.com"]"#);
+        std::fs::write(home.path().join(AGENTS_FILE), changed).unwrap();
+        assert!(Agents::approve_seen(home.path(), "opencode", &seen).is_err());
+        assert!(Agents::load(home.path()).unwrap().get("opencode").is_none());
+
+        let seen = Agents::load(home.path()).unwrap().listed()[3]
+            .digest
+            .clone();
+        Agents::approve_seen(home.path(), "opencode", &seen).unwrap();
+        assert!(Agents::load(home.path()).unwrap().get("opencode").is_some());
     }
 }

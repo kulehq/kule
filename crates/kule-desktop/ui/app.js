@@ -51,7 +51,8 @@ const $ = (id) => document.getElementById(id);
 function replace(el, ...children) {
   const active = document.activeElement;
   const key = active && active !== el && el.contains(active) ? active.dataset.key : undefined;
-  el.replaceChildren(...children);
+  // Left-out parts (`cond ? h(…) : null`) are skipped, as `h` skips them.
+  el.replaceChildren(...children.flat().filter((c) => c !== null && c !== undefined && c !== false));
   if (!key) return;
   const again = el.querySelector(`[data-key="${CSS.escape(key)}"]`);
   if (again) again.focus();
@@ -100,6 +101,8 @@ function when(unix) {
 const state = {
   tasks: [],
   current: null,
+  /** "tasks", or "agents" while the agent profiles are shown. */
+  view: "tasks",
   tab: "live",
   agents: [],
   /** Live stream per task: what the window saw since it opened. */
@@ -175,6 +178,14 @@ function renderSidebar() {
 // --- Task view -------------------------------------------------------------
 
 function renderTask() {
+  const agents = state.view === "agents";
+  $("agents-view").hidden = !agents;
+  $("open-agents").setAttribute("aria-current", agents ? "page" : "false");
+  if (agents) {
+    $("empty").hidden = true;
+    $("task").hidden = true;
+    return;
+  }
   const task = currentTask();
   $("empty").hidden = Boolean(task);
   $("task").hidden = !task;
@@ -957,6 +968,398 @@ function armed(label, armedLabel, disabled, action) {
   return button;
 }
 
+// --- Agents ----------------------------------------------------------------
+
+// Kule's own agent profiles and the person's. A profile opens holes in the
+// sandbox, so the view shows exactly what each one opens, and the person
+// approves that: the daemon approves only the profile they looked at.
+
+const agentsView = {
+  listed: [],
+  /** The ACP registry once asked for: { entries, fresh }. */
+  registry: null,
+  registryOpen: false,
+  filter: "",
+  /** The profile being written, and whether it is a new one. */
+  editing: null,
+  isNew: false,
+  /** Where the agent came from, for a download the person installs. */
+  note: null,
+  trial: null,
+  trying: false,
+};
+
+/** The agents the prompt can pick: the ones that can run. */
+async function loadAgentChoices() {
+  try {
+    state.agents = await call("agents");
+  } catch (err) {
+    fail(err);
+  }
+  const picked = $("agent").value;
+  replace($("agent"), ...state.agents.map((name) => h("option", { value: name, selected: name === picked }, name)));
+}
+
+async function openAgents() {
+  state.view = "agents";
+  renderSidebar();
+  renderTask();
+  await loadAgentList();
+}
+
+async function loadAgentList() {
+  keepForm();
+  try {
+    agentsView.listed = await call("agent_list");
+  } catch (err) {
+    fail(err);
+  }
+  renderAgents();
+}
+
+/** After a change to the profiles: the list, and what the prompt offers. */
+async function agentsChanged() {
+  await loadAgentList();
+  await loadAgentChoices();
+}
+
+const lines = (text) =>
+  text
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean);
+
+/** What a profile opens, one row each, as the person approves it. */
+function opens(profile) {
+  const row = (label, items) =>
+    items && items.length ? [h("dt", {}, label), h("dd", {}, items.join(", "))] : [];
+  const env = Object.entries(profile.env || {}).map(([k, v]) => `${k}=${v}`);
+  return h(
+    "dl",
+    { class: "agent-opens" },
+    ...row("Runs", [profile.command.join(" ")]),
+    ...row("Writes in ~", profile.state),
+    ...row("Its login", profile.login),
+    ...row("Read-only", profile.protected),
+    ...row("Reveals (macOS)", profile.reveal_on_macos),
+    ...row("Sees your env", profile.pass_env),
+    ...row("Sets env", env),
+    ...row("Also connects to", (profile.hosts || []).map((host) => `https://${host}`)),
+    ...row("Session mode", profile.mode ? [profile.mode] : [])
+  );
+}
+
+function agentCard(listed) {
+  const { profile, origin, held, digest } = listed;
+  const yours = origin === "person";
+  const actions = [];
+  if (yours) {
+    actions.push(
+      h("button", { class: "button ghost", type: "button", "data-key": `edit:${profile.name}`, onclick: () => editAgent(profile, false) }, "Edit")
+    );
+    if (held) {
+      const approve = armed(
+        "Approve",
+        "Click again to let it open what is listed",
+        false,
+        async () => {
+          try {
+            await call("approve_agent", { name: profile.name, digest });
+            toast(`${profile.name} can run now`);
+          } catch (err) {
+            fail(err);
+          }
+          await agentsChanged();
+        }
+      );
+      approve.classList.remove("danger");
+      approve.dataset.key = `approve:${profile.name}`;
+      actions.push(approve);
+    } else {
+      actions.push(
+        h(
+          "button",
+          {
+            class: "button ghost",
+            type: "button",
+            "data-key": `revoke:${profile.name}`,
+            onclick: (e) =>
+              inFlight(e.currentTarget, async () => {
+                await call("revoke_agent", { name: profile.name }).catch(fail);
+                await agentsChanged();
+              }),
+          },
+          "Revoke"
+        )
+      );
+    }
+    const remove = armed("Remove", `Click again to remove ${profile.name}`, false, async () => {
+      await call("remove_agent", { name: profile.name }).catch(fail);
+      await agentsChanged();
+    });
+    remove.dataset.key = `remove:${profile.name}`;
+    actions.push(remove);
+  }
+  return h(
+    "article",
+    { class: "agent-card" },
+    h(
+      "header",
+      { class: "agent-card-head" },
+      h("h2", {}, profile.name),
+      h("span", { class: "chip" }, yours ? "yours" : "built in"),
+      h("span", { class: `chip ${held ? "ask" : "allow"}` }, held ? "held" : "can run")
+    ),
+    held ? h("p", { class: "agent-held" }, held) : null,
+    opens(profile),
+    actions.length ? h("div", { class: "agent-actions" }, ...actions) : null
+  );
+}
+
+function editAgent(profile, isNew, note) {
+  agentsView.editing = JSON.parse(JSON.stringify(profile));
+  agentsView.isNew = isNew;
+  agentsView.note = note || null;
+  agentsView.trial = null;
+  agentsView.registryOpen = false;
+  renderAgents();
+  $("agent-form-name")?.focus();
+}
+
+const BLANK = { name: "", command: [], state: [], login: [], protected: [], reveal_on_macos: [], env: {}, pass_env: [], hosts: [], mode: null };
+
+/** The profile the form holds now. */
+function formProfile() {
+  const value = (id) => $(id).value;
+  const env = {};
+  for (const line of lines(value("agent-form-env"))) {
+    const at = line.indexOf("=");
+    if (at > 0) env[line.slice(0, at).trim()] = line.slice(at + 1).trim();
+  }
+  return {
+    name: value("agent-form-name").trim(),
+    command: lines(value("agent-form-command")),
+    state: lines(value("agent-form-state")),
+    login: lines(value("agent-form-login")),
+    protected: lines(value("agent-form-protected")),
+    reveal_on_macos: agentsView.editing.reveal_on_macos || [],
+    mode: value("agent-form-mode").trim() || null,
+    env,
+    pass_env: lines(value("agent-form-pass-env")),
+    hosts: lines(value("agent-form-hosts")),
+  };
+}
+
+function field(id, label, hint, value, rows) {
+  const input = rows
+    ? h("textarea", { id, rows, spellcheck: "false" }, value)
+    : h("input", { id, type: "text", value, spellcheck: "false" });
+  return h("label", { class: "agent-field", for: id }, h("span", { class: "agent-field-label" }, label), input, hint ? h("span", { class: "agent-field-hint" }, hint) : null);
+}
+
+function agentEditor() {
+  const p = agentsView.editing;
+  const env = Object.entries(p.env || {}).map(([k, v]) => `${k}=${v}`).join("\n");
+  const trial = agentsView.trial;
+  return h(
+    "section",
+    { class: "agent-editor", "aria-label": "Agent profile" },
+    h("h2", {}, agentsView.isNew ? "New agent" : `Edit ${p.name}`),
+    agentsView.note ? h("p", { class: "agent-held" }, agentsView.note) : null,
+    h(
+      "div",
+      { class: "agent-form" },
+      field("agent-form-name", "Name", "Lowercase letters, digits and dashes.", p.name),
+      field("agent-form-command", "Command", "One argument per line; a package fetched by npx or uvx names one exact version.", p.command.join("\n"), 3),
+      field("agent-form-state", "Writes in ~", "Its own state, one path per line under your home directory.", p.state.join("\n"), 3),
+      field("agent-form-login", "Its login", "In that state; hidden from every other agent.", p.login.join("\n"), 2),
+      field("agent-form-protected", "Read-only", "Its settings that run code outside the sandbox later (hooks, MCP servers).", p.protected.join("\n"), 2),
+      field("agent-form-pass-env", "Sees your env", "Your variables it may read: its own key.", p.pass_env.join("\n"), 2),
+      field("agent-form-env", "Sets env", "NAME=value, one per line.", env, 2),
+      field("agent-form-hosts", "Also connects to", "HTTPS hosts beyond what the policy lets through.", p.hosts.join("\n"), 3),
+      field("agent-form-mode", "Session mode", "Optional: the ACP mode to start in.", p.mode || "")
+    ),
+    h(
+      "div",
+      { class: "agent-actions" },
+      h("button", { class: "button primary", type: "button", "data-key": "agent-save", onclick: (e) => inFlight(e.currentTarget, saveAgent) }, "Save"),
+      h(
+        "button",
+        { class: "button", type: "button", "data-key": "agent-try", disabled: agentsView.trying, onclick: tryAgent },
+        agentsView.trying ? "Trying… (up to two minutes)" : "Try it"
+      ),
+      h("button", { class: "button ghost", type: "button", "data-key": "agent-cancel", onclick: () => { agentsView.editing = null; renderAgents(); } }, "Cancel")
+    ),
+    h("p", { class: "agent-field-hint" }, "Try it runs the agent once in an empty folder, opened no wider than above, and suggests what it was refused. Saved, it runs only once you approve it."),
+    trial ? trialResult(trial) : null
+  );
+}
+
+function trialResult(trial) {
+  const picks = [
+    ...trial.state.map((path) => ({ kind: "state", value: path, label: `Writes in ~: ${path}` })),
+    ...trial.hosts.map((host) => ({ kind: "hosts", value: host, label: `Connects to: https://${host}` })),
+  ];
+  const boxes = picks.map((pick) => {
+    const box = h("input", { type: "checkbox", checked: true });
+    box.pick = pick;
+    return h("label", { class: "check" }, box, pick.label);
+  });
+  const add = () => {
+    const profile = formProfile();
+    for (const label of boxes) {
+      const box = label.querySelector("input");
+      if (box.checked && !profile[box.pick.kind].includes(box.pick.value)) profile[box.pick.kind].push(box.pick.value);
+    }
+    agentsView.editing = profile;
+    agentsView.trial = null;
+    renderAgents();
+  };
+  return h(
+    "div",
+    { class: "agent-trial" },
+    h("p", { class: trial.error ? "agent-held" : "" }, trial.error ? `It did not answer: ${trial.error}` : `It answered: ${trial.reply}`),
+    picks.length
+      ? [h("p", {}, "It was refused these; add the ones it needs:"), ...boxes, h("button", { class: "button", type: "button", "data-key": "agent-add-picks", onclick: add }, "Add selected")]
+      : h("p", { class: "muted" }, "Nothing to suggest."),
+    trial.refused.length ? h("details", {}, h("summary", {}, `Everything refused · ${trial.refused.length}`), h("pre", {}, trial.refused.join("\n"))) : null,
+    trial.log.length ? h("details", {}, h("summary", {}, "Its error output"), h("pre", {}, trial.log.join("\n"))) : null
+  );
+}
+
+async function saveAgent() {
+  const profile = formProfile();
+  try {
+    await call("save_agent", { profile });
+    toast(`Saved ${profile.name}: approve it to let it run`);
+    agentsView.editing = null;
+  } catch (err) {
+    fail(err);
+  }
+  await agentsChanged();
+}
+
+async function tryAgent() {
+  const profile = formProfile();
+  agentsView.editing = profile;
+  agentsView.trying = true;
+  agentsView.trial = null;
+  renderAgents();
+  try {
+    agentsView.trial = await call("try_agent", { profile });
+  } catch (err) {
+    fail(err);
+  }
+  agentsView.trying = false;
+  renderAgents();
+}
+
+/** What the person typed in the form, kept across a redraw. */
+function keepForm() {
+  if (agentsView.editing && $("agent-form-name")) agentsView.editing = formProfile();
+}
+
+async function toggleRegistry() {
+  keepForm();
+  agentsView.registryOpen = !agentsView.registryOpen;
+  renderAgents();
+  if (agentsView.registryOpen && !agentsView.registry) {
+    try {
+      agentsView.registry = await call("agent_registry");
+    } catch (err) {
+      fail(err);
+      agentsView.registryOpen = false;
+    }
+    renderAgents();
+  }
+}
+
+/** A registry entry as a profile to start from, opening nothing yet. */
+function fromRegistry(entry) {
+  const install = entry.install;
+  if (install.kind === "package") {
+    editAgent({ ...BLANK, name: entry.id, command: install.command, env: install.env }, true);
+  } else if (install.kind === "download") {
+    const program = install.cmd.split("/").pop();
+    editAgent(
+      { ...BLANK, name: entry.id, command: [program, ...install.args] },
+      true,
+      `${entry.name} is a download: get ${install.archive} (sha256 ${install.sha256}) and put ${program} on your PATH first.`
+    );
+  }
+}
+
+function registryPanel() {
+  const registry = agentsView.registry;
+  if (!registry) return h("section", { class: "agent-registry" }, h("p", { class: "muted" }, "Reading the ACP registry…"));
+  const filter = h("input", {
+    type: "search",
+    placeholder: "Filter",
+    "aria-label": "Filter the registry",
+    value: agentsView.filter,
+    "data-key": "registry-filter",
+    // Only the list is drawn again, so typing keeps its place.
+    oninput: (e) => {
+      agentsView.filter = e.currentTarget.value;
+      replace($("registry-list"), ...registryItems());
+    },
+  });
+  return h(
+    "section",
+    { class: "agent-registry", "aria-label": "ACP registry" },
+    h("h2", {}, "ACP registry"),
+    registry.fresh ? null : h("p", { class: "muted" }, "The registry could not be reached; this is the list as last read."),
+    filter,
+    h("ul", { class: "registry-list", id: "registry-list" }, ...registryItems())
+  );
+}
+
+function registryItems() {
+  const words = agentsView.filter.toLowerCase();
+  return agentsView.registry.entries
+    .filter((e) => `${e.name} ${e.id} ${e.description}`.toLowerCase().includes(words))
+    .map((entry) => {
+        const how =
+          entry.install.kind === "package" ? entry.install.command.join(" ") : entry.install.kind === "download" ? "download" : "not for this system";
+        return h(
+          "li",
+          {},
+          h("div", { class: "registry-name" }, h("strong", {}, entry.name), ` ${entry.version}`),
+          h("div", { class: "muted" }, entry.description),
+          h("div", { class: "agent-field-hint" }, how, entry.website ? ` · ${entry.website}` : ""),
+          entry.install.kind === "unavailable"
+            ? null
+            : h("button", { class: "button", type: "button", "data-key": `registry:${entry.id}`, onclick: () => fromRegistry(entry) }, "Use")
+        );
+      });
+}
+
+function renderAgents() {
+  if (state.view !== "agents") return;
+  replace(
+    $("agents-view"),
+    h(
+      "header",
+      { class: "agents-head" },
+      h("h1", { id: "agents-title" }, "Agents"),
+      h(
+        "p",
+        { class: "muted" },
+        "Kule's own agents, and yours from ~/.kule/agents.toml. Each of yours opens only what is listed on it, and runs only once you approve that; a change to it needs approval again."
+      ),
+      h(
+        "div",
+        { class: "agent-actions" },
+        h("button", { class: "button", type: "button", "data-key": "registry-toggle", "aria-expanded": String(agentsView.registryOpen), onclick: toggleRegistry }, "Add from the ACP registry"),
+        h("button", { class: "button ghost", type: "button", "data-key": "agent-new", onclick: () => editAgent(BLANK, true) }, "Add by hand")
+      )
+    ),
+    agentsView.editing ? agentEditor() : null,
+    agentsView.registryOpen ? registryPanel() : null,
+    ...agentsView.listed.map(agentCard)
+  );
+}
+
 /** Runs `action` with `button` disabled, so a double click acts once. */
 async function inFlight(button, action) {
   const was = button.disabled;
@@ -1151,6 +1554,7 @@ function select(id) {
     $("remove-task").disarm?.();
     clearPanels();
   }
+  state.view = "tasks";
   state.current = id;
   renderSidebar();
   renderTask();
@@ -1262,12 +1666,8 @@ async function start() {
   remove.id = "remove-task";
   $("remove-task").replaceWith(remove);
 
-  try {
-    state.agents = await call("agents");
-  } catch (err) {
-    fail(err);
-  }
-  replace($("agent"), ...state.agents.map((name) => h("option", { value: name }, name)));
+  await loadAgentChoices();
+  $("open-agents").addEventListener("click", openAgents);
 
   await backend.onRun(onRun);
   await backend.onQuestions(onQuestions);

@@ -10,7 +10,7 @@ use serde_json::Value;
 
 /// Changes whenever a call, a result or a notice changes shape; a client
 /// and a daemon that disagree on it cannot talk.
-pub const PROTOCOL: u32 = 5;
+pub const PROTOCOL: u32 = 6;
 
 /// What a daemon says about itself.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -96,6 +96,29 @@ pub enum Call {
     SetApprovalTimeout {
         task: String,
         minutes: u64,
+    },
+    /// Every agent profile, the ones that cannot run included.
+    AgentList,
+    /// The ACP registry, fresh or as last read.
+    AgentRegistry,
+    /// Writes one of the person's profiles; it then waits for approval.
+    SaveAgent {
+        profile: kule_acp::Profile,
+    },
+    RemoveAgent {
+        name: String,
+    },
+    /// Approves a profile, only if it still has the digest the person saw.
+    ApproveAgent {
+        name: String,
+        digest: String,
+    },
+    RevokeAgent {
+        name: String,
+    },
+    /// Runs a draft profile once in an empty folder; what it was refused.
+    TryAgent {
+        profile: kule_acp::Profile,
     },
     /// Turns the connection into a stream of notices.
     Subscribe,

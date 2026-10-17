@@ -36,6 +36,21 @@ enum AgentsCmd {
     Approve { name: String },
     /// Take an approval back.
     Revoke { name: String },
+    /// The agents of the ACP registry, which `add` takes a draft from.
+    Registry,
+    /// Add an agent of the ACP registry to your profiles, opening nothing
+    /// yet: `try` it to see what it needs.
+    Add { id: String },
+    /// Run one of your profiles once, in an empty folder, and show what the
+    /// sandbox refused it: what its profile should open. With --apply, add
+    /// that to the profile (which then waits for approval again).
+    Try {
+        name: String,
+        #[arg(long)]
+        apply: bool,
+    },
+    /// Take one of your profiles out of agents.toml.
+    Remove { name: String },
 }
 
 #[derive(Subcommand)]
@@ -728,6 +743,108 @@ fn agents_cmd(home: &Path, action: AgentsCmd) -> Result<()> {
                 println!("{name} is no longer approved");
             } else {
                 println!("{name} was not approved");
+            }
+        }
+        AgentsCmd::Registry => {
+            let (entries, fresh) = kule_acp::registry::load(home)?;
+            if !fresh {
+                println!("(the registry could not be reached; as last read)");
+            }
+            for entry in &entries {
+                let how = match &entry.install {
+                    kule_acp::registry::Install::Package { command, .. } => command.join(" "),
+                    kule_acp::registry::Install::Download { cmd, .. } => {
+                        format!("download, then {cmd}")
+                    }
+                    kule_acp::registry::Install::Unavailable => "not for this system".to_owned(),
+                };
+                println!("{:<22} {:<10} {how}", entry.id, entry.version);
+            }
+        }
+        AgentsCmd::Add { id } => {
+            let (entries, _) = kule_acp::registry::load(home)?;
+            let entry = entries
+                .iter()
+                .find(|e| e.id == id)
+                .ok_or_else(|| anyhow!("no agent {id} in the ACP registry"))?;
+            let draft = entry
+                .draft()
+                .ok_or_else(|| anyhow!("{id} has nothing to run on this system"))?;
+            if Agents::load(home)?
+                .listed()
+                .iter()
+                .any(|l| l.profile.name == id)
+            {
+                return Err(anyhow!("there is a profile named {id} already"));
+            }
+            Agents::save(home, &draft)?;
+            if let kule_acp::registry::Install::Download {
+                archive,
+                sha256,
+                cmd,
+                ..
+            } = &entry.install
+            {
+                println!(
+                    "{id} is a download: get {archive} (sha256 {sha256}) and put {cmd} on your PATH"
+                );
+            }
+            println!(
+                "added {id}, opening nothing yet; next: kule agents try {id} --apply, then kule agents approve {id}"
+            );
+        }
+        AgentsCmd::Try { name, apply } => {
+            let agents = Agents::load(home)?;
+            let listed = agents
+                .listed()
+                .iter()
+                .find(|l| l.profile.name == name && l.origin == Origin::Person)
+                .ok_or_else(|| anyhow!("no profile {name} of yours"))?;
+            println!("trying {name} in an empty folder (up to two minutes)…");
+            let trial = kule_acp::trial::trial(
+                home,
+                &agents,
+                &listed.profile,
+                kule_engine::CacheSources::from_env(),
+            )?;
+            match &trial.error {
+                None => println!("it answered: {}", trial.reply),
+                Some(error) => println!("it did not answer: {error}"),
+            }
+            for line in &trial.log {
+                println!("log      {line}");
+            }
+            for refused in &trial.refused {
+                println!("refused  {refused}");
+            }
+            println!("suggested state: {}", trial.state.join(", "));
+            println!("suggested hosts: {}", trial.hosts.join(", "));
+            if cfg!(target_os = "linux") {
+                println!("(Linux does not report refused files: only hosts are suggested)");
+            }
+            if apply && !(trial.state.is_empty() && trial.hosts.is_empty()) {
+                let mut profile = listed.profile.clone();
+                for state in trial.state {
+                    if !profile.state.contains(&state) {
+                        profile.state.push(state);
+                    }
+                }
+                for host in trial.hosts {
+                    if !profile.hosts.contains(&host) {
+                        profile.hosts.push(host);
+                    }
+                }
+                Agents::save(home, &profile)?;
+                println!(
+                    "added to {name}; review it with kule agents show {name}, then approve it"
+                );
+            }
+        }
+        AgentsCmd::Remove { name } => {
+            if Agents::remove(home, &name)? {
+                println!("removed {name}");
+            } else {
+                println!("no profile {name} of yours");
             }
         }
     }

@@ -10,8 +10,8 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use kule_daemon::{
-    Alert, Alerts, Call, Client, Commit, Hello, Notice, PROTOCOL, Question, Result, Review,
-    RunEvent, Sequenced, TaskView, Timeline, default_home,
+    AgentProfile, Alert, Alerts, Call, Client, Commit, Hello, Notice, PROTOCOL, Question, Result,
+    Review, RunEvent, Sequenced, TaskView, Timeline, default_home,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -86,6 +86,44 @@ type K<'a> = State<'a, Kule>;
 #[tauri::command(async)]
 fn agents(kule: K<'_>) -> Result<Vec<String>> {
     kule.call(Call::Agents)
+}
+
+// Agent profiles: passed through as the daemon says them.
+
+#[tauri::command(async)]
+fn agent_list(kule: K<'_>) -> Result<serde_json::Value> {
+    kule.call(Call::AgentList)
+}
+
+#[tauri::command(async)]
+fn agent_registry(kule: K<'_>) -> Result<serde_json::Value> {
+    kule.call(Call::AgentRegistry)
+}
+
+#[tauri::command(async)]
+fn save_agent(kule: K<'_>, profile: AgentProfile) -> Result<()> {
+    kule.call(Call::SaveAgent { profile })
+}
+
+#[tauri::command(async)]
+fn remove_agent(kule: K<'_>, name: String) -> Result<bool> {
+    kule.call(Call::RemoveAgent { name })
+}
+
+#[tauri::command(async)]
+fn approve_agent(kule: K<'_>, name: String, digest: String) -> Result<()> {
+    kule.call(Call::ApproveAgent { name, digest })
+}
+
+#[tauri::command(async)]
+fn revoke_agent(kule: K<'_>, name: String) -> Result<bool> {
+    kule.call(Call::RevokeAgent { name })
+}
+
+/// Runs a draft once in an empty folder; takes up to two minutes.
+#[tauri::command(async)]
+fn try_agent(kule: K<'_>, profile: AgentProfile) -> Result<serde_json::Value> {
+    kule.call(Call::TryAgent { profile })
 }
 
 #[tauri::command(async)]
@@ -293,6 +331,13 @@ fn main() {
         .manage(kule)
         .invoke_handler(tauri::generate_handler![
             agents,
+            agent_list,
+            agent_registry,
+            save_agent,
+            remove_agent,
+            approve_agent,
+            revoke_agent,
+            try_agent,
             tasks,
             pick_workspace,
             create_task,

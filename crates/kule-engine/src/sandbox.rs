@@ -615,10 +615,13 @@ impl Sandbox {
 }
 
 /// `Sandbox: bash(89964) deny(1) file-write-create /some/path` (and the tag
-/// on the next line).
+/// on the next line). A denial the kernel already reported comes as
+/// `1 duplicate report for Sandbox: …`, and is often the only one left in
+/// the log.
 #[cfg(target_os = "macos")]
 fn parse_denial(message: &str) -> Option<Denial> {
-    let line = message.lines().next()?.strip_prefix("Sandbox: ")?;
+    let first = message.lines().next()?;
+    let line = &first[first.find("Sandbox: ")? + "Sandbox: ".len()..];
     let (process, rest) = line.split_once('(')?;
     let (_, rest) = rest.split_once(") deny(")?;
     let (_, rest) = rest.split_once(") ")?;
@@ -790,5 +793,31 @@ impl Sandbox {
 impl Sandbox {
     fn platform_command(&self, _program: &str, _args: &[String]) -> Result<Command> {
         Err(Error::Invalid("no sandbox on this platform yet".into()))
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn denials_are_read_also_as_duplicate_reports() {
+        let plain = "Sandbox: bash(89964) deny(1) file-write-create /Users/me/.zshrc\nkule-1-2";
+        let repeated = "1 duplicate report for Sandbox: node(60494) deny(1) file-write-create /Users/me/.qwen\nkule-1-2";
+        for (message, process, path) in [
+            (plain, "bash", "/Users/me/.zshrc"),
+            (repeated, "node", "/Users/me/.qwen"),
+        ] {
+            let denial = parse_denial(message).unwrap();
+            assert_eq!(
+                (
+                    denial.process.as_str(),
+                    denial.operation.as_str(),
+                    denial.path.as_str()
+                ),
+                (process, "file-write-create", path)
+            );
+        }
+        assert!(parse_denial("something else").is_none());
     }
 }

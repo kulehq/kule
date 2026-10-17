@@ -62,6 +62,14 @@ pub struct TaskView {
     pub overlaps: Vec<Overlap>,
 }
 
+/// The ACP registry as the app shows it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Registry {
+    pub entries: Vec<kule_acp::registry::Entry>,
+    /// Read from the network now; otherwise as last read.
+    pub fresh: bool,
+}
+
 /// A file this task and another one both change, and what in it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Overlap {
@@ -332,6 +340,50 @@ impl Service {
     /// The agents that can run: Kule's own and the person's approved ones.
     pub fn agents(&self) -> Result<Vec<String>> {
         Ok(kule_acp::Agents::load(&self.home).map_err(text)?.names())
+    }
+
+    /// Every profile, with why the ones that cannot run cannot.
+    pub fn agent_list(&self) -> Result<Vec<kule_acp::Listed>> {
+        Ok(kule_acp::Agents::load(&self.home)
+            .map_err(text)?
+            .listed()
+            .to_vec())
+    }
+
+    pub fn agent_registry(&self) -> Result<Registry> {
+        let (entries, fresh) = kule_acp::registry::load(&self.home).map_err(text)?;
+        Ok(Registry { entries, fresh })
+    }
+
+    pub fn save_agent(&self, profile: &kule_acp::Profile) -> Result<()> {
+        kule_acp::Agents::save(&self.home, profile).map_err(text)
+    }
+
+    pub fn remove_agent(&self, name: &str) -> Result<bool> {
+        kule_acp::Agents::remove(&self.home, name).map_err(text)
+    }
+
+    pub fn approve_agent(&self, name: &str, digest: &str) -> Result<()> {
+        kule_acp::Agents::approve_seen(&self.home, name, digest)
+            .map(|_| ())
+            .map_err(text)
+    }
+
+    pub fn revoke_agent(&self, name: &str) -> Result<bool> {
+        kule_acp::Agents::revoke(&self.home, name).map_err(text)
+    }
+
+    /// Runs `profile` once in an empty folder, as the person this daemon
+    /// runs for; takes as long as the agent does, up to two minutes.
+    pub fn try_agent(&self, profile: &kule_acp::Profile) -> Result<kule_acp::trial::Trial> {
+        let agents = kule_acp::Agents::load(&self.home).map_err(text)?;
+        kule_acp::trial::trial(
+            &self.home,
+            &agents,
+            profile,
+            kule_engine::CacheSources::from_env(),
+        )
+        .map_err(text)
     }
 
     /// Every task, newest first, from each one's last scan; scans older
@@ -1124,6 +1176,52 @@ mod tests {
         assert_eq!(
             s.app.agents().unwrap(),
             ["claude-code", "gemini", "codex", "opencode"]
+        );
+    }
+
+    #[test]
+    fn the_app_saves_a_profile_and_approves_only_what_it_showed() {
+        let s = Setup::new();
+        let mut profile = kule_acp::Profile::bare(
+            "cline",
+            vec![
+                "npx".into(),
+                "-y".into(),
+                "cline@3.0.73".into(),
+                "--acp".into(),
+            ],
+            Default::default(),
+        );
+        profile.state = vec![".cline".into()];
+        s.app.save_agent(&profile).unwrap();
+        let listed = s.app.agent_list().unwrap();
+        let cline = listed.iter().find(|l| l.profile.name == "cline").unwrap();
+        assert!(cline.held.is_some());
+        let shown = cline.digest.clone();
+
+        // Changed after the window showed it: not approved unseen.
+        profile.hosts = vec!["api.cline.bot".into()];
+        s.app.save_agent(&profile).unwrap();
+        assert!(s.app.approve_agent("cline", &shown).is_err());
+        assert!(!s.app.agents().unwrap().contains(&"cline".to_owned()));
+
+        let listed = s.app.agent_list().unwrap();
+        let shown = listed
+            .iter()
+            .find(|l| l.profile.name == "cline")
+            .unwrap()
+            .digest
+            .clone();
+        s.app.approve_agent("cline", &shown).unwrap();
+        assert!(s.app.agents().unwrap().contains(&"cline".to_owned()));
+        assert!(s.app.revoke_agent("cline").unwrap());
+        assert!(s.app.remove_agent("cline").unwrap());
+        assert!(
+            s.app
+                .agent_list()
+                .unwrap()
+                .iter()
+                .all(|l| l.profile.name != "cline")
         );
     }
 

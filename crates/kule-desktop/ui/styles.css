@@ -938,3 +938,181 @@ select:focus-visible {
   border-color: var(--deny);
   color: var(--deny);
 }
+
+/* Agents: Kule's own profiles and the person's. */
+.sidebar-foot {
+  margin-top: auto;
+}
+
+.sidebar-foot[aria-current="page"] {
+  background: var(--accent-soft);
+}
+
+.agents-view {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 16px;
+  padding: 24px;
+  overflow-y: auto;
+}
+
+.agents-head h1 {
+  font-size: 20px;
+  font-weight: 650;
+}
+
+.agents-head p {
+  max-width: 720px;
+  margin: 4px 0 12px;
+}
+
+.agent-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.agent-card,
+.agent-editor,
+.agent-registry {
+  max-width: 820px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.agent-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.agent-card-head h2,
+.agent-editor h2,
+.agent-registry h2 {
+  margin-right: 4px;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.agent-held {
+  margin: 0 0 8px;
+  color: var(--ask);
+  font-size: 13px;
+}
+
+.agent-opens {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 4px 16px;
+  margin: 0 0 12px;
+  font-size: 13px;
+}
+
+.agent-opens dt {
+  color: var(--muted);
+}
+
+.agent-opens dd {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.agent-form {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px 16px;
+  margin: 12px 0;
+}
+
+.agent-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.agent-field-label {
+  font-size: 13px;
+  font-weight: 550;
+}
+
+.agent-field input,
+.agent-field textarea,
+.agent-registry input[type="search"] {
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  font: 12px var(--mono);
+}
+
+.agent-field-hint {
+  color: var(--faint);
+  font-size: 12px;
+}
+
+.agent-trial {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+  font-size: 13px;
+}
+
+.agent-trial pre {
+  max-height: 240px;
+  padding: 8px;
+  overflow: auto;
+  border-radius: 6px;
+  background: var(--sunken);
+  font: 11px var(--mono);
+  white-space: pre-wrap;
+}
+
+.agent-registry input[type="search"] {
+  width: 100%;
+  margin: 8px 0;
+}
+
+.registry-list {
+  display: flex;
+  max-height: 420px;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  flex-direction: column;
+  list-style: none;
+}
+
+.registry-list li {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 2px 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+}
+
+.registry-list li > :not(button) {
+  grid-column: 1;
+}
+
+.registry-list li > button {
+  grid-row: 1 / span 3;
+  grid-column: 2;
+  align-self: center;
+}
+
+.agent-trial > button {
+  align-self: flex-start;
+}

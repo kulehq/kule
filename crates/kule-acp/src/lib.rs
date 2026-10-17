@@ -11,6 +11,8 @@
 //! workspace; asking twice would only train people to click through.
 
 mod profile;
+pub mod registry;
+pub mod trial;
 
 use std::collections::HashMap;
 use std::process::{Command, Stdio};
