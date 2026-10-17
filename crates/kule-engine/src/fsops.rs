@@ -216,6 +216,75 @@ fn reconcile(src: &Path, dst: &Path, before: &Tree, start: (i64, i64)) -> Result
     Ok(cloned)
 }
 
+/// Files kept as a task's base no larger than this: what Kule merges.
+pub(crate) const BASE_MAX: u64 = 1 << 20;
+
+/// Directories never kept as a base: what tools rebuild, nobody merges.
+const NOT_BASE: &[&str] = &[
+    ".git",
+    "node_modules",
+    "target",
+    ".venv",
+    "venv",
+    "__pycache__",
+    ".next",
+    ".gradle",
+    ".cache",
+];
+
+/// Keeps `copy`, as it is right after it was made, as the task's base at
+/// `base`, which must not exist: the text the task and the folder both
+/// start from, for a later merge. In one clone where the system can (it
+/// takes no space until files change); otherwise the files up to
+/// [`BASE_MAX`], outside directories tools rebuild, one by one.
+pub(crate) fn keep_base(copy: &Path, base: &Path) -> Result<()> {
+    if clone_dir_at_once(copy, base) {
+        return Ok(());
+    }
+    remove(base)?;
+    fs::create_dir(base).at(base)?;
+    let walk = WalkDir::new(copy)
+        .min_depth(1)
+        .follow_links(false)
+        .into_iter()
+        .filter_entry(|e| {
+            !(e.file_type().is_dir()
+                && e.file_name()
+                    .to_str()
+                    .is_some_and(|n| NOT_BASE.contains(&n)))
+        });
+    for entry in walk.flatten() {
+        let rel = relative(copy, entry.path())?;
+        base_one(copy, base, &rel)?;
+    }
+    Ok(())
+}
+
+/// Makes `rel` under `base` what it is under `copy`: a directory, a file up
+/// to [`BASE_MAX`], or nothing.
+pub(crate) fn base_one(copy: &Path, base: &Path, rel: &str) -> Result<()> {
+    let (from, to) = (copy.join(rel), base.join(rel));
+    let rebuilt = rel.split('/').any(|part| NOT_BASE.contains(&part));
+    let meta = fs::symlink_metadata(&from).ok().filter(|_| !rebuilt);
+    match meta {
+        Some(m) if m.is_dir() => {
+            if !fs::symlink_metadata(&to).is_ok_and(|t| t.is_dir()) {
+                remove(&to)?;
+                fs::create_dir_all(&to).at(&to)?;
+            }
+        }
+        Some(m) if m.is_file() && m.len() <= BASE_MAX => {
+            remove(&to)?;
+            if let Some(parent) = to.parent() {
+                fs::create_dir_all(parent).at(parent)?;
+            }
+            reflink_copy::reflink_or_copy(&from, &to).at(&from)?;
+        }
+        _ => remove(&to)?,
+    }
+    Ok(())
+}
+
 /// Clones directory `src` to `dst`, which must not exist, in one call.
 #[cfg(target_os = "macos")]
 fn clone_dir_at_once(src: &Path, dst: &Path) -> bool {
@@ -415,7 +484,15 @@ pub(crate) fn replace_file(path: &Path, bytes: &[u8]) -> Result<()> {
 /// Removes a file, symlink or whole directory; a missing path is not an error.
 pub fn remove(path: &Path) -> Result<()> {
     match fs::symlink_metadata(path) {
-        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+        // Under a file, nothing is there either.
+        Err(e)
+            if matches!(
+                e.kind(),
+                io::ErrorKind::NotFound | io::ErrorKind::NotADirectory
+            ) =>
+        {
+            Ok(())
+        }
         Err(e) => Err(e).at(path),
         Ok(meta) if meta.is_dir() => remove_dir_tree(path),
         Ok(_) => fs::remove_file(path).at(path),

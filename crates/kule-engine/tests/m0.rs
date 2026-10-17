@@ -325,7 +325,9 @@ fn commit_refuses_when_the_workspace_changed_underneath() {
     write(&s.work().join("src/main.rs"), "fn main() { /* human */ }\n");
 
     match s.task.commit() {
-        Err(Error::Conflict(paths)) => assert_eq!(paths, ["src/main.rs"]),
+        Err(Error::Conflict(paths)) => {
+            assert_eq!(paths, ["src/main.rs (both changed function main)"])
+        }
         other => panic!("expected a conflict, got {other:?}"),
     }
     assert_eq!(

@@ -53,14 +53,16 @@ the system's notifications when two tasks start to meet, when an agent
 waits for an answer, and when a run is over.
 
 When the second of them commits, a file both changed is merged, three ways
-from what both started with (the first commit kept it): changes to
+from what both started with: changes to
 different methods, sections or keys both go in, two methods added at the
 same place are both kept, and the commit says what it merged. Two changes
 to the same method, section or key are a conflict by name (`task.rs (both
 changed method Task::commit)`), even where their lines do not touch, and so
-is a merge whose parts would not stay where either side put them. A file
-changed by hand in the folder meanwhile is a conflict as before: nothing
-kept what it held.
+is a merge whose parts would not stay where either side put them. The same
+holds for a file you change by hand in an editor while the agent works:
+each task keeps what the folder held at its last sync (one clone on macOS;
+elsewhere the files up to 1 MiB, outside `.git`, `node_modules`, `target`
+and the like), hidden from the sandbox with the rest of the task.
 
 A changed picture (PNG, JPEG, GIF, WebP) shows what it was and what it is
 under Review. Only what its header proves to be such a picture, under

@@ -97,6 +97,11 @@ impl Stamp {
         self.ctime = (i64::MIN, -1);
         self
     }
+
+    /// Whether this is such a stamp: nothing is known of what it held.
+    pub fn is_unknown(&self) -> bool {
+        self.ctime == (i64::MIN, -1)
+    }
 }
 
 /// Every tracked entry under `root` (not `root` itself), by relative path.

@@ -109,7 +109,14 @@ impl Task {
             git: git::read(&self.copy())?,
         };
         self.save_baseline(&baseline)?;
+        fsops::keep_base(&self.copy(), &self.base_dir())?;
         write_json(&self.dir.join("task.json"), &self.info)
+    }
+
+    /// What the copy and the folder held at the last sync, for merging:
+    /// hidden from the sandbox with the rest of the task.
+    fn base_dir(&self) -> PathBuf {
+        self.dir.join("base")
     }
 
     pub fn open(home: &Path, id: &str) -> Result<Task> {
@@ -445,10 +452,23 @@ impl Task {
         ))
     }
 
-    /// What the folder held at `path` when this task's copy was made from
-    /// it, as it stood with `expected`: kept by the commit of another task
-    /// on the same folder that replaced it since.
+    /// What the folder held at `path` at the last sync, as it stood with
+    /// `expected`: in this task's base, or kept by the commit of another
+    /// task on the same folder that replaced it since.
     fn base_of(&self, path: &str, expected: &Stamp) -> Result<Option<Vec<u8>>> {
+        // A file that changed while the copy was made: what both started
+        // from was never pinned down.
+        if expected.is_unknown() {
+            return Ok(None);
+        }
+        // Kept by this task since the last sync, whoever changed the folder;
+        // a task from before bases were kept has none.
+        if self.base_dir().is_dir()
+            && let Some(bytes) = outline::read_file(&self.base_dir(), path)?
+            && bytes.len() as u64 == expected.size
+        {
+            return Ok(Some(bytes));
+        }
         let home = self.home();
         for info in Task::list(&home)? {
             if info.id == self.id() || info.workspace != self.info.workspace {
@@ -797,6 +817,13 @@ impl Task {
     /// [`Task::resync`] without saving: the baseline in memory only, so a
     /// commit or undo can record its checkpoint first.
     fn settle(&self, baseline: &mut Baseline, paths: &[String]) -> Result<()> {
+        // The base follows: what the two hold now is what both start from.
+        // A task from before bases were kept has none to follow.
+        if self.base_dir().is_dir() {
+            for path in paths {
+                fsops::base_one(&self.copy(), &self.base_dir(), path)?;
+            }
+        }
         let work_clock = self.clock(self.workspace())?;
         let copy_clock = self.clock(&self.copy())?;
         let (work_start, copy_start) = (work_clock.now()?, copy_clock.now()?);

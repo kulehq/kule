@@ -88,13 +88,59 @@ fn changes_to_the_same_method_are_refused_by_name() {
 }
 
 #[test]
-fn a_change_made_by_hand_in_the_folder_is_a_conflict_as_before() {
-    // Nothing kept what the file held before the hand-made change: no base
-    // to merge from.
+fn a_change_made_by_hand_in_the_folder_merges_too() {
+    // The task kept what the folder held when it began: a change made by
+    // hand in an editor meanwhile merges like another task's.
     let s = Setup::new();
     let b = s.task();
     write(&b, "task.rs", &CODE.replace("2;", "20;"));
-    // A different size, so the change shows whatever the clock does.
     fs::write(s.ws.path().join("task.rs"), CODE.replace("1;", "100;")).unwrap();
-    assert_eq!(conflicts(b.commit()), ["task.rs"]);
+    let checkpoint = b.commit().unwrap().unwrap();
+    assert_eq!(checkpoint.merged, ["task.rs"]);
+    assert_eq!(
+        s.work("task.rs"),
+        CODE.replace("1;", "100;").replace("2;", "20;")
+    );
+
+    // The base follows the commit: the next round merges from there.
+    write(&b, "task.rs", &s.work("task.rs").replace("20;", "21;"));
+    fs::write(
+        s.ws.path().join("task.rs"),
+        s.work("task.rs").replace("100;", "101;"),
+    )
+    .unwrap();
+    b.commit().unwrap().unwrap();
+    assert_eq!(
+        s.work("task.rs"),
+        CODE.replace("1;", "101;").replace("2;", "21;")
+    );
+
+    // The same method by hand and by the task: a conflict by name.
+    write(&b, "task.rs", &s.work("task.rs").replace("101;", "102;"));
+    fs::write(
+        s.ws.path().join("task.rs"),
+        s.work("task.rs").replace("101;", "103;"),
+    )
+    .unwrap();
+    assert_eq!(
+        conflicts(b.commit()),
+        ["task.rs (both changed method Task::commit)"]
+    );
+}
+
+#[test]
+fn a_task_without_a_base_still_merges_from_the_others_commit() {
+    // A task made before Kule kept bases: what both started from comes
+    // from the first task's checkpoint instead.
+    let s = Setup::new();
+    let (a, b) = (s.task(), s.task());
+    fs::remove_dir_all(b.copy().with_file_name("base")).unwrap();
+    write(&a, "task.rs", &CODE.replace("1;", "10;"));
+    write(&b, "task.rs", &CODE.replace("2;", "20;"));
+    a.commit().unwrap().unwrap();
+    assert_eq!(b.commit().unwrap().unwrap().merged, ["task.rs"]);
+    assert_eq!(
+        s.work("task.rs"),
+        CODE.replace("1;", "10;").replace("2;", "20;")
+    );
 }
