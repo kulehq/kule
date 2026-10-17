@@ -41,9 +41,12 @@ jobs:
         run: |
           cargo build --release --locked -p kule --target aarch64-apple-darwin
           cargo build --release --locked -p kule --target x86_64-apple-darwin
-          mkdir -p crates/kule-desktop/binaries
-          lipo -create -output crates/kule-desktop/binaries/kule-universal-apple-darwin \
-            target/aarch64-apple-darwin/release/kule target/x86_64-apple-darwin/release/kule
+          # Tauri builds each architecture apart, then the universal app:
+          # each build looks for the CLI of its own.
+          bin=crates/kule-desktop/binaries
+          mkdir -p "$bin"
+          for t in aarch64-apple-darwin x86_64-apple-darwin; do cp "target/$t/release/kule" "$bin/kule-$t"; done
+          lipo -create -output "$bin/kule-universal-apple-darwin" "$bin/kule-aarch64-apple-darwin" "$bin/kule-x86_64-apple-darwin"
       - name: Build, sign and notarize
         working-directory: crates/kule-desktop
         env:
@@ -118,8 +121,9 @@ jobs:
         run: |
           mkdir dist
           cp target/release/bundle/deb/*.deb dist/
-          dpkg-deb --contents dist/*.deb | grep -q '/usr/bin/kule$'
-          dpkg-deb --contents dist/*.deb | grep -q '/usr/bin/kule-desktop$'
+          dpkg-deb --contents dist/*.deb | tee contents.txt
+          grep -Eq ' \./usr/bin/kule$' contents.txt
+          grep -Eq ' \./usr/bin/kule-desktop$' contents.txt
           target/release/kule --version
           version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)
           tar -C target/release -czf "dist/kule-$version-linux-x86_64.tar.gz" kule
