@@ -771,14 +771,7 @@ impl Task {
     /// none.
     pub fn set_budget(&self, budget: Option<Money>) -> Result<()> {
         if let Some(b) = &budget {
-            let currency_ok =
-                b.currency.len() == 3 && b.currency.chars().all(|c| c.is_ascii_uppercase());
-            if !(b.amount.is_finite() && b.amount > 0.0) || !currency_ok {
-                return Err(Error::Invalid(format!(
-                    "a budget is a positive amount in a currency like USD, not {} {}",
-                    b.amount, b.currency
-                )));
-            }
+            b.check_budget()?;
         }
         let mut settings = self.settings()?;
         settings.budget = budget;

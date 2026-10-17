@@ -74,4 +74,4 @@ pub use secrets::{AgentKey, SECRETS_FILE, SecretInfo, Vault, add_secret, remove_
 pub use steps::{Step, StepChange};
 pub use task::{AgentAtWork, Task, TaskInfo};
 pub use textdiff::{DiffSkip, Hunk, Line, LineKind, TextDiff};
-pub use usage::{Money, RunUsage, Spent};
+pub use usage::{Money, RunUsage, Spent, daily_budget, daily_left, set_daily_budget, spent_today};

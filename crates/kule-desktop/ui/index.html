@@ -28,6 +28,17 @@
         <p class="nav-empty" id="tasks-empty" hidden>No tasks yet.</p>
       </section>
       <div class="sidebar-foot">
+        <div class="daily">
+          <label
+            class="daily-pick"
+            title="What every task may cost together in any 24 hours, as the agents report it. No run starts anywhere once it is spent; a run is held to what is left. Empty for no limit."
+          >
+            Daily budget
+            <input id="daily-budget" type="number" min="0" step="1" inputmode="decimal" placeholder="none" />
+            <span id="daily-currency">USD</span>
+          </label>
+          <span class="daily-spent" id="daily-spent"></span>
+        </div>
         <button id="open-rules" class="button ghost wide" type="button">Rules</button>
         <button id="open-secrets" class="button ghost wide" type="button">Secrets</button>
         <button id="open-agents" class="button ghost wide" type="button">Agents</button>

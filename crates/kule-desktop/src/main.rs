@@ -10,8 +10,8 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use kule_daemon::{
-    AgentProfile, Alert, Alerts, Call, Client, Commit, Hello, Money, Notice, PROTOCOL, Question,
-    Result, Review, RunEvent, Sequenced, TaskView, Timeline, default_home,
+    AgentProfile, Alert, Alerts, Call, Client, Commit, DailyBudget, Hello, Money, Notice, PROTOCOL,
+    Question, Result, Review, RunEvent, Sequenced, TaskView, Timeline, default_home,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -301,6 +301,16 @@ fn set_budget(kule: K<'_>, task: String, budget: Option<Money>) -> Result<TaskVi
 }
 
 #[tauri::command(async)]
+fn daily_budget(kule: K<'_>) -> Result<DailyBudget> {
+    kule.call(Call::DailyBudget)
+}
+
+#[tauri::command(async)]
+fn set_daily_budget(kule: K<'_>, budget: Option<Money>) -> Result<DailyBudget> {
+    kule.call(Call::SetDailyBudget { budget })
+}
+
+#[tauri::command(async)]
 fn start_run(kule: K<'_>, task: String, agent: String, prompt: String) -> Result<()> {
     kule.call(Call::StartRun {
         task,
@@ -447,6 +457,8 @@ fn main() {
             rule_impact,
             set_approval_timeout,
             set_budget,
+            daily_budget,
+            set_daily_budget,
             start_run,
             stream,
         ])

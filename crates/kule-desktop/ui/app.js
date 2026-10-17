@@ -355,6 +355,47 @@ function renderSpent(task) {
   chip.textContent = parts.join(" · ") || "nothing spent yet";
 }
 
+/** What every task spent in the last 24 hours, against the daily budget. */
+function renderDaily(daily) {
+  const { budget, spent } = daily;
+  if (document.activeElement !== $("daily-budget")) {
+    $("daily-budget").value = budget ? String(budget.amount) : "";
+  }
+  $("daily-currency").textContent = budget ? budget.currency : "USD";
+  const el = $("daily-spent");
+  el.className = "daily-spent";
+  const cost = spent.cost.length ? spent.cost.map(money).join(" + ") : "nothing reported";
+  if (!budget) {
+    el.textContent = `Last 24 h: ${cost}`;
+    return;
+  }
+  const used = spent.cost.filter((m) => m.currency === budget.currency).reduce((a, m) => a + m.amount, 0);
+  const rest = Math.max(0, budget.amount - used);
+  el.textContent = `Last 24 h: ${cost} · ${money({ amount: rest, currency: budget.currency })} left`;
+  if (rest <= 0) el.classList.add("deny");
+  else if (rest < budget.amount * 0.2) el.classList.add("ask");
+}
+
+async function loadDaily() {
+  try {
+    renderDaily(await call("daily_budget"));
+  } catch (err) {
+    fail(err);
+  }
+}
+
+async function setDailyBudget() {
+  const text = $("daily-budget").value.trim();
+  const currency = $("daily-currency").textContent || "USD";
+  const budget = text === "" ? null : { amount: Number(text), currency };
+  try {
+    renderDaily(await call("set_daily_budget", { budget }));
+  } catch (err) {
+    fail(err);
+    await loadDaily();
+  }
+}
+
 async function setBudgetFor() {
   const task = currentTask();
   if (!task) return;
@@ -2028,6 +2069,7 @@ async function refresh() {
   if (!state.current && state.tasks.length) state.current = state.tasks[0].id;
   renderSidebar();
   renderTask();
+  loadDaily();
 }
 
 function select(id) {
@@ -2177,6 +2219,7 @@ async function start() {
   }
   $("timeout").addEventListener("change", setTimeoutFor);
   $("budget").addEventListener("change", setBudgetFor);
+  $("daily-budget").addEventListener("change", setDailyBudget);
   // Counts down the deadlines without re-rendering the cards.
   setInterval(() => {
     for (const el of document.querySelectorAll(".countdown")) {

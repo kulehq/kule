@@ -1257,3 +1257,36 @@ select:focus-visible {
 .menu-item.danger:hover:not(:disabled) {
   color: var(--deny);
 }
+
+/* What every task may spend in a day, at the foot of the sidebar. */
+.daily {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 8px;
+  padding: 0 8px;
+  font-size: 12px;
+}
+
+.daily-pick {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+}
+
+.daily-pick input {
+  width: 64px;
+}
+
+.daily-spent {
+  color: var(--faint);
+}
+
+.daily-spent.ask {
+  color: var(--ask);
+}
+
+.daily-spent.deny {
+  color: var(--deny);
+}

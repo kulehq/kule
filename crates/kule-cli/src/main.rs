@@ -208,6 +208,16 @@ enum Cmd {
         /// ISO 4217 [default: USD]
         currency: Option<String>,
     },
+    /// Show or set what every task may cost together in any 24 hours: no
+    /// run starts anywhere once the runs started in the last 24 hours
+    /// spent it, and a run is held to what is left, as a task's budget
+    /// holds it. `off` takes it away.
+    DailyBudget {
+        /// An amount like 20 or 7.50, or `off`; shows it without one.
+        amount: Option<String>,
+        /// ISO 4217 [default: USD]
+        currency: Option<String>,
+    },
     /// List the steps of the task's uncommitted work: what each tool call changed.
     Steps { task: String },
     /// Show the task's uncommitted changes and what the policy says about them.
@@ -448,6 +458,15 @@ fn run() -> Result<ExitCode> {
                     task.id()
                 );
             }
+            let daily = kule_engine::daily_left(&home)?;
+            if let Some(left) = &daily
+                && left.amount <= 0.0
+            {
+                bail!(
+                    "the daily budget is spent: every task together, in the last 24 hours; raise it with `kule daily-budget AMOUNT CURRENCY` or turn it off"
+                );
+            }
+            let limit = Money::tighter(limit, daily);
             let _at_work = task.agent_at_work()?;
             let started = Instant::now();
             let usage = RunUsage {
@@ -544,6 +563,43 @@ fn run() -> Result<ExitCode> {
             };
             task.set_budget(budget)?;
             print_spent(&task)?;
+        }
+        Cmd::DailyBudget { amount, currency } => {
+            match amount.as_deref() {
+                None => {}
+                Some("off") => kule_engine::set_daily_budget(&home, None)?,
+                Some(amount) => kule_engine::set_daily_budget(
+                    &home,
+                    Some(Money {
+                        amount: amount
+                            .parse()
+                            .map_err(|_| anyhow!("{amount}: an amount like 20 or 7.50, or off"))?,
+                        currency: currency.unwrap_or_else(|| "USD".to_owned()),
+                    }),
+                )?,
+            }
+            let spent = kule_engine::spent_today(&home)?;
+            let cost = if spent.cost.is_empty() {
+                "no cost reported".to_owned()
+            } else {
+                spent.cost.iter().map(money).collect::<Vec<_>>().join(" + ")
+            };
+            let mut line = format!("last 24 hours, every task: {cost} in {} runs", spent.runs);
+            match kule_engine::daily_budget(&home)? {
+                Some(budget) => {
+                    let left = budget.amount - spent.in_currency(&budget.currency);
+                    line += &format!(
+                        "; daily budget {}, {} left",
+                        money(&budget),
+                        money(&Money {
+                            amount: left.max(0.0),
+                            currency: budget.currency.clone()
+                        })
+                    );
+                }
+                None => line += "; no daily budget",
+            }
+            println!("{line}");
         }
         Cmd::Steps { task } => {
             for step in Task::open(&home, &task)?.steps()? {

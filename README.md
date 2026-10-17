@@ -302,6 +302,10 @@ its cost as it works is cancelled when it gets there. Claude Code reports
 the cost as each turn ends, so its turn can go over and the next run is
 the one refused. Codex signed in with ChatGPT reports tokens but no cost,
 Gemini reports neither, and a budget does not hold what is not reported.
+`kule daily-budget 20` (or *Daily budget* at the foot of the app's
+sidebar) caps what every task may cost together in any 24 hours, the same
+way; a run is held to the tighter of the two. The app tells you when a
+task has spent 80% of its budget, and when it has spent it all.
 
 ## Writes in your home, caught for review
 

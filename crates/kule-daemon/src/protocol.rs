@@ -10,7 +10,7 @@ use serde_json::Value;
 
 /// Changes whenever a call, a result or a notice changes shape; a client
 /// and a daemon that disagree on it cannot talk.
-pub const PROTOCOL: u32 = 11;
+pub const PROTOCOL: u32 = 12;
 
 /// What a daemon says about itself.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -108,6 +108,12 @@ pub enum Call {
     /// What the task's runs may cost together; `None` for no limit.
     SetBudget {
         task: String,
+        budget: Option<kule_engine::Money>,
+    },
+    /// What every task may spend together in 24 hours, and what they did.
+    DailyBudget,
+    /// `None` for no limit.
+    SetDailyBudget {
         budget: Option<kule_engine::Money>,
     },
     /// Every agent profile, the ones that cannot run included.

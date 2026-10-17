@@ -7,7 +7,10 @@ use std::io::Write;
 
 use serde::{Deserialize, Serialize};
 
+use std::path::Path;
+
 use crate::error::{Error, IoContext, Result};
+use crate::fsops::{read_json, write_json};
 use crate::task::Task;
 
 /// An amount in an ISO 4217 currency.
@@ -15,6 +18,31 @@ use crate::task::Task;
 pub struct Money {
     pub amount: f64,
     pub currency: String,
+}
+
+impl Money {
+    /// Refused unless a positive amount in an ISO 4217 currency.
+    pub(crate) fn check_budget(&self) -> Result<()> {
+        let currency_ok =
+            self.currency.len() == 3 && self.currency.chars().all(|c| c.is_ascii_uppercase());
+        if !(self.amount.is_finite() && self.amount > 0.0) || !currency_ok {
+            return Err(Error::Invalid(format!(
+                "a budget is a positive amount in a currency like USD, not {} {}",
+                self.amount, self.currency
+            )));
+        }
+        Ok(())
+    }
+
+    /// The tighter of two limits; one in another currency than the first
+    /// is not compared, and the first stands.
+    pub fn tighter(a: Option<Money>, b: Option<Money>) -> Option<Money> {
+        match (a, b) {
+            (Some(a), Some(b)) if a.currency == b.currency && b.amount < a.amount => Some(b),
+            (Some(a), _) => Some(a),
+            (None, b) => b,
+        }
+    }
 }
 
 /// What one run used.
@@ -57,6 +85,22 @@ pub struct Spent {
 }
 
 impl Spent {
+    fn add(&mut self, run: RunUsage) {
+        self.runs += 1;
+        self.tokens += run.input_tokens
+            + run.output_tokens
+            + run.thought_tokens
+            + run.cached_read_tokens
+            + run.cached_write_tokens;
+        match run.cost {
+            Some(cost) => match self.cost.iter_mut().find(|m| m.currency == cost.currency) {
+                Some(sum) => sum.amount += cost.amount,
+                None => self.cost.push(cost),
+            },
+            None => self.unpriced_runs += 1,
+        }
+    }
+
     /// What was spent in `currency`.
     pub fn in_currency(&self, currency: &str) -> f64 {
         self.cost
@@ -107,19 +151,7 @@ impl Task {
     pub fn spent(&self) -> Result<Spent> {
         let mut spent = Spent::default();
         for run in self.usage()? {
-            spent.runs += 1;
-            spent.tokens += run.input_tokens
-                + run.output_tokens
-                + run.thought_tokens
-                + run.cached_read_tokens
-                + run.cached_write_tokens;
-            match run.cost {
-                Some(cost) => match spent.cost.iter_mut().find(|m| m.currency == cost.currency) {
-                    Some(sum) => sum.amount += cost.amount,
-                    None => spent.cost.push(cost),
-                },
-                None => spent.unpriced_runs += 1,
-            }
+            spent.add(run);
         }
         Ok(spent)
     }
@@ -206,4 +238,69 @@ mod tests {
             assert!(task.set_budget(budget).is_err(), "{amount} {currency}");
         }
     }
+}
+
+/// What a home's tasks may spend together, kept in `<home>/budget.json`.
+#[derive(Debug, Default, Serialize, Deserialize)]
+struct HomeBudget {
+    #[serde(default)]
+    daily: Option<Money>,
+}
+
+const BUDGET_FILE: &str = "budget.json";
+const DAY_SECS: u64 = 24 * 60 * 60;
+
+fn now_unix() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
+}
+
+/// What every task in `home` may spend together in any 24 hours; `None`
+/// for no limit.
+pub fn daily_budget(home: &Path) -> Result<Option<Money>> {
+    let path = home.join(BUDGET_FILE);
+    if !path.is_file() {
+        return Ok(None);
+    }
+    Ok(read_json::<HomeBudget>(&path)?.daily)
+}
+
+/// Sets [`daily_budget`]: a positive amount in an ISO 4217 currency, or
+/// none.
+pub fn set_daily_budget(home: &Path, budget: Option<Money>) -> Result<()> {
+    if let Some(b) = &budget {
+        b.check_budget()?;
+    }
+    std::fs::create_dir_all(home).at(home)?;
+    write_json(&home.join(BUDGET_FILE), &HomeBudget { daily: budget })
+}
+
+/// What every task in `home` used in the last 24 hours: the runs that
+/// started then.
+pub fn spent_today(home: &Path) -> Result<Spent> {
+    let since = now_unix().saturating_sub(DAY_SECS);
+    let mut spent = Spent::default();
+    for info in Task::list(home)? {
+        let task = Task::open(home, &info.id)?;
+        for run in task.usage()? {
+            if run.started_unix >= since {
+                spent.add(run);
+            }
+        }
+    }
+    Ok(spent)
+}
+
+/// What is left of the daily budget for the next run of any task: `None`
+/// without one, and an amount of zero or less when it is spent.
+pub fn daily_left(home: &Path) -> Result<Option<Money>> {
+    let Some(budget) = daily_budget(home)? else {
+        return Ok(None);
+    };
+    let spent = spent_today(home)?.in_currency(&budget.currency);
+    Ok(Some(Money {
+        amount: budget.amount - spent,
+        currency: budget.currency,
+    }))
 }

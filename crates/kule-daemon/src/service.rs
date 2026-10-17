@@ -32,6 +32,14 @@ fn text(e: Error) -> String {
     }
 }
 
+/// What every task may spend together in any 24 hours, and what they spent
+/// in the last 24.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DailyBudget {
+    pub budget: Option<kule_engine::Money>,
+    pub spent: kule_engine::Spent,
+}
+
 /// A task as the task list shows it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskView {
@@ -419,6 +427,22 @@ impl Service {
         self.view(id)
     }
 
+    /// What every task may spend together in 24 hours, and what they did.
+    pub fn daily_budget(&self) -> Result<DailyBudget> {
+        Ok(DailyBudget {
+            budget: kule_engine::daily_budget(&self.home).map_err(text)?,
+            spent: kule_engine::spent_today(&self.home).map_err(text)?,
+        })
+    }
+
+    /// Sets what every task may spend together in 24 hours; `None` for no
+    /// limit.
+    pub fn set_daily_budget(&self, budget: Option<kule_engine::Money>) -> Result<DailyBudget> {
+        kule_engine::set_daily_budget(&self.home, budget).map_err(text)?;
+        notify(&self.subscribers, Notice::Tasks);
+        self.daily_budget()
+    }
+
     /// The agents that can run: Kule's own and the person's approved ones.
     pub fn agents(&self) -> Result<Vec<String>> {
         Ok(kule_acp::Agents::load(&self.home).map_err(text)?.names())
@@ -765,7 +789,7 @@ impl Service {
             .cloned()
             .ok_or_else(|| agents.refusal(agent))?;
         let task = self.open(id)?;
-        let limit = budget_left(&task)?;
+        let limit = budget_left(&self.home, &task)?;
         if !self.running.lock().unwrap().insert(id.to_owned()) {
             return Err(format!("an agent is already at work in task {id}"));
         }
@@ -1010,14 +1034,28 @@ impl Service {
 }
 
 /// What the next run of `task` may cost; refused when its budget is spent.
-fn budget_left(task: &Task) -> Result<Option<kule_engine::Money>> {
-    match task.budget_left().map_err(text)? {
-        Some(left) if left.amount <= 0.0 => Err(format!(
-            "task {} has spent its budget; raise it or turn it off to run again",
-            task.id()
-        )),
-        left => Ok(left),
-    }
+/// Also refused when every task together spent the daily budget; the tighter
+/// of the two limits stands.
+fn budget_left(home: &Path, task: &Task) -> Result<Option<kule_engine::Money>> {
+    let left = match task.budget_left().map_err(text)? {
+        Some(left) if left.amount <= 0.0 => {
+            return Err(format!(
+                "task {} has spent its budget; raise it or turn it off to run again",
+                task.id()
+            ));
+        }
+        left => left,
+    };
+    let daily = match kule_engine::daily_left(home).map_err(text)? {
+        Some(daily) if daily.amount <= 0.0 => {
+            return Err(
+                "the daily budget is spent: every task together, in the last 24 hours; raise it or turn it off to run again"
+                    .to_owned(),
+            );
+        }
+        daily => daily,
+    };
+    Ok(kule_engine::Money::tighter(left, daily))
 }
 
 fn unix_now() -> u64 {
@@ -1422,6 +1460,38 @@ mod tests {
         assert!(s.app.stream(&id).is_empty());
 
         assert_eq!(s.app.set_budget(&id, None).unwrap().budget, None);
+    }
+
+    #[test]
+    fn what_every_task_spent_today_counts_against_the_daily_budget() {
+        let s = Setup::new();
+        let (first, _) = s.task();
+        let (second, _) = s.task();
+        let usd = |amount| kule_engine::Money {
+            amount,
+            currency: "USD".into(),
+        };
+        let daily = s.app.set_daily_budget(Some(usd(2.0))).unwrap();
+        assert_eq!(daily.budget, Some(usd(2.0)));
+        s.app
+            .open(&first)
+            .unwrap()
+            .record_usage(&kule_engine::RunUsage {
+                agent: "claude-code".into(),
+                started_unix: unix_now(),
+                cost: Some(usd(2.5)),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(s.app.daily_budget().unwrap().spent.runs, 1);
+
+        // The second task has no budget of its own and has run nothing.
+        let e = s.app.start_run(&second, "claude-code", "hi").unwrap_err();
+        assert!(e.contains("daily budget is spent"), "{e}");
+        assert!(!s.app.running.lock().unwrap().contains(&second));
+
+        s.app.set_daily_budget(None).unwrap();
+        assert_eq!(s.app.daily_budget().unwrap().budget, None);
     }
 
     #[test]
