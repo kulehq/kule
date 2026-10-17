@@ -51,6 +51,37 @@ enum RulesCmd {
 }
 
 #[derive(Subcommand)]
+enum SecretsCmd {
+    /// List them, without their values (the default).
+    List,
+    /// Keep a secret: its value is read from the terminal without echo, or
+    /// from standard input, never from the command line. Commands in a
+    /// task see a placeholder in variable NAME; the proxy puts the value
+    /// into requests to the hosts named, over HTTPS, and nowhere else.
+    Add {
+        /// The environment variable it goes in, like STRIPE_KEY.
+        name: String,
+        /// A host it may go to (repeatable), like api.stripe.com.
+        #[arg(long = "host", required = true)]
+        hosts: Vec<String>,
+        /// The folder it is for (default: the current one).
+        #[arg(long, conflicts_with = "everywhere")]
+        folder: Option<PathBuf>,
+        /// Every folder.
+        #[arg(long)]
+        everywhere: bool,
+    },
+    /// Forget a secret.
+    Remove {
+        name: String,
+        #[arg(long, conflicts_with = "everywhere")]
+        folder: Option<PathBuf>,
+        #[arg(long)]
+        everywhere: bool,
+    },
+}
+
+#[derive(Subcommand)]
 enum AgentsCmd {
     /// List them, and why the ones that cannot run cannot (the default).
     List,
@@ -178,6 +209,13 @@ enum Cmd {
     Rules {
         #[command(subcommand)]
         action: Option<RulesCmd>,
+    },
+    /// Secrets a task's commands use without seeing them: API keys that
+    /// go only to their hosts. Values in the copy's .env files that look
+    /// like secrets are masked the same way.
+    Secrets {
+        #[command(subcommand)]
+        action: Option<SecretsCmd>,
     },
     /// The agents Kule can run: its own, and yours from
     /// <KULE_HOME>/agents.toml, each of which runs only once approved.
@@ -313,7 +351,10 @@ fn run() -> Result<ExitCode> {
                 if network != Network::Allow {
                     warn_if_network_not_isolated();
                 }
-                sandbox.set_network(network);
+                match &proxy {
+                    Some(proxy) => sandbox.use_proxy(proxy),
+                    None => sandbox.set_network(network),
+                }
                 let child = sandbox.command(&command[0], &command[1..])?;
                 used = Some(sandbox);
                 child
@@ -576,6 +617,7 @@ fn run() -> Result<ExitCode> {
         }
         Cmd::Agents { action } => agents_cmd(&home, action.unwrap_or(AgentsCmd::List))?,
         Cmd::Rules { action } => rules_cmd(&home, action.unwrap_or(RulesCmd::List))?,
+        Cmd::Secrets { action } => secrets_cmd(&home, action.unwrap_or(SecretsCmd::List))?,
         Cmd::Policy => print!("{DEFAULT_POLICY}"),
         Cmd::Rollback { task } => {
             let set = Task::open(&home, &task)?.rollback()?;
@@ -743,7 +785,8 @@ fn print_connections(log: &[Connection]) {
     let mut seen: Vec<(&Connection, usize)> = Vec::new();
     for c in log {
         match seen.iter_mut().find(|(s, _)| {
-            (&s.host, s.port, s.verdict, &s.outcome) == (&c.host, c.port, c.verdict, &c.outcome)
+            (&s.host, s.port, s.verdict, &s.outcome, &s.secrets)
+                == (&c.host, c.port, c.verdict, &c.outcome, &c.secrets)
         }) {
             Some((_, n)) => *n += 1,
             None => seen.push((c, 1)),
@@ -760,8 +803,13 @@ fn print_connections(log: &[Connection]) {
             Verdict::Ask => "refused, waits for approval".to_owned(),
             Verdict::Deny => "refused, denied".to_owned(),
         };
+        let secrets = if c.secrets.is_empty() {
+            String::new()
+        } else {
+            format!(" · with {}", c.secrets.join(", "))
+        };
         println!(
-            "net: {}:{}{times} · {what} ({})",
+            "net: {}:{}{times} · {what}{secrets} ({})",
             c.host,
             c.port,
             c.rules.join(", ")
@@ -972,6 +1020,121 @@ fn rules_cmd(home: &Path, action: RulesCmd) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// The folder a rule or secret holds for: the one named, the current one,
+/// or every folder.
+fn scope(folder: Option<PathBuf>, everywhere: bool) -> Result<Option<PathBuf>> {
+    Ok(if everywhere {
+        None
+    } else {
+        Some(match folder {
+            Some(f) => f,
+            None => std::env::current_dir()?,
+        })
+    })
+}
+
+fn secrets_cmd(home: &Path, action: SecretsCmd) -> Result<()> {
+    match action {
+        SecretsCmd::List => {
+            let kept = kule_engine::secrets(home)?;
+            if kept.is_empty() {
+                println!("no secrets kept");
+            }
+            for s in kept {
+                let place = s
+                    .workspace
+                    .as_ref()
+                    .map_or("every folder".to_owned(), |w| w.display().to_string());
+                println!("{}  → {}  · {place}", s.name, s.hosts.join(", "));
+            }
+        }
+        SecretsCmd::Add {
+            name,
+            hosts,
+            folder,
+            everywhere,
+        } => {
+            let folder = scope(folder, everywhere)?;
+            let value = read_secret(&name)?;
+            let kept = kule_engine::add_secret(home, &name, &value, &hosts, folder.as_deref())?;
+            println!(
+                "kept {}: commands see a placeholder; the value goes only to {}",
+                kept.name,
+                kept.hosts.join(", ")
+            );
+        }
+        SecretsCmd::Remove {
+            name,
+            folder,
+            everywhere,
+        } => {
+            let folder = scope(folder, everywhere)?;
+            if kule_engine::remove_secret(home, &name, folder.as_deref())? {
+                println!("forgot {name}");
+            } else {
+                println!("no secret {name} kept there");
+            }
+        }
+    }
+    Ok(())
+}
+
+/// A secret's value: typed without echo at a terminal, or the first line
+/// of standard input.
+fn read_secret(name: &str) -> Result<String> {
+    use std::io::{BufRead, IsTerminal};
+    let stdin = std::io::stdin();
+    let terminal = stdin.is_terminal();
+    let echo_off = terminal.then(|| {
+        eprint!("value of {name} (not shown): ");
+        let _ = std::io::stderr().flush();
+        Echo::off()
+    });
+    let mut line = String::new();
+    stdin.lock().read_line(&mut line)?;
+    drop(echo_off);
+    if terminal {
+        eprintln!();
+    }
+    let value = line.trim_end_matches(['\n', '\r']).to_owned();
+    if value.is_empty() {
+        bail!("no value given");
+    }
+    Ok(value)
+}
+
+/// The terminal's echo, turned off until dropped.
+struct Echo(Option<libc::termios>);
+
+impl Echo {
+    fn off() -> Echo {
+        // SAFETY: tcgetattr/tcsetattr on stdin with a zeroed struct they fill.
+        unsafe {
+            let mut term: libc::termios = std::mem::zeroed();
+            if libc::tcgetattr(0, &mut term) != 0 {
+                return Echo(None);
+            }
+            let saved = term;
+            term.c_lflag &= !libc::ECHO;
+            if libc::tcsetattr(0, libc::TCSANOW, &term) != 0 {
+                return Echo(None);
+            }
+            Echo(Some(saved))
+        }
+    }
+}
+
+impl Drop for Echo {
+    fn drop(&mut self) {
+        if let Some(saved) = &self.0 {
+            // SAFETY: restores what tcgetattr returned.
+            unsafe {
+                libc::tcsetattr(0, libc::TCSANOW, saved);
+            }
+        }
+    }
 }
 
 fn agents_cmd(home: &Path, action: AgentsCmd) -> Result<()> {

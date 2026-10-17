@@ -297,6 +297,38 @@ the cost as each turn ends, so its turn can go over and the next run is
 the one refused. Codex signed in with ChatGPT reports tokens but no cost,
 Gemini reports neither, and a budget does not hold what is not reported.
 
+## Secrets the agent never sees
+
+`kule secrets add STRIPE_KEY --host api.stripe.com` (the value is typed
+without echo, or piped in; never an argument) keeps a secret in Kule's
+home, readable by you alone and hidden from every sandbox. A task's
+commands find a placeholder in `$STRIPE_KEY`. The task's proxy looks
+inside TLS for the secret's hosts and no other: it makes a certificate
+authority of its own for each run, valid only for those hosts by its name
+constraints, with a key that never leaves its memory, and points
+`SSL_CERT_FILE`, `NODE_EXTRA_CA_CERTS`, `REQUESTS_CA_BUNDLE` and the like
+at it. On the way to `api.stripe.com` the placeholder in the request line
+or a header (`Authorization: Basic` included) becomes the value; sent
+anywhere else it is a string that opens nothing. The connection log names
+the secrets that went out (`net: api.stripe.com:443 · tunneled · with
+STRIPE_KEY`). A response that repeats the value has it blanked out with
+`*` (the proxy asks for it uncompressed), as far as it can read it.
+
+Values in the copy's `.env` files (`.env`, `.env.local`, `*.env`,
+`.envrc`; not `.env.example`) that look like secrets, by their name or
+their shape, are replaced with placeholders when the task is made, after
+each commit, rollback and undo, and before every run. The folder keeps the
+real ones: a commit puts them back into a settings file the agent changed,
+and merges with the real values. A masked value that is also a kept secret
+gets that secret's placeholder, so it reaches the secret's hosts; any other
+stays where it is. The app has a *Secrets* view; `kule secrets list` and
+`remove` do the rest.
+
+What it does not do yet: HTTP/2 (clients fall back to HTTP/1.1), one
+request per connection (the proxy asks the host to close after it),
+secrets in request bodies, and Go programs on macOS, which trust the
+system keychain alone.
+
 ## Not yet
 
 - Linux: Landlock reports refusals only to the audit log, so they are not

@@ -17,7 +17,7 @@ use std::path::{Component, Path};
 use std::process::Command;
 
 use kule_engine::{
-    CacheSources, Error, HIDDEN_IN_HOME, Kept, Network, Policy, Proxy, Result, Sandbox, Task,
+    CacheSources, Error, HIDDEN_IN_HOME, Kept, Policy, Proxy, Result, Sandbox, Task,
 };
 use serde::{Deserialize, Serialize};
 
@@ -895,7 +895,7 @@ impl Profile {
                 sandbox.allow_write(dir)?;
             }
         }
-        sandbox.set_network(Network::Proxy(proxy.port()));
+        sandbox.use_proxy(proxy);
         let kept = sandbox.keep_protected()?;
         let mut command = sandbox.command(&self.program().to_string_lossy(), &self.args())?;
         command.envs(&self.env);

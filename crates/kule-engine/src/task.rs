@@ -21,7 +21,11 @@ use crate::manifest::{Baseline, Entry, Kind, Stamp, Tree, relative, scan};
 use crate::meet::{self, Touched};
 use crate::outline::{self, FileOutline};
 use crate::preview::{self, Preview};
+use crate::secrets::{self, TaskSecrets, Vault};
 use crate::usage::Money;
+
+/// The largest settings file Kule masks secrets in.
+const MAX_SETTINGS: u64 = 1024 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskInfo {
@@ -113,12 +117,17 @@ impl Task {
         // The repository state is read from the copy: it is what the agent
         // starts from, so a human commit made during the copy must show up
         // as a change in the workspace, not be folded into the baseline.
-        let baseline = Baseline {
+        let mut baseline = Baseline {
             entries: pair(taken, scan(&self.copy())?)?,
             git: git::read(&self.copy())?,
         };
         self.save_baseline(&baseline)?;
+        // The base holds what the folder holds, secrets too: it is for
+        // merging, outside the copy.
         fsops::keep_base(&self.copy(), &self.base_dir())?;
+        if self.mask_copy(&mut baseline)? {
+            self.save_baseline(&baseline)?;
+        }
         write_json(&self.dir.join("task.json"), &self.info)
     }
 
@@ -126,6 +135,109 @@ impl Task {
     /// hidden from the sandbox with the rest of the task.
     fn base_dir(&self) -> PathBuf {
         self.dir.join("base")
+    }
+
+    /// What the task's proxy holds: the person's secrets for this folder
+    /// and the values masked in the copy, each with the task's placeholder.
+    pub fn vault(&self) -> Result<Vault> {
+        Vault::load(&self.home(), self.workspace(), &self.dir)
+    }
+
+    /// Masks the values that look like secrets in the copy's settings files
+    /// (`.env` and the like), before an agent runs: see [`crate::secrets`].
+    fn protect_secrets(&self) -> Result<()> {
+        let _lock = self.lock()?;
+        let mut baseline = self.load_baseline()?;
+        if self.mask_copy(&mut baseline)? {
+            self.save_baseline(&baseline)?;
+        }
+        Ok(())
+    }
+
+    /// Masks the copy's settings files the baseline knows; where the copy
+    /// still held what it held at the last sync, the baseline takes the
+    /// masked file as that, so masking shows as no change. Whether the
+    /// baseline changed.
+    fn mask_copy(&self, baseline: &mut Baseline) -> Result<bool> {
+        let copy = self.copy();
+        let candidates: Vec<String> = baseline
+            .entries
+            .iter()
+            .filter(|(path, e)| e.copy.kind == Kind::File && secrets::is_env_file(path))
+            .map(|(path, _)| path.clone())
+            .collect();
+        if candidates.is_empty() {
+            return Ok(false);
+        }
+        let vault = self.vault()?;
+        let mut kept = TaskSecrets::load(&self.dir)?;
+        let mut writes = Vec::new();
+        for path in candidates {
+            let full = copy.join(&path);
+            let Some(stamp) = Stamp::of(&full)?.filter(|s| s.kind == Kind::File) else {
+                continue;
+            };
+            if stamp.size > MAX_SETTINGS {
+                continue;
+            }
+            let Ok(text) = fs::read_to_string(&full) else {
+                continue;
+            };
+            let masked = secrets::mask_with(&path, &text, &mut kept, &vault)?;
+            if masked != text {
+                let synced = baseline.entries.get(&path).is_some_and(|e| e.copy == stamp);
+                writes.push((path, masked, synced));
+            }
+        }
+        if writes.is_empty() {
+            return Ok(false);
+        }
+        // The values first: a masked file whose values were lost could only
+        // ever be committed as placeholders.
+        kept.save(&self.dir)?;
+        let mut latest = (i64::MIN, 0);
+        let mut moved = Vec::new();
+        for (path, masked, synced) in writes {
+            let full = copy.join(&path);
+            fsops::replace_file(&full, masked.as_bytes())?;
+            if let (true, Some(now)) = (synced, Stamp::of(&full)?) {
+                latest = latest.max(now.ctime);
+                moved.push((path, now));
+            }
+        }
+        // As in settle: a write within the same tick of the clock could
+        // otherwise go unnoticed.
+        let past = moved.is_empty() || self.clock(&copy)?.wait_past(latest)?;
+        let changed = !moved.is_empty();
+        for (path, now) in moved {
+            if let Some(entry) = baseline.entries.get_mut(&path) {
+                entry.copy = if past { now } else { now.unknown() };
+            }
+        }
+        Ok(changed)
+    }
+
+    /// Puts the masked values back into the settings files among `paths`
+    /// in the copy, for a commit to take them to the folder.
+    fn unmask_copy(&self, paths: &[String]) -> Result<()> {
+        let mut vault = None;
+        for path in paths.iter().filter(|p| secrets::is_env_file(p)) {
+            let full = self.copy().join(path);
+            if Stamp::of(&full)?.is_none_or(|s| s.kind != Kind::File || s.size > MAX_SETTINGS) {
+                continue;
+            }
+            let Ok(text) = fs::read_to_string(&full) else {
+                continue;
+            };
+            if vault.is_none() {
+                vault = Some(self.vault()?);
+            }
+            let real = vault.as_ref().map(|v| v.unmask(&text)).unwrap_or_default();
+            if real != text {
+                fsops::replace_file(&full, real.as_bytes())?;
+            }
+        }
+        Ok(())
     }
 
     pub fn open(home: &Path, id: &str) -> Result<Task> {
@@ -354,7 +466,10 @@ impl Task {
         let mut checkpoint = store.begin(self.workspace(), &set.effects)?;
         checkpoint.merged = merges.iter().map(|m| m.path.clone()).collect();
         let paths = set.paths();
+        // The folder gets the real values; the copy is masked again below.
+        self.unmask_copy(&paths)?;
         if let Err(failed) = fsops::mirror(&self.copy(), self.workspace(), &paths, true) {
+            let _ = self.mask_copy(&mut baseline);
             // Part of it may be in place: put back what the commit replaced
             // and forget the checkpoint, so nothing is left half done. Only
             // the paths it got to: rewriting the others would change their
@@ -395,6 +510,7 @@ impl Task {
             return Err(failed);
         }
         self.settle(&mut baseline, &paths)?;
+        self.mask_copy(&mut baseline)?;
         for path in &paths {
             if let Some(entry) = baseline.entries.get(path) {
                 checkpoint.after.insert(path.clone(), entry.work.clone());
@@ -446,9 +562,16 @@ impl Task {
         };
         let read =
             |root: &Path| -> Result<Option<Vec<u8>>> { outline::read_file(root, &effect.path) };
-        let (Some(theirs), Some(ours)) = (read(self.workspace())?, read(&self.copy())?) else {
+        let (Some(theirs), Some(mut ours)) = (read(self.workspace())?, read(&self.copy())?) else {
             return Ok(None);
         };
+        // Merged with the real values: masked ones would read as changes to
+        // every secret line.
+        if secrets::is_env_file(&effect.path)
+            && let Ok(text) = std::str::from_utf8(&ours)
+        {
+            ours = self.vault()?.unmask(text).into_bytes();
+        }
         Ok(Some(
             match crate::entities::merge(&effect.path, &base, &theirs, &ours) {
                 Ok(bytes) => Ok(Merge {
@@ -513,6 +636,9 @@ impl Task {
             let paths = set.paths();
             fsops::mirror(self.workspace(), &self.copy(), &paths, false)?;
             self.resync(&mut baseline, &paths)?;
+            if self.mask_copy(&mut baseline)? {
+                self.save_baseline(&baseline)?;
+            }
         }
         Ok(set)
     }
@@ -564,6 +690,7 @@ impl Task {
         let undone = self.revert(&checkpoint, &reverted, &paths, &before, &mut baseline);
         store.done_with(&checkpoint)?;
         undone?;
+        self.mask_copy(&mut baseline)?;
         checkpoint.state = State::Undone;
         // As for commit: the checkpoint first, then the baseline.
         store.save(&checkpoint)?;
@@ -957,6 +1084,9 @@ impl Task {
                 self.info.id
             )));
         }
+        // Before anything at work reads the copy: its settings files hold
+        // placeholders, not secrets (a person may have typed one in since).
+        self.protect_secrets()?;
         let _ = fs::remove_file(&path);
         let mut file = OpenOptions::new()
             .write(true)

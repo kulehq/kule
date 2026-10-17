@@ -36,9 +36,11 @@ mod preview;
 mod protect;
 pub mod remembered;
 mod sandbox;
+mod secrets;
 mod snapshot;
 mod steps;
 mod task;
+mod tls;
 mod usage;
 
 pub use approvals::{
@@ -65,6 +67,7 @@ pub use sandbox::{
     Denial, HIDDEN_IN_HOME, Network, PASSED_ENV, Sandbox, denials, isolates_network,
     protects_in_place, record_denials,
 };
+pub use secrets::{SECRETS_FILE, SecretInfo, Vault, add_secret, remove_secret, secrets};
 pub use steps::{Step, StepChange};
 pub use task::{AgentAtWork, Task, TaskInfo};
 pub use usage::{Money, RunUsage, Spent};

@@ -10,7 +10,7 @@ use serde_json::Value;
 
 /// Changes whenever a call, a result or a notice changes shape; a client
 /// and a daemon that disagree on it cannot talk.
-pub const PROTOCOL: u32 = 8;
+pub const PROTOCOL: u32 = 9;
 
 /// What a daemon says about itself.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -141,6 +141,21 @@ pub enum Call {
     /// What an allowance would have let through so far, before it is kept.
     RuleImpact {
         allowance: kule_engine::Allowance,
+        #[serde(default)]
+        workspace: Option<PathBuf>,
+    },
+    /// The person's secrets, without their values.
+    Secrets,
+    /// Keeps a secret for `hosts`, on `workspace` or every folder.
+    AddSecret {
+        name: String,
+        value: String,
+        hosts: Vec<String>,
+        #[serde(default)]
+        workspace: Option<PathBuf>,
+    },
+    RemoveSecret {
+        name: String,
         #[serde(default)]
         workspace: Option<PathBuf>,
     },

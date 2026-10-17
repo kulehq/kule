@@ -140,14 +140,7 @@ fn check(allowance: &Allowance) -> Result<()> {
     let refuse = |why: String| Err(Error::Invalid(why));
     match allowance {
         Allowance::Connect { host, port } => {
-            let labels: Vec<&str> = host.split('.').collect();
-            let plain = labels.len() >= 2
-                && labels.iter().all(|l| {
-                    !l.is_empty()
-                        && l.chars()
-                            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
-                });
-            if !plain || *port == 0 {
+            if !plain_host(host) || *port == 0 {
                 return refuse(format!(
                     "{host}:{port}: a lowercase host name and a port, without a wildcard"
                 ));
@@ -174,6 +167,18 @@ fn check(allowance: &Allowance) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// A lowercase host name of two labels or more, without a wildcard: what
+/// goes into a Cedar rule or a secret's hosts as it is.
+pub(crate) fn plain_host(host: &str) -> bool {
+    let labels: Vec<&str> = host.split('.').collect();
+    labels.len() >= 2
+        && labels.iter().all(|l| {
+            !l.is_empty()
+                && l.chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+        })
 }
 
 /// What `allowance` would have let through so far, in the tasks on

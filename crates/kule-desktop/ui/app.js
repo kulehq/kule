@@ -183,10 +183,11 @@ function renderSidebar() {
 // --- Task view -------------------------------------------------------------
 
 function renderTask() {
-  const agents = state.view === "agents" || state.view === "rules";
+  const agents = ["agents", "rules", "secrets"].includes(state.view);
   $("agents-view").hidden = !agents;
   $("open-agents").setAttribute("aria-current", state.view === "agents" ? "page" : "false");
   $("open-rules").setAttribute("aria-current", state.view === "rules" ? "page" : "false");
+  $("open-secrets").setAttribute("aria-current", state.view === "secrets" ? "page" : "false");
   if (agents) {
     $("empty").hidden = true;
     $("task").hidden = true;
@@ -1136,6 +1137,101 @@ async function renderRules() {
   );
 }
 
+// --- Secrets ---------------------------------------------------------------
+
+// API keys a task's commands use without seeing them. The window sends a
+// value once, to keep, and never gets one back: the list has names and
+// hosts only.
+
+async function openSecrets() {
+  state.view = "secrets";
+  renderSidebar();
+  renderTask();
+  await renderSecrets();
+}
+
+async function renderSecrets() {
+  if (state.view !== "secrets") return;
+  let kept = [];
+  try {
+    kept = await call("secrets");
+  } catch (err) {
+    fail(err);
+  }
+  const folders = [...new Set(state.tasks.map((t) => t.workspace))].sort();
+  const input = (id, label, hint, attrs) =>
+    h(
+      "label",
+      { class: "agent-field", for: id },
+      h("span", { class: "agent-field-label" }, label),
+      h("input", { id, autocomplete: "off", spellcheck: "false", ...attrs }),
+      h("span", { class: "agent-field-hint" }, hint)
+    );
+  const scope = h(
+    "select",
+    { id: "secret-scope" },
+    h("option", { value: "" }, "Every folder"),
+    ...folders.map((f) => h("option", { value: f }, f))
+  );
+  const add = async () => {
+    const name = $("secret-name").value.trim();
+    const hosts = $("secret-hosts").value.split(/[\s,]+/).filter(Boolean);
+    const value = $("secret-value").value;
+    const workspace = $("secret-scope").value || null;
+    await call("add_secret", { name, value, hosts, workspace });
+    // Not kept in the window a moment longer than needed.
+    $("secret-value").value = "";
+    toast(`${name} kept: commands see a placeholder`);
+    await renderSecrets();
+  };
+  replace(
+    $("agents-view"),
+    h(
+      "header",
+      { class: "agents-head" },
+      h("h1", { id: "agents-title" }, "Secrets"),
+      h(
+        "p",
+        { class: "muted" },
+        "API keys a task's commands use without seeing them. A command finds a placeholder in the variable of the secret's name; the task's proxy puts the value into requests to the secret's hosts, over HTTPS, and nowhere else. Values in a folder's .env files that look like secrets are kept out of the copy the same way."
+      )
+    ),
+    kept.length === 0
+      ? h("p", { class: "muted" }, "No secrets kept.")
+      : h(
+          "ul",
+          { class: "rule-list" },
+          ...kept.map((s) => {
+            const remove = armed("Forget", "Click again to forget it", false, async () => {
+              await call("remove_secret", { name: s.name, workspace: s.workspace || null }).catch(fail);
+              await renderSecrets();
+            });
+            remove.dataset.key = `forget-secret:${s.name}:${s.workspace || ""}`;
+            return h(
+              "li",
+              { class: "agent-card" },
+              h("div", {}, h("strong", {}, s.name), " → ", s.hosts.join(", ")),
+              h("div", { class: "muted" }, s.workspace ? `In ${s.workspace}` : "In every folder", ` · since ${when(s.added_unix)}`),
+              remove
+            );
+          })
+        ),
+    h(
+      "div",
+      { class: "agent-form" },
+      input("secret-name", "Name", "The variable commands find it in, like STRIPE_KEY.", { placeholder: "STRIPE_KEY" }),
+      input("secret-hosts", "Goes to", "Hosts, separated by spaces or commas.", { placeholder: "api.stripe.com" }),
+      input("secret-value", "Value", "Kept in Kule's home, readable by you alone; never shown again.", { type: "password" }),
+      h("label", { class: "agent-field", for: "secret-scope" }, h("span", { class: "agent-field-label" }, "For"), scope, h("span", { class: "agent-field-hint" }, "One folder, or every folder."))
+    ),
+    h(
+      "div",
+      { class: "agent-actions" },
+      h("button", { class: "button primary", type: "button", "data-key": "secret-add", onclick: (e) => inFlight(e.currentTarget, () => add().catch(fail)) }, "Keep secret")
+    )
+  );
+}
+
 // --- Agents ----------------------------------------------------------------
 
 // Kule's own agent profiles and the person's. A profile opens holes in the
@@ -1852,6 +1948,7 @@ async function start() {
   await loadAgentChoices();
   $("open-agents").addEventListener("click", openAgents);
   $("open-rules").addEventListener("click", openRules);
+  $("open-secrets").addEventListener("click", openSecrets);
 
   await backend.onRun(onRun);
   await backend.onQuestions(onQuestions);

@@ -339,6 +339,16 @@ pub fn dispatch(service: &Arc<Service>, call: Call) -> Result<Value, String> {
             json(service.set_approval_timeout(&task, minutes)?)
         }
         Call::SetBudget { task, budget } => json(service.set_budget(&task, budget)?),
+        Call::Secrets => json(service.secrets()?),
+        Call::AddSecret {
+            name,
+            value,
+            hosts,
+            workspace,
+        } => json(service.add_secret(&name, &value, &hosts, workspace.as_deref())?),
+        Call::RemoveSecret { name, workspace } => {
+            json(service.remove_secret(&name, workspace.as_deref())?)
+        }
         Call::Hello => json(Hello {
             protocol: PROTOCOL,
             version: env!("CARGO_PKG_VERSION").to_owned(),

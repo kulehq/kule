@@ -299,6 +299,7 @@ mod tests {
             rules: vec!["no-rule-lets-it-pass".into()],
             outcome: "refused".into(),
             answer: None,
+            secrets: Vec::new(),
         }
     }
 

@@ -9,6 +9,7 @@
 //! [`Approvals`]).
 
 use std::collections::HashMap;
+use std::ffi::OsString;
 use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, ErrorKind, Write};
 use std::net::SocketAddr;
@@ -22,6 +23,7 @@ use crate::approvals::{Answer, Approvals};
 use crate::error::{Error, IoContext, Result};
 use crate::policy::{Judgement, Policy, Verdict};
 use crate::task::Task;
+use crate::tls::Interceptor;
 
 /// One connection a command asked for, as the task's log keeps it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -36,6 +38,9 @@ pub struct Connection {
     /// For a connection put to a person, how it was decided.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub answer: Option<Answer>,
+    /// The secrets the proxy put into the request.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub secrets: Vec<String>,
 }
 
 /// The proxy of one task, serving until it is dropped. Dropping it closes
@@ -44,6 +49,7 @@ pub struct Connection {
 pub struct Proxy {
     server: Option<lonca_net::Server>,
     asker: Option<Asker>,
+    env: Vec<(String, OsString)>,
 }
 
 /// Where a proxy puts the connections that wait for a person.
@@ -89,21 +95,43 @@ impl Proxy {
             .append(true)
             .open(&path)
             .at(&path)?;
+        let vault = task.vault()?;
+        let mut env: Vec<(String, OsString)> = vault
+            .env()
+            .into_iter()
+            .map(|(name, placeholder)| (name, placeholder.into()))
+            .collect();
+        let interceptor = if vault.hosts().is_empty() {
+            None
+        } else {
+            let interceptor = Interceptor::new(vault, crate::tls::web_roots())?;
+            env.extend(trust(task, interceptor.ca_pem())?);
+            Some(interceptor)
+        };
         let gate = Arc::new(Gate {
             policy,
             log: Mutex::new(log),
             pending: Mutex::new(HashMap::new()),
             asker: asker.clone(),
+            interceptor,
         });
         let server = lonca_net::spawn(listener, gate).at(addr)?;
         Ok(Proxy {
             server: Some(server),
             asker,
+            env,
         })
     }
 
     pub fn port(&self) -> u16 {
         self.server.as_ref().map_or(0, |s| s.local_addr().port())
+    }
+
+    /// What the commands behind this proxy need in their environment: each
+    /// kept secret's placeholder by its name, and, when the proxy looks
+    /// inside TLS for some host, where to find the authority to trust.
+    pub fn env(&self) -> &[(String, OsString)] {
+        &self.env
     }
 
     /// Closes the proxy and cuts the connections still open; once it
@@ -153,14 +181,58 @@ fn log_path(task: &Task) -> PathBuf {
     task.dir().join("network.jsonl")
 }
 
+/// Where the system keeps the certificates it trusts, by platform.
+const SYSTEM_ROOTS: &[&str] = &[
+    "/etc/ssl/cert.pem",
+    "/etc/ssl/certs/ca-certificates.crt",
+    "/etc/pki/tls/certs/ca-bundle.crt",
+    "/etc/ssl/ca-bundle.pem",
+];
+
+/// Writes the proxy's authority into the task's tmp, alone and after the
+/// system's roots, and names them in the variables tools read: Node adds
+/// `NODE_EXTRA_CA_CERTS` to its own roots, the others replace theirs.
+fn trust(task: &Task, ca_pem: &str) -> Result<Vec<(String, OsString)>> {
+    let tmp = task.tmp()?;
+    let ca = tmp.join("kule-ca.pem");
+    std::fs::write(&ca, ca_pem).at(&ca)?;
+    let mut bundle_text = SYSTEM_ROOTS
+        .iter()
+        .find_map(|p| std::fs::read_to_string(p).ok())
+        .unwrap_or_default();
+    if !bundle_text.is_empty() && !bundle_text.ends_with('\n') {
+        bundle_text.push('\n');
+    }
+    bundle_text.push_str(ca_pem);
+    let bundle = tmp.join("kule-ca-bundle.pem");
+    std::fs::write(&bundle, bundle_text).at(&bundle)?;
+    let mut env = vec![("NODE_EXTRA_CA_CERTS".to_owned(), ca.into_os_string())];
+    for var in [
+        "SSL_CERT_FILE",
+        "CURL_CA_BUNDLE",
+        "REQUESTS_CA_BUNDLE",
+        "GIT_SSL_CAINFO",
+        "AWS_CA_BUNDLE",
+    ] {
+        env.push((var.to_owned(), bundle.clone().into_os_string()));
+    }
+    Ok(env)
+}
+
 struct Gate {
     policy: Policy,
     log: Mutex<File>,
     /// Judgements waiting for their outcome, with the person's answer if
     /// one was asked, by the client's address.
-    pending: Mutex<HashMap<SocketAddr, (Judgement, Option<Answer>)>>,
+    pending: Mutex<HashMap<SocketAddr, Pending>>,
     asker: Option<Asker>,
+    /// Looks inside TLS to the hosts the task's secrets are for.
+    interceptor: Option<Interceptor>,
 }
+
+/// A judged connection waiting for its outcome: the person's answer if one
+/// was asked, and the secrets put into it.
+type Pending = (Judgement, Option<Answer>, Vec<String>);
 
 impl lonca_net::Gate for Gate {
     fn decide(&self, request: &lonca_net::Request<'_>) -> lonca_net::Verdict {
@@ -189,7 +261,7 @@ impl lonca_net::Gate for Gate {
             }
             (Verdict::Deny, _) => format!("denied ({rules})"),
         };
-        lock(&self.pending).insert(request.peer, (judgement, answer));
+        lock(&self.pending).insert(request.peer, (judgement, answer, Vec::new()));
         lonca_net::Verdict {
             allow,
             // Loopback by name only, and only when the policy let it pass;
@@ -199,8 +271,29 @@ impl lonca_net::Gate for Gate {
         }
     }
 
+    fn relay(
+        &self,
+        request: &lonca_net::Request<'_>,
+        tunnel: lonca_net::Tunnel,
+    ) -> Option<lonca_net::Tunnel> {
+        let Some(interceptor) = self
+            .interceptor
+            .as_ref()
+            .filter(|i| i.wants(request.host, request.port))
+        else {
+            return Some(tunnel);
+        };
+        // A request that fails here fails for the client too; nothing is
+        // passed on half filled.
+        let used = interceptor.serve(request.host, tunnel).unwrap_or_default();
+        if let Some(pending) = lock(&self.pending).get_mut(&request.peer) {
+            pending.2 = used;
+        }
+        None
+    }
+
     fn finished(&self, request: &lonca_net::Request<'_>, outcome: lonca_net::Outcome) {
-        let Some((judgement, answer)) = lock(&self.pending).remove(&request.peer) else {
+        let Some((judgement, answer, secrets)) = lock(&self.pending).remove(&request.peer) else {
             return;
         };
         let record = Connection {
@@ -213,6 +306,7 @@ impl lonca_net::Gate for Gate {
             rules: judgement.rules,
             outcome: format!("{outcome:?}").to_lowercase(),
             answer,
+            secrets,
         };
         if let Ok(mut line) = serde_json::to_vec(&record) {
             line.push(b'\n');

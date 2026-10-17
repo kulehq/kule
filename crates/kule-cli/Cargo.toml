@@ -23,6 +23,7 @@ futures = "0.3.34"
 kule-acp = { version = "0.0.1", path = "../kule-acp" }
 kule-daemon = { version = "0.0.1", path = "../kule-daemon" }
 tokio = { version = "1.53.3", features = ["rt-multi-thread"] }
+libc = "0.2.190"
 
 [dev-dependencies]
 tempfile.workspace = true

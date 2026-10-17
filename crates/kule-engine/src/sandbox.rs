@@ -321,6 +321,14 @@ impl Sandbox {
         self.network = network;
     }
 
+    /// Sends the network through `proxy`, with what its commands need in
+    /// their environment: the placeholders of the task's secrets, and the
+    /// authority to trust where the proxy looks inside TLS.
+    pub fn use_proxy(&mut self, proxy: &crate::Proxy) {
+        self.network = Network::Proxy(proxy.port());
+        self.env.extend(proxy.env().iter().cloned());
+    }
+
     /// Passes environment variable `name` on to what the sandbox runs, such
     /// as an agent's own API key; others are left out but for the few tools
     /// need (see [`PASSED_ENV`]).

@@ -367,6 +367,26 @@ impl Service {
         kule_engine::forget(&self.home, id).map_err(text)
     }
 
+    /// The person's secrets, without their values.
+    pub fn secrets(&self) -> Result<Vec<kule_engine::SecretInfo>> {
+        kule_engine::secrets(&self.home).map_err(text)
+    }
+
+    /// Keeps a secret; the value goes nowhere but into Kule's home.
+    pub fn add_secret(
+        &self,
+        name: &str,
+        value: &str,
+        hosts: &[String],
+        workspace: Option<&Path>,
+    ) -> Result<kule_engine::SecretInfo> {
+        kule_engine::add_secret(&self.home, name, value, hosts, workspace).map_err(text)
+    }
+
+    pub fn remove_secret(&self, name: &str, workspace: Option<&Path>) -> Result<bool> {
+        kule_engine::remove_secret(&self.home, name, workspace).map_err(text)
+    }
+
     pub fn rule_impact(
         &self,
         allowance: &kule_engine::Allowance,

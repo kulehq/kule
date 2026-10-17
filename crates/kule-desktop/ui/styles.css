@@ -1072,6 +1072,7 @@ select:focus-visible {
 
 .agent-field input,
 .agent-field textarea,
+.agent-field select,
 .agent-registry input[type="search"] {
   padding: 6px 8px;
   border: 1px solid var(--border);

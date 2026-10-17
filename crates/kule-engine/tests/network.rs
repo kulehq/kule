@@ -371,3 +371,40 @@ fn datagrams_do_not_leave_the_sandbox() {
         assert!(receiver.recv(&mut buf).is_err(), "a datagram reached {ip}");
     }
 }
+
+/// With a secret kept, the proxy looks inside TLS only for its hosts:
+/// every other tunnel passes as it is, and the commands get the
+/// placeholder and the authority to trust.
+#[test]
+fn a_secret_changes_nothing_for_other_hosts() {
+    let (home, ws) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+    kule_engine::add_secret(
+        home.path(),
+        "API_KEY",
+        "real-value",
+        &["api.example.com".into()],
+        None,
+    )
+    .unwrap();
+    let task = Task::create(home.path(), ws.path()).unwrap();
+    let proxy = Proxy::start(&task, policy()).unwrap();
+    let names: Vec<_> = proxy.env().iter().map(|(n, _)| n.as_str()).collect();
+    assert!(
+        names.contains(&"API_KEY") && names.contains(&"SSL_CERT_FILE"),
+        "{names:?}"
+    );
+    let placeholder = &proxy.env().iter().find(|(n, _)| n == "API_KEY").unwrap().1;
+    assert_ne!(placeholder.to_str(), Some("real-value"));
+
+    let up = upstream();
+    let mut s = TcpStream::connect(("127.0.0.1", proxy.port())).unwrap();
+    write!(
+        s,
+        "CONNECT 127.0.0.1:{up} HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n"
+    )
+    .unwrap();
+    s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    let mut reply = String::new();
+    let _ = std::io::Read::read_to_string(&mut s, &mut reply);
+    assert!(reply.contains("hello from upstream"), "{reply}");
+}

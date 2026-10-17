@@ -229,6 +229,34 @@ fn forget_rule(kule: K<'_>, id: u64) -> Result<bool> {
     kule.call(Call::ForgetRule { id })
 }
 
+// Secrets: the window sends a value once, to keep; it never gets one back.
+
+#[tauri::command(async)]
+fn secrets(kule: K<'_>) -> Result<serde_json::Value> {
+    kule.call(Call::Secrets)
+}
+
+#[tauri::command(async)]
+fn add_secret(
+    kule: K<'_>,
+    name: String,
+    value: String,
+    hosts: Vec<String>,
+    workspace: Option<PathBuf>,
+) -> Result<serde_json::Value> {
+    kule.call(Call::AddSecret {
+        name,
+        value,
+        hosts,
+        workspace,
+    })
+}
+
+#[tauri::command(async)]
+fn remove_secret(kule: K<'_>, name: String, workspace: Option<PathBuf>) -> Result<bool> {
+    kule.call(Call::RemoveSecret { name, workspace })
+}
+
 #[tauri::command(async)]
 fn rule_impact(
     kule: K<'_>,
@@ -389,6 +417,9 @@ fn main() {
             answer,
             rules,
             forget_rule,
+            secrets,
+            add_secret,
+            remove_secret,
             rule_impact,
             set_approval_timeout,
             set_budget,
