@@ -1220,6 +1220,15 @@ async function start() {
   $("open-terminal").addEventListener("click", openTerminal);
   $("empty-new-task").addEventListener("click", newTask);
   $("composer").addEventListener("submit", submitPrompt);
+  // Ctrl+Enter, or ⌘+Enter on a Mac, runs the prompt; Enter alone is a new line.
+  const mac = /Mac/.test(navigator.platform);
+  $("send").title = `Run (${mac ? "⌘" : "Ctrl"}+Enter)`;
+  $("send").append(h("kbd", { class: "shortcut", "aria-hidden": "true" }, mac ? "⌘↵" : "Ctrl+↵"));
+  $("prompt").addEventListener("keydown", (e) => {
+    if (e.key !== "Enter" || !(e.ctrlKey || e.metaKey) || e.isComposing) return;
+    e.preventDefault();
+    if (!$("send").disabled) $("composer").requestSubmit();
+  });
   $("prompt").addEventListener("keydown", (e) => {
     if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) $("composer").requestSubmit();
   });

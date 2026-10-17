@@ -417,6 +417,12 @@ select:focus-visible {
   overflow-wrap: anywhere;
 }
 
+.button .shortcut {
+  margin-left: 8px;
+  font: 11px var(--sans);
+  opacity: 0.75;
+}
+
 /* An agent's answer, laid out from its Markdown. */
 .msg.md {
   white-space: normal;
