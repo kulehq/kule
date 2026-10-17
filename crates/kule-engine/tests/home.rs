@@ -16,10 +16,12 @@ struct Setup {
 
 impl Setup {
     fn new() -> Setup {
+        // The person's home outside /tmp, which the sandbox lets commands
+        // write to, as no real home is.
         let (home, ws, person) = (
             TempDir::new().unwrap(),
             TempDir::new().unwrap(),
-            TempDir::new().unwrap(),
+            TempDir::new_in(env!("CARGO_TARGET_TMPDIR")).unwrap(),
         );
         let p = person.path();
         let write = |rel: &str, text: &str| {
