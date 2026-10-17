@@ -75,7 +75,7 @@ pub fn save(home: &Path, layout: Option<&Layout>) -> Result<()> {
 }
 
 fn check(layout: &Layout) -> Result<()> {
-    if layout.version != 1 {
+    if !(1..=2).contains(&layout.version) {
         return Err(format!("a layout of version {}", layout.version));
     }
     if layout.composer.is_some_and(|h| h > MAX_SIZE) {

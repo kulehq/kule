@@ -2608,7 +2608,7 @@ async function removeTask(task = currentTask()) {
 
 const PANELS = {
   tasks: { title: "Tasks", needsTask: false },
-  live: { title: "Live", needsTask: true },
+  live: { title: "Agent", needsTask: true },
   review: { title: "Review", needsTask: true },
   timeline: { title: "Timeline", needsTask: true },
   files: { title: "Files", needsTask: true },
@@ -2619,14 +2619,18 @@ const REGION_NAMES = { left: "the left side", main: "the main area", right: "the
 
 const SIZE_LIMITS = { left: [180, 640], right: [220, 760], bottom: [120, 900] };
 
+/** The layout's format; one kept in an older one gives way to Kule's own. */
+const LAYOUT_VERSION = 2;
+
 function defaultLayout() {
   return {
-    version: 1,
+    version: LAYOUT_VERSION,
     regions: {
       left: { panels: ["tasks", "files"], active: "tasks", open: true, size: 272 },
-      main: { panels: ["live", "review", "timeline"], active: "live", open: true, size: 0 },
+      main: { panels: ["review", "timeline"], active: "review", open: true, size: 0 },
       right: { panels: [], active: null, open: false, size: 380 },
-      bottom: { panels: ["terminal"], active: "terminal", open: false, size: 260 },
+      // The agent's chat and the terminals share the bottom, side by side.
+      bottom: { panels: ["live", "terminal"], active: "live", open: true, size: 420 },
     },
   };
 }
@@ -2637,7 +2641,7 @@ let layout = defaultLayout();
  * added but the kept layout lacks put where it goes by default. */
 function normalLayout(kept) {
   const base = defaultLayout();
-  if (!kept || !kept.regions) return base;
+  if (!kept || !kept.regions || kept.version !== LAYOUT_VERSION) return base;
   const seen = new Set();
   const regions = {};
   for (const name of Object.keys(base.regions)) {
@@ -2646,7 +2650,7 @@ function normalLayout(kept) {
     regions[name] = {
       panels,
       active: panels.includes(r.active) ? r.active : panels[0] || null,
-      open: name === "main" ? true : Boolean(r.open),
+      open: name === "main" ? r.open !== false : Boolean(r.open),
       size: Number.isFinite(r.size) ? r.size : base.regions[name].size,
     };
   }
@@ -2659,7 +2663,7 @@ function normalLayout(kept) {
       }
     }
   }
-  const out = { version: 1, regions };
+  const out = { version: LAYOUT_VERSION, regions };
   if (Number.isFinite(kept.composer)) out.composer = kept.composer;
   return out;
 }
@@ -2725,21 +2729,87 @@ function panelTab(name, panel) {
   );
 }
 
+/** The terminal panel's tabs in its region's bar: one per shell of the open
+ * task, each closable, then "+" for another. */
+function terminalTabs(name) {
+  const r = layout.regions[name];
+  const task = currentTask();
+  const tabs = (task && terminals.get(task.id)) || { list: [], active: null };
+  const command = commandById("terminal.new");
+  const combo = command ? bindingOf(command) : "";
+  const shown = r.active === "terminal";
+  const items = tabs.list.map((e) => {
+    const selected = shown && e.key === tabs.active;
+    return h(
+      "span",
+      { class: `tab terminal-tab${selected ? " active" : ""}${e.ended ? " ended" : ""}` },
+      h(
+        "button",
+        {
+          type: "button",
+          role: "tab",
+          class: "terminal-tab-main",
+          "data-panel": "terminal",
+          "data-key": `term:${e.key}`,
+          "aria-selected": String(selected),
+          "aria-controls": "panel-terminal",
+          tabindex: selected ? 0 : -1,
+          title: "Your shell in the task's copy, outside the sandbox · drag to move the terminals",
+          onclick: () => {
+            if (panelDrag.moved) return;
+            focusTerminal(task.id, e.key);
+          },
+          oncontextmenu: (ev) => {
+            ev.preventDefault();
+            panelMenu("terminal", ev);
+          },
+          onpointerdown: (ev) => panelDragStart(ev, "terminal"),
+        },
+        h("span", { class: "terminal-dot", "aria-hidden": "true" }),
+        `${e.shell} ${e.n}`
+      ),
+      h("button", { type: "button", class: "terminal-close", "aria-label": `Close terminal ${e.n}`, title: "Close", onclick: () => closeTerminal(task.id, e.key) }, "×")
+    );
+  });
+  items.push(
+    h(
+      "button",
+      {
+        type: "button",
+        class: "tab-plus",
+        "aria-label": "New terminal",
+        title: combo ? `New terminal (${formatCombo(combo)})` : "New terminal",
+        disabled: !task,
+        onclick: () => newTerminal(),
+      },
+      "+"
+    )
+  );
+  return items;
+}
+
 /** Puts every panel in its region, shows the one in front, sizes the
  * regions and says which are open. */
 function renderLayout() {
   const workbench = $("workbench");
   const side = (n) => (layout.regions[n].open ? layout.regions[n].size : 0);
   workbench.style.gridTemplateColumns = `${side("left")}px ${layout.regions.left.open ? 5 : 0}px minmax(0, 1fr) ${layout.regions.right.open ? 5 : 0}px ${side("right")}px`;
-  workbench.querySelector(".center").style.gridTemplateRows = `minmax(0, 1fr) ${layout.regions.bottom.open ? 5 : 0}px ${side("bottom")}px`;
   const task = currentTask();
+  // The main area gives its height to the bottom panel while it is hidden;
+  // Settings and the empty window still have it.
+  const mainHeld = layout.regions.main.open || SETTINGS.includes(state.view) || !task;
+  workbench.querySelector(".center").style.gridTemplateRows = mainHeld
+    ? `minmax(0, 1fr) ${layout.regions.bottom.open ? 5 : 0}px ${side("bottom")}px`
+    : "auto 0px minmax(0, 1fr)";
+  $("main-area").classList.toggle("collapsed", !mainHeld);
   for (const [name, r] of Object.entries(layout.regions)) {
     const el = $(`region-${name}`);
     const hideMain = name === "main" && (SETTINGS.includes(state.view) || !task);
     el.hidden = !r.open || hideMain;
     const split = document.querySelector(`[data-split="${name}"]`);
     if (split) split.hidden = !r.open;
-    replace(el.querySelector(".region-tabs"), ...r.panels.map((p) => panelTab(name, p)));
+    replace(el.querySelector(".region-tabs"), ...r.panels.flatMap((p) => (p === "terminal" ? terminalTabs(name) : [panelTab(name, p)])));
+    replace(el.querySelector(".region-actions"), ...regionActions(name));
     const body = el.querySelector(".region-body");
     for (const p of r.panels) {
       const node = $(`panel-${p}`);
@@ -2758,9 +2828,29 @@ function renderLayout() {
       note.textContent = message;
     } else if (note) note.remove();
   }
-  for (const n of ["left", "bottom", "right"]) {
+  for (const n of ["left", "main", "bottom", "right"]) {
     $(`toggle-${n}`).setAttribute("aria-pressed", String(layout.regions[n].open));
   }
+}
+
+/** The buttons at the end of a region's tab bar: hide it, and for the
+ * bottom panel, fill the window with it or give the space back. */
+function regionActions(name) {
+  const button = (label, glyph, key, action) =>
+    h("button", { class: "region-action", type: "button", "aria-label": label, title: label, "data-key": key, onclick: action }, glyph);
+  const words = REGION_NAMES[name];
+  const actions = [];
+  if (name === "bottom") {
+    const filling = !layout.regions.main.open;
+    actions.push(
+      button(filling ? "Give the main area its space back" : "Fill the window with the bottom panel", filling ? "⤡" : "⤢", "bottom-fill", () => toggleRegion("main"))
+    );
+  }
+  if (name === "main") {
+    actions.push(button("Fill the window with the main area", "⤢", "main-fill", () => closeRegion("bottom")));
+  }
+  actions.push(button(`Hide ${words}`, { left: "‹", right: "›", bottom: "⌄", main: "⌃" }[name], `hide-${name}`, () => closeRegion(name)));
+  return actions;
 }
 
 function activatePanel(panel) {
@@ -2800,11 +2890,44 @@ function movePanel(panel, to, at) {
 }
 
 function toggleRegion(name) {
+  if (layout.regions[name].open) closeRegion(name);
+  else openRegion(name);
+}
+
+function openRegion(name) {
   const r = layout.regions[name];
-  r.open = !r.open;
-  if (r.open && !r.panels.length) toast(`${REGION_NAMES[name][0].toUpperCase()}${REGION_NAMES[name].slice(1)} is empty; drag a panel's tab here`);
+  r.open = true;
+  if (!r.panels.length) toast(`${REGION_NAMES[name][0].toUpperCase()}${REGION_NAMES[name].slice(1)} is empty; drag a panel's tab here`);
   keepLayout();
   renderTask();
+}
+
+/** Hides a region. The main area and the bottom panel are never hidden
+ * together: one of them holds the window's middle. */
+function closeRegion(name) {
+  const { main, bottom } = layout.regions;
+  if (name === "main") {
+    if (!bottom.panels.length) {
+      toast("The bottom panel is empty, so the main area stays");
+      return;
+    }
+    main.open = false;
+    bottom.open = true;
+  } else {
+    layout.regions[name].open = false;
+    if (name === "bottom") main.open = true;
+  }
+  keepLayout();
+  renderTask();
+}
+
+/** Shows `panel`, or hides its region when it is the one showing there. */
+function togglePanel(panel) {
+  const name = regionOf(panel);
+  if (!name) return;
+  const r = layout.regions[name];
+  if (r.open && r.active === panel && (name !== "main" || isShown(panel))) closeRegion(name);
+  else revealPanel(panel);
 }
 
 async function resetLayout() {
@@ -3240,6 +3363,12 @@ async function newTerminal(taskId = state.current) {
   const entry = { key: ++terminalKeys, n, term, fit, search, el, id: null, shell: "shell", ended: false };
   tabs.list.push(entry);
   tabs.active = entry.key;
+  const name = regionOf("terminal");
+  if (name) {
+    layout.regions[name].active = "terminal";
+    layout.regions[name].open = true;
+    keepLayout();
+  }
   term.open(el);
   renderTerminals(taskId);
   fit.fit();
@@ -3266,41 +3395,27 @@ async function newTerminal(taskId = state.current) {
   return entry;
 }
 
-/** The terminal tabs of the open task, and its terminal in front. */
+/** The open task's terminal in front, and the tab bars that show them. */
 function renderTerminals(taskId = state.current) {
   const tabs = terminals.get(taskId) || { list: [], active: null };
   for (const t of terminals.values()) for (const e of t.list) e.el.hidden = true;
   const front = tabs.list.find((e) => e.key === tabs.active);
   if (front) front.el.hidden = false;
-  replace(
-    $("terminal-tabs"),
-    ...tabs.list.map((e) =>
-      h(
-        "span",
-        { class: `terminal-tab${e.key === tabs.active ? " active" : ""}${e.ended ? " ended" : ""}` },
-        h(
-          "button",
-          {
-            type: "button",
-            role: "tab",
-            "aria-selected": String(e.key === tabs.active),
-            "data-key": `term:${e.key}`,
-            onclick: () => focusTerminal(taskId, e.key),
-          },
-          h("span", { class: "terminal-dot", "aria-hidden": "true" }),
-          `${e.n} · ${e.shell}${e.ended ? " (ended)" : ""}`
-        ),
-        h("button", { type: "button", class: "terminal-close", "aria-label": `Close terminal ${e.n}`, title: "Close", onclick: () => closeTerminal(taskId, e.key) }, "×")
-      )
-    )
-  );
   $("terminal-empty").hidden = tabs.list.length > 0;
+  renderLayout();
   if (front) requestAnimationFrame(() => front.fit.fit());
 }
 
 function focusTerminal(taskId, key) {
   const tabs = tabsOf(taskId);
   tabs.active = key;
+  const name = regionOf("terminal");
+  if (name) {
+    layout.regions[name].active = "terminal";
+    layout.regions[name].open = true;
+    keepLayout();
+  }
+  renderTask();
   renderTerminals(taskId);
   activeTerminal(taskId)?.term.focus();
 }
@@ -3309,9 +3424,15 @@ function focusTerminal(taskId, key) {
 async function showTerminal(taskId) {
   if (!window.Terminal) return;
   const tabs = tabsOf(taskId);
-  if (!tabs.list.length && !tabs.started) {
-    tabs.started = true;
-    await newTerminal(taskId);
+  // Shown with none open: one starts, as it would in an editor.
+  if (!tabs.list.length) {
+    if (tabs.starting) return;
+    tabs.starting = true;
+    try {
+      await newTerminal(taskId);
+    } finally {
+      tabs.starting = false;
+    }
     return;
   }
   renderTerminals(taskId);
@@ -3327,6 +3448,13 @@ async function closeTerminal(taskId, key) {
   const at = tabs.list.indexOf(entry);
   tabs.list.splice(at, 1);
   if (tabs.active === key) tabs.active = (tabs.list[at] || tabs.list[at - 1] || {}).key ?? null;
+  const name = regionOf("terminal");
+  if (!tabs.list.length && name && layout.regions[name].active === "terminal") {
+    const other = layout.regions[name].panels.find((p) => p !== "terminal");
+    if (other) layout.regions[name].active = other;
+    keepLayout();
+  }
+  renderTask();
   renderTerminals(taskId);
   activeTerminal(taskId)?.term.focus();
 }
@@ -4051,7 +4179,9 @@ const COMMANDS = [
 
   { id: "view.tasks", title: "Show Tasks", group: "Layout", keys: "Mod+0", inFields: true, run: () => revealPanel("tasks") },
   { id: "view.files", title: "Show Files", group: "Layout", keys: "Mod+Shift+E", inFields: true, run: () => revealPanel("files") },
-  { id: "view.terminal", title: "Show the terminal", group: "Terminal", keys: "Ctrl+`", inFields: true, run: () => withTask(() => revealPanel("terminal")) },
+  { id: "view.terminal", title: "Show or hide the terminal", group: "Terminal", keys: "Ctrl+`", inFields: true, run: () => withTask(() => togglePanel("terminal")) },
+  { id: "chat.toggle", title: "Show or hide the agent chat", group: "Layout", keys: "Mod+Shift+J", inFields: true, run: () => withTask(() => togglePanel("live")) },
+  { id: "layout.main", title: "Show or hide the main area", group: "Layout", keys: "", inFields: true, run: () => toggleRegion("main") },
   { id: "terminal.new", title: "New terminal", group: "Terminal", keys: "Ctrl+Shift+`", inFields: true, run: () => withTask((t) => { revealPanel("terminal"); newTerminal(t.id); }) },
   { id: "terminal.close", title: "Close the terminal", group: "Terminal", keys: "", run: () => withTask((t) => { const e = activeTerminal(t.id); if (e) closeTerminal(t.id, e.key); }) },
   { id: "terminal.next", title: "Next terminal", group: "Terminal", keys: "", inFields: true, run: () => stepTerminal(1) },
@@ -4070,7 +4200,7 @@ const COMMANDS = [
   })),
   { id: "layout.reset", title: "Reset the layout", group: "Layout", keys: "", run: () => resetLayout() },
 
-  { id: "view.live", title: "Show Live", group: "Task", keys: "Mod+1", inFields: true, run: () => withTask(() => showTab("live")) },
+  { id: "view.live", title: "Show the agent chat", group: "Task", keys: "Mod+1", inFields: true, run: () => withTask(() => showTab("live")) },
   { id: "view.review", title: "Show Review", group: "Task", keys: "Mod+2", inFields: true, run: () => withTask(() => showTab("review")) },
   { id: "view.timeline", title: "Show Timeline", group: "Task", keys: "Mod+3", inFields: true, run: () => withTask(() => showTab("timeline")) },
   { id: "prompt.focus", title: "Write to the agent", group: "Task", keys: "Mod+L", run: () => withTask(() => { showTab("live"); $("prompt").focus(); }) },
@@ -4563,7 +4693,7 @@ async function start() {
   document.addEventListener("pointermove", panelDragMove);
   document.addEventListener("pointerup", panelDragEnd);
   document.addEventListener("pointercancel", panelDragEnd);
-  for (const n of ["left", "bottom", "right"]) $(`toggle-${n}`).addEventListener("click", () => toggleRegion(n));
+  for (const n of ["left", "main", "bottom", "right"]) $(`toggle-${n}`).addEventListener("click", () => toggleRegion(n));
   $("files-tree").addEventListener("keydown", filesKey);
   loadLayout();
   const remove = armed(
@@ -4618,7 +4748,6 @@ async function start() {
   if (backend.onTasks) await backend.onTasks(() => refresh());
   if (backend.onMenu) await backend.onMenu(onMenu);
   if (backend.onTerminal) await backend.onTerminal(onTerminal);
-  $("terminal-new").addEventListener("click", () => newTerminal());
   $("terminal-empty-new").addEventListener("click", () => newTerminal());
   $("terminal-find-input").addEventListener("keydown", (e) => {
     if (e.key === "Enter") {

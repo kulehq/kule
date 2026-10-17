@@ -317,7 +317,13 @@ it writes in Kule reaches it outside; you sign it in there once.
   window's named parts and nothing else (`#rrggbb`, checked on the way
   in). The theme in use and your own are kept in `themes.json`.
 - **Layout**: the window is four regions, left, main, right and bottom,
-  each holding panels as tabs: Tasks, Live, Review, Timeline, Files (the
+  each holding panels as tabs. By default the agent's chat and the
+  terminals share the bottom, side by side (`Agent | zsh 1 | zsh 2 | +`),
+  and the main area shows Review and Timeline. Any region hides with the
+  button at the end of its tab bar or from the bar on the left; the bottom
+  panel can fill the window, and the main area and the bottom panel are
+  never hidden together. Mod+Shift+J shows or hides the chat, Ctrl+\` the
+  terminal. The panels are Tasks, Agent, Review, Timeline, Files (the
   task's copy as a tree, changed files marked, any file shown as text)
   and Terminal (your shells in the copy, as many as you open, each a tab;
   outside the sandbox like *Open terminal*; Ctrl+\` shows it,

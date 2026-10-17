@@ -16,6 +16,7 @@
         <path class="brand-glyph" d="M466 470 L558 470 L588 806 Q590 826 570 826 L454 826 Q434 826 436 806 Z" />
       </svg>
       <button id="toggle-left" class="activity-button" type="button" aria-pressed="true" aria-label="Left side"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="11" rx="2"/><rect class="fill" x="1.5" y="2.5" width="4.5" height="11" rx="2"/></svg></button>
+      <button id="toggle-main" class="activity-button" type="button" aria-pressed="true" aria-label="Main area"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="11" rx="2"/><rect class="fill" x="1.5" y="2.5" width="13" height="6.5" rx="2"/></svg></button>
       <button id="toggle-bottom" class="activity-button" type="button" aria-pressed="false" aria-label="Bottom panel"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="11" rx="2"/><rect class="fill" x="1.5" y="9" width="13" height="4.5" rx="2"/></svg></button>
       <button id="toggle-right" class="activity-button" type="button" aria-pressed="false" aria-label="Right side"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="11" rx="2"/><rect class="fill" x="10" y="2.5" width="4.5" height="11" rx="2"/></svg></button>
       <span class="activity-spacer"></span>
@@ -31,7 +32,7 @@
 
     <div class="workbench" id="workbench">
       <section class="region region-side" id="region-left" data-region="left" aria-label="Left side">
-        <div class="region-tabs" role="tablist" aria-label="Left side panels"></div>
+        <div class="region-head"><div class="region-tabs" role="tablist" aria-label="Left side panels"></div><div class="region-actions"></div></div>
         <div class="region-body"></div>
       </section>
       <div class="split split-v" data-split="left" role="separator" aria-orientation="vertical" aria-label="Resize the left side" tabindex="0"></div>
@@ -107,19 +108,19 @@
         </header>
       </section>
           <section class="region region-main" id="region-main" data-region="main" aria-label="Main">
-            <div class="region-tabs" role="tablist" aria-label="Main panels"></div>
+            <div class="region-head"><div class="region-tabs" role="tablist" aria-label="Main panels"></div><div class="region-actions"></div></div>
             <div class="region-body"></div>
           </section>
         </div>
         <div class="split split-h" data-split="bottom" role="separator" aria-orientation="horizontal" aria-label="Resize the bottom panel" tabindex="0"></div>
         <section class="region region-bottom" id="region-bottom" data-region="bottom" aria-label="Bottom panel">
-          <div class="region-tabs" role="tablist" aria-label="Bottom panels"></div>
+          <div class="region-head"><div class="region-tabs" role="tablist" aria-label="Bottom panels"></div><div class="region-actions"></div></div>
           <div class="region-body"></div>
         </section>
       </div>
       <div class="split split-v" data-split="right" role="separator" aria-orientation="vertical" aria-label="Resize the right side" tabindex="0"></div>
       <section class="region region-side" id="region-right" data-region="right" aria-label="Right side">
-        <div class="region-tabs" role="tablist" aria-label="Right side panels"></div>
+        <div class="region-head"><div class="region-tabs" role="tablist" aria-label="Right side panels"></div><div class="region-actions"></div></div>
         <div class="region-body"></div>
       </section>
     </div>
@@ -194,11 +195,6 @@
           <div class="timeline" id="timeline"></div>
         </section>
         <section class="panel panel-terminal" id="panel-terminal" data-panel="terminal">
-          <div class="terminal-bar">
-            <div class="terminal-tabs" id="terminal-tabs" role="tablist" aria-label="Terminals"></div>
-            <button id="terminal-new" class="button ghost terminal-plus" type="button" aria-label="New terminal" title="New terminal">+</button>
-            <span class="terminal-note" title="Your shell in the task's copy, outside the sandbox; what it changes is reviewed like the agent's work.">outside the sandbox</span>
-          </div>
           <div class="terminal-find" id="terminal-find" hidden>
             <input id="terminal-find-input" type="search" placeholder="Find" aria-label="Find in the terminal" autocomplete="off" spellcheck="false" />
             <button id="terminal-find-prev" class="button ghost" type="button" aria-label="Previous match" title="Previous (Shift+Enter)">↑</button>
@@ -206,6 +202,7 @@
             <button id="terminal-find-close" class="button ghost" type="button" aria-label="Close find" title="Close (Esc)">×</button>
           </div>
           <div class="terminal-host" id="terminal-host">
+            <span class="terminal-note" title="Your shell in the task's copy, outside the sandbox; what it changes is reviewed like the agent's work.">outside the sandbox</span>
             <div class="terminal-empty" id="terminal-empty" hidden>
               <p class="muted">No terminal is open for this task.</p>
               <button id="terminal-empty-new" class="button" type="button">New terminal</button>
