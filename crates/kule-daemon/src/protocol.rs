@@ -158,7 +158,7 @@ pub enum Call {
     /// Keeps a secret for `hosts`, on `workspace` or every folder.
     AddSecret {
         name: String,
-        value: String,
+        value: Redacted,
         hosts: Vec<String>,
         #[serde(default)]
         workspace: Option<PathBuf>,
@@ -179,4 +179,34 @@ pub struct Response {
     pub result: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+}
+
+/// A secret's value on its way to Kule's home: sent as it is, never shown
+/// when a call is printed.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct Redacted(pub String);
+
+impl std::fmt::Debug for Redacted {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("<secret>")
+    }
+}
+
+#[cfg(test)]
+mod redacted {
+    use super::*;
+
+    #[test]
+    fn a_printed_call_never_shows_a_secret() {
+        let call = Call::AddSecret {
+            name: "STRIPE_KEY".into(),
+            value: Redacted("sk_live_real".into()),
+            hosts: vec!["api.stripe.com".into()],
+            workspace: None,
+        };
+        assert!(!format!("{call:?}").contains("sk_live_real"));
+        let sent = serde_json::to_string(&call).unwrap();
+        assert!(sent.contains("\"value\":\"sk_live_real\""), "{sent}");
+    }
 }

@@ -347,7 +347,7 @@ pub fn dispatch(service: &Arc<Service>, call: Call) -> Result<Value, String> {
             value,
             hosts,
             workspace,
-        } => json(service.add_secret(&name, &value, &hosts, workspace.as_deref())?),
+        } => json(service.add_secret(&name, &value.0, &hosts, workspace.as_deref())?),
         Call::RemoveSecret { name, workspace } => {
             json(service.remove_secret(&name, workspace.as_deref())?)
         }

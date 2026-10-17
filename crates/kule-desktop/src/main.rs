@@ -246,7 +246,7 @@ fn add_secret(
 ) -> Result<serde_json::Value> {
     kule.call(Call::AddSecret {
         name,
-        value,
+        value: kule_daemon::Redacted(value),
         hosts,
         workspace,
     })
