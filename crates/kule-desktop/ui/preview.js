@@ -17,7 +17,13 @@ const preview = {
   token: 0,
   /** How each kind of file is shown, as last chosen. */
   mode: {},
+  /** The sheet in front, and how many of its rows are drawn. */
+  sheet: 0,
+  rows: 0,
 };
+
+/** Rows of a sheet drawn at first, and added at a time after. */
+const PREVIEW_ROWS = 1000;
 
 const PREVIEW_MODES = {
   markdown: [
@@ -56,6 +62,8 @@ function kindText(v) {
       return "Markdown";
     case "image":
       return `${v.mime.slice(6).toUpperCase()} · ${v.width} × ${v.height}`;
+    case "table":
+      return v.sheets.length > 1 ? `${v.sheets.length} sheets` : "Table";
     default:
       return "";
   }
@@ -63,7 +71,7 @@ function kindText(v) {
 
 /** Shows file `path` of the task Files is on, and brings the Preview up. */
 function previewFile(path, change) {
-  Object.assign(preview, { task: files.task, path, change: change || null, view: null, key: null });
+  Object.assign(preview, { task: files.task, path, change: change || null, view: null, key: null, sheet: 0, rows: PREVIEW_ROWS });
   activatePanel("preview");
 }
 
@@ -196,12 +204,14 @@ function previewBody(v) {
         { class: `preview-body preview-image ${previewMode(v)}`, tabindex: "0" },
         h("img", { src: `data:${v.mime};base64,${v.data}`, alt: preview.path, width: v.width, height: v.height })
       );
+    case "table":
+      return previewTable(v);
     default:
       return h(
         "div",
         { class: "preview-body preview-other" },
         h("p", {}, `${sizeText(v.size)}, ${v.reason}.`),
-        h("p", { class: "muted" }, "The Preview shows text, Markdown and PNG, JPEG, GIF or WebP pictures.")
+        h("p", { class: "muted" }, "The Preview shows text, Markdown, CSV and Excel files, and PNG, JPEG, GIF or WebP pictures.")
       );
   }
 }
@@ -216,4 +226,112 @@ function previewLines(text) {
     h("pre", { class: "preview-gutter", "aria-hidden": "true" }, numbers),
     h("pre", { class: "preview-code" }, text)
   );
+}
+
+/** Column `n` (from 0) as a spreadsheet names it: A, …, Z, AA. */
+function columnName(n) {
+  let name = "";
+  for (n += 1; n > 0; n = Math.floor((n - 1) / 26)) name = String.fromCharCode(65 + ((n - 1) % 26)) + name;
+  return name;
+}
+
+const NUMBER = /^[-+]?[\d.,\s]*\d[\d.,]*\s*%?$|^[-+]?\d[\d.,]*[eE][-+]?\d+$/;
+
+/** A sheet as a grid from A1, its sheets as tabs under it, and a bar over
+ * it that shows the picked cell's value or formula. */
+function previewTable(v) {
+  const at = Math.min(preview.sheet, v.sheets.length - 1);
+  const sheet = v.sheets[at];
+  const cols = sheet.rows.reduce((n, r) => Math.max(n, r.length), 1);
+  const shown = Math.min(sheet.rows.length, preview.rows || PREVIEW_ROWS);
+  const formulas = new Map((sheet.formulas || []).map((f) => [`${f.row}:${f.col}`, f.text]));
+  const where = h("span", { class: "preview-fx-cell" }, "");
+  const what = h("span", { class: "preview-fx-text" }, "Pick a cell to see what it holds.");
+  const fx = h("div", { class: "preview-fx", "aria-live": "polite" }, where, what);
+  const head = h(
+    "tr",
+    {},
+    h("th", { class: "preview-corner", "aria-hidden": "true" }),
+    ...Array.from({ length: cols }, (_, c) => h("th", { scope: "col" }, columnName(c)))
+  );
+  const rows = sheet.rows.slice(0, shown).map((row, r) =>
+    h(
+      "tr",
+      {},
+      h("th", { scope: "row" }, String(r + 1)),
+      ...Array.from({ length: cols }, (_, c) => {
+        const text = row[c] ?? "";
+        const formula = formulas.has(`${r}:${c}`);
+        return h("td", { class: `${NUMBER.test(text) ? "num" : ""}${formula ? " formula" : ""}`, "data-r": r, "data-c": c }, text);
+      })
+    )
+  );
+  const table = h(
+    "table",
+    {
+      class: "preview-grid",
+      onclick: (e) => {
+        const td = e.target.closest("td");
+        if (!td) return;
+        table.querySelector("td.active")?.classList.remove("active");
+        td.classList.add("active");
+        const r = Number(td.dataset.r);
+        const c = Number(td.dataset.c);
+        where.textContent = `${columnName(c)}${r + 1}`;
+        const f = formulas.get(`${r}:${c}`);
+        what.textContent = f !== undefined ? `=${f}` : sheet.rows[r]?.[c] ?? "";
+      },
+    },
+    h("thead", {}, head),
+    h("tbody", {}, ...rows)
+  );
+  const more = sheet.rows.length - shown;
+  const grid = h(
+    "div",
+    { class: "preview-body preview-table", tabindex: "0", "aria-label": `${sheet.name}, ${sheet.rows.length} rows` },
+    table,
+    more > 0
+      ? h(
+          "button",
+          {
+            class: "button ghost preview-more",
+            type: "button",
+            onclick: () => {
+              preview.rows = shown + PREVIEW_ROWS;
+              renderPreview(true);
+            },
+          },
+          more > PREVIEW_ROWS
+            ? `Show ${PREVIEW_ROWS.toLocaleString()} more rows (${more.toLocaleString()} left)`
+            : `Show the other ${more.toLocaleString()} rows`
+        )
+      : null
+  );
+  const tabs =
+    v.sheets.length > 1
+      ? h(
+          "div",
+          { class: "preview-sheets", role: "tablist", "aria-label": "Sheets" },
+          ...v.sheets.map((s, i) =>
+            h(
+              "button",
+              {
+                class: `preview-sheet${i === at ? " on" : ""}`,
+                type: "button",
+                role: "tab",
+                "aria-selected": String(i === at),
+                "data-key": `preview-sheet:${i}`,
+                onclick: () => {
+                  preview.sheet = i;
+                  preview.rows = PREVIEW_ROWS;
+                  renderPreview(false);
+                },
+              },
+              s.name
+            )
+          )
+        )
+      : null;
+  const cut = sheet.cut ? h("p", { class: "preview-note" }, "The sheet has more rows or columns than are shown.") : null;
+  return [fx, grid, cut, tabs];
 }

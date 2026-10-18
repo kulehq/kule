@@ -9,7 +9,13 @@
   - text and code with line numbers; JSON or XML packed onto a line or two
     can be shown formatted;
   - Markdown laid out, or as its source;
-  - PNG, JPEG, GIF and WebP pictures, fitted or at 100%.
+  - PNG, JPEG, GIF and WebP pictures, fitted or at 100%;
+  - CSV and Excel (`.xlsx`) files as a grid from A1, with each sheet as a
+    tab and a bar that shows a picked cell's value or formula. Formulas are
+    not computed: a cell shows the value Excel saved with it.
+- An Excel file is read in memory and never unpacked. Each part it holds
+  is inflated through a cap, so a small file that expands to gigabytes is
+  not read.
 - Text shows up to 1 MB of a file. A picture is shown only when its bytes
   prove it to be one of a sane size, the same check Review uses.
 

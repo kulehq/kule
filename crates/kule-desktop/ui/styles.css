@@ -3022,6 +3022,127 @@ body.dragging-panel * {
   font-size: 12px;
 }
 
+/* Tables: a grid from A1 with sticky letters and numbers. */
+.preview-fx {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  min-height: 30px;
+  padding: 6px 14px;
+  border-bottom: 1px solid var(--border);
+  color: var(--muted);
+  font: 12px var(--mono);
+}
+
+.preview-fx-cell {
+  min-width: 48px;
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.preview-fx-text {
+  overflow: hidden;
+  color: var(--text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.preview-grid {
+  border-collapse: separate;
+  border-spacing: 0;
+  font: 12px var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.preview-grid th,
+.preview-grid td {
+  max-width: 320px;
+  padding: 3px 10px;
+  overflow: hidden;
+  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.preview-grid thead th {
+  position: sticky;
+  z-index: 1;
+  top: 0;
+  background: var(--sunken);
+  color: var(--faint);
+  font-weight: 500;
+}
+
+.preview-grid tbody th {
+  position: sticky;
+  left: 0;
+  min-width: 40px;
+  background: var(--sunken);
+  color: var(--faint);
+  font-weight: 500;
+  text-align: right;
+}
+
+.preview-grid .preview-corner {
+  z-index: 2;
+  left: 0;
+}
+
+.preview-grid td {
+  min-width: 64px;
+  color: var(--text);
+  cursor: cell;
+}
+
+.preview-grid td.num {
+  text-align: right;
+}
+
+.preview-grid td.formula {
+  color: var(--accent);
+}
+
+.preview-grid td.active {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.preview-more {
+  margin: 10px 14px;
+}
+
+.preview-sheets {
+  display: flex;
+  gap: 2px;
+  padding: 0 14px;
+  overflow-x: auto;
+  border-top: 1px solid var(--border);
+  background: var(--sunken);
+}
+
+.preview-sheet {
+  padding: 6px 12px;
+  border: 0;
+  border-radius: 0 0 6px 6px;
+  background: transparent;
+  color: var(--muted);
+  font: 12px var(--sans);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.preview-sheet.on {
+  background: var(--surface);
+  color: var(--text);
+  font-weight: 600;
+}
+
+.preview-sheet:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
 .preview-image {
   display: flex;
   padding: 18px;

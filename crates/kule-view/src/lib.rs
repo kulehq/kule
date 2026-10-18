@@ -4,7 +4,10 @@
 //! read, and from where, is the daemon's business.
 
 pub mod image;
+pub mod office;
+pub mod table;
 pub mod text;
+pub mod xlsx;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
@@ -40,6 +43,11 @@ pub enum View {
         /// The file, base64.
         data: String,
     },
+    /// A workbook's sheets, or a CSV file as one sheet.
+    Table {
+        sheets: Vec<table::Sheet>,
+        size: u64,
+    },
     /// Nothing to show, and why.
     Other {
         size: u64,
@@ -47,12 +55,29 @@ pub enum View {
     },
 }
 
-/// How much of a file named `path` [`view`] needs: a picture whole, text
-/// up to [`MAX_TEXT`]. One byte more than a picture may have shows that it
-/// is too large without reading it all.
+fn extension(path: &str) -> String {
+    let name = path.rsplit('/').next().unwrap_or(path);
+    name.rsplit_once('.')
+        .map(|(_, ext)| ext.to_ascii_lowercase())
+        .unwrap_or_default()
+}
+
+fn is_workbook(path: &str) -> bool {
+    matches!(extension(path).as_str(), "xlsx" | "xlsm")
+}
+
+fn is_csv(path: &str) -> bool {
+    matches!(extension(path).as_str(), "csv" | "tsv")
+}
+
+/// How much of a file named `path` [`view`] needs: a picture or a workbook
+/// whole, text up to [`MAX_TEXT`]. One byte more than a whole file may have
+/// shows that it is too large without reading it all.
 pub fn wanted(path: &str) -> u64 {
     if image::named_like_one(path) {
         image::MAX_IMAGE as u64 + 1
+    } else if is_workbook(path) {
+        office::MAX_FILE as u64 + 1
     } else {
         MAX_TEXT
     }
@@ -81,11 +106,26 @@ pub fn view(path: &str, bytes: Vec<u8>, size: u64) -> View {
             Err(why) => other(why.reason()),
         };
     }
+    if is_workbook(path) {
+        if cut {
+            return other("too large to preview");
+        }
+        return match xlsx::sheets(&bytes) {
+            Ok(sheets) => View::Table { sheets, size },
+            Err(why) => other(&why.0),
+        };
+    }
     let Some(text) = text::decode(bytes, cut) else {
         return other("a binary file");
     };
     if text::is_markdown(path) {
         return View::Markdown { text, cut, size };
+    }
+    if is_csv(path) {
+        return View::Table {
+            sheets: vec![table::csv(path, &text, cut)],
+            size,
+        };
     }
     let formatted = if cut {
         None
@@ -176,5 +216,33 @@ mod tests {
         assert!(cut && formatted.is_none());
         assert_eq!(wanted("a.png"), image::MAX_IMAGE as u64 + 1);
         assert_eq!(wanted("a.txt"), MAX_TEXT);
+        assert_eq!(wanted("b.XLSX"), office::MAX_FILE as u64 + 1);
+        // A workbook larger than one may be is not read in part.
+        assert_eq!(
+            view("b.xlsx", vec![b'P'; 10], office::MAX_FILE as u64 * 2),
+            View::Other {
+                size: office::MAX_FILE as u64 * 2,
+                reason: "too large to preview".into()
+            }
+        );
+    }
+
+    #[test]
+    fn workbooks_and_csv_files_are_tables() {
+        let book = xlsx::tests::workbook();
+        let View::Table { sheets, .. } = view("data/sales.xlsx", book.clone(), book.len() as u64)
+        else {
+            panic!("not a table");
+        };
+        assert_eq!(sheets[0].name, "Sales");
+        let View::Table { sheets, .. } = view("r.csv", b"a,b\n1,2\n".to_vec(), 8) else {
+            panic!("not a table");
+        };
+        assert_eq!(sheets[0].rows, [["a", "b"], ["1", "2"]]);
+        // Named a workbook, but not one.
+        assert!(matches!(
+            view("x.xlsx", b"hello".to_vec(), 5),
+            View::Other { .. }
+        ));
     }
 }
