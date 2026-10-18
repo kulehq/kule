@@ -2,10 +2,12 @@
 //! package checks of `kule_ext`, plus the checks of what an extension adds
 //! that only Kule's own modules know (themes).
 
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use kule_ext::{Listed, Package, Source, Store};
 use serde::Serialize;
+use serde_json::Value;
 
 use crate::Result;
 use crate::themes::{self, ThemeFile};
@@ -59,6 +61,26 @@ pub fn set_enabled(home: &Path, id: &str, enabled: bool) -> Result<Listed> {
 
 pub fn remove(home: &Path, id: &str) -> Result<()> {
     Store::new(home).remove(id).map_err(|e| e.to_string())
+}
+
+pub fn storage(home: &Path, id: &str) -> Result<Value> {
+    Store::new(home).storage(id).map_err(|e| e.to_string())
+}
+
+pub fn set_storage(home: &Path, id: &str, value: &Value) -> Result<()> {
+    Store::new(home)
+        .set_storage(id, value)
+        .map_err(|e| e.to_string())
+}
+
+pub fn config(home: &Path, id: &str) -> Result<BTreeMap<String, Value>> {
+    Store::new(home).config(id).map_err(|e| e.to_string())
+}
+
+pub fn set_config(home: &Path, id: &str, key: &str, value: &Value) -> Result<()> {
+    Store::new(home)
+        .set_config(id, key, value)
+        .map_err(|e| e.to_string())
 }
 
 /// A theme an extension that may run brings.

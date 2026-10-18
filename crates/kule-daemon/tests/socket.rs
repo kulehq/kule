@@ -366,3 +366,79 @@ fn a_request_without_the_token_is_refused() {
     ));
     assert!(reply.contains("\"result\":[]"), "{reply}");
 }
+
+#[test]
+fn extensions_are_installed_and_approved_over_the_socket_and_subscribers_hear_it() {
+    let home = TempDir::new().unwrap();
+    let service = daemon(home.path());
+    let notices = service.subscribe();
+    let client = Client::new(home.path());
+
+    let src = TempDir::new().unwrap();
+    fs::write(
+        src.path().join("kule-extension.json"),
+        r#"{ "kule_extension": 1, "id": "acme.notes", "name": "Notes", "version": "1.0.0",
+             "publisher": "acme", "permissions": ["storage"],
+             "contributes": { "configuration": [
+                 { "key": "level", "title": "Level", "type": "enum", "values": ["info", "warn"], "default": "warn" } ] } }"#,
+    )
+    .unwrap();
+    let file = src.path().join("notes.kulext");
+    fs::write(&file, kule_ext::pack(src.path()).unwrap()).unwrap();
+
+    let listed: kule_ext::Listed = client.call(Call::InstallExtension { path: file }).unwrap();
+    assert_eq!(listed.held.as_deref(), Some("not approved yet"));
+    assert!(matches!(
+        notices.recv_timeout(Duration::from_secs(5)).unwrap(),
+        Notice::Extensions
+    ));
+
+    let stale = client
+        .call::<kule_ext::Listed>(Call::ApproveExtension {
+            id: "acme.notes".into(),
+            digest: "not-what-you-saw".into(),
+        })
+        .unwrap_err();
+    assert!(stale.contains("changed since you looked"), "{stale}");
+    let listed: kule_ext::Listed = client
+        .call(Call::ApproveExtension {
+            id: "acme.notes".into(),
+            digest: listed.digest,
+        })
+        .unwrap();
+    assert!(listed.runs());
+
+    client
+        .call::<()>(Call::SetExtensionConfig {
+            id: "acme.notes".into(),
+            key: "level".into(),
+            value: serde_json::json!("info"),
+        })
+        .unwrap();
+    let config: serde_json::Value = client
+        .call(Call::ExtensionConfig {
+            id: "acme.notes".into(),
+        })
+        .unwrap();
+    assert_eq!(config, serde_json::json!({ "level": "info" }));
+    client
+        .call::<()>(Call::SetExtensionStorage {
+            id: "acme.notes".into(),
+            value: serde_json::json!([1, 2]),
+        })
+        .unwrap();
+    let kept: serde_json::Value = client
+        .call(Call::ExtensionStorage {
+            id: "acme.notes".into(),
+        })
+        .unwrap();
+    assert_eq!(kept, serde_json::json!([1, 2]));
+
+    client
+        .call::<()>(Call::RemoveExtension {
+            id: "acme.notes".into(),
+        })
+        .unwrap();
+    let all: Vec<kule_ext::Listed> = client.call(Call::Extensions).unwrap();
+    assert!(all.is_empty());
+}

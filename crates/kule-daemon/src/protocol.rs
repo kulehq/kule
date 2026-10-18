@@ -10,7 +10,7 @@ use serde_json::Value;
 
 /// Changes whenever a call, a result or a notice changes shape; a client
 /// and a daemon that disagree on it cannot talk.
-pub const PROTOCOL: u32 = 21;
+pub const PROTOCOL: u32 = 22;
 
 /// What a daemon says about itself.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -292,6 +292,49 @@ pub enum Call {
         #[serde(default)]
         workspace: Option<PathBuf>,
     },
+    /// The installed extensions, and why any that cannot run cannot.
+    Extensions,
+    /// Installs or updates the `.kulext` at `path`; it waits for approval.
+    InstallExtension {
+        path: PathBuf,
+    },
+    /// Installs a folder under development, read live.
+    InstallDevExtension {
+        path: PathBuf,
+    },
+    /// Approves an extension as the person saw it: refused if its digest
+    /// is no longer `digest`.
+    ApproveExtension {
+        id: String,
+        digest: String,
+    },
+    SetExtensionEnabled {
+        id: String,
+        enabled: bool,
+    },
+    RemoveExtension {
+        id: String,
+    },
+    /// What an extension kept.
+    ExtensionStorage {
+        id: String,
+    },
+    SetExtensionStorage {
+        id: String,
+        value: Value,
+    },
+    /// An extension's settings, with defaults for those not chosen.
+    ExtensionConfig {
+        id: String,
+    },
+    /// Sets one setting; null puts back its default.
+    SetExtensionConfig {
+        id: String,
+        key: String,
+        value: Value,
+    },
+    /// The themes extensions that may run bring.
+    ExtensionThemes,
     /// Turns the connection into a stream of notices.
     Subscribe,
 }

@@ -261,6 +261,23 @@ pub enum Notice {
     /// A task's changes, ignored paths or verdict are not what the task
     /// list last said: ask for it again.
     Tasks,
+    /// Something happened to a task as a whole.
+    TaskChanged { task: String, change: TaskChange },
+    /// An extension was installed, approved, turned on or off, or removed.
+    Extensions,
+}
+
+/// What happened to a task, for whoever watches (extensions among them).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskChange {
+    Created,
+    /// Changes reached the folder.
+    Committed,
+    RolledBack,
+    /// The newest commit was taken back.
+    Undone,
+    Removed,
 }
 
 /// How many events of a task's runs are kept for a window that opens later.
@@ -761,7 +778,23 @@ impl Service {
 
     pub fn create(&self, workspace: &Path) -> Result<TaskView> {
         let task = Task::create(&self.home, workspace).map_err(text)?;
+        self.changed(task.id(), TaskChange::Created);
         self.view(task.id())
+    }
+
+    fn changed(&self, id: &str, change: TaskChange) {
+        notify(
+            &self.subscribers,
+            Notice::TaskChanged {
+                task: id.to_owned(),
+                change,
+            },
+        );
+    }
+
+    /// Tells subscribers the extensions changed.
+    pub fn extensions_changed(&self) {
+        notify(&self.subscribers, Notice::Extensions);
     }
 
     /// The ruling covers the ignored paths only with `include_ignored`.
@@ -891,11 +924,14 @@ impl Service {
         let outcome = task.commit_with(include_ignored, check);
         let _ = self.rescan(id);
         match outcome {
-            Ok(Some(checkpoint)) => Ok(Commit::Applied {
-                checkpoint: checkpoint.id,
-                changes: checkpoint.effects.len(),
-                merged: checkpoint.merged,
-            }),
+            Ok(Some(checkpoint)) => {
+                self.changed(id, TaskChange::Committed);
+                Ok(Commit::Applied {
+                    checkpoint: checkpoint.id,
+                    changes: checkpoint.effects.len(),
+                    merged: checkpoint.merged,
+                })
+            }
             Ok(None) => Ok(Commit::Nothing),
             Err(Error::Held(ruling)) => Ok(Commit::Held { ruling }),
             Err(e) => Err(text(e)),
@@ -906,14 +942,20 @@ impl Service {
     pub fn rollback(&self, id: &str) -> Result<usize> {
         let set = self.idle(id)?.rollback();
         let _ = self.rescan(id);
-        Ok(set.map_err(text)?.effects.len())
+        let thrown = set.map_err(text)?.effects.len();
+        self.changed(id, TaskChange::RolledBack);
+        Ok(thrown)
     }
 
     /// Reverts the newest commit; returns its checkpoint, if there was one.
     pub fn undo(&self, id: &str) -> Result<Option<u32>> {
         let undone = self.idle(id)?.undo();
         let _ = self.rescan(id);
-        Ok(undone.map_err(text)?.map(|c| c.id))
+        let undone = undone.map_err(text)?.map(|c| c.id);
+        if undone.is_some() {
+            self.changed(id, TaskChange::Undone);
+        }
+        Ok(undone)
     }
 
     pub fn timeline(&self, id: &str) -> Result<Timeline> {
@@ -942,6 +984,7 @@ impl Service {
         self.streams.lock().unwrap().remove(id);
         self.scans.lock().unwrap().remove(id);
         self.outlined.lock().unwrap().remove(id);
+        self.changed(id, TaskChange::Removed);
         let home = self.home.clone();
         std::thread::spawn(move || {
             if let Err(e) = Task::empty_trash(&home) {
@@ -1395,6 +1438,40 @@ mod tests {
             s.settled()
                 .iter()
                 .all(|v| v.overlaps.iter().all(|o| o.task != a))
+        );
+    }
+
+    /// Watchers (extensions among them) hear what happens to a task as a whole.
+    #[test]
+    fn subscribers_hear_a_task_created_committed_rolled_back_undone_and_removed() {
+        let s = Setup::new();
+        let notices = s.app.subscribe();
+        let (id, copy) = s.task();
+        fs::write(copy.join("b.txt"), "b\n").unwrap();
+        assert!(matches!(
+            s.app.commit(&id, true, false, None).unwrap(),
+            Commit::Applied { .. }
+        ));
+        fs::write(copy.join("c.txt"), "c\n").unwrap();
+        s.app.rollback(&id).unwrap();
+        s.app.undo(&id).unwrap();
+        s.app.remove(&id).unwrap();
+        let heard: Vec<TaskChange> =
+            std::iter::from_fn(|| notices.recv_timeout(Duration::from_secs(2)).ok())
+                .filter_map(|n| match n {
+                    Notice::TaskChanged { task, change } if task == id => Some(change),
+                    _ => None,
+                })
+                .collect();
+        assert_eq!(
+            heard,
+            [
+                TaskChange::Created,
+                TaskChange::Committed,
+                TaskChange::RolledBack,
+                TaskChange::Undone,
+                TaskChange::Removed
+            ]
         );
     }
 

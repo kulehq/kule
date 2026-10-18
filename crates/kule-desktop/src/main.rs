@@ -4,6 +4,8 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod ext_serve;
+mod extensions;
 mod menu;
 mod pty;
 mod shell_path;
@@ -19,8 +21,8 @@ use kule_daemon::shortcuts::Shortcuts;
 use kule_daemon::themes::{ThemeFile, Themes};
 use kule_daemon::{
     AgentProfile, Alert, Alerts, Call, Client, Commit, DailyBudget, Hello, Money, Notice, PROTOCOL,
-    PolicyChoice, Question, Result, Review, RunEvent, Sequenced, TaskColor, TaskView, Timeline,
-    default_home,
+    PolicyChoice, Question, Result, Review, RunEvent, Sequenced, TaskChange, TaskColor, TaskView,
+    Timeline, default_home,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -671,6 +673,12 @@ struct RunMessage {
 /// runs, starting the daemon again if it goes away. While the window is
 /// not in front, what needs the person also goes to the system's
 /// notifications.
+#[derive(Clone, Serialize)]
+struct TaskChanged {
+    task: String,
+    change: TaskChange,
+}
+
 fn relay(app: AppHandle, home: &Path) {
     let kule = Kule {
         home: home.to_owned(),
@@ -718,6 +726,13 @@ fn relay(app: AppHandle, home: &Path) {
                         tell(&app, alerts.tasks(&views));
                     }
                     let _ = app.emit("tasks", ());
+                }
+                Notice::TaskChanged { task, change } => {
+                    let _ = app.emit("task-changed", TaskChanged { task, change });
+                }
+                Notice::Extensions => {
+                    app.state::<extensions::Host>().forget();
+                    let _ = app.emit("extensions", ());
                 }
             });
         }
@@ -769,9 +784,20 @@ fn main() {
                 let _ = app.emit("menu", command.to_owned());
             }
         })
+        .manage(extensions::Host::start(&kule.home))
         .manage(kule)
         .manage(pty::Terminals::default())
         .invoke_handler(tauri::generate_handler![
+            extensions::extension_host,
+            extensions::extensions,
+            extensions::install_extension,
+            extensions::install_dev_extension,
+            extensions::approve_extension,
+            extensions::set_extension_enabled,
+            extensions::remove_extension,
+            extensions::extension_config,
+            extensions::set_extension_config,
+            extensions::extension_themes,
             agents,
             agent_list,
             agent_registry,

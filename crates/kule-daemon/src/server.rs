@@ -15,6 +15,7 @@ use std::time::{Duration, Instant};
 use serde::Serialize;
 use serde_json::Value;
 
+use crate::extensions as ext;
 use crate::protocol::{Call, Hello, PROTOCOL, Request, Response};
 use crate::service::Service;
 
@@ -398,6 +399,41 @@ pub fn dispatch(service: &Arc<Service>, call: Call) -> Result<Value, String> {
         Call::RemoveSecret { name, workspace } => {
             json(service.remove_secret(&name, workspace.as_deref())?)
         }
+        Call::Extensions => json(ext::list(service.home())?),
+        Call::InstallExtension { path } => {
+            let listed = ext::install(service.home(), &path)?;
+            service.extensions_changed();
+            json(listed)
+        }
+        Call::InstallDevExtension { path } => {
+            let listed = ext::install_folder(service.home(), &path)?;
+            service.extensions_changed();
+            json(listed)
+        }
+        Call::ApproveExtension { id, digest } => {
+            let listed = ext::approve(service.home(), &id, &digest)?;
+            service.extensions_changed();
+            json(listed)
+        }
+        Call::SetExtensionEnabled { id, enabled } => {
+            let listed = ext::set_enabled(service.home(), &id, enabled)?;
+            service.extensions_changed();
+            json(listed)
+        }
+        Call::RemoveExtension { id } => {
+            ext::remove(service.home(), &id)?;
+            service.extensions_changed();
+            json(())
+        }
+        Call::ExtensionStorage { id } => json(ext::storage(service.home(), &id)?),
+        Call::SetExtensionStorage { id, value } => {
+            json(ext::set_storage(service.home(), &id, &value)?)
+        }
+        Call::ExtensionConfig { id } => json(ext::config(service.home(), &id)?),
+        Call::SetExtensionConfig { id, key, value } => {
+            json(ext::set_config(service.home(), &id, &key, &value)?)
+        }
+        Call::ExtensionThemes => json(ext::themes(service.home())?),
         Call::Hello => json(Hello {
             protocol: PROTOCOL,
             version: env!("CARGO_PKG_VERSION").to_owned(),
