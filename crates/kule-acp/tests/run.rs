@@ -473,9 +473,30 @@ fn what_a_command_leaves_running_ends_with_the_run() {
         .trim()
         .parse()
         .unwrap_or_else(|_| panic!("{said:?}"));
-    // SAFETY: signal 0 only asks whether the process is there.
-    let alive = unsafe { libc::kill(pid, 0) } == 0;
-    assert!(!alive, "the background process {pid} outlived the run");
+    assert!(gone(pid), "the background process {pid} outlived the run");
+}
+
+/// Whether process `pid` is gone within a few seconds: killed, it may stay
+/// a zombie until whoever inherited it reaps it, and a zombie runs nothing.
+fn gone(pid: i32) -> bool {
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    loop {
+        // SAFETY: signal 0 only asks whether the process is there.
+        if unsafe { libc::kill(pid, 0) } != 0 {
+            return true;
+        }
+        #[cfg(target_os = "linux")]
+        if fs::read_to_string(format!("/proc/{pid}/stat")).is_ok_and(|s| {
+            s.rsplit_once(") ")
+                .is_some_and(|(_, rest)| rest.starts_with('Z'))
+        }) {
+            return true;
+        }
+        if std::time::Instant::now() > until {
+            return false;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
 }
 
 /// Pictures go after the prompt's text to an agent that takes them; one

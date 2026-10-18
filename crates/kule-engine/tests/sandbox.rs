@@ -668,6 +668,7 @@ fn the_shield_keeps_an_unhooked_server_off_the_network() {
         "released, the port is the server's again"
     );
     let _ = server.kill();
+    let _ = server.wait();
 }
 
 /// On Linux, without a network of its own, any program's server is held to

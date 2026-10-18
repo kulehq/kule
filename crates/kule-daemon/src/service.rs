@@ -2026,6 +2026,7 @@ mod tests {
         app.running.lock().unwrap().remove(&id);
         let released = wait_for(false);
         let _ = server.kill();
+        let _ = server.wait();
         assert!(held, "the run's server was not shielded");
         assert!(released, "the port was kept after the run");
     }
