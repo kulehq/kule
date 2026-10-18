@@ -10,7 +10,7 @@ use serde_json::Value;
 
 /// Changes whenever a call, a result or a notice changes shape; a client
 /// and a daemon that disagree on it cannot talk.
-pub const PROTOCOL: u32 = 25;
+pub const PROTOCOL: u32 = 26;
 
 /// What a daemon says about itself.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -244,6 +244,20 @@ pub enum Call {
     /// Keeps these in place of the ones chosen before.
     SetShortcuts {
         shortcuts: crate::shortcuts::Shortcuts,
+    },
+    /// Stops the agent at work in the task.
+    StopRun {
+        task: String,
+    },
+    /// The limits on the runs of every task that sets none of its own.
+    Limits,
+    SetLimits {
+        limits: kule_engine::Limits,
+    },
+    /// The limits the task sets itself, field by field.
+    SetTaskLimits {
+        task: String,
+        limits: kule_engine::TaskLimits,
     },
     /// What every task may spend together in 24 hours, and what they did.
     DailyBudget,

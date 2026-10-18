@@ -10,6 +10,8 @@
 //! answered yes, because the policy decides at commit what reaches the
 //! workspace; asking twice would only train people to click through.
 
+mod control;
+pub mod governor;
 pub mod mcp;
 pub mod packages;
 mod profile;
@@ -20,7 +22,6 @@ pub mod trial;
 use std::collections::HashMap;
 use std::process::{Command, Stdio};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use agent_client_protocol::schema::ProtocolVersion;
@@ -39,6 +40,7 @@ use futures::channel::mpsc::UnboundedSender;
 use kule_engine::{RunUsage, Step, Task};
 use serde::{Deserialize, Serialize};
 
+pub use control::RunControl;
 pub use mcp::McpCommand;
 pub use profile::{AGENTS_FILE, Agents, Launch, Listed, Origin, Profile, parse_profiles, profile};
 
@@ -282,7 +284,20 @@ pub async fn run_with(
     mcp: &[McpCommand],
     events: UnboundedSender<Event>,
 ) -> Result<String, Error> {
-    run_pictured(task, agent, prompt, &[], mode, limit, mcp, None, events).await
+    let control = RunControl::new();
+    run_pictured(
+        task,
+        agent,
+        prompt,
+        &[],
+        mode,
+        limit,
+        mcp,
+        None,
+        &control,
+        events,
+    )
+    .await
 }
 
 /// A picture that goes with a prompt, base64.
@@ -296,7 +311,8 @@ pub struct Picture {
 /// says it takes pictures; one that does not gets the text alone, and the
 /// run notes that the pictures were left out. With `sandbox` (the agent's
 /// own), Kule offers to run the agent's commands for it there, so their
-/// output comes as they print (see [`terminals`]).
+/// output comes as they print (see [`terminals`]). `control` stops the run
+/// from outside (see [`RunControl::stop`]), and names its processes.
 #[allow(clippy::too_many_arguments)]
 pub async fn run_pictured(
     task: &Task,
@@ -307,10 +323,22 @@ pub async fn run_pictured(
     limit: Option<Cost>,
     mcp: &[McpCommand],
     sandbox: Option<kule_engine::Sandbox>,
+    control: &RunControl,
     events: UnboundedSender<Event>,
 ) -> Result<String, Error> {
-    let terminals =
-        sandbox.map(|s| Arc::new(terminals::Terminals::new(s, task.copy(), events.clone())));
+    let _finish = control::Finish(control.clone());
+    // Stopped before it started (a limit already reached, a person).
+    if let Some(reason) = control.reason() {
+        return Err(Error(reason));
+    }
+    let terminals = sandbox.map(|s| {
+        Arc::new(terminals::Terminals::new(
+            s,
+            task.copy(),
+            events.clone(),
+            control.clone(),
+        ))
+    });
     let mcp_servers: Vec<_> = mcp.iter().map(McpCommand::to_acp).collect();
     let log = task.copy().with_file_name("agent.log");
     let log = std::fs::OpenOptions::new()
@@ -337,6 +365,7 @@ pub async fn run_pictured(
     // ends, however it ends, everything the agent left running in it goes
     // too, so nothing keeps changing the copy behind the person's review.
     let _group = Group(child.id() as i32);
+    control.started_agent(child.id() as i32);
     let stdin = child.stdin.take().ok_or_else(|| error("no stdin"))?;
     let stdout = child.stdout.take().ok_or_else(|| error("no stdout"))?;
 
@@ -344,8 +373,6 @@ pub async fn run_pictured(
     let prompt = prompt.to_owned();
     let pictures = pictures.to_vec();
     let mode = mode.map(str::to_owned);
-    let over = Arc::new(tokio::sync::Notify::new());
-    let stopped = Arc::new(AtomicBool::new(false));
     let watcher = Watcher {
         task: task.clone(),
         events: events.clone(),
@@ -355,13 +382,13 @@ pub async fn run_pictured(
         printing: HashMap::new(),
         terminals: terminals.clone(),
         limit: limit.clone(),
-        over: Arc::clone(&over),
-        stopped: Arc::clone(&stopped),
+        control: control.clone(),
     };
     let mut watcher = Some(watcher);
     let turn_events = events.clone();
     let offers_terminals = terminals.is_some();
-    let stop = agent_client_protocol::Client
+    let stopping = control.clone();
+    let session = agent_client_protocol::Client
         .builder()
         .on_receive_notification(
             async move |notification: SessionNotification, _cx| {
@@ -375,7 +402,9 @@ pub async fn run_pictured(
         .on_receive_request(
             {
                 let events = events.clone();
+                let control = control.clone();
                 async move |request: RequestPermissionRequest, responder, _cx| {
+                    control.touch();
                     let choice = request
                         .options
                         .iter()
@@ -555,11 +584,12 @@ pub async fn run_pictured(
                 tokio::pin!(prompt);
                 let response = tokio::select! {
                     response = &mut prompt => response?,
-                    () = over.notified() => {
-                        // Over the budget: cancelled as a person would, and
-                        // given a moment to end the turn.
+                    () = stopping.stopped() => {
+                        // Stopped (a person, a limit, the budget):
+                        // cancelled as a person would, and given a moment
+                        // to end the turn.
                         connection.send_notification(CancelNotification::new(session_id))?;
-                        match tokio::time::timeout(Duration::from_secs(10), &mut prompt).await {
+                        match tokio::time::timeout(STOP_GRACE, &mut prompt).await {
                             Ok(response) => response?,
                             Err(_) => return Ok("cancelled".to_owned()),
                         }
@@ -576,27 +606,43 @@ pub async fn run_pictured(
                 }
                 Ok(format!("{:?}", response.stop_reason).to_lowercase())
             },
-        )
-        .await
-        .map_err(|e| Error(format!("ACP: {e}")))?;
+        );
+    // Stopped before the turn began (starting, or a slow session), or an
+    // agent that does not end its turn: given the same moment, then left.
+    let stopped_early = async {
+        control.stopped().await;
+        tokio::time::sleep(STOP_GRACE + Duration::from_secs(2)).await;
+    };
+    let outcome = tokio::select! {
+        outcome = session => outcome.map_err(|e| Error(format!("ACP: {e}"))),
+        () = stopped_early => Ok("cancelled".to_owned()),
+    };
+    let _ = child.kill();
+    // Stopped, the run fails with why; also when the agent died of it (a
+    // limit kills at once). An agent may report the cost only as the turn
+    // ends (Claude Code does): then the turn is over before the cancel,
+    // nothing was stopped, and the next run is the one refused.
+    let cancelled = match &outcome {
+        Ok(stop) => stop == "cancelled",
+        Err(_) => true,
+    };
+    if let Some(reason) = control.reason()
+        && cancelled
+    {
+        let _ = events.unbounded_send(Event::Done {
+            stop_reason: "cancelled".to_owned(),
+        });
+        return Err(Error(reason));
+    }
+    let stop = outcome?;
     let _ = events.unbounded_send(Event::Done {
         stop_reason: stop.clone(),
     });
-    let _ = child.kill();
-    // An agent may report the cost only as the turn ends (Claude Code
-    // does): then the turn is over before the cancel, nothing was stopped,
-    // and the next run is the one refused.
-    if stopped.load(Ordering::SeqCst)
-        && stop == "cancelled"
-        && let Some(limit) = &limit
-    {
-        return Err(Error(format!(
-            "stopped: what the agent reported it cost reached what was left of the task's budget, {:.2} {}",
-            limit.amount, limit.currency
-        )));
-    }
     Ok(stop)
 }
+
+/// How long a stopped agent has to end its turn.
+const STOP_GRACE: Duration = Duration::from_secs(10);
 
 /// The agent's process group, killed when dropped.
 struct Group(i32);
@@ -627,14 +673,14 @@ struct Watcher {
     /// The commands Kule runs for the agent, whose output goes to the tool
     /// call that shows them.
     terminals: Option<Arc<terminals::Terminals>>,
-    /// The cost the run may reach; `over` is told, once, when it does.
+    /// The cost the run may reach; the run is stopped when it does.
     limit: Option<Cost>,
-    over: Arc<tokio::sync::Notify>,
-    stopped: Arc<AtomicBool>,
+    control: RunControl,
 }
 
 impl Watcher {
     fn update(&mut self, update: SessionUpdate) {
+        self.control.touch();
         match update {
             SessionUpdate::AgentMessageChunk(chunk) => {
                 if let Some(text) = text_of(&chunk.content) {
@@ -702,8 +748,11 @@ impl Watcher {
                     context_size: usage.size,
                     cost,
                 });
-                if reached && !self.stopped.swap(true, Ordering::SeqCst) {
-                    self.over.notify_one();
+                if reached && let Some(limit) = &self.limit {
+                    self.control.stop(format!(
+                        "stopped: what the agent reported it cost reached what was left of the task's budget, {:.2} {}",
+                        limit.amount, limit.currency
+                    ));
                 }
             }
             _ => {}

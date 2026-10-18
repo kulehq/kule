@@ -276,6 +276,7 @@ function taskMenu(task, list, e) {
       title: "A new task on the same folder, starting from this one's copy as it is now",
     }),
     item(task.budget ? `Budget: ${money(task.budget)}…` : "Budget…", () => (closeMenu(), openTaskBudget(task.id))),
+    item("Limits…", () => (closeMenu(), openTaskLimits(task.id)), { title: limitsSummary(task.limits || {}) }),
     remove,
   ];
   const menu = h(
@@ -1055,7 +1056,10 @@ function renderComposer(task) {
   $("prompt").disabled = busy;
   $("agent").disabled = busy;
   $("timeout").value = String(Math.round(task.approval_timeout_secs / 60));
+  $("send").hidden = busy;
+  $("stop").hidden = !busy;
   renderSpent(task);
+  renderMeasure(task);
   renderPromptRefs(task);
 }
 
@@ -1090,11 +1094,11 @@ function renderSpent(task) {
 }
 
 /** Settings' sections, each a value of `state.view`. */
-const SETTINGS = ["agents", "policy", "rules", "secrets", "budget", "appearance", "shortcuts", "extensions", "profile"];
+const SETTINGS = ["agents", "policy", "rules", "secrets", "budget", "limits", "appearance", "shortcuts", "extensions", "profile"];
 
 async function openSettings(view = SETTINGS.includes(state.view) ? state.view : "agents") {
   closeMenu();
-  const opening = { agents: openAgents, policy: openPolicy, rules: openRules, secrets: openSecrets, budget: openBudget, appearance: openAppearance, shortcuts: openShortcuts, extensions: openExtensions, profile: openProfile }[view];
+  const opening = { agents: openAgents, policy: openPolicy, rules: openRules, secrets: openSecrets, budget: openBudget, limits: openLimits, appearance: openAppearance, shortcuts: openShortcuts, extensions: openExtensions, profile: openProfile }[view];
   await opening();
 }
 
@@ -1537,6 +1541,341 @@ async function setDailyBudget() {
   }
 }
 
+// --- Limits ----------------------------------------------------------------
+
+/** The limits on a run, each in the unit a person sets it in; the daemon
+ * keeps them in `stored` units (`to` and `from` convert). */
+const LIMIT_FIELDS = [
+  {
+    key: "cpu_percent",
+    label: "Processor",
+    unit: "cores",
+    step: 0.5,
+    to: (v) => Math.round(v * 100),
+    from: (n) => n / 100,
+    help: "Over it, the run is slowed down, not stopped: its processes are paused and resumed in turn.",
+  },
+  {
+    key: "memory_mb",
+    label: "Memory",
+    unit: "GB",
+    step: 0.5,
+    to: (v) => Math.round(v * 1024),
+    from: (n) => n / 1024,
+    help: "What the run's processes hold together. Over it, they are killed at once.",
+  },
+  {
+    key: "disk_mb",
+    label: "Disk",
+    unit: "GB",
+    step: 1,
+    to: (v) => Math.round(v * 1024),
+    from: (n) => n / 1024,
+    help: "What the task's copy, temporary files and home changes may grow by since the task was made.",
+  },
+  {
+    key: "run_minutes",
+    label: "One run",
+    unit: "min",
+    step: 5,
+    to: (v) => Math.round(v),
+    from: (n) => n,
+    help: "How long one run may take, start to end.",
+  },
+  {
+    key: "task_minutes",
+    label: "All of a task's runs",
+    unit: "h",
+    step: 1,
+    to: (v) => Math.round(v * 60),
+    from: (n) => n / 60,
+    help: "How long a task's runs may take together; none starts once it is used up.",
+  },
+  {
+    key: "idle_minutes",
+    label: "Doing nothing",
+    unit: "min",
+    step: 1,
+    to: (v) => Math.round(v),
+    from: (n) => n,
+    help: "How long the agent may say, run and print nothing before the run stops. A question waiting on you does not count.",
+  },
+];
+
+/** A limit as a person reads it: "2.5 GB", or "none". */
+function limitText(field, stored) {
+  if (stored === null || stored === undefined) return "none";
+  const v = field.from(stored);
+  return `${Number.isInteger(v) ? v : v.toFixed(v < 1 ? 2 : 1)} ${field.unit}`;
+}
+
+/** Bytes as a person reads them. */
+function bytesText(n) {
+  if (n >= 1024 ** 3) return `${(n / 1024 ** 3).toFixed(1)} GB`;
+  return `${Math.round(n / 1024 ** 2)} MB`;
+}
+
+/** The limits in force for a task, said in a line. */
+function limitsSummary(limits) {
+  const set = LIMIT_FIELDS.filter((f) => limits[f.key] != null).map((f) => `${f.label.toLowerCase()} ${limitText(f, limits[f.key])}`);
+  if (limits.gpu === false) set.push("no GPU");
+  return set.length ? set.join(" · ") : "no limits";
+}
+
+/** The task whose limits Settings opens on. */
+let focusLimits = null;
+
+async function openTaskLimits(id) {
+  focusLimits = id;
+  await openLimits();
+}
+
+async function openLimits() {
+  state.view = "limits";
+  renderSidebar();
+  renderTask();
+  let every = {};
+  try {
+    every = await call("limits");
+  } catch (err) {
+    fail(err);
+  }
+  replace(
+    $("agents-view"),
+    h(
+      "header",
+      { class: "agents-head" },
+      h("h2", {}, "Limits"),
+      h(
+        "p",
+        { class: "muted" },
+        "What each run may take of this computer. Over the processor limit a run is slowed down; over memory, disk or time it is stopped, and Live says why. These hold for every task that sets none of its own, below. A run going on keeps the limits it started with."
+      )
+    ),
+    h(
+      "div",
+      { class: "agent-card limits-card" },
+      h(
+        "div",
+        { class: "limits-grid" },
+        LIMIT_FIELDS.map((f) =>
+          h(
+            "label",
+            { class: "limit-field", title: f.help },
+            h("span", { class: "limit-label" }, f.label),
+            h(
+              "span",
+              { class: "limit-value" },
+              h("input", {
+                id: `limit-${f.key}`,
+                "data-key": `limit:${f.key}`,
+                type: "number",
+                min: 0,
+                step: f.step,
+                inputmode: "decimal",
+                placeholder: "none",
+                value: every[f.key] != null ? String(f.from(every[f.key])) : "",
+                onchange: setEveryLimits,
+              }),
+              f.unit
+            )
+          )
+        ),
+        h(
+          "label",
+          { class: "limit-field", title: "Whether the run's programs may use the GPU (Metal on macOS; /dev/dri and NVIDIA's devices on Linux). Only on or off: no system lets a share of it be set." },
+          h("span", { class: "limit-label" }, "GPU"),
+          h(
+            "span",
+            { class: "limit-value" },
+            h("input", { id: "limit-gpu", "data-key": "limit:gpu", type: "checkbox", checked: every.gpu !== false, onchange: setEveryLimits }),
+            "may be used"
+          )
+        )
+      ),
+      h("span", { class: "muted" }, "Empty for no limit.")
+    ),
+    taskLimits(every)
+  );
+  if (focusLimits) {
+    const row = document.querySelector(`#agents-view [data-task="${CSS.escape(focusLimits)}"]`);
+    if (row) {
+      row.open = true;
+      row.querySelector("summary")?.focus();
+    }
+    focusLimits = null;
+  }
+}
+
+async function setEveryLimits() {
+  const limits = { gpu: $("limit-gpu").checked };
+  for (const f of LIMIT_FIELDS) {
+    const text = $(`limit-${f.key}`).value.trim();
+    limits[f.key] = text === "" ? null : f.to(Number(text));
+  }
+  try {
+    await call("set_limits", { limits });
+    toast(`Every task: ${limitsSummary(limits)}`);
+  } catch (err) {
+    fail(err);
+  }
+  await refresh();
+  if (state.view === "limits") await openLimits();
+}
+
+/** Each task's own limits, field by field: every task's, none, or its own. */
+function taskLimits(every) {
+  const head = h(
+    "header",
+    { class: "agents-head task-budgets-head" },
+    h("h2", {}, "Each task"),
+    h("p", { class: "muted" }, "A task can set any limit for itself, or have none; the rest are every task's.")
+  );
+  if (!state.tasks.length) return h("section", { class: "task-budgets" }, head, h("p", { class: "muted" }, "No tasks yet."));
+  return h(
+    "section",
+    { class: "task-budgets" },
+    head,
+    h("ul", { class: "task-budget-list" }, state.tasks.map((task) => taskLimitsRow(task, every)))
+  );
+}
+
+function taskLimitsRow(task, every) {
+  const own = task.own_limits || {};
+  const used = task.time_used_secs ? `runs took ${durationText(task.time_used_secs)}` : "no runs yet";
+  const fields = LIMIT_FIELDS.map((f) => {
+    const set = Object.prototype.hasOwnProperty.call(own, f.key);
+    const choice = !set ? "every" : own[f.key] === null ? "none" : "own";
+    const input = h("input", {
+      "data-key": `limit:${task.id}:${f.key}:value`,
+      "aria-label": `${f.label}, ${f.unit}`,
+      type: "number",
+      min: 0,
+      step: f.step,
+      inputmode: "decimal",
+      value: choice === "own" ? String(f.from(own[f.key])) : "",
+      disabled: choice !== "own",
+      onchange: () => setTaskLimits(task),
+    });
+    const select = h(
+      "select",
+      {
+        "data-key": `limit:${task.id}:${f.key}`,
+        "data-field": f.key,
+        "aria-label": f.label,
+        onchange: () => {
+          input.disabled = select.value !== "own";
+          if (select.value === "own") input.focus();
+          else setTaskLimits(task);
+        },
+      },
+      h("option", { value: "every", selected: choice === "every" }, `Every task's (${limitText(f, every[f.key])})`),
+      h("option", { value: "none", selected: choice === "none" }, "No limit"),
+      h("option", { value: "own", selected: choice === "own" }, "Its own")
+    );
+    select.input = input;
+    return h(
+      "label",
+      { class: "limit-field", title: f.help },
+      h("span", { class: "limit-label" }, f.label),
+      h("span", { class: "limit-value" }, select, input, f.unit)
+    );
+  });
+  const gpuChoice = own.gpu === undefined || own.gpu === null ? "every" : own.gpu ? "yes" : "no";
+  const gpu = h(
+    "select",
+    { "data-key": `limit:${task.id}:gpu`, "data-field": "gpu", "aria-label": "GPU", onchange: () => setTaskLimits(task) },
+    h("option", { value: "every", selected: gpuChoice === "every" }, `Every task's (${every.gpu === false ? "off" : "may be used"})`),
+    h("option", { value: "yes", selected: gpuChoice === "yes" }, "May be used"),
+    h("option", { value: "no", selected: gpuChoice === "no" }, "Off")
+  );
+  return h(
+    "li",
+    { class: `task-budget-row task-limits-row${colorOf(task) ? ` color-${colorOf(task)}` : ""}` },
+    h(
+      "details",
+      { "data-task": task.id },
+      h(
+        "summary",
+        { "data-key": `limits:${task.id}` },
+        h("span", { class: "task-budget-name" }, taskName(task), h("span", { class: "muted" }, ` · ${task.id}`)),
+        h("span", { class: "muted task-budget-spent" }, `${limitsSummary(task.limits || {})} · ${used}`)
+      ),
+      h("div", { class: "limits-grid" }, fields, h("label", { class: "limit-field" }, h("span", { class: "limit-label" }, "GPU"), h("span", { class: "limit-value" }, gpu)))
+    )
+  );
+}
+
+/** Seconds as "1 h 20 min". */
+function durationText(secs) {
+  const minutes = Math.round(secs / 60);
+  if (minutes < 60) return `${minutes} min`;
+  return `${Math.floor(minutes / 60)} h${minutes % 60 ? ` ${minutes % 60} min` : ""}`;
+}
+
+async function setTaskLimits(task) {
+  const row = document.querySelector(`#agents-view [data-task="${CSS.escape(task.id)}"]`);
+  if (!row) return;
+  const limits = {};
+  for (const select of row.querySelectorAll("select[data-field]")) {
+    const key = select.dataset.field;
+    if (key === "gpu") {
+      if (select.value !== "every") limits.gpu = select.value === "yes";
+      continue;
+    }
+    const f = LIMIT_FIELDS.find((x) => x.key === key);
+    if (select.value === "none") limits[key] = null;
+    else if (select.value === "own") {
+      const text = select.input.value.trim();
+      if (text === "") return; // Waits for a value.
+      limits[key] = f.to(Number(text));
+    }
+  }
+  try {
+    const view = await call("set_task_limits", { task: task.id, limits });
+    toast(`${taskName(task)}: ${limitsSummary(view.limits)}`);
+  } catch (err) {
+    fail(err);
+  }
+  await refresh();
+  if (state.view === "limits") {
+    focusLimits = task.id;
+    await openLimits();
+  }
+}
+
+/** Task id → what its run at work takes now. */
+const liveMeasure = new Map();
+
+/** What the run at work takes, against the task's limits. */
+function renderMeasure(task) {
+  const el = $("run-measure");
+  const m = task.running ? liveMeasure.get(task.id) : null;
+  el.hidden = !m;
+  if (!m) return;
+  const l = task.limits || {};
+  const of = (key, used) => (l[key] != null ? used / l[key] : 0);
+  const parts = [
+    `CPU ${m.cpu_percent}%${l.cpu_percent != null ? ` / ${l.cpu_percent}%` : ""}`,
+    `${bytesText(m.memory)}${l.memory_mb != null ? ` / ${limitText(LIMIT_FIELDS[1], l.memory_mb)}` : ""}`,
+  ];
+  if (m.disk != null) parts.push(`disk +${bytesText(m.disk)}${l.disk_mb != null ? ` / ${limitText(LIMIT_FIELDS[2], l.disk_mb)}` : ""}`);
+  parts.push(plural(m.processes, "process", "processes"));
+  el.textContent = parts.join(" · ");
+  const near = Math.max(of("memory_mb", m.memory / 1024 ** 2), of("disk_mb", (m.disk || 0) / 1024 ** 2));
+  el.classList.toggle("ask", near >= 0.8);
+  el.classList.toggle("slowed", l.cpu_percent != null && m.cpu_percent >= l.cpu_percent * 0.9);
+}
+
+async function stopRun(task) {
+  try {
+    await call("stop_run", { task: task.id });
+    toast(`Stopping the agent in ${taskName(task)}`);
+  } catch (err) {
+    fail(err);
+  }
+}
+
 // --- Questions -------------------------------------------------------------
 
 function clock(unix) {
@@ -1938,12 +2277,20 @@ function fold(task, event) {
     absorb(task, event.event);
   } else if (event.type === "preparing") {
     streamOf(task).push({ kind: "note", text: event.text });
+  } else if (event.type === "resources") {
+    liveMeasure.set(task, event.measured);
   } else if (event.type === "finished") {
     const refused = event.denials.length ? ` · the sandbox refused ${plural(event.denials.length, "operation")}` : "";
+    // Stopped by a person or a limit: said as it is, not as a failure.
+    const stopped = event.error && event.error.startsWith("stopped: ");
     streamOf(task).push({
       kind: "finished",
       error: Boolean(event.error),
-      text: event.error ? `The run failed: ${event.error}` : `Done. Review the changes before they reach the folder${refused}.`,
+      text: stopped
+        ? `Stopped: ${event.error.slice("stopped: ".length)}. Review what it changed before it reaches the folder${refused}.`
+        : event.error
+          ? `The run failed: ${event.error}`
+          : `Done. Review the changes before they reach the folder${refused}.`,
     });
   }
 }
@@ -1951,7 +2298,15 @@ function fold(task, event) {
 async function onRun({ task, seq, event }) {
   tellExtensions("run", { task, seq, event }, "events.read");
   // What the run at work has cost so far; in the task's spent once it ends.
-  if (event.type === "prompt" || event.type === "finished") liveCost.delete(task);
+  if (event.type === "prompt" || event.type === "finished") {
+    liveCost.delete(task);
+    liveMeasure.delete(task);
+  }
+  // A limit stopped a run out of sight: said where it is seen.
+  if (event.type === "finished" && event.error?.startsWith("stopped: ") && task !== state.current && !event.error.includes("you stopped")) {
+    const t = state.tasks.find((x) => x.id === task);
+    toast(`${t ? taskName(t) : task}: ${event.error}`, "error");
+  }
   if (event.type === "agent" && event.event.type === "usage" && event.event.cost) {
     liveCost.set(task, event.event.cost);
     const current = currentTask();
@@ -1969,6 +2324,11 @@ async function onRun({ task, seq, event }) {
     state.buffered.get(task).push({ seq, event });
   }
   if (event.type === "prompt" || event.type === "finished") await refresh();
+  if (event.type === "resources") {
+    const current = currentTask();
+    if (current && current.id === task) renderMeasure(current);
+    return;
+  }
   if (task === state.current) renderStream(task);
 }
 
@@ -4776,6 +5136,7 @@ const PROFILE_PARTS = [
   ["shortcuts", "Shortcuts", "The shortcuts you set yourself"],
   ["policy", "Policy", "Kule's balanced or careful policy"],
   ["budget", "Daily budget", "What every task may cost together in a day"],
+  ["limits", "Limits", "What every task's runs may take: processor, memory, disk, GPU, time"],
   ["agents", "Your agents", "The agent profiles you added; they wait for approval on the other side"],
 ];
 
@@ -4793,12 +5154,13 @@ async function openProfile() {
   renderSidebar();
   renderTask();
   renderProfile();
-  const [policy, daily, agents] = await Promise.all([
+  const [policy, daily, agents, limits] = await Promise.all([
     call("policy").catch(() => null),
     call("daily_budget").catch(() => null),
     call("agent_list").catch(() => []),
+    call("limits").catch(() => null),
   ]);
-  profileView.now = { policy, daily, agents: agents.filter((l) => l.origin === "person").map((l) => l.profile.name) };
+  profileView.now = { policy, daily, limits, agents: agents.filter((l) => l.origin === "person").map((l) => l.profile.name) };
   renderProfile();
 }
 
@@ -4818,6 +5180,8 @@ function partSummary(part, from) {
     case "budget":
       if (!from.budget) return null;
       return from.budget.daily ? `${money(from.budget.daily)} a day` : "no daily budget";
+    case "limits":
+      return from.limits ? limitsSummary(from.limits) : null;
     case "agents":
       return from.agents ? (from.agents.length ? from.agents.join(", ") : "none") : null;
     default:
@@ -4832,6 +5196,7 @@ function profileNow() {
     shortcuts: keys.chosen,
     policy: now && now.policy,
     budget: now && now.daily ? { daily: now.daily.budget } : null,
+    limits: now && now.limits,
     agents: now ? now.agents : null,
   };
 }
@@ -4935,7 +5300,7 @@ function renderProfile() {
         "section",
         { class: "agent-card profile-block", "aria-label": "Import" },
         h("h3", {}, "Import"),
-        h("p", { class: "muted" }, "This profile holds the parts below. Tick the ones to apply: themes join yours, shortcuts, the policy and the budget take the profile's, and its agents wait for your approval before they run."),
+        h("p", { class: "muted" }, "This profile holds the parts below. Tick the ones to apply: themes join yours, shortcuts, the policy, the budget and the limits take the profile's, and its agents wait for your approval before they run."),
         h(
           "div",
           { class: "profile-parts" },
@@ -5129,6 +5494,11 @@ const COMMANDS = [
     run: () => withTask(() => { if (!$("send").disabled) $("composer").requestSubmit(); }),
   },
   { id: "task.budget", title: "Set the task's budget", group: "Task", keys: "", run: () => withTask((t) => openTaskBudget(t.id)) },
+  { id: "task.limits", title: "Set the task's limits: processor, memory, disk, GPU, time", group: "Task", keys: "", run: () => withTask((t) => openTaskLimits(t.id)) },
+  {
+    id: "task.stop", title: "Stop the agent at work", group: "Task", keys: "Mod+Shift+K", inFields: true,
+    run: () => withTask((t) => (t.running ? stopRun(t) : toast("No agent is at work here"))),
+  },
   { id: "task.wait", title: "Set how long the agent waits for you", group: "Task", keys: "", run: () => withTask(() => { showTab("live"); $("timeout").focus(); }) },
 
   {
@@ -5214,6 +5584,7 @@ function labelControls() {
   label($("toggle-bottom"), "layout.bottom", "Show or hide the bottom panel");
   label($("toggle-right"), "layout.right", "Show or hide the right side");
   label($("send"), "prompt.run", "Run (Enter; Shift+Enter for a new line)");
+  label($("stop"), "task.stop", "Stop: cancel the agent's turn; it is killed if it does not end it within seconds");
   $("send-keys").textContent = "↵";
   renderLayout();
 }
@@ -5593,6 +5964,14 @@ async function start() {
   $("new-group").addEventListener("click", newGroup);
   $("empty-new-task").addEventListener("click", newTask);
   $("composer").addEventListener("submit", submitPrompt);
+  $("stop").addEventListener("click", () => {
+    const task = currentTask();
+    if (task && task.running) stopRun(task);
+  });
+  $("run-measure").addEventListener("click", () => {
+    const task = currentTask();
+    if (task) openTaskLimits(task.id);
+  });
   watchSelection();
   // Enter alone is a new line in the prompt; running it is a shortcut
   // (prompt.run, ⌘/Ctrl+Enter by default).

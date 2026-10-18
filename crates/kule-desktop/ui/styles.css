@@ -4090,3 +4090,111 @@ body.dragging-panel * {
 .ext-log.error .ext-log-level {
   color: var(--deny);
 }
+
+/* Settings > Limits. */
+.limits-card {
+  max-width: 760px;
+}
+
+.limits-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 10px 18px;
+  width: 100%;
+}
+
+.limit-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.limit-label {
+  font-weight: 550;
+}
+
+.limit-value {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+}
+
+.limit-value input[type="number"],
+.limit-value select {
+  min-width: 0;
+  min-height: 30px;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+}
+
+.limit-value input[type="number"] {
+  width: 5.5em;
+}
+
+.limit-value select {
+  flex: 1 1 auto;
+}
+
+.limit-value input:disabled {
+  opacity: 0.5;
+}
+
+.task-limits-row {
+  display: block;
+}
+
+.task-limits-row summary {
+  display: grid;
+  grid-template-columns: minmax(8em, 1fr) minmax(0, 2fr);
+  align-items: center;
+  gap: 14px;
+  cursor: pointer;
+}
+
+.task-limits-row details[open] summary {
+  margin-bottom: 10px;
+}
+
+/* Live: stopping a run, and what it takes. */
+.stop-button {
+  border-color: var(--deny);
+  color: var(--deny);
+}
+
+.run-button.stop-button:hover:not(:disabled) {
+  background: var(--deny);
+  color: var(--accent-text);
+}
+
+.run-measure {
+  margin-left: auto;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font: 11.5px var(--mono);
+  cursor: pointer;
+}
+
+.run-measure:hover {
+  color: var(--text);
+}
+
+.run-measure.ask {
+  color: var(--ask);
+}
+
+.run-measure.slowed::after {
+  content: " · slowed";
+  color: var(--ask);
+}
+
+.task-limits-row summary .task-budget-spent {
+  text-align: right;
+}

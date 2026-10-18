@@ -175,6 +175,43 @@ async fn main() -> agent_client_protocol::Result<()> {
                             perform(&connection, &session, &dir, n, &said).await?;
                             continue;
                         }
+                        // Says nothing for a while, or runs a command of
+                        // its own (a long build), and stops either when
+                        // cancelled, as a real agent does.
+                        let quiet = if let Some(ms) = command.strip_prefix("wait ") {
+                            Some((ms.parse().unwrap_or(100), None))
+                        } else {
+                            command.strip_prefix("exec ").map(|script| {
+                                let child = std::process::Command::new("/bin/sh")
+                                    .args(["-c", script])
+                                    .current_dir(&dir)
+                                    .stdin(std::process::Stdio::null())
+                                    .spawn()
+                                    .ok();
+                                (u64::MAX, child)
+                            })
+                        };
+                        if let Some((ms, mut child)) = quiet {
+                            let until = std::time::Instant::now()
+                                + std::time::Duration::from_millis(ms.min(3_600_000));
+                            while std::time::Instant::now() < until {
+                                if cancelled.load(Ordering::SeqCst) {
+                                    if let Some(child) = child.as_mut() {
+                                        let _ = child.kill();
+                                        let _ = child.wait();
+                                    }
+                                    return responder
+                                        .respond(PromptResponse::new(StopReason::Cancelled));
+                                }
+                                if let Some(c) = child.as_mut()
+                                    && !matches!(c.try_wait(), Ok(None))
+                                {
+                                    break;
+                                }
+                                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                            }
+                            continue;
+                        }
                         if let Some(pieces) = command.strip_prefix("stream ") {
                             let deltas = deltas.load(Ordering::SeqCst);
                             stream(&connection, &session, n, pieces, deltas).await?;

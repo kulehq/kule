@@ -609,6 +609,14 @@ fn run() -> Result<ExitCode> {
                 );
             }
             let limit = Money::tighter(limit, daily);
+            let time_left = task.time_left()?;
+            if time_left.is_some_and(|l| l.is_zero()) {
+                bail!(
+                    "the task has used its time: its runs took {} minutes together; raise its time limit in the app or turn it off",
+                    task.time_used()?.as_secs() / 60
+                );
+            }
+            let plan = kule_acp::governor::Plan::new(&task.limits_in_force()?, time_left);
             let _at_work = task.agent_at_work()?;
             let started = Instant::now();
             let usage = RunUsage {
@@ -631,15 +639,32 @@ fn run() -> Result<ExitCode> {
             let (tx, rx) = futures::channel::mpsc::unbounded();
             let runtime = tokio::runtime::Runtime::new()?;
             let printer = runtime.spawn(print_events(rx, usage, profile.name.clone()));
-            let outcome = runtime.block_on(kule_acp::run_limited(
+            let control = kule_acp::RunControl::new();
+            let governor = kule_acp::governor::govern(
+                &task,
+                plan,
+                control.clone(),
+                kule_acp::governor::Watch {
+                    // The CLI's proxy asks no one.
+                    waiting: Box::new(|| false),
+                    report: Box::new(|_| {}),
+                },
+            );
+            let outcome = runtime.block_on(kule_acp::run_pictured(
                 &task,
                 command,
                 &prompt,
+                &[],
                 mode.as_deref(),
                 limit,
+                &[],
+                None,
+                &control,
                 tx,
             ));
-            if let Ok(usage) = runtime.block_on(printer) {
+            let _ = governor.join();
+            if let Ok(mut usage) = runtime.block_on(printer) {
+                usage.duration_secs = started.elapsed().as_secs();
                 // Kept whether the run went well or not: it was spent either way.
                 task.record_usage(&usage)?;
                 if usage.cost.is_none() && task.budget()?.is_some() {

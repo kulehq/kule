@@ -132,6 +132,10 @@ pub struct Sandbox {
     kept: PathBuf,
     /// The task's home layer, the commands' `HOME` (see [`crate::home`]).
     layer: Option<PathBuf>,
+    /// Whether commands may use the GPU.
+    gpu: bool,
+    /// The largest file a command may write, in bytes.
+    file_size: Option<u64>,
     /// Marks this sandbox's refusals where the platform reports them (macOS).
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     tag: String,
@@ -185,6 +189,8 @@ impl Sandbox {
             env: Vec::new(),
             kept: task.home().join("kept"),
             layer: None,
+            gpu: true,
+            file_size: None,
             tag: format!("kule-{}-{nanos:x}", task.id()),
         })
     }
@@ -209,6 +215,14 @@ impl Sandbox {
     /// `sources` names.
     pub fn for_task_with(task: &Task, sources: Option<Sources>) -> Result<Sandbox> {
         let mut sandbox = Sandbox::new(task)?;
+        let limits = task.limits_in_force()?;
+        if !limits.gpu {
+            sandbox.deny_gpu();
+        }
+        // No one file outgrows the disk limit between two measures of it.
+        if let Some(mb) = limits.disk_mb {
+            sandbox.limit_file_size(mb.saturating_mul(1024 * 1024));
+        }
         let tmp = Path::new("/tmp");
         if tmp.is_dir() {
             sandbox.allow_write(tmp)?;
@@ -231,6 +245,19 @@ impl Sandbox {
         }
         self.env = caches::prepare(&self.tmp, sources)?;
         Ok(())
+    }
+
+    /// Commands cannot use the GPU: on macOS they cannot open its devices
+    /// (Metal, and OpenCL through it); on Linux `/dev/dri` and NVIDIA's
+    /// devices stay read-only, which leaves them unusable.
+    pub fn deny_gpu(&mut self) {
+        self.gpu = false;
+    }
+
+    /// A command cannot write a file larger than `bytes`: the write fails
+    /// (`EFBIG`) past it.
+    pub fn limit_file_size(&mut self, bytes: u64) {
+        self.file_size = Some(bytes);
     }
 
     pub fn allow_write(&mut self, path: &Path) -> Result<()> {
@@ -379,10 +406,23 @@ impl Sandbox {
         // whole process group can be stopped when it is done.
         // SAFETY: setsid is async-signal-safe and touches nothing but the
         // child between fork and exec.
+        let file_size = self.file_size;
         unsafe {
-            command.pre_exec(|| {
+            command.pre_exec(move || {
                 if libc::setsid() == -1 {
                     return Err(std::io::Error::last_os_error());
+                }
+                if let Some(bytes) = file_size {
+                    let limit = libc::rlimit {
+                        rlim_cur: bytes as libc::rlim_t,
+                        rlim_max: bytes as libc::rlim_t,
+                    };
+                    if libc::setrlimit(libc::RLIMIT_FSIZE, &limit) == -1 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    // Past it the write fails rather than the program dying
+                    // of SIGXFSZ.
+                    libc::signal(libc::SIGXFSZ, libc::SIG_IGN);
                 }
                 Ok(())
             });
@@ -578,6 +618,14 @@ impl Sandbox {
                     "(deny network-outbound (remote ip) {tag})\n(allow network-outbound (remote ip \"localhost:{port}\"))\n"
                 ));
             }
+        }
+        if !self.gpu {
+            // The GPU's user clients: Apple silicon's (`AGXDeviceUserClient`
+            // is one) and the IOAccelerator family's of Intel Macs. A class
+            // matches its subclasses too.
+            text.push_str(&format!(
+                "(deny iokit-open (iokit-user-client-class \"IOGPUDeviceUserClient\" \"IOAccelDevice2\" \"IOAccelSharedUserClient2\" \"IOAccelContext2\" \"IOAccelCommandQueue2\") {tag})\n"
+            ));
         }
         if self.network != Network::Allow {
             // Name lookups would carry data out past the proxy, which
@@ -792,14 +840,19 @@ impl Sandbox {
         );
         writable.extend([self.copy.clone(), self.tmp.clone()]);
         writable.extend(self.layer.clone());
-        let devices = [
+        let mut devices: Vec<PathBuf> = [
             "/dev/null",
             "/dev/zero",
             "/dev/full",
             "/dev/tty",
             "/dev/ptmx",
             "/dev/pts",
-        ];
+        ]
+        .map(PathBuf::from)
+        .to_vec();
+        if self.gpu {
+            devices.extend(gpu_devices());
+        }
         let mut created = ruleset
             .create()
             .map_err(|e| fail(&e))?
@@ -817,6 +870,24 @@ impl Sandbox {
         }
         Ok(created)
     }
+}
+
+/// The GPU's devices: DRM's (`/dev/dri`, render and card nodes) and
+/// NVIDIA's, those this computer has.
+#[cfg(target_os = "linux")]
+fn gpu_devices() -> Vec<PathBuf> {
+    let mut found: Vec<PathBuf> = Vec::new();
+    if Path::new("/dev/dri").is_dir() {
+        found.push(PathBuf::from("/dev/dri"));
+    }
+    if let Ok(dir) = std::fs::read_dir("/dev") {
+        found.extend(
+            dir.flatten()
+                .filter(|e| e.file_name().to_string_lossy().starts_with("nvidia"))
+                .map(|e| e.path()),
+        );
+    }
+    found
 }
 
 /// `roots` with `hidden` taken out: a root that is an ancestor of `hidden`

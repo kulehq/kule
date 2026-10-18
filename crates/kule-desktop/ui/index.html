@@ -52,6 +52,7 @@
             <button class="tab" role="tab" id="settings-rules" aria-controls="agents-view" data-view="rules" type="button">Rules</button>
             <button class="tab" role="tab" id="settings-secrets" aria-controls="agents-view" data-view="secrets" type="button">Secrets</button>
             <button class="tab" role="tab" id="settings-budget" aria-controls="agents-view" data-view="budget" type="button">Budget</button>
+            <button class="tab" role="tab" id="settings-limits" aria-controls="agents-view" data-view="limits" type="button">Limits</button>
             <button class="tab" role="tab" id="settings-appearance" aria-controls="agents-view" data-view="appearance" type="button">Appearance</button>
             <button class="tab" role="tab" id="settings-shortcuts" aria-controls="agents-view" data-view="shortcuts" type="button">Shortcuts</button>
             <button class="tab" role="tab" id="settings-extensions" aria-controls="agents-view" data-view="extensions" type="button">Extensions</button>
@@ -155,6 +156,7 @@
                 title="The agent works in the task's copy; nothing reaches your folder until you review and commit it."
               ></textarea>
               <button class="run-button" id="send" type="submit" aria-keyshortcuts="Control+Enter Meta+Enter">Run</button>
+              <button class="run-button stop-button" id="stop" type="button" title="Cancel the agent's turn; it is killed if it does not end it within seconds" hidden>Stop</button>
             </div>
             <div class="composer-bar">
               <label class="agent-pick" title="The agent that takes the prompt">
@@ -176,6 +178,13 @@
                   <option value="480">8 hours</option>
                 </select>
               </label>
+              <button
+                class="run-measure"
+                id="run-measure"
+                type="button"
+                title="What the run takes now, against the task's limits. Click to change them."
+                hidden
+              ></button>
             </div>
           </form>
         </section>

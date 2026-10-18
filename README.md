@@ -388,8 +388,8 @@ it writes in Kule reaches it outside; you sign it in there once.
   stay in the window so they keep working in a text field.
 - **Profile**: your choices in one `.kule-profile.json` file, all of them
   or the parts you tick: the theme in use and your own themes, your
-  shortcuts, Kule's balanced or careful policy, the daily budget and the
-  agent profiles you added. On import Kule shows what the file holds
+  shortcuts, Kule's balanced or careful policy, the daily budget, the
+  limits and the agent profiles you added. On import Kule shows what the file holds
   before anything changes, and you pick the parts to apply; themes join
   yours, the rest take the profile's, and its agents wait for your
   approval before they run. Secrets, remembered approvals and a policy
@@ -445,6 +445,33 @@ Gemini reports neither, and a budget does not hold what is not reported.
 every task may cost together in any 24 hours, the same
 way; a run is held to the tighter of the two. The app tells you when a
 task has spent 80% of its budget, and when it has spent it all.
+
+*Settings → Limits* (also a task's ⋮ menu) sets what a run may take of
+this computer, for every task and, field by field, for each one:
+
+- **Processor**, in cores: over it the run is slowed down, not stopped.
+  Kule pauses and resumes its processes in turn (`SIGSTOP`/`SIGCONT`,
+  a tenth of a second at a time), which needs no privileges on either
+  system.
+- **Memory**: what the run's processes hold together (their footprint on
+  macOS, their proportional share on Linux). Over it they are killed at
+  once.
+- **Disk**: what the task's copy, temporary files and home changes may
+  grow by since the task was made. Kule measures it as often as a walk
+  through them allows (at most every second) and stops the run over it;
+  no single file can be written past it.
+- **GPU**, on or off: off, Metal (and OpenCL through it) gets no device on
+  macOS, and `/dev/dri` and NVIDIA's devices stay read-only on Linux. No
+  system lets a share of a GPU be set.
+- **Time**: one run's, all of a task's runs' together (none starts once it
+  is used up), and how long the agent may do nothing (no message, tool
+  call, output, processor use or new process) before the run stops. A
+  question waiting on you does not count as doing nothing.
+
+A run stopped by a limit fails with why, in Live. **Stop** (⌘⇧K) stops
+the run at work: its turn is cancelled, and the agent is killed if it does
+not end it within ten seconds. While a run goes on, Live shows what it
+takes against its limits. `kule run` is held to the same limits.
 
 ## Writes in your home, caught for review
 

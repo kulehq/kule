@@ -67,6 +67,9 @@ pub struct RunUsage {
     pub context_size: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cost: Option<Money>,
+    /// How long the run took, start to end.
+    #[serde(default)]
+    pub duration_secs: u64,
 }
 
 /// What a task's runs used together.

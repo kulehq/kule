@@ -22,9 +22,9 @@ use kule_daemon::settings_profile::{Part, ProfileFile};
 use kule_daemon::shortcuts::Shortcuts;
 use kule_daemon::themes::{ThemeFile, Themes};
 use kule_daemon::{
-    AgentProfile, Alert, Alerts, Call, Client, Commit, DailyBudget, Hello, Money, Notice, PROTOCOL,
-    PolicyChoice, Question, Result, Review, RunEvent, Sequenced, TaskChange, TaskColor, TaskView,
-    Timeline, default_home,
+    AgentProfile, Alert, Alerts, Call, Client, Commit, DailyBudget, Hello, Limits, Money, Notice,
+    PROTOCOL, PolicyChoice, Question, Result, Review, RunEvent, Sequenced, TaskChange, TaskColor,
+    TaskLimits, TaskView, Timeline, default_home,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -669,6 +669,26 @@ fn set_daily_budget(kule: K<'_>, budget: Option<Money>) -> Result<DailyBudget> {
 }
 
 #[tauri::command(async)]
+fn limits(kule: K<'_>) -> Result<Limits> {
+    kule.call(Call::Limits)
+}
+
+#[tauri::command(async)]
+fn set_limits(kule: K<'_>, limits: Limits) -> Result<Limits> {
+    kule.call(Call::SetLimits { limits })
+}
+
+#[tauri::command(async)]
+fn set_task_limits(kule: K<'_>, task: String, limits: TaskLimits) -> Result<TaskView> {
+    kule.call(Call::SetTaskLimits { task, limits })
+}
+
+#[tauri::command(async)]
+fn stop_run(kule: K<'_>, task: String) -> Result<()> {
+    kule.call(Call::StopRun { task })
+}
+
+#[tauri::command(async)]
 fn start_run(
     kule: K<'_>,
     task: String,
@@ -936,6 +956,10 @@ fn main() {
             set_shortcuts,
             daily_budget,
             set_daily_budget,
+            limits,
+            set_limits,
+            set_task_limits,
+            stop_run,
             start_run,
             stream,
         ])

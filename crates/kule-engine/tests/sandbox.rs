@@ -912,3 +912,78 @@ fn a_hidden_directory_stays_hidden_after_a_path_inside_it() {
         assert!(!ok(&out), "{path}: {out:?}");
     }
 }
+
+#[test]
+fn a_command_cannot_write_a_file_past_the_size_limit() {
+    let s = Setup::new();
+    let mut sandbox = s.sandbox();
+    sandbox.limit_file_size(1 << 20);
+    let out = sh(&sandbox, "head -c 3000000 /dev/zero > big; echo $?");
+    assert_ne!(text(&out), "0", "the write went through");
+    let size = fs::metadata(s.task.copy().join("big")).unwrap().len();
+    assert!(size <= 1 << 20, "{size}");
+    // Without the limit it goes through.
+    let out = sh(&s.sandbox(), "head -c 3000000 /dev/zero > big2; echo $?");
+    assert_eq!(text(&out), "0");
+}
+
+#[test]
+fn the_task_s_limits_reach_its_sandbox() {
+    let s = Setup::new();
+    s.task
+        .set_limits(&kule_engine::TaskLimits {
+            disk_mb: Some(Some(1)),
+            ..Default::default()
+        })
+        .unwrap();
+    let sandbox = Sandbox::for_task_with(&s.task, None).unwrap();
+    let out = sh(&sandbox, "head -c 3000000 /dev/zero > big; echo $?");
+    assert_ne!(text(&out), "0", "the write went through");
+}
+
+/// Metal, through a small Swift program: whether it gets a device and runs
+/// a command on it. `None` where it cannot be told: no Swift compiler, or
+/// no GPU (a virtual machine).
+#[cfg(target_os = "macos")]
+fn metal_works(sandbox: Option<&Sandbox>, probe: &Path) -> Option<bool> {
+    let out = match sandbox {
+        Some(sandbox) => sandbox
+            .command(probe.to_str().unwrap(), &[])
+            .unwrap()
+            .output(),
+        None => Command::new(probe).output(),
+    }
+    .ok()?;
+    Some(String::from_utf8_lossy(&out.stdout).starts_with("gpu ok"))
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn a_command_denied_the_gpu_gets_no_metal_device() {
+    let s = Setup::new();
+    let dir = s.outside();
+    let source = dir.join("probe.swift");
+    fs::write(
+        &source,
+        "import Metal\n\
+         guard let d = MTLCreateSystemDefaultDevice(), let q = d.makeCommandQueue(), let b = d.makeBuffer(length: 4096), let c = q.makeCommandBuffer(), let e = c.makeBlitCommandEncoder() else { print(\"no device\"); exit(2) }\n\
+         e.fill(buffer: b, range: 0..<4096, value: 7); e.endEncoding(); c.commit(); c.waitUntilCompleted()\n\
+         print(c.status == .completed ? \"gpu ok\" : \"gpu failed\")\n",
+    )
+    .unwrap();
+    let probe = dir.join("probe");
+    let built = Command::new("swiftc")
+        .arg(&source)
+        .arg("-o")
+        .arg(&probe)
+        .status()
+        .is_ok_and(|s| s.success());
+    if !built || metal_works(None, &probe) != Some(true) {
+        eprintln!("skipped: no Swift compiler or no GPU here");
+        return;
+    }
+    assert_eq!(metal_works(Some(&s.sandbox()), &probe), Some(true));
+    let mut denied = s.sandbox();
+    denied.deny_gpu();
+    assert_eq!(metal_works(Some(&denied), &probe), Some(false));
+}

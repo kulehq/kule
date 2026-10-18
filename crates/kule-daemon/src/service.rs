@@ -114,6 +114,16 @@ pub struct TaskView {
     /// The group the person put the task in.
     #[serde(default)]
     pub group: Option<u64>,
+    /// What its runs may take: its own limits, and every task's where it
+    /// sets none.
+    #[serde(default)]
+    pub limits: kule_engine::Limits,
+    /// The limits it sets itself.
+    #[serde(default)]
+    pub own_limits: kule_engine::TaskLimits,
+    /// How long its runs took together.
+    #[serde(default)]
+    pub time_used_secs: u64,
 }
 
 /// The ACP registry as the app shows it.
@@ -245,6 +255,11 @@ pub enum RunEvent {
     Preparing {
         text: String,
     },
+    /// What the run takes now, every two seconds while it goes on; only
+    /// the latest is kept.
+    Resources {
+        measured: kule_acp::governor::Measured,
+    },
     /// The run is over; `error` says why it failed.
     Finished {
         error: Option<String>,
@@ -305,6 +320,8 @@ pub struct Service {
     home: PathBuf,
     /// Tasks with an agent at work: one agent per task at a time.
     running: Mutex<HashSet<String>>,
+    /// What stops each run, by task.
+    controls: Mutex<HashMap<String, kule_acp::RunControl>>,
     /// Questions agents are waiting on, from every task.
     approvals: Approvals,
     subscribers: Subscribers,
@@ -377,6 +394,7 @@ impl Service {
         Service {
             home,
             running: Mutex::new(HashSet::new()),
+            controls: Mutex::new(HashMap::new()),
             approvals,
             subscribers,
             streams: Mutex::new(HashMap::new()),
@@ -452,6 +470,13 @@ impl Service {
             if let Some(at) = kept.iter().rposition(same) {
                 kept.remove(at);
             }
+        }
+        if matches!(event, RunEvent::Resources { .. })
+            && let Some(at) = kept
+                .iter()
+                .rposition(|s| matches!(s.event, RunEvent::Resources { .. }))
+        {
+            kept.remove(at);
         }
         if !merged {
             if kept.len() == KEPT_EVENTS {
@@ -1143,14 +1168,21 @@ impl Service {
             })
             .collect();
         let limit = budget_left(&self.home, &task)?;
+        let plan = plan(&task)?;
         if !self.running.lock().unwrap().insert(id.to_owned()) {
             return Err(format!("an agent is already at work in task {id}"));
         }
+        let control = kule_acp::RunControl::new();
+        self.controls
+            .lock()
+            .unwrap()
+            .insert(id.to_owned(), control.clone());
         // Marked in the task too, so the CLI and any other process see it.
         let at_work = match task.agent_at_work() {
             Ok(at_work) => at_work,
             Err(e) => {
                 self.running.lock().unwrap().remove(id);
+                self.controls.lock().unwrap().remove(id);
                 return Err(text(e));
             }
         };
@@ -1167,11 +1199,13 @@ impl Service {
             kule_view::refs::with_places(prompt, &refs),
         );
         std::thread::spawn(move || {
-            let (error, denials) = match service.run(&task, &profile, &prompt, &pictures, limit) {
+            let run = service.run(&task, &profile, &prompt, &pictures, limit, plan, &control);
+            let (error, denials) = match run {
                 Ok(denials) => (None, denials),
                 Err(e) => (Some(e), Vec::new()),
             };
             drop(at_work);
+            service.controls.lock().unwrap().remove(task.id());
             service.running.lock().unwrap().remove(task.id());
             // Before the window hears the run is over and asks again.
             let _ = service.rescan(task.id());
@@ -1180,7 +1214,40 @@ impl Service {
         Ok(())
     }
 
-    /// One run, start to end; returns what the sandbox refused.
+    /// Stops the run in task `id` at once: its turn is cancelled, and the
+    /// agent killed if it does not end it.
+    pub fn stop_run(&self, id: &str) -> Result<()> {
+        match self.controls.lock().unwrap().get(id) {
+            Some(control) => {
+                control.stop("stopped: you stopped the run");
+                Ok(())
+            }
+            None => Err(format!("no agent is at work in task {id}")),
+        }
+    }
+
+    /// The limits of every task that sets none of its own.
+    pub fn limits(&self) -> Result<kule_engine::Limits> {
+        kule_engine::limits(&self.home).map_err(text)
+    }
+
+    /// Sets [`Service::limits`]; runs going on keep the limits they started
+    /// with.
+    pub fn set_limits(&self, limits: &kule_engine::Limits) -> Result<kule_engine::Limits> {
+        kule_engine::set_limits(&self.home, limits).map_err(text)?;
+        notify(&self.subscribers, Notice::Tasks);
+        self.limits()
+    }
+
+    /// Sets the limits task `id` sets itself.
+    pub fn set_task_limits(&self, id: &str, limits: &kule_engine::TaskLimits) -> Result<TaskView> {
+        self.open(id)?.set_limits(limits).map_err(text)?;
+        self.view(id)
+    }
+
+    /// One run, start to end, held to `plan`; returns what the sandbox
+    /// refused.
+    #[allow(clippy::too_many_arguments)]
     fn run(
         self: &Arc<Self>,
         task: &Task,
@@ -1188,8 +1255,51 @@ impl Service {
         prompt: &str,
         pictures: &[kule_acp::Picture],
         limit: Option<kule_engine::Money>,
+        plan: kule_acp::governor::Plan,
+        control: &kule_acp::RunControl,
     ) -> Result<Vec<Denial>> {
         let started = Instant::now();
+        let governor = self.govern(task, plan, control);
+        let outcome = self.run_governed(task, profile, prompt, pictures, limit, control, started);
+        // The run is over by now, however it ended.
+        let _ = governor.join();
+        outcome
+    }
+
+    /// Holds the run `control` names to `plan`, telling subscribers what it
+    /// takes as it goes.
+    fn govern(
+        self: &Arc<Self>,
+        task: &Task,
+        plan: kule_acp::governor::Plan,
+        control: &kule_acp::RunControl,
+    ) -> std::thread::JoinHandle<()> {
+        let (asked, told) = (Arc::clone(self), Arc::clone(self));
+        let (id, told_id) = (task.id().to_owned(), task.id().to_owned());
+        kule_acp::governor::govern(
+            task,
+            plan,
+            control.clone(),
+            kule_acp::governor::Watch {
+                waiting: Box::new(move || asked.approvals.waiting().iter().any(|q| q.task == id)),
+                report: Box::new(move |measured| {
+                    told.emit(&told_id, RunEvent::Resources { measured });
+                }),
+            },
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn run_governed(
+        self: &Arc<Self>,
+        task: &Task,
+        profile: &kule_acp::Profile,
+        prompt: &str,
+        pictures: &[kule_acp::Picture],
+        limit: Option<kule_engine::Money>,
+        control: &kule_acp::RunControl,
+        started: Instant,
+    ) -> Result<Vec<Denial>> {
         let mut usage = kule_engine::RunUsage {
             agent: profile.name.clone(),
             started_unix: unix_now(),
@@ -1239,9 +1349,11 @@ impl Service {
             // The agent's commands, when it asks Kule to run them, run in
             // its own sandbox.
             Some(launch.sandbox.clone()),
+            control,
             tx,
         ));
-        if let Ok(usage) = runtime.block_on(forward) {
+        if let Ok(mut usage) = runtime.block_on(forward) {
+            usage.duration_secs = started.elapsed().as_secs();
             // Kept whether the run went well or not: it was spent either way.
             task.record_usage(&usage).map_err(text)?;
         }
@@ -1299,6 +1411,9 @@ impl Service {
             label: task.label().map_err(text)?,
             color: task.color().map_err(text)?,
             group: task.group().map_err(text)?,
+            limits: task.limits_in_force().map_err(text)?,
+            own_limits: task.limits().map_err(text)?,
+            time_used_secs: task.time_used().map_err(text)?.as_secs(),
         })
     }
 
@@ -1438,6 +1553,21 @@ fn budget_left(home: &Path, task: &Task) -> Result<Option<kule_engine::Money>> {
         daily => daily,
     };
     Ok(kule_engine::Money::tighter(left, daily))
+}
+
+/// The limits the next run of `task` is held to; refused when the task's
+/// runs used up its time.
+fn plan(task: &Task) -> Result<kule_acp::governor::Plan> {
+    let limits = task.limits_in_force().map_err(text)?;
+    let left = task.time_left().map_err(text)?;
+    if left.is_some_and(|l| l.is_zero()) {
+        return Err(format!(
+            "task {} has used its time: its runs took {} minutes together; raise its time limit or turn it off to run again",
+            task.id(),
+            task.time_used().map_err(text)?.as_secs() / 60
+        ));
+    }
+    Ok(kule_acp::governor::Plan::new(&limits, left))
 }
 
 fn unix_now() -> u64 {
@@ -2156,6 +2286,99 @@ mod tests {
         assert!(s.app.stream(&id).is_empty());
 
         assert_eq!(s.app.set_budget(&id, None).unwrap().budget, None);
+    }
+
+    #[test]
+    fn a_task_that_used_its_time_runs_no_agent() {
+        let s = Setup::new();
+        let (id, _) = s.task();
+        let every = kule_engine::Limits {
+            task_minutes: Some(10),
+            memory_mb: Some(2048),
+            ..Default::default()
+        };
+        let heard = s.app.subscribe();
+        assert_eq!(s.app.set_limits(&every).unwrap(), every);
+        assert!(matches!(heard.try_recv(), Ok(Notice::Tasks)));
+        let view = s.app.view(&id).unwrap();
+        assert_eq!(view.limits, every);
+        assert_eq!(view.own_limits, kule_engine::TaskLimits::default());
+
+        let task = s.app.open(&id).unwrap();
+        task.record_usage(&kule_engine::RunUsage {
+            duration_secs: 600,
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(s.app.view(&id).unwrap().time_used_secs, 600);
+        let e = s
+            .app
+            .start_run(&id, "claude-code", "hi", Vec::new())
+            .unwrap_err();
+        assert!(e.contains("has used its time"), "{e}");
+        assert!(!s.app.running.lock().unwrap().contains(&id));
+        assert!(s.app.controls.lock().unwrap().is_empty());
+
+        // The task's own limit stands in for every task's.
+        let own = kule_engine::TaskLimits {
+            task_minutes: Some(Some(20)),
+            memory_mb: Some(None),
+            ..Default::default()
+        };
+        let view = s.app.set_task_limits(&id, &own).unwrap();
+        assert_eq!(view.own_limits, own);
+        assert_eq!(
+            (view.limits.task_minutes, view.limits.memory_mb),
+            (Some(20), None)
+        );
+        assert_eq!(
+            plan(&task).unwrap().task_left,
+            Some((Duration::from_secs(600), Duration::from_secs(1200)))
+        );
+    }
+
+    #[test]
+    fn a_person_stops_the_run_at_work() {
+        let s = Setup::new();
+        let (id, _) = s.task();
+        let e = s.app.stop_run(&id).unwrap_err();
+        assert!(e.contains("no agent is at work"), "{e}");
+        let control = kule_acp::RunControl::new();
+        s.app
+            .controls
+            .lock()
+            .unwrap()
+            .insert(id.clone(), control.clone());
+        s.app.stop_run(&id).unwrap();
+        assert_eq!(
+            control.reason().as_deref(),
+            Some("stopped: you stopped the run")
+        );
+    }
+
+    #[test]
+    fn only_the_latest_measure_of_a_run_is_kept() {
+        let s = Setup::new();
+        let (id, _) = s.task();
+        let measured = |memory| RunEvent::Resources {
+            measured: kule_acp::governor::Measured {
+                memory,
+                ..Default::default()
+            },
+        };
+        s.app.emit(&id, measured(1));
+        s.app.emit(
+            &id,
+            RunEvent::Preparing {
+                text: "between".into(),
+            },
+        );
+        for n in 2..(KEPT_EVENTS as u64 * 2) {
+            s.app.emit(&id, measured(n));
+        }
+        let kept = s.app.stream(&id);
+        assert_eq!(kept.len(), 2);
+        assert_eq!(kept[1].event, measured(KEPT_EVENTS as u64 * 2 - 1));
     }
 
     #[test]

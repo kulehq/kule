@@ -18,6 +18,7 @@ use crate::fsops::{self, read_json, write_json};
 use crate::git::{self, GitState, Part};
 use crate::history::{Entry as HistoryEntry, Event};
 use crate::labels::{self, TaskColor};
+use crate::limits::TaskLimits;
 use crate::manifest::{Baseline, Entry, Kind, Stamp, Tree, relative, scan};
 use crate::meet::{self, Touched};
 use crate::outline::{self, FileOutline};
@@ -59,6 +60,17 @@ struct Settings {
     /// The group the person put the task in; its policy judges the task.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     group: Option<u64>,
+    /// What the task's runs may take, where the task sets its own.
+    #[serde(default, skip_serializing_if = "is_default")]
+    limits: TaskLimits,
+    /// What the copy, the temporary directory and the home changes took
+    /// when the task was made: disk limits count from there.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    disk_base: Option<u64>,
+}
+
+fn is_default(limits: &TaskLimits) -> bool {
+    *limits == TaskLimits::default()
 }
 
 fn default_timeout() -> u64 {
@@ -200,6 +212,8 @@ impl Task {
         if self.mask_copy(&mut baseline)? {
             self.save_baseline(&baseline)?;
         }
+        // Its own: the source's copy may have grown since it was made.
+        self.mark_disk_base()?;
         write_json(&self.dir.join("task.json"), &self.info)
     }
 
@@ -226,6 +240,7 @@ impl Task {
         if self.mask_copy(&mut baseline)? {
             self.save_baseline(&baseline)?;
         }
+        self.mark_disk_base()?;
         write_json(&self.dir.join("task.json"), &self.info)
     }
 
@@ -910,9 +925,48 @@ impl Task {
                 label: None,
                 color: None,
                 group: None,
+                limits: TaskLimits::default(),
+                disk_base: None,
             });
         }
         read_json(&path)
+    }
+
+    /// What the task sets for itself of the limits on its runs; see
+    /// [`Task::limits_in_force`].
+    pub fn limits(&self) -> Result<TaskLimits> {
+        Ok(self.settings()?.limits)
+    }
+
+    /// Sets [`Task::limits`], each value in its range.
+    pub fn set_limits(&self, limits: &TaskLimits) -> Result<()> {
+        limits.check()?;
+        let mut settings = self.settings()?;
+        settings.limits = *limits;
+        write_json(&self.dir.join("settings.json"), &settings)
+    }
+
+    /// What the task took on disk when it was made, which its disk limit
+    /// counts from; measured now for a task made before Kule kept it.
+    pub fn disk_base(&self) -> Result<u64> {
+        if let Some(base) = self.settings()?.disk_base {
+            return Ok(base);
+        }
+        self.mark_disk_base()
+    }
+
+    fn mark_disk_base(&self) -> Result<u64> {
+        let base = crate::resources::disk_used(&self.disk_dirs());
+        let mut settings = self.settings()?;
+        settings.disk_base = Some(base);
+        write_json(&self.dir.join("settings.json"), &settings)?;
+        Ok(base)
+    }
+
+    /// Where the task's runs write: the copy, the temporary directory and
+    /// the home changes.
+    pub fn disk_dirs(&self) -> Vec<PathBuf> {
+        vec![self.copy(), self.dir.join("tmp"), self.dir.join("home")]
     }
 
     /// What the task's runs may cost, together; `None` for no limit.

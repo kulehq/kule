@@ -165,6 +165,9 @@ mod tests {
             label: None,
             color: None,
             group: None,
+            limits: Default::default(),
+            own_limits: Default::default(),
+            time_used_secs: 0,
         }
     }
 

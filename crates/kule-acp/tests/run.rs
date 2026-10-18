@@ -392,6 +392,7 @@ impl Setup {
                 None,
                 &[],
                 terminals.then_some(sandbox),
+                &kule_acp::RunControl::new(),
                 tx,
             ))
             .unwrap();
@@ -526,6 +527,7 @@ fn pictures_go_only_to_an_agent_that_takes_them() {
                 None,
                 &[],
                 None,
+                &kule_acp::RunControl::new(),
                 tx,
             ))
             .unwrap();

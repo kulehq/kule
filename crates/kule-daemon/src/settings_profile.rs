@@ -1,7 +1,8 @@
 //! A profile: the person's choices in one file, to take to another
 //! computer or keep. It carries what shapes how Kule looks and works for
 //! them, each part only when they ask for it: the themes, the shortcuts,
-//! Kule's policy they chose, the daily budget and their own agents.
+//! Kule's policy they chose, the daily budget, the limits on every task's
+//! runs and their own agents.
 //!
 //! What would let something through without asking never travels: no
 //! secret's value, no remembered approval, no policy they wrote themselves.
@@ -30,6 +31,7 @@ pub enum Part {
     Shortcuts,
     Policy,
     Budget,
+    Limits,
     Agents,
 }
 
@@ -53,6 +55,9 @@ pub struct ProfileFile {
     pub policy: Option<kule_engine::PolicyChoice>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub budget: Option<Budget>,
+    /// The limits of every task that sets none of its own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limits: Option<kule_engine::Limits>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agents: Option<Vec<kule_acp::Profile>>,
 }
@@ -80,6 +85,9 @@ pub fn export(home: &Path, parts: &[Part]) -> Result<String> {
                 file.budget = Some(Budget {
                     daily: kule_engine::daily_budget(home).map_err(|e| e.to_string())?,
                 })
+            }
+            Part::Limits => {
+                file.limits = Some(kule_engine::limits(home).map_err(|e| e.to_string())?)
             }
             Part::Agents => {
                 let agents = kule_acp::Agents::load(home).map_err(|e| e.to_string())?;
@@ -130,6 +138,9 @@ pub fn read(text: &str) -> Result<ProfileFile> {
                 m.amount, m.currency
             ));
         }
+    }
+    if let Some(limits) = &file.limits {
+        limits.check().map_err(|e| format!("limits: {e}"))?;
     }
     if let Some(agents) = &file.agents
         && agents.len() > MAX_AGENTS
@@ -206,6 +217,11 @@ pub fn apply(home: &Path, text: &str, parts: &[Part]) -> Result<Vec<String>> {
                     None => "Daily budget: none".to_owned(),
                 });
             }
+            Part::Limits => {
+                let Some(limits) = &file.limits else { continue };
+                kule_engine::set_limits(home, limits).map_err(|e| format!("limits: {e}"))?;
+                said.push("Limits: every task's, from the profile".to_owned());
+            }
             Part::Agents => {
                 let Some(agents) = &file.agents else { continue };
                 for agent in agents {
@@ -273,6 +289,15 @@ login = [".local/share/opencode/auth.json"]
             }),
         )
         .unwrap();
+        kule_engine::set_limits(
+            home,
+            &kule_engine::Limits {
+                memory_mb: Some(4096),
+                gpu: false,
+                ..Default::default()
+            },
+        )
+        .unwrap();
         std::fs::write(home.join(kule_acp::AGENTS_FILE), OPENCODE).unwrap();
     }
 
@@ -288,6 +313,7 @@ login = [".local/share/opencode/auth.json"]
             Part::Shortcuts,
             Part::Policy,
             Part::Budget,
+            Part::Limits,
             Part::Agents,
         ];
         let text = export(one.path(), &all).unwrap();
@@ -313,7 +339,14 @@ login = [".local/share/opencode/auth.json"]
             kule_engine::PolicyChoice::Balanced
         );
 
+        assert_eq!(
+            kule_engine::limits(two.path()).unwrap(),
+            kule_engine::Limits::default()
+        );
+
         let said = apply(two.path(), &text, &all).unwrap();
+        let limits = kule_engine::limits(two.path()).unwrap();
+        assert_eq!((limits.memory_mb, limits.gpu), (Some(4096), false));
         assert_eq!(themes::load(two.path()).unwrap().current, "custom-a");
         assert_eq!(
             kule_engine::policy_choice(two.path()).unwrap(),
@@ -361,6 +394,7 @@ login = [".local/share/opencode/auth.json"]
             r##"{"kule_profile":1,"appearance":{"current":"x","custom":[{"id":"x","name":"n","scheme":"dark","colors":{"bg":"url(x)"}}]}}"##,
             r#"{"kule_profile":1,"shortcuts":{"Bad Id":"Mod+K"}}"#,
             r#"{"kule_profile":1,"budget":{"daily":{"amount":-1,"currency":"USD"}}}"#,
+            r#"{"kule_profile":1,"limits":{"idle_minutes":0}}"#,
         ] {
             assert!(read(bad).is_err(), "{bad}");
         }

@@ -403,6 +403,10 @@ pub fn dispatch(service: &Arc<Service>, call: Call) -> Result<Value, String> {
             crate::shortcuts::save(service.home(), &shortcuts)?;
             json(crate::shortcuts::load(service.home())?)
         }
+        Call::StopRun { task } => json(service.stop_run(&task)?),
+        Call::Limits => json(service.limits()?),
+        Call::SetLimits { limits } => json(service.set_limits(&limits)?),
+        Call::SetTaskLimits { task, limits } => json(service.set_task_limits(&task, &limits)?),
         Call::DailyBudget => json(service.daily_budget()?),
         Call::SetDailyBudget { budget } => json(service.set_daily_budget(budget)?),
         Call::ApplyHome { task, paths } => json(service.apply_home(&task, &paths)?),

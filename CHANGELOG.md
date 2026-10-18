@@ -69,6 +69,25 @@
     look), so only that first moment is open. The chip shows 🛡 for a shielded server and
     turns amber, with a warning, for one the network still reaches (a
     server you started in a terminal, which Kule leaves to you).
+- Limits on what a run takes, in *Settings → Limits* for every task and,
+  field by field, for each task (its ⋮ menu): processor, memory, disk,
+  GPU, one run's time, all of a task's runs' time, and time doing nothing.
+  - Over the processor limit a run is slowed down by pausing and resuming
+    its processes in turn; over memory they are killed at once; over disk
+    or time the run is stopped, and Live says why.
+  - Disk counts what the copy, temporary files and home changes grew by
+    since the task was made; no single file can be written past it.
+  - The GPU is on or off: off, Metal gets no device on macOS and the GPU's
+    devices stay read-only on Linux. On Linux it was off before; it is now
+    on unless turned off.
+  - Doing nothing is no message, tool call, output, processor use or new
+    process from the agent; a question waiting on you does not count.
+  - Live shows what a run takes against its limits, every two seconds.
+  - `kule run` is held to the same limits.
+- **Stop** in Live (⌘⇧K) stops the run at work: its turn is cancelled, and
+  the agent killed if it does not end it within ten seconds.
+- Daemon protocol 26: `StopRun`, `Limits`, `SetLimits`, `SetTaskLimits`,
+  the `resources` run event, and the limits and time used in each task.
 
 ### Preview
 

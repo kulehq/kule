@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 use futures::channel::mpsc::UnboundedSender;
 use kule_engine::Sandbox;
 
-use crate::Event;
+use crate::{Event, RunControl};
 
 /// The most output kept for one command, whatever the agent asks for.
 pub const MAX_TERMINAL_OUTPUT: usize = 1 << 20;
@@ -68,6 +68,8 @@ pub(crate) struct Terminals {
     /// The sessions of commands the agent is done with, stopped with the run.
     released: Mutex<Vec<i32>>,
     events: UnboundedSender<Event>,
+    /// The run's: told of each command, and of what it prints.
+    control: RunControl,
 }
 
 /// Variables an agent may not set for a command: what loads code into
@@ -91,7 +93,12 @@ fn refused_variable(name: &str) -> bool {
 }
 
 impl Terminals {
-    pub(crate) fn new(sandbox: Sandbox, copy: PathBuf, events: UnboundedSender<Event>) -> Self {
+    pub(crate) fn new(
+        sandbox: Sandbox,
+        copy: PathBuf,
+        events: UnboundedSender<Event>,
+        control: RunControl,
+    ) -> Self {
         Terminals {
             sandbox,
             copy,
@@ -99,6 +106,7 @@ impl Terminals {
             terms: Mutex::new(HashMap::new()),
             released: Mutex::new(Vec::new()),
             events,
+            control,
         }
     }
 
@@ -142,6 +150,7 @@ impl Terminals {
         let mut child = command
             .spawn()
             .map_err(|e| format!("could not start {program}: {e}"))?;
+        self.control.started_command(child.id() as i32);
         let id = format!("term-{}", self.next.fetch_add(1, Ordering::SeqCst));
         let limit = limit
             .map_or(MAX_TERMINAL_OUTPUT, |l| l as usize)
@@ -176,12 +185,14 @@ impl Terminals {
         .flatten()
         .map(|mut stream| {
             let (term, events) = (Arc::clone(&term), self.events.clone());
+            let control = self.control.clone();
             std::thread::spawn(move || {
                 let mut buf = [0u8; 8192];
                 while let Ok(n) = stream.read(&mut buf) {
                     if n == 0 {
                         break;
                     }
+                    control.touch();
                     let mut out = term.output.lock().unwrap();
                     out.bytes.extend_from_slice(&buf[..n]);
                     if out.bytes.len() > out.limit {
