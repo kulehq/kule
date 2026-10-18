@@ -106,6 +106,11 @@ impl Host {
     pub fn forget(&self) {
         self.files.forget();
     }
+
+    /// The origin extension frames come from, when they are served.
+    pub fn origin(&self) -> Option<String> {
+        self.server.as_ref().map(Server::origin)
+    }
 }
 
 /// What the window needs to place an extension's frames.

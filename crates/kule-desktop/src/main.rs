@@ -771,6 +771,15 @@ fn main() {
     if let Err(e) = kule.start() {
         eprintln!("kule-desktop: {e}");
     }
+    let host = extensions::Host::start(&kule.home);
+    let mut context = tauri::generate_context!();
+    // Frames only from the extension server's own port (the config says
+    // none, and stays that way when the server could not start).
+    let security = &mut context.config_mut().app.security;
+    if let Some(tauri::utils::config::Csp::Policy(csp)) = &security.csp {
+        let csp = ext_serve::frame_policy(csp, host.origin().as_deref());
+        security.csp = Some(tauri::utils::config::Csp::Policy(csp));
+    }
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
@@ -786,7 +795,7 @@ fn main() {
                 let _ = app.emit("menu", command.to_owned());
             }
         })
-        .manage(extensions::Host::start(&kule.home))
+        .manage(host)
         .manage(kule)
         .manage(pty::Terminals::default())
         .manage(ext_call::Limits::default())
@@ -876,7 +885,7 @@ fn main() {
             start_run,
             stream,
         ])
-        .run(tauri::generate_context!())
+        .run(context)
         .expect("the window could not start");
 }
 

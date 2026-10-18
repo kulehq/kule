@@ -44,6 +44,23 @@ impl Server {
     pub fn prefix(&self) -> String {
         format!("http://127.0.0.1:{}/{}/", self.port, self.key)
     }
+
+    /// The one origin the window may frame: this server's.
+    pub fn origin(&self) -> String {
+        format!("http://127.0.0.1:{}", self.port)
+    }
+}
+
+/// The window's content policy with frames allowed from `origin` alone, in
+/// place of the `frame-src 'none'` the config carries. A frame can navigate
+/// itself; with any other port allowed it could carry what it read to any
+/// server on the computer, or send GETs to one, without the `net`
+/// permission.
+pub fn frame_policy(csp: &str, origin: Option<&str>) -> String {
+    match origin {
+        Some(origin) => csp.replace("frame-src 'none'", &format!("frame-src {origin}")),
+        None => csp.to_owned(),
+    }
 }
 
 fn base(port: u16, key: &str, ext: &str) -> String {
@@ -278,6 +295,28 @@ mod tests {
             let reply = ask(&head);
             assert!(!reply.starts_with("HTTP/1.1 200"), "{head:?}: {reply}");
         }
+    }
+
+    /// A frame that navigates itself may go only where the window's policy
+    /// lets frames be: the extension server, never another local port.
+    #[test]
+    fn the_window_frames_the_extension_server_alone() {
+        let config = include_str!("../tauri.conf.json");
+        assert!(
+            config.contains("frame-src 'none'"),
+            "the config frames nothing"
+        );
+        assert!(
+            !config.contains(":*"),
+            "no port wildcard anywhere in the config"
+        );
+        let csp = "default-src 'self'; frame-src 'none'";
+        let policy = frame_policy(csp, Some("http://127.0.0.1:4000"));
+        assert_eq!(
+            policy,
+            "default-src 'self'; frame-src http://127.0.0.1:4000"
+        );
+        assert_eq!(frame_policy(csp, None), csp, "no server, no frames");
     }
 
     #[test]
