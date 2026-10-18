@@ -105,7 +105,7 @@ fn a_packed_extension_runs_once_approved_and_waits_again_when_updated() {
     stdout(&kule(
         home.path(),
         work.path(),
-        &["ext", "approve", "acme.notes"],
+        &["ext", "approve", "acme.notes", "--yes"],
     ));
     let list = stdout(&kule(home.path(), work.path(), &["ext"]));
     assert!(list.contains("Notes — runs"), "{list}");
@@ -234,7 +234,7 @@ fn an_extension_brings_agents_and_mcp_servers_that_wait_for_the_person() {
     stdout(&kule(
         home.path(),
         work.path(),
-        &["ext", "approve", "acme.tools"],
+        &["ext", "approve", "acme.tools", "--yes"],
     ));
     let mcp = stdout(&kule(home.path(), work.path(), &["ext", "mcp"]));
     assert!(mcp.contains("acme.tools/db — waits for you"), "{mcp}");
@@ -248,7 +248,7 @@ fn an_extension_brings_agents_and_mcp_servers_that_wait_for_the_person() {
     stdout(&kule(
         home.path(),
         work.path(),
-        &["ext", "mcp", "approve", "acme.tools/db"],
+        &["ext", "mcp", "approve", "acme.tools/db", "--yes"],
     ));
     let mcp = stdout(&kule(home.path(), work.path(), &["ext", "mcp"]));
     assert!(mcp.contains("acme.tools/db — agents get it"), "{mcp}");
@@ -258,7 +258,7 @@ fn an_extension_brings_agents_and_mcp_servers_that_wait_for_the_person() {
     stdout(&kule(
         home.path(),
         work.path(),
-        &["ext", "approve", "acme.tools"],
+        &["ext", "approve", "acme.tools", "--yes"],
     ));
     let mcp = stdout(&kule(home.path(), work.path(), &["ext", "mcp"]));
     assert!(mcp.contains("acme.tools/db — waits for you"), "{mcp}");
@@ -266,7 +266,7 @@ fn an_extension_brings_agents_and_mcp_servers_that_wait_for_the_person() {
     stdout(&kule(
         home.path(),
         work.path(),
-        &["ext", "mcp", "approve", "acme.tools/db"],
+        &["ext", "mcp", "approve", "acme.tools/db", "--yes"],
     ));
     stdout(&kule(
         home.path(),
@@ -298,7 +298,7 @@ fn a_new_extension_installs_as_it_is() {
     stdout(&kule(
         home.path(),
         work.path(),
-        &["ext", "approve", "me.first-try"],
+        &["ext", "approve", "me.first-try", "--yes"],
     ));
     assert!(stdout(&kule(home.path(), work.path(), &["ext"])).contains("First Try (dev) — runs"));
     // Never over a folder with something in it.
@@ -335,4 +335,80 @@ fn every_example_extension_reads() {
         seen += 1;
     }
     assert!(seen >= 3, "{seen}");
+}
+
+#[test]
+fn an_approval_is_asked_for_and_never_given_without_a_yes() {
+    let (home, work, src) = (
+        TempDir::new_in(env!("CARGO_TARGET_TMPDIR")).unwrap(),
+        TempDir::new_in(env!("CARGO_TARGET_TMPDIR")).unwrap(),
+        TempDir::new_in(env!("CARGO_TARGET_TMPDIR")).unwrap(),
+    );
+    extension(src.path(), "1.0.0", r#""tasks.read""#);
+    stdout(&kule(
+        home.path(),
+        work.path(),
+        &["ext", "dev", src.path().to_str().unwrap()],
+    ));
+    // No terminal to ask on and no --yes: shown, not approved.
+    let out = kule(home.path(), work.path(), &["ext", "approve", "acme.notes"]);
+    let err = stderr(&out);
+    assert!(err.contains("add --yes"), "{err}");
+    assert!(String::from_utf8_lossy(&out.stdout).contains("may:         tasks.read"));
+    assert!(stdout(&kule(home.path(), work.path(), &["ext"])).contains("held: not approved yet"));
+}
+
+/// The CLI goes through a running daemon, so the app hears of a change at
+/// once: an extension turned off stops making calls.
+#[test]
+fn a_change_from_the_cli_reaches_a_running_app() {
+    let (home, work, src) = (
+        TempDir::new_in(env!("CARGO_TARGET_TMPDIR")).unwrap(),
+        TempDir::new_in(env!("CARGO_TARGET_TMPDIR")).unwrap(),
+        TempDir::new_in(env!("CARGO_TARGET_TMPDIR")).unwrap(),
+    );
+    extension(src.path(), "1.0.0", r#""tasks.read""#);
+    stdout(&kule(
+        home.path(),
+        work.path(),
+        &["ext", "dev", src.path().to_str().unwrap()],
+    ));
+    stdout(&kule(
+        home.path(),
+        work.path(),
+        &["ext", "approve", "acme.notes", "--yes"],
+    ));
+    let mut daemon = Command::new(env!("CARGO_BIN_EXE_kule"))
+        .args(["daemon", "--idle-secs", "60"])
+        .env("KULE_HOME", home.path())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    let client = kule_daemon::Client::new(home.path());
+    let started = std::time::Instant::now();
+    while !client.is_running() {
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(20),
+            "no daemon"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    let (tx, rx) = std::sync::mpsc::channel();
+    let at = home.path().to_owned();
+    std::thread::spawn(move || {
+        let _ = kule_daemon::Client::new(&at).subscribe(|notice| {
+            let _ = tx.send(notice);
+        });
+    });
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    stdout(&kule(
+        home.path(),
+        work.path(),
+        &["ext", "disable", "acme.notes"],
+    ));
+    let heard = std::iter::from_fn(|| rx.recv_timeout(std::time::Duration::from_secs(5)).ok())
+        .any(|n| matches!(n, kule_daemon::Notice::Extensions));
+    let _ = daemon.kill();
+    let _ = daemon.wait();
+    assert!(heard, "the app heard nothing of the change");
 }

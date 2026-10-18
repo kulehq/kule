@@ -170,8 +170,13 @@ enum ExtCmd {
     /// Install a folder you are working on, read live. Code changes run
     /// as they are; a changed manifest waits for approval again.
     Dev { dir: PathBuf },
-    /// Let an extension run, as it stands now.
-    Approve { id: String },
+    /// Let an extension run, as it stands now: shows what it asks for, then
+    /// asks (--yes approves what is shown without asking).
+    Approve {
+        id: String,
+        #[arg(long)]
+        yes: bool,
+    },
     /// Let an approved extension run again.
     Enable { id: String },
     /// Stop an extension without removing it.
@@ -189,9 +194,11 @@ enum ExtCmd {
 enum McpCmd {
     List,
     /// Let agents use EXTENSION/NAME, as it stands now. They start it in
-    /// their own sandbox.
+    /// their own sandbox. Shows it, then asks (--yes: without asking).
     Approve {
         server: String,
+        #[arg(long)]
+        yes: bool,
     },
     /// Stop offering EXTENSION/NAME to agents.
     Revoke {
@@ -1659,7 +1666,7 @@ impl Drop for Echo {
 }
 
 fn ext_cmd(home: &Path, action: ExtCmd) -> Result<()> {
-    use kule_daemon::extensions;
+    use kule_daemon::{Call, extensions};
     use kule_ext::{Package, Source};
     match action {
         ExtCmd::List => {
@@ -1711,12 +1718,21 @@ fn ext_cmd(home: &Path, action: ExtCmd) -> Result<()> {
             println!("digest {}", package.digest());
         }
         ExtCmd::Install { file } => {
-            let listed = extensions::install(home, &file).map_err(|e| anyhow!(e))?;
+            let path = std::path::absolute(&file)?;
+            let listed =
+                through_daemon(home, Call::InstallExtension { path: path.clone() }, || {
+                    extensions::install(home, &path)
+                })?;
             print_listed(&listed);
             println!("\ninstalled; `kule ext approve {}` lets it run", listed.id);
         }
         ExtCmd::Dev { dir } => {
-            let listed = extensions::install_folder(home, &dir).map_err(|e| anyhow!(e))?;
+            let path = std::path::absolute(&dir)?;
+            let listed = through_daemon(
+                home,
+                Call::InstallDevExtension { path: path.clone() },
+                || extensions::install_folder(home, &path),
+            )?;
             print_listed(&listed);
             println!(
                 "\ninstalled from {}; `kule ext approve {}` lets it run",
@@ -1724,7 +1740,7 @@ fn ext_cmd(home: &Path, action: ExtCmd) -> Result<()> {
                 listed.id
             );
         }
-        ExtCmd::Approve { id } => {
+        ExtCmd::Approve { id, yes } => {
             let all = extensions::list(home).map_err(|e| anyhow!(e))?;
             let listed = all
                 .iter()
@@ -1736,23 +1752,52 @@ fn ext_cmd(home: &Path, action: ExtCmd) -> Result<()> {
                     listed.held.as_deref().unwrap_or("")
                 ));
             }
-            let listed = extensions::approve(home, &id, &listed.digest).map_err(|e| anyhow!(e))?;
-            print_listed(&listed);
-            println!("\napproved {id} as it stands; a change to it needs approval again");
+            // What is shown is what is approved: a change since is refused.
+            print_listed(listed);
+            if !confirmed(&format!("\nLet {id} run as shown?"), yes)? {
+                println!("not approved");
+                return Ok(());
+            }
+            let digest = listed.digest.clone();
+            through_daemon::<kule_ext::Listed>(
+                home,
+                Call::ApproveExtension {
+                    id: id.clone(),
+                    digest: digest.clone(),
+                },
+                || extensions::approve(home, &id, &digest),
+            )?;
+            println!("approved {id} as it stands; a change to it needs approval again");
         }
         ExtCmd::Enable { id } => {
-            let listed = extensions::set_enabled(home, &id, true).map_err(|e| anyhow!(e))?;
+            let listed: kule_ext::Listed = through_daemon(
+                home,
+                Call::SetExtensionEnabled {
+                    id: id.clone(),
+                    enabled: true,
+                },
+                || extensions::set_enabled(home, &id, true),
+            )?;
             match &listed.held {
                 Some(why) => println!("{id} is on, but held: {why}"),
                 None => println!("{id} runs"),
             }
         }
         ExtCmd::Disable { id } => {
-            extensions::set_enabled(home, &id, false).map_err(|e| anyhow!(e))?;
+            through_daemon::<kule_ext::Listed>(
+                home,
+                Call::SetExtensionEnabled {
+                    id: id.clone(),
+                    enabled: false,
+                },
+                || extensions::set_enabled(home, &id, false),
+            )?;
             println!("{id} is turned off");
         }
         ExtCmd::Remove { id } => {
-            extensions::remove(home, &id).map_err(|e| anyhow!(e))?;
+            through_daemon::<()>(home, Call::RemoveExtension { id: id.clone() }, || {
+                extensions::remove(home, &id)
+            })?;
             println!("removed {id} and what it kept");
         }
         ExtCmd::Mcp { action } => {
@@ -1785,15 +1830,38 @@ fn ext_cmd(home: &Path, action: ExtCmd) -> Result<()> {
                         }
                     }
                 }
-                McpCmd::Approve { server } => {
+                McpCmd::Approve { server, yes } => {
                     let (ext, name) = split(&server)?;
                     let offered = extensions::mcp_servers(home)
                         .map_err(|e| anyhow!(e))?
                         .into_iter()
                         .find(|o| o.extension == ext && o.server.name == name)
                         .ok_or_else(|| anyhow!("no extension that runs offers {server}"))?;
-                    extensions::approve_mcp(home, &ext, &name, &offered.digest)
-                        .map_err(|e| anyhow!(e))?;
+                    println!(
+                        "{server} starts: {} {}",
+                        offered.server.command,
+                        offered.server.args.join(" ")
+                    );
+                    for (k, v) in &offered.server.env {
+                        println!("  sets: {k}={v}");
+                    }
+                    println!(
+                        "An agent starts it inside its sandbox: it reads what the agent can, its sign-in included."
+                    );
+                    if !confirmed("Let agents use it?", yes)? {
+                        println!("not approved");
+                        return Ok(());
+                    }
+                    let digest = offered.digest.clone();
+                    through_daemon::<()>(
+                        home,
+                        Call::ApproveMcpServer {
+                            extension: ext.clone(),
+                            name: name.clone(),
+                            digest: digest.clone(),
+                        },
+                        || extensions::approve_mcp(home, &ext, &name, &digest),
+                    )?;
                     println!(
                         "agents get {server} from their next run: {} {}",
                         offered.server.command,
@@ -1802,13 +1870,53 @@ fn ext_cmd(home: &Path, action: ExtCmd) -> Result<()> {
                 }
                 McpCmd::Revoke { server } => {
                     let (ext, name) = split(&server)?;
-                    extensions::revoke_mcp(home, &ext, &name).map_err(|e| anyhow!(e))?;
+                    through_daemon::<()>(
+                        home,
+                        Call::RevokeMcpServer {
+                            extension: ext.clone(),
+                            name: name.clone(),
+                        },
+                        || extensions::revoke_mcp(home, &ext, &name),
+                    )?;
                     println!("agents no longer get {server}");
                 }
             }
         }
     }
     Ok(())
+}
+
+/// Makes an extension change through the daemon when one runs, so the app
+/// hears of it at once (an extension turned off stops calling); else in
+/// Kule's home directly.
+fn through_daemon<T: serde::de::DeserializeOwned>(
+    home: &Path,
+    call: kule_daemon::Call,
+    direct: impl FnOnce() -> std::result::Result<T, String>,
+) -> Result<T> {
+    let client = kule_daemon::Client::new(home);
+    if client.is_running() {
+        return client.call(call).map_err(|e| anyhow!(e));
+    }
+    direct().map_err(|e| anyhow!(e))
+}
+
+/// The person's yes on a terminal; elsewhere --yes must give it.
+fn confirmed(question: &str, yes: bool) -> Result<bool> {
+    use std::io::{BufRead, IsTerminal, Write};
+    if yes {
+        return Ok(true);
+    }
+    if !std::io::stdin().is_terminal() {
+        return Err(anyhow!(
+            "no terminal to ask on; add --yes to approve what is shown above"
+        ));
+    }
+    print!("{question} [y/N] ");
+    std::io::stdout().flush()?;
+    let mut answer = String::new();
+    std::io::stdin().lock().read_line(&mut answer)?;
+    Ok(matches!(answer.trim().to_lowercase().as_str(), "y" | "yes"))
 }
 
 fn print_listed(listed: &kule_ext::Listed) {

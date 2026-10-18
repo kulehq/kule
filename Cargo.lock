@@ -3340,6 +3340,7 @@ dependencies = [
  "kule-engine",
  "kule-ext",
  "libc",
+ "serde",
  "serde_json",
  "tempfile",
  "tokio",
