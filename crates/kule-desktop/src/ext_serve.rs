@@ -215,8 +215,18 @@ fn answer(head: &[u8], port: u16, key: &str, files: &dyn Files) -> Vec<u8> {
          frame-src 'none'; form-action 'none'; base-uri 'none'; object-src 'none'; \
          frame-ancestors tauri://localhost http://tauri.localhost"
     );
+    // An extension's frame has an opaque origin, and a module script
+    // (`<script type="module">`, `import`) is fetched in CORS mode: without
+    // this a module never runs. Scripts are no secret, the key in the path
+    // still guards them, and a frame's own policy keeps it from fetching
+    // anything (connect-src 'none') or loading another extension's scripts.
+    let cors = if media.starts_with("text/javascript") {
+        "Access-Control-Allow-Origin: *\r\n"
+    } else {
+        ""
+    };
     let mut out = format!(
-        "HTTP/1.1 200 OK\r\nContent-Type: {media}\r\nContent-Length: {}\r\n\
+        "HTTP/1.1 200 OK\r\nContent-Type: {media}\r\nContent-Length: {}\r\n{cors}\
          Content-Security-Policy: {policy}\r\nX-Content-Type-Options: nosniff\r\n\
          Referrer-Policy: no-referrer\r\nPermissions-Policy: {FEATURES}\r\n\
          X-DNS-Prefetch-Control: off\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n",
@@ -260,13 +270,31 @@ mod tests {
     use super::*;
 
     /// Serves any path of acme.notes but missing.html, as a careless store
-    /// would: what climbs or decodes must be stopped by the server.
+    /// would: what climbs or decodes must be stopped by the server. A `.js`
+    /// path is a script.
     struct One;
     impl Files for One {
         fn get(&self, ext: &str, path: &str) -> Option<(Vec<u8>, &'static str)> {
-            (ext == "acme.notes" && path != "missing.html")
-                .then(|| (b"<p>hi</p>".to_vec(), "text/html; charset=utf-8"))
+            let media = if path.ends_with(".js") {
+                "text/javascript; charset=utf-8"
+            } else {
+                "text/html; charset=utf-8"
+            };
+            (ext == "acme.notes" && path != "missing.html").then(|| (b"<p>hi</p>".to_vec(), media))
         }
+    }
+
+    /// A module script runs in an extension's frame (opaque origin) only
+    /// with CORS allowed; pages need none of it.
+    #[test]
+    fn scripts_may_be_loaded_as_modules_and_pages_are_not_shared() {
+        let script = get(&format!("/{KEY}/acme.notes/mod.js"));
+        assert!(
+            script.contains("Access-Control-Allow-Origin: *\r\n"),
+            "{script}"
+        );
+        let page = get(&format!("/{KEY}/acme.notes/panel.html"));
+        assert!(!page.contains("Access-Control-Allow-Origin"), "{page}");
     }
 
     const KEY: &str = "00112233445566778899aabbccddeeff";

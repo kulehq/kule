@@ -25,6 +25,8 @@ const EXT = {
   themes: [],
   /** The MCP servers running extensions offer, approved or not. */
   mcp: [],
+  /** id → the last messages an extension logged, newest last. */
+  logs: new Map(),
   /** task → review digest last told, so a note never loops into a new review. */
   reviewTold: new Map(),
   /** The task the frames were last told about. */
@@ -83,7 +85,7 @@ async function loadExtensions() {
   try {
     EXT.prefix = (await call("extension_host")).prefix;
     EXT.listed = await call("extensions");
-    EXT.mcp = await call("mcp_servers");
+    EXT.mcp = (await call("mcp_servers")) || [];
     const brought = await call("extension_themes");
     const counts = new Map();
     EXT.themes = brought.map((t) => {
@@ -209,6 +211,10 @@ function fromFrame(rec, m) {
     keyFromFrame(rec, m.key);
     return;
   }
+  if (m.log && typeof m.log === "object") {
+    keepLog(rec, m.log);
+    return;
+  }
   if (typeof m.id !== "number" || typeof m.method !== "string") return;
   // The app takes at most 1 MiB a request; a larger one goes no further.
   if (m.params !== undefined && JSON.stringify(m.params).length > MAX_PARAMS) {
@@ -279,6 +285,28 @@ function keyFromFrame(rec, k) {
     return combo && combos.includes(combo) && (c.ext === rec.ext.id || (!c.ext && viewOnly(c.id)));
   });
   if (command) steady(rec, () => command.run());
+}
+
+/** The messages an extension keeps, for Settings → Extensions. */
+const MAX_LOGS = 100;
+let logsRedraw = null;
+
+function keepLog(rec, log) {
+  const level = ["log", "info", "warn", "error"].includes(log.level) ? log.level : "log";
+  const list = EXT.logs.get(rec.ext.id) || [];
+  list.push({
+    at: new Date(),
+    level,
+    where: rec.context.panel || "main",
+    text: extText(typeof log.text === "string" ? log.text.replace(/\n/g, " ⏎ ") : "", 2000),
+  });
+  EXT.logs.set(rec.ext.id, list.slice(-MAX_LOGS));
+  if (state.view === "extensions" && !logsRedraw) {
+    logsRedraw = setTimeout(() => {
+      logsRedraw = null;
+      renderExtensions();
+    }, 500);
+  }
 }
 
 function runExtCommand(extId, local, args) {
@@ -522,11 +550,33 @@ function extensionCard(l) {
       l.enabled ? "Turn off" : "Turn on"
     )
   );
+  if (l.dev && EXT.running.has(l.id)) {
+    // A folder under development: its frames start again with the code as
+    // it is now.
+    actions.push(
+      h(
+        "button",
+        {
+          class: "button ghost",
+          type: "button",
+          "data-key": `ext-reload:${l.id}`,
+          onclick: () => {
+            stopExtension(l.id);
+            syncExtensions();
+            toast(`Reloaded ${m ? m.name : l.id}`);
+          },
+        },
+        "Reload"
+      )
+    );
+  }
   const remove = armed("Remove", "Click again to remove it and what it kept", false, () => extensionAction(() => call("remove_extension", { id: l.id })));
   remove.dataset.key = `ext-remove:${l.id}`;
   actions.push(remove);
   parts.push(h("div", { class: "agent-actions" }, ...actions));
   if (m && (m.contributes.configuration || []).length) parts.push(extensionSettings(l));
+  const logs = EXT.logs.get(l.id) || [];
+  if (logs.length) parts.push(extensionLogs(l.id, logs));
   return h("li", { class: "agent-card ext-card", "data-key": `ext:${l.id}` }, ...parts);
 }
 
@@ -560,6 +610,40 @@ function mcpRow(o) {
       "The agent starts it inside its sandbox, so it can read what the agent can, the agent's sign-in included; the policy asks about every host it reaches."
     ),
     action
+  );
+}
+
+/** What the extension logged and what went wrong in it, newest first. */
+function extensionLogs(id, logs) {
+  const errors = logs.filter((x) => x.level === "error").length;
+  const clear = h(
+    "button",
+    { class: "button ghost", type: "button", "data-key": `ext-logs-clear:${id}`, onclick: () => (EXT.logs.delete(id), renderExtensions()) },
+    "Clear"
+  );
+  return h(
+    "details",
+    { class: "ext-logs", "data-key": `ext-logs:${id}`, open: errors > 0 },
+    h("summary", {}, `Messages · ${plural(logs.length, "message")}${errors ? `, ${plural(errors, "error")}` : ""}`),
+    h(
+      "ol",
+      { class: "ext-log-list" },
+      logs
+        .slice()
+        .reverse()
+        .map((x) =>
+          h(
+            "li",
+            { class: `ext-log ${x.level}` },
+            h("span", { class: "muted" }, `${x.at.toLocaleTimeString()} · ${x.where}`),
+            " ",
+            h("span", { class: "ext-log-level" }, x.level),
+            " ",
+            x.text
+          )
+        )
+    ),
+    clear
   );
 }
 

@@ -3316,3 +3316,30 @@ body.dragging-panel * {
   cursor: pointer;
   text-decoration: underline;
 }
+
+.ext-logs summary {
+  cursor: pointer;
+}
+
+.ext-log-list {
+  max-height: 240px;
+  margin: 6px 0;
+  padding: 6px 8px;
+  overflow: auto;
+  border-radius: var(--radius);
+  background: var(--sunken);
+  font: 12px var(--mono);
+  list-style: none;
+}
+
+.ext-log {
+  overflow-wrap: anywhere;
+}
+
+.ext-log.warn .ext-log-level {
+  color: var(--ask);
+}
+
+.ext-log.error .ext-log-level {
+  color: var(--deny);
+}

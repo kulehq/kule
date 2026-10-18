@@ -89,6 +89,36 @@
     ready();
   });
 
+  // What the extension logs, and what goes wrong in it, goes to the window,
+  // which shows it in Settings → Extensions: a frame has no console of its
+  // own to look at.
+  function shown(value) {
+    if (value instanceof Error) return value.stack || String(value);
+    if (typeof value === "string") return value;
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return String(value);
+    }
+  }
+  function report(level, values) {
+    send({ log: { level, text: values.map(shown).join(" ").slice(0, 2000) } });
+  }
+  for (const level of ["log", "info", "warn", "error"]) {
+    const original = console[level].bind(console);
+    console[level] = (...values) => {
+      original(...values);
+      report(level, values);
+    };
+  }
+  window.addEventListener("error", (e) => {
+    const where = e.filename ? ` (${e.filename.split("/").pop()}:${e.lineno})` : "";
+    report("error", [`${e.message}${where}`]);
+  });
+  window.addEventListener("unhandledrejection", (e) => {
+    report("error", ["Unhandled rejection:", e.reason]);
+  });
+
   // Keys with a modifier go to the window, so its shortcuts (the command
   // palette, moving between panels) work while a panel has the focus.
   document.addEventListener(

@@ -48,6 +48,32 @@ The desktop app does the same under **Settings → Extensions**.
 | `lockfile-notes` | A review helper: it notes changed lockfiles |
 | `webhook-notify` | Watching tasks and posting to a webhook |
 
+## Language and tools
+
+An extension runs in the window's web engine (WebKit on macOS, WebKitGTK on
+Linux), not in Node: modern JavaScript, the DOM and CSS. There is no
+`require`, no file system and no network but what the SDK offers.
+
+- **Scripts:** classic `<script src="…">` and ES modules (`<script
+  type="module">`, `import "./util.js"`) both work. Imports come from the
+  extension's own files only.
+- **TypeScript:** compile to `.js` (with `tsc` or `esbuild`) and ship the
+  `.js`. For types, add `kule-ext.d.ts` (which `kule ext new` writes) to your
+  `tsconfig.json`, or put `/// <reference path="kule-ext.d.ts" />` at the
+  top of a file. A `.ts` file may travel in the package, but it does not run.
+- **npm packages:** a frame has no network and no bare imports, so `import x
+  from "lodash"` fails. Bundle them into a file of your own, e.g. `esbuild
+  src/main.ts --bundle --format=esm --outfile=main.js`.
+- **No inline code:** the page's policy allows scripts and styles from the
+  extension's files only. So there is no inline `<script>`, no `style="…"`
+  attribute and no `eval` or `new Function`. Setting `element.style` from a
+  script is fine.
+- **No browser storage:** `localStorage`, cookies and IndexedDB refuse an
+  opaque origin. Use `kule.storage`.
+- **Files:** html, js, css, json, png, svg, woff2, toml, md, txt, ts, or a
+  name without an extension. Names hold letters, digits, `-`, `_` and `.`.
+  Hidden files (`.git`, `.DS_Store`) are left out when packing.
+
 ## The manifest: `kule-extension.json`
 
 ```json
@@ -168,6 +194,38 @@ await kule.net.fetch("https://hooks.slack.com/…", { method: "POST", headers, b
 
 Events arrive only while the desktop app is open.
 
+## Lifecycle
+
+- **When the code runs:** an extension runs while the desktop app is open
+  and the extension is on and approved as it is. Nothing runs while the app
+  is closed, and events from then are not replayed.
+- **The main script:** it runs in a hidden frame from the app's start (or
+  from the approval) until the extension is turned off, removed or changed.
+  A change stops it until it is approved again.
+- **Panels:** each panel's page loads at start too, even while its tab is
+  hidden. Moving a panel to another region reloads its page.
+- **Each load is fresh:** the page gets a new connection, and `kule.ready`
+  resolves again. Keep what must last in `kule.storage`, not in variables.
+  `kule.context.task` is the task chosen when the page loaded; listen to
+  `task-selected` for later ones.
+- **While you write:** a folder installed with `kule ext dev` is read live.
+  Its card in Settings → Extensions has **Reload**, which starts its frames
+  again with the code as it is now.
+
+## Debugging
+
+- **Messages:** every frame's `console.log`, `info`, `warn` and `error`
+  calls, uncaught errors and unhandled rejections go to the window. The
+  extension's card in Settings → Extensions lists the last 100, newest
+  first. The list opens by itself when one of them is an error.
+- **Refused calls:** a refused call rejects with an `Error` that says why.
+  Catch it and `console.error` it, and it shows there too.
+- **Inspector:** in a development build of Kule (`cargo run -p
+  kule-desktop`), Tauri enables WebKit's inspector. Right-click inside a
+  panel and choose Inspect Element.
+- **Before installing:** `kule ext info FOLDER` reads the manifest as Kule
+  will, and `kule ext pack FOLDER` refuses whatever a package cannot carry.
+
 ## Contributions
 
 - **Commands** appear in the palette and in Settings → Shortcuts as
@@ -247,6 +305,38 @@ installed, every entry is checked:
 Approval pins the blake3 of the whole package. Kule checks it again before
 serving a file. `kule ext pack` makes the same bytes from the same folder, so
 the digest the person approved names exactly what they read.
+
+## Sharing and updating
+
+There is no marketplace yet. You share the `.kulext` file itself (a
+download, a release asset). The person installs it from Settings →
+Extensions → Install from a file, or with `kule ext install FILE`.
+
+- **The digest:** `kule ext pack` prints it. Publish it beside the file, so
+  people can check it with `kule ext info FILE` before installing. Nobody
+  verifies the publisher; the digest is what proves the file is yours.
+- **Updating:** raise `version`, pack again, and share the new file.
+  Installing it over the old one keeps the extension's storage and settings
+  (a setting the new manifest no longer has is dropped). It holds the
+  extension until the person approves again, and the approval names any
+  permission or host that is new.
+- **Identity:** the id is the extension's identity. A package with the same
+  id is an update of it, whoever made it, so pick a publisher name that is
+  yours.
+
+## Limits at a glance
+
+| What | Limit |
+| --- | --- |
+| Package | 20 MiB packed; 40 MiB inflated; 500 files; 5 MiB a file |
+| Manifest | 64 KiB; 50 commands, 8 panels, 32 settings, 8 themes, 8 MCP servers, 16 hosts |
+| A request from a frame | 1 MiB |
+| Calls | 200 every 10 seconds per extension, keys and messages included |
+| `storage` | 1 MiB of JSON |
+| `ui.notify` | 5 a minute; title 80 characters, body 300 |
+| `net.fetch` | 60 a minute; https on 443 to the listed hosts; 15 s; 1 MiB out, 4 MiB in; no redirects |
+| Notes on a review | 50 per task per extension, 500 characters each |
+| Messages kept | the last 100 per extension, 2,000 characters each |
 
 ## Where things are
 

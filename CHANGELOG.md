@@ -23,6 +23,12 @@
   are checked.
 - Agent profiles and MCP servers from an extension are each approved on
   their own. MCP servers are started by the agent inside its sandbox.
+- For extension authors:
+  - ES modules work in frames;
+  - every frame's console output and errors show in the extension's card;
+  - a folder under development has Reload;
+  - the guide covers language and tools, lifecycle, debugging, sharing,
+    updating and limits.
 - Hardened after an OWASP review:
   - frames may come from the extension server's port only;
   - WebRTC is off in the window;
