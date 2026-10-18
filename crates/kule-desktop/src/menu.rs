@@ -65,6 +65,7 @@ const TASK: &[Entry] = &[
     Command("task.rename", "Rename…"),
     Command("task.menu", "Task Actions…"),
     Command("task.terminal", "Open Terminal in the Copy"),
+    Command("task.fork", "Fork Task"),
     Command("task.up", "Move Up"),
     Command("task.down", "Move Down"),
     Separator,

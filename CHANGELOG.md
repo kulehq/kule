@@ -29,6 +29,12 @@
     a link the agent puts in place is kept as a link, never as what it
     points to. Settings files with secrets are masked again on the way back.
   - `.git` is not put back; a commit starts the steps over.
+- Fork a task (its menu, `Mod+Shift+D`, or "Fork from here" on any step
+  in Timeline): a new task on the same folder starts from this one's copy,
+  as it is now or as it was after that step. It takes the task's label
+  (with "(fork)"), colour, group, budget and secret stand-ins, and has no
+  steps or commits of its own yet. Its changes reach the folder through
+  its own review and commit, as any other task's.
 
 ### Preview
 

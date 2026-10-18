@@ -994,6 +994,30 @@ impl Service {
         })
     }
 
+    /// A new task on the same folder from this one's copy, as it is now or
+    /// as it was after step `step`, named after it.
+    pub fn fork(&self, id: &str, step: Option<u32>) -> Result<TaskView> {
+        let source = self.idle(id)?;
+        let fork = source.fork(step);
+        let _ = self.rescan(id);
+        let fork = fork.map_err(text)?;
+        let name = source.label().map_err(text)?.unwrap_or_else(|| {
+            source.workspace().file_name().map_or_else(
+                || source.id().to_owned(),
+                |n| n.to_string_lossy().into_owned(),
+            )
+        });
+        let label = match step {
+            Some(n) if n > 0 => format!("{name} (fork at step {n})"),
+            Some(_) => format!("{name} (fork from the start)"),
+            None => format!("{name} (fork)"),
+        };
+        let label: String = label.chars().take(kule_engine::MAX_LABEL).collect();
+        fork.set_label(Some(&label)).map_err(text)?;
+        self.changed(fork.id(), TaskChange::Created);
+        self.view(fork.id())
+    }
+
     /// Puts the task's copy back as it was after step `step` (`0`: before
     /// the first); returns the step that records it.
     pub fn back_to_step(&self, id: &str, step: u32) -> Result<Step> {
@@ -1934,6 +1958,28 @@ mod tests {
         assert_eq!(back.label, "Back to before the first step");
         assert_eq!(fs::read_to_string(copy.join("a.txt")).unwrap(), "a\n");
         assert_eq!(s.app.timeline(&id).unwrap().steps.len(), 2);
+    }
+
+    /// A fork is a task of its own on the same folder, named after the one
+    /// it came from, and not made while an agent works in that one.
+    #[test]
+    fn a_fork_is_a_new_task_named_after_its_source() {
+        let s = Setup::new();
+        let (id, copy) = s.task();
+        s.app.set_label(&id, Some("Report")).unwrap();
+        fs::write(copy.join("a.txt"), "changed\n").unwrap();
+        Task::open(&s.app.home, &id).unwrap().step("edit").unwrap();
+
+        s.app.running.lock().unwrap().insert(id.clone());
+        assert!(s.app.fork(&id, None).unwrap_err().contains("at work"));
+        s.app.running.lock().unwrap().remove(&id);
+
+        let fork = s.app.fork(&id, None).unwrap();
+        assert_eq!(fork.label.as_deref(), Some("Report (fork)"));
+        assert_eq!(fork.workspace, s.app.view(&id).unwrap().workspace);
+        let at = s.app.fork(&id, Some(0)).unwrap();
+        assert_eq!(at.label.as_deref(), Some("Report (fork from the start)"));
+        assert_eq!(s.app.tasks().unwrap().len(), 3);
     }
 
     /// Each tool call's output is kept once, as it was last, at the end: a

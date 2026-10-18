@@ -271,6 +271,10 @@ function taskMenu(task, list, e) {
       "aria-keyshortcuts": "Alt+ArrowDown",
     }),
     item("Open terminal", () => (closeMenu(), openTerminal(task))),
+    item(busy ? "Fork task (agent at work)" : "Fork task", () => (closeMenu(), forkTask(task.id, null)), {
+      disabled: busy,
+      title: "A new task on the same folder, starting from this one's copy as it is now",
+    }),
     item(task.budget ? `Budget: ${money(task.budget)}…` : "Budget…", () => (closeMenu(), openTaskBudget(task.id))),
     remove,
   ];
@@ -3286,6 +3290,19 @@ async function loadTimeline(id) {
       "Go back here"
     );
   };
+  const forkAt = (n) =>
+    h(
+      "button",
+      {
+        class: "button ghost step-back",
+        type: "button",
+        disabled: Boolean((timeline.blockers || {})[n]) || (task && task.running),
+        title: n === 0 ? "A new task on the same folder, from the copy as the folder holds it" : `A new task on the same folder, from the copy as it was after step ${n}`,
+        "data-key": `fork:${n}`,
+        onclick: () => forkTask(id, n),
+      },
+      "Fork from here"
+    );
   if (timeline.steps.length) {
     entries.push(
       h(
@@ -3293,7 +3310,7 @@ async function loadTimeline(id) {
         { class: "entry step" },
         h("span", { class: "entry-dot" }),
         h("span", { class: "entry-title" }, "Before the first step"),
-        h("span", { class: "entry-actions" }, backTo(0)),
+        h("span", { class: "entry-actions" }, backTo(0), forkAt(0)),
         h("div", { class: "entry-body" }, h("div", {}, "the copy as the folder holds it"))
       )
     );
@@ -3305,7 +3322,7 @@ async function loadTimeline(id) {
         { class: "entry step" },
         h("span", { class: "entry-dot" }),
         h("span", { class: "entry-title" }, `Step ${step.id} · ${step.label}`),
-        h("span", { class: "entry-actions" }, h("span", { class: "chip" }, "uncommitted"), backTo(step.id)),
+        h("span", { class: "entry-actions" }, h("span", { class: "chip" }, "uncommitted"), backTo(step.id), forkAt(step.id)),
         h(
           "div",
           { class: "entry-body" },
@@ -3345,6 +3362,19 @@ async function loadTimeline(id) {
   }
   replace($("timeline"), ...entries);
   tabify($("timeline"));
+}
+
+/** A new task from this one's copy, now (`step` null) or at a step, and
+ * the window on it. */
+async function forkTask(id, step) {
+  try {
+    const fork = await call("fork_task", { task: id, step });
+    await refresh();
+    select(fork.id);
+    toast(`${fork.label} is a new task on the same folder`);
+  } catch (err) {
+    fail(err);
+  }
 }
 
 async function goBack(id, step) {
@@ -5055,6 +5085,7 @@ const COMMANDS = [
   { id: "group.new", title: "New group…", group: "Tasks", keys: "", run: () => { revealPanel("tasks"); newGroup(); } },
   { id: "group.policy", title: "Group policies", group: "Settings", keys: "", run: () => openPolicy() },
   { id: "task.terminal", title: "Open a terminal in the task's copy", group: "Tasks", keys: "Mod+T", run: () => withTask((t) => openTerminal(t)) },
+  { id: "task.fork", title: "Fork the task: a new one from its copy as it is now", group: "Tasks", keys: "Mod+Shift+D", run: () => withTask((t) => forkTask(t.id, null)) },
   { id: "task.delete", title: "Delete the task (press twice)", group: "Tasks", keys: "Mod+Backspace", run: () => withTask((t) => deleteByKey(t)) },
   ...[null, ...COLORS].map((color) => ({
     id: `task.color.${color || "none"}`,

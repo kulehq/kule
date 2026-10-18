@@ -114,6 +114,95 @@ impl Task {
         }
     }
 
+    /// A new task on the same folder whose copy is this one's: as it is
+    /// now, or as it was after step `at` (`0`: before the first). It has
+    /// this task's settings (label, colour, group, budget), the same
+    /// stand-ins for the folder's secrets, the same last sync with the
+    /// folder, and no steps or commits of its own yet. Changes since the
+    /// last step are kept as a step here first when going back to a step.
+    pub fn fork(&self, at: Option<u32>) -> Result<Task> {
+        let staging = self.dir.join(crate::step_store::STORE).join("forking");
+        let staged = at
+            .map(|n| self.stage_step(n, &staging, "Changes before forking"))
+            .transpose();
+        let made = staged.and_then(|staged| {
+            let (id, dir) = new_task_dir(&self.home().join("tasks"))?;
+            let created_unix = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_or(0, |d| d.as_secs());
+            let fork = Task {
+                info: TaskInfo {
+                    id,
+                    workspace: self.info.workspace.clone(),
+                    created_unix,
+                },
+                dir,
+            };
+            match fork.populate_from(self, staged.as_deref(), &staging) {
+                Ok(()) => Ok(fork),
+                Err(e) => {
+                    let _ = fsops::remove_dir_tree(&fork.dir);
+                    Err(e)
+                }
+            }
+        });
+        if staging.exists() {
+            let _ = fsops::remove_dir_tree(&staging);
+        }
+        made
+    }
+
+    /// Makes this task a fork of `source` (see [`Task::fork`]); `staged`
+    /// are the paths `staging` holds as they were at the step forked from.
+    fn populate_from(
+        &self,
+        source: &Task,
+        staged: Option<&[(String, bool)]>,
+        staging: &Path,
+    ) -> Result<()> {
+        let _lock = source.lock()?;
+        fsops::clone_tree(&source.copy(), &self.copy(), &self.clock(&source.copy())?)?;
+        if source.base_dir().is_dir() {
+            let clock = self.clock(&source.base_dir())?;
+            fsops::clone_tree(&source.base_dir(), &self.base_dir(), &clock)?;
+        }
+        for name in [secrets::SECRETS_FILE, "settings.json"] {
+            let from = source.dir.join(name);
+            if from.is_file() {
+                fs::copy(&from, self.dir.join(name)).at(&from)?;
+            }
+        }
+        // The last sync is the source's; the copy's side of it is this
+        // copy's own files wherever the source's copy still matched it.
+        let mut baseline = source.load_baseline()?;
+        let source_copy = source.copy();
+        for (path, entry) in baseline.entries.iter_mut() {
+            let theirs = Stamp::of(&source_copy.join(path))?;
+            if theirs.is_some_and(|s| entry.copy.unchanged(&s))
+                && let Some(mine) = Stamp::of(&self.copy().join(path))?
+            {
+                entry.copy = mine;
+            }
+        }
+        if let Some(staged) = staged {
+            let paths: Vec<String> = staged.iter().map(|(p, _)| p.clone()).collect();
+            fsops::mirror(staging, &self.copy(), &paths, false)?;
+            for (path, synced) in staged {
+                if *synced
+                    && let Some(entry) = baseline.entries.get_mut(path)
+                    && let Some(mine) = Stamp::of(&self.copy().join(path))?
+                {
+                    entry.copy = mine;
+                }
+            }
+        }
+        self.save_baseline(&baseline)?;
+        if self.mask_copy(&mut baseline)? {
+            self.save_baseline(&baseline)?;
+        }
+        write_json(&self.dir.join("task.json"), &self.info)
+    }
+
     /// Writes `task.json` last: until then the task is not listed, so a
     /// half-made one never shows.
     fn populate(&self) -> Result<()> {

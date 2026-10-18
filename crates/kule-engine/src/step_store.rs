@@ -210,12 +210,43 @@ impl Task {
     /// step), and records that as a step. Changes made since the last step
     /// are kept as a step first, so nothing is lost on the way.
     pub fn back_to_step(&self, id: u32) -> Result<Step> {
+        let staging = self.dir().join(STORE).join("going-back");
+        let staged = self
+            .stage_step(id, &staging, "Changes before going back")
+            .and_then(|paths| {
+                self.put_back(
+                    &staging,
+                    &paths.into_iter().map(|(p, _)| p).collect::<Vec<_>>(),
+                )
+            });
+        if staging.exists() {
+            let _ = crate::fsops::remove_dir_tree(&staging);
+        }
+        staged?;
+        self.step(&if id == 0 {
+            "Back to before the first step".to_owned()
+        } else {
+            format!("Back to step {id}")
+        })
+    }
+
+    /// Puts in `staging` (made anew) what every path changed after step
+    /// `id` held at `id`: absent there when it was not there. Changes
+    /// since the last step are kept as a step labelled `pending` first.
+    /// Returns the paths, sorted parents first, each with whether it held
+    /// what the last sync left (and so is unchanged at `id`).
+    pub(crate) fn stage_step(
+        &self,
+        id: u32,
+        staging: &Path,
+        pending: &str,
+    ) -> Result<Vec<(String, bool)>> {
         let mut steps = self.steps()?;
         if id != 0 && !steps.iter().any(|s| s.id == id) {
             return Err(Error::Invalid(format!("the task has no step {id}")));
         }
         if self.unstepped()? {
-            steps.push(self.step("Changes before going back")?);
+            steps.push(self.step(pending)?);
         }
         let targets = targets(self, &steps, id)?;
         if let Some((path, _)) = targets.iter().find(|(_, (left, _))| *left == Left::Unkept) {
@@ -225,43 +256,34 @@ impl Task {
         }
         // The paths' states gathered in one tree, so one mirror puts them
         // in place: what is absent there goes from the copy.
-        let staging = self.dir().join(STORE).join("going-back");
         if staging.exists() {
-            crate::fsops::remove_dir_tree(&staging)?;
+            crate::fsops::remove_dir_tree(staging)?;
         }
-        fs::create_dir_all(&staging).at(&staging)?;
-        let staged = (|| {
-            for (path, (left, step)) in &targets {
-                let to = staging.join(path);
-                match left {
-                    Left::Absent | Left::Unkept => {}
-                    Left::Workspace => self.stage_synced(path, &to)?,
-                    Left::Kept => {
-                        let kept = step_dir(self, *step).join("tree").join(path);
-                        if let Some(parent) = to.parent() {
-                            fs::create_dir_all(parent).at(parent)?;
-                        }
-                        let meta = fs::symlink_metadata(&kept).at(&kept)?;
-                        if meta.is_dir() {
-                            fs::create_dir_all(&to).at(&to)?;
-                        } else if meta.file_type().is_symlink() {
-                            std::os::unix::fs::symlink(fs::read_link(&kept).at(&kept)?, &to)
-                                .at(&to)?;
-                        } else {
-                            reflink_copy::reflink_or_copy(&kept, &to).at(&kept)?;
-                        }
+        fs::create_dir_all(staging).at(staging)?;
+        for (path, (left, step)) in &targets {
+            let to = staging.join(path);
+            match left {
+                Left::Absent | Left::Unkept => {}
+                Left::Workspace => self.stage_synced(path, &to)?,
+                Left::Kept => {
+                    let kept = step_dir(self, *step).join("tree").join(path);
+                    if let Some(parent) = to.parent() {
+                        fs::create_dir_all(parent).at(parent)?;
+                    }
+                    let meta = fs::symlink_metadata(&kept).at(&kept)?;
+                    if meta.is_dir() {
+                        fs::create_dir_all(&to).at(&to)?;
+                    } else if meta.file_type().is_symlink() {
+                        std::os::unix::fs::symlink(fs::read_link(&kept).at(&kept)?, &to).at(&to)?;
+                    } else {
+                        reflink_copy::reflink_or_copy(&kept, &to).at(&kept)?;
                     }
                 }
             }
-            let paths: Vec<String> = targets.keys().cloned().collect();
-            self.put_back(&staging, &paths)
-        })();
-        let _ = crate::fsops::remove_dir_tree(&staging);
-        staged?;
-        self.step(&if id == 0 {
-            "Back to before the first step".to_owned()
-        } else {
-            format!("Back to step {id}")
-        })
+        }
+        Ok(targets
+            .into_iter()
+            .map(|(path, (left, _))| (path, left == Left::Workspace))
+            .collect())
     }
 }

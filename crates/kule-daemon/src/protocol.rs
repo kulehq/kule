@@ -74,6 +74,13 @@ pub enum Call {
         task: String,
         step: u32,
     },
+    /// A new task on the same folder from this one's copy: now, or as it
+    /// was after a step. Returns the new task.
+    ForkTask {
+        task: String,
+        #[serde(default)]
+        step: Option<u32>,
+    },
     Timeline {
         task: String,
     },
