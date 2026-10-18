@@ -14,6 +14,10 @@ its text.
 checkpoints on Lonca with a signed history, secrets, cost and the home
 directory caught for review. macOS and Linux. See [CHANGELOG.md](CHANGELOG.md).
 
+**New to Kule?** [The guide](docs/guide.md) walks through the app: a task
+from start to finish, every panel and setting, the keyboard, and what is
+new. This README is about how each part works underneath.
+
 ## Install
 
 From [the releases](https://github.com/kulehq/kule/releases):
@@ -319,8 +323,9 @@ it writes in Kule reaches it outside; you sign it in there once.
   checked before it is kept. A repository's refusals and what you told
   Kule not to ask about again still hold. `kule group` does the same from
   a terminal (`new`, `put`, `policy`, `rename`, `color`, `delete`).
-- **Settings**: agents, the policy, remembered rules, secrets and the
-  budgets (the daily one and each task's), one section each.
+- **Settings**: agents, the policy, remembered rules, secrets, the
+  budgets (the daily one and each task's), the limits on what a run takes,
+  appearance, shortcuts, extensions and your profile, one section each.
 - **First run**: with no task yet, the window shows which agents can start
   (and what to install for those that cannot), lets you choose the
   balanced or careful policy, then asks for a folder. Opened from the
