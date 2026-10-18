@@ -3022,6 +3022,43 @@ body.dragging-panel * {
   font-size: 12px;
 }
 
+/* Word documents: text kept as written, list items with Word's markers. */
+.preview-doc p,
+.preview-doc .preview-item {
+  white-space: pre-wrap;
+}
+
+.preview-item {
+  display: grid;
+  grid-template-columns: minmax(28px, auto) 1fr;
+  gap: 6px;
+  line-height: 1.65;
+}
+
+.preview-item.depth-1 { margin-left: 24px; }
+.preview-item.depth-2 { margin-left: 48px; }
+.preview-item.depth-3 { margin-left: 72px; }
+.preview-item.depth-4 { margin-left: 96px; }
+
+.preview-doc > .preview-item {
+  margin-bottom: 4px;
+}
+
+.preview-doc > .preview-item + :not(.preview-item) {
+  margin-top: 12px;
+}
+
+.preview-marker {
+  color: var(--muted);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.preview-doc .md-table td,
+.preview-doc .md-table th {
+  text-align: left;
+}
+
 /* Tables: a grid from A1 with sticky letters and numbers. */
 .preview-fx {
   display: flex;

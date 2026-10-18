@@ -64,6 +64,8 @@ function kindText(v) {
       return `${v.mime.slice(6).toUpperCase()} · ${v.width} × ${v.height}`;
     case "table":
       return v.sheets.length > 1 ? `${v.sheets.length} sheets` : "Table";
+    case "document":
+      return "Word document";
     default:
       return "";
   }
@@ -206,12 +208,14 @@ function previewBody(v) {
       );
     case "table":
       return previewTable(v);
+    case "document":
+      return previewDocument(v);
     default:
       return h(
         "div",
         { class: "preview-body preview-other" },
         h("p", {}, `${sizeText(v.size)}, ${v.reason}.`),
-        h("p", { class: "muted" }, "The Preview shows text, Markdown, CSV and Excel files, and PNG, JPEG, GIF or WebP pictures.")
+        h("p", { class: "muted" }, "The Preview shows text, Markdown, CSV, Excel and Word files, and PNG, JPEG, GIF or WebP pictures.")
       );
   }
 }
@@ -334,4 +338,39 @@ function previewTable(v) {
       : null;
   const cut = sheet.cut ? h("p", { class: "preview-note" }, "The sheet has more rows or columns than are shown.") : null;
   return [fx, grid, cut, tabs];
+}
+
+/** A Word document's text: each block carries its number (data-block,
+ * from 1), which is how a place in it is named. */
+function previewDocument(v) {
+  const blocks = v.blocks.map((b, i) => {
+    const n = { "data-block": i + 1 };
+    switch (b.kind) {
+      case "heading":
+        return h(`h${Math.min(b.level + 2, 6)}`, { ...n, class: "md-h", "data-level": b.level }, b.text);
+      case "list_item":
+        return h(
+          "div",
+          { ...n, class: `preview-item depth-${Math.min(b.level, 4)}` },
+          h("span", { class: "preview-marker", "aria-hidden": "true" }, b.marker),
+          h("span", {}, b.text)
+        );
+      case "table":
+        return h(
+          "div",
+          { ...n, class: "md-table" },
+          h("table", {}, h("tbody", {}, ...b.rows.map((row, r) => h("tr", {}, ...row.map((cell) => h(r === 0 ? "th" : "td", {}, cell))))))
+        );
+      default:
+        return h("p", n, b.text);
+    }
+  });
+  return [
+    h(
+      "div",
+      { class: "preview-body preview-md preview-doc", tabindex: "0" },
+      ...(blocks.length ? blocks : [h("p", { class: "muted" }, "The document has no text.")])
+    ),
+    v.cut ? h("p", { class: "preview-note" }, "The document goes on past what is shown.") : null,
+  ];
 }

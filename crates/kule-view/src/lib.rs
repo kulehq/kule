@@ -3,6 +3,7 @@
 //! is nothing to show. Everything here works on bytes already read; what is
 //! read, and from where, is the daemon's business.
 
+pub mod docx;
 pub mod image;
 pub mod office;
 pub mod table;
@@ -48,6 +49,13 @@ pub enum View {
         sheets: Vec<table::Sheet>,
         size: u64,
     },
+    /// A Word document's text.
+    Document {
+        blocks: Vec<docx::Block>,
+        /// More blocks than are here.
+        cut: bool,
+        size: u64,
+    },
     /// Nothing to show, and why.
     Other {
         size: u64,
@@ -66,17 +74,21 @@ fn is_workbook(path: &str) -> bool {
     matches!(extension(path).as_str(), "xlsx" | "xlsm")
 }
 
+fn is_document(path: &str) -> bool {
+    matches!(extension(path).as_str(), "docx" | "docm")
+}
+
 fn is_csv(path: &str) -> bool {
     matches!(extension(path).as_str(), "csv" | "tsv")
 }
 
-/// How much of a file named `path` [`view`] needs: a picture or a workbook
-/// whole, text up to [`MAX_TEXT`]. One byte more than a whole file may have
-/// shows that it is too large without reading it all.
+/// How much of a file named `path` [`view`] needs: a picture or an office
+/// file whole, text up to [`MAX_TEXT`]. One byte more than a whole file may
+/// have shows that it is too large without reading it all.
 pub fn wanted(path: &str) -> u64 {
     if image::named_like_one(path) {
         image::MAX_IMAGE as u64 + 1
-    } else if is_workbook(path) {
+    } else if is_workbook(path) || is_document(path) {
         office::MAX_FILE as u64 + 1
     } else {
         MAX_TEXT
@@ -106,14 +118,16 @@ pub fn view(path: &str, bytes: Vec<u8>, size: u64) -> View {
             Err(why) => other(why.reason()),
         };
     }
-    if is_workbook(path) {
+    if is_workbook(path) || is_document(path) {
         if cut {
             return other("too large to preview");
         }
-        return match xlsx::sheets(&bytes) {
-            Ok(sheets) => View::Table { sheets, size },
-            Err(why) => other(&why.0),
+        let read = if is_workbook(path) {
+            xlsx::sheets(&bytes).map(|sheets| View::Table { sheets, size })
+        } else {
+            docx::blocks(&bytes).map(|(blocks, cut)| View::Document { blocks, cut, size })
         };
+        return read.unwrap_or_else(|why| other(&why.0));
     }
     let Some(text) = text::decode(bytes, cut) else {
         return other("a binary file");
@@ -244,5 +258,17 @@ mod tests {
             view("x.xlsx", b"hello".to_vec(), 5),
             View::Other { .. }
         ));
+    }
+
+    #[test]
+    fn a_word_document_is_its_blocks() {
+        let doc = docx::tests::document();
+        let View::Document { blocks, cut, .. } =
+            view("Contract.DOCX", doc.clone(), doc.len() as u64)
+        else {
+            panic!("not a document");
+        };
+        assert!(!cut && blocks.len() == 8);
+        assert_eq!(wanted("a.docx"), office::MAX_FILE as u64 + 1);
     }
 }
