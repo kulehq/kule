@@ -17,14 +17,19 @@ use std::io::{self, BufRead, BufReader, Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// The longest request head read.
 const MAX_HEAD: usize = 8 * 1024;
 /// Connections served at once; more wait for the kernel's backlog.
 const MAX_OPEN: usize = 32;
-/// How long a slow client may take to send its request.
+/// How long a client may take to send its whole request.
 const READ_TIMEOUT: Duration = Duration::from_secs(5);
+/// What an extension's page may not use: devices, the clipboard, payment,
+/// fullscreen, and the rest it has no business with.
+const FEATURES: &str = "camera=(), microphone=(), geolocation=(), display-capture=(), \
+    clipboard-read=(), clipboard-write=(), fullscreen=(), payment=(), usb=(), \
+    serial=(), bluetooth=(), midi=(), screen-wake-lock=(), web-share=()";
 
 /// Where the files come from.
 pub trait Files: Send + Sync + 'static {
@@ -101,10 +106,42 @@ fn random_key() -> io::Result<String> {
     Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
 }
 
+/// Reads that give up once `until` passes, however slowly the bytes come:
+/// a byte every few seconds would otherwise hold a connection for good.
+struct Deadline {
+    stream: TcpStream,
+    until: Instant,
+}
+
+impl Read for Deadline {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let left = self.until.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return Err(io::ErrorKind::TimedOut.into());
+        }
+        self.stream.set_read_timeout(Some(left))?;
+        self.stream.read(buf)
+    }
+}
+
 fn serve(stream: TcpStream, port: u16, key: &str, files: &dyn Files) -> io::Result<()> {
-    stream.set_read_timeout(Some(READ_TIMEOUT))?;
+    serve_within(stream, port, key, files, READ_TIMEOUT)
+}
+
+/// Answers one request whose head arrives whole within `time`.
+fn serve_within(
+    stream: TcpStream,
+    port: u16,
+    key: &str,
+    files: &dyn Files,
+    time: Duration,
+) -> io::Result<()> {
     stream.set_write_timeout(Some(READ_TIMEOUT))?;
-    let mut reader = BufReader::new(stream.try_clone()?.take(MAX_HEAD as u64));
+    let deadline = Deadline {
+        stream: stream.try_clone()?,
+        until: Instant::now() + time,
+    };
+    let mut reader = BufReader::new(deadline.take(MAX_HEAD as u64));
     let mut head = Vec::new();
     loop {
         let before = head.len();
@@ -181,7 +218,8 @@ fn answer(head: &[u8], port: u16, key: &str, files: &dyn Files) -> Vec<u8> {
     let mut out = format!(
         "HTTP/1.1 200 OK\r\nContent-Type: {media}\r\nContent-Length: {}\r\n\
          Content-Security-Policy: {policy}\r\nX-Content-Type-Options: nosniff\r\n\
-         Referrer-Policy: no-referrer\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n",
+         Referrer-Policy: no-referrer\r\nPermissions-Policy: {FEATURES}\r\n\
+         X-DNS-Prefetch-Control: off\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n",
         body.len()
     )
     .into_bytes();
@@ -258,6 +296,9 @@ mod tests {
             reply.contains("frame-ancestors tauri://localhost"),
             "{reply}"
         );
+        assert!(reply.contains("Permissions-Policy: camera=()"), "{reply}");
+        assert!(reply.contains("clipboard-write=()"), "{reply}");
+        assert!(reply.contains("X-DNS-Prefetch-Control: off"), "{reply}");
         assert!(reply.ends_with("\r\n\r\n<p>hi</p>"), "{reply}");
     }
 
@@ -317,6 +358,32 @@ mod tests {
             "default-src 'self'; frame-src http://127.0.0.1:4000"
         );
         assert_eq!(frame_policy(csp, None), csp, "no server, no frames");
+    }
+
+    /// A byte now and then does not hold a connection past its time.
+    #[test]
+    fn a_head_that_trickles_in_is_given_up_on() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let addr = listener.local_addr().unwrap();
+        let client = std::thread::spawn(move || {
+            let mut stream = TcpStream::connect(addr).unwrap();
+            for _ in 0..20 {
+                if stream.write_all(b"G").is_err() {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        });
+        let (stream, _) = listener.accept().unwrap();
+        let started = Instant::now();
+        let served = serve_within(stream, addr.port(), KEY, &One, Duration::from_millis(300));
+        assert!(served.is_err(), "{served:?}");
+        assert!(
+            started.elapsed() < Duration::from_millis(1500),
+            "{:?}",
+            started.elapsed()
+        );
+        client.join().unwrap();
     }
 
     #[test]
