@@ -44,6 +44,8 @@ mod protect;
 pub mod remembered;
 mod sandbox;
 mod secrets;
+#[cfg(target_os = "macos")]
+pub mod shield;
 mod snapshot;
 mod step_store;
 mod steps;

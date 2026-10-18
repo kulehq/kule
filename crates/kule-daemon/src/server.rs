@@ -87,6 +87,13 @@ pub fn serve(
     token: String,
 ) {
     let clients = Arc::new(AtomicUsize::new(0));
+    // What runs listen on is kept off the network (macOS; Linux does it in
+    // the sandbox itself).
+    #[cfg(target_os = "macos")]
+    {
+        let service = service.clone();
+        std::thread::spawn(move || service.shield());
+    }
     let control = Arc::new(Control {
         stopping: AtomicBool::new(false),
         socket: socket.to_owned(),
@@ -317,7 +324,13 @@ pub fn dispatch(service: &Arc<Service>, call: Call) -> Result<Value, String> {
         Call::BackToStep { task, step } => json(service.back_to_step(&task, step)?),
         Call::ForkTask { task, step } => json(service.fork(&task, step)?),
         Call::Ports { task } => {
-            json(kule_engine::listening_in(&service.copy_of(&task)?).map_err(|e| e.to_string())?)
+            let mut found =
+                kule_engine::listening_in(&service.copy_of(&task)?).map_err(|e| e.to_string())?;
+            let shielded = service.shielded();
+            for listener in &mut found {
+                listener.shielded = listener.address == "*" && shielded.contains(&listener.port);
+            }
+            json(found)
         }
         Call::Timeline { task } => json(service.timeline(&task)?),
         Call::RemoveTask { task } => json(service.remove(&task)?),

@@ -5746,7 +5746,7 @@ async function loadPorts() {
       h(
         "button",
         {
-          class: `port-chip${l.reachable ? "" : " unreachable"}${l.reachable && !local(l.address) ? " exposed" : ""}`,
+          class: `port-chip${l.reachable ? "" : " unreachable"}${l.reachable && !local(l.address) && !l.shielded ? " exposed" : ""}`,
           type: "button",
           disabled: !l.reachable,
           "data-key": `port:${l.port}`,
@@ -5754,10 +5754,13 @@ async function loadPorts() {
             ? `${l.process} (pid ${l.pid}) listens inside the sandbox's own network, which this computer does not reach`
             : local(l.address)
               ? `${l.process} (pid ${l.pid}) listens on this computer only, port ${l.port}. Open http://localhost:${l.port}/ in the browser`
+              : l.shielded
+                ? `${l.process} (pid ${l.pid}) listens on every address, port ${l.port}; Kule keeps your network off it, so only this computer reaches it. Open http://localhost:${l.port}/ in the browser`
               : `${l.process} (pid ${l.pid}) listens on ${l.address === "*" ? "every address" : l.address}, port ${l.port}: other computers on your network can reach it. Open http://localhost:${l.port}/ in the browser`,
           onclick: () => call("open_url", { url: `http://localhost:${l.port}/` }).catch(fail),
         },
-        l.reachable && !local(l.address) ? h("span", { class: "port-exposed", "aria-label": "reachable from the network" }, "⚠ ") : null,
+        l.reachable && !local(l.address) && !l.shielded ? h("span", { class: "port-exposed", "aria-label": "reachable from the network" }, "⚠ ") : null,
+        l.shielded ? h("span", { class: "port-shielded", "aria-label": "kept off the network by Kule" }, "🛡 ") : null,
         `localhost:${l.port}`,
         l.reachable ? h("span", { class: "port-open", "aria-hidden": "true" }, " ↗") : null
       )

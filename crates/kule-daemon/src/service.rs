@@ -315,9 +315,54 @@ pub struct Service {
     scans: Mutex<HashMap<String, Cached>>,
     /// Each task's changed files as last outlined, by path.
     outlined: Mutex<HashMap<String, HashMap<String, Outlined>>>,
+    /// Ports a run's servers listen on every address, which Kule keeps off
+    /// the network (macOS, see `kule_engine::shield`).
+    shielded: Mutex<std::collections::BTreeSet<u16>>,
 }
 
 impl Service {
+    /// Ports a run's servers listen on every address, kept off the network.
+    pub fn shielded(&self) -> std::collections::BTreeSet<u16> {
+        self.shielded.lock().unwrap().clone()
+    }
+
+    /// macOS: while runs go on, keeps what they listen on off the network,
+    /// looking every fifth of a second; lets go when none does. Runs for
+    /// the life of the daemon.
+    #[cfg(target_os = "macos")]
+    pub fn shield(self: Arc<Self>) {
+        let mut shield = kule_engine::shield::Shield::new();
+        // Each stopped process is told once.
+        let mut told: HashSet<(u32, u16)> = HashSet::new();
+        loop {
+            let runs: Vec<String> = self.running.lock().unwrap().iter().cloned().collect();
+            if runs.is_empty() {
+                if !shield.held().is_empty() {
+                    shield.release();
+                    self.shielded.lock().unwrap().clear();
+                }
+                told.clear();
+                std::thread::sleep(Duration::from_millis(500));
+                continue;
+            }
+            let guarded = shield.guard(&kule_engine::shield::descendants());
+            *self.shielded.lock().unwrap() = guarded.shielded;
+            for stopped in guarded.stopped {
+                if !told.insert((stopped.pid, stopped.port)) {
+                    continue;
+                }
+                let text = format!(
+                    "Kule stopped {} (pid {}): it listened on {}:{}, which your network reaches. Servers keep to this computer; listen on 127.0.0.1 or every address",
+                    stopped.process, stopped.pid, stopped.address, stopped.port
+                );
+                for task in &runs {
+                    self.emit(task, RunEvent::Preparing { text: text.clone() });
+                }
+            }
+            std::thread::sleep(Duration::from_millis(200));
+        }
+    }
+
     /// Kule's home, which this service keeps everything in.
     pub fn home(&self) -> &Path {
         &self.home
@@ -337,6 +382,7 @@ impl Service {
             next_seq: std::sync::atomic::AtomicU64::new(1),
             scans: Mutex::new(HashMap::new()),
             outlined: Mutex::new(HashMap::new()),
+            shielded: Mutex::new(Default::default()),
         }
     }
 
@@ -1936,6 +1982,51 @@ mod tests {
             panic!("no lines");
         };
         assert_eq!(hunks[0].lines.last().unwrap().text, "b");
+    }
+
+    /// macOS: while a run goes on, a server of the run that listens on every
+    /// address is kept off the network and the window hears it shielded;
+    /// with no run, the port is let go.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_run_s_servers_are_shielded_while_it_goes_on() {
+        use std::io::{BufRead, BufReader};
+        let s = Setup::new();
+        let (id, _copy) = s.task();
+        let mut server = std::process::Command::new("python3")
+            .args([
+                "-I",
+                "-c",
+                "import socket,time\ns=socket.socket()\ns.bind(('0.0.0.0',0))\ns.listen()\nprint(s.getsockname()[1],flush=True)\ntime.sleep(30)",
+            ])
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut line = String::new();
+        BufReader::new(server.stdout.take().unwrap())
+            .read_line(&mut line)
+            .unwrap();
+        let port: u16 = line.trim().parse().unwrap();
+
+        let app = Arc::clone(&s.app);
+        std::thread::spawn({
+            let app = Arc::clone(&app);
+            move || app.shield()
+        });
+        let wait_for = |want: bool| {
+            let until = Instant::now() + Duration::from_secs(5);
+            while app.shielded().contains(&port) != want && Instant::now() < until {
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            app.shielded().contains(&port) == want
+        };
+        app.running.lock().unwrap().insert(id.clone());
+        let held = wait_for(true);
+        app.running.lock().unwrap().remove(&id);
+        let released = wait_for(false);
+        let _ = server.kill();
+        assert!(held, "the run's server was not shielded");
+        assert!(released, "the port was kept after the run");
     }
 
     /// Going back to a step puts the copy back, is refused while an agent

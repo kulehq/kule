@@ -22,6 +22,10 @@ pub struct Listener {
     /// Whether this computer reaches it: a server inside a sandbox with a
     /// network of its own (Linux) is not.
     pub reachable: bool,
+    /// Listening on every address, but kept off the network by Kule (see
+    /// `shield`, macOS).
+    #[serde(default)]
+    pub shielded: bool,
 }
 
 /// The servers whose processes work inside `dir`, one per port, by port.
@@ -51,52 +55,112 @@ fn address_of(ip: &str) -> String {
 
 #[cfg(target_os = "macos")]
 fn listeners() -> Result<Vec<Listener>> {
-    use std::process::{Command, Stdio};
-    use std::time::{Duration, Instant};
-    // lsof comes with macOS and reads every socket the person's processes
-    // hold: p<pid>, c<name>, n<address:port>, one field a line.
-    let mut child = Command::new("/usr/sbin/lsof")
-        .args(["-nP", "-iTCP", "-sTCP:LISTEN", "-F", "pcn"])
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .at(Path::new("/usr/sbin/lsof"))?;
-    let until = Instant::now() + Duration::from_secs(5);
-    let out = loop {
-        match child.try_wait().at(Path::new("/usr/sbin/lsof"))? {
-            Some(_) => break child.wait_with_output().at(Path::new("/usr/sbin/lsof"))?,
-            None if Instant::now() > until => {
-                let _ = child.kill();
-                return Ok(Vec::new());
-            }
-            None => std::thread::sleep(Duration::from_millis(20)),
-        }
-    };
     let mut found = Vec::new();
-    let (mut pid, mut name) = (0u32, String::new());
-    for line in String::from_utf8_lossy(&out.stdout).lines() {
-        let (tag, value) = line.split_at(line.len().min(1));
-        match tag {
-            "p" => pid = value.parse().unwrap_or(0),
-            "c" => name = value.to_owned(),
-            "n" => {
-                let Some((ip, port)) = value.rsplit_once(':') else {
-                    continue;
-                };
-                let Ok(port) = port.parse() else { continue };
-                found.push(Listener {
-                    port,
-                    address: address_of(ip),
-                    pid,
-                    process: name.clone(),
-                    reachable: true,
-                });
-            }
-            _ => {}
+    for pid in macos::all_pids() {
+        let sockets = macos::listening(pid);
+        if sockets.is_empty() {
+            continue;
+        }
+        let process = macos::name_of(pid);
+        for (ip, port) in sockets {
+            found.push(Listener {
+                port,
+                address: address_of(&ip.to_string()),
+                pid: pid as u32,
+                process: process.clone(),
+                reachable: true,
+                shielded: false,
+            });
         }
     }
     Ok(found)
+}
+
+/// macOS: processes and their listening sockets, read from the kernel
+/// (libproc), for the window's port chips and for the shield.
+#[cfg(target_os = "macos")]
+pub(crate) mod macos {
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+
+    #[repr(C)]
+    struct RawListener {
+        family: libc::c_int,
+        port: libc::c_ushort,
+        addr: [u8; 16],
+    }
+
+    unsafe extern "C" {
+        fn kule_listeners(pid: libc::c_int, out: *mut RawListener, max: libc::c_int)
+        -> libc::c_int;
+    }
+
+    /// The person's processes (those this one may read).
+    pub(crate) fn all_pids() -> Vec<i32> {
+        // SAFETY: a null buffer asks for the count; the second call fills
+        // at most the room given.
+        unsafe {
+            let n = libc::proc_listallpids(std::ptr::null_mut(), 0);
+            if n <= 0 {
+                return Vec::new();
+            }
+            let mut pids = vec![0i32; n as usize + 64];
+            let bytes = (pids.len() * std::mem::size_of::<i32>()) as libc::c_int;
+            let got = libc::proc_listallpids(pids.as_mut_ptr().cast(), bytes);
+            pids.truncate(got.max(0) as usize);
+            pids.retain(|&p| p > 0);
+            pids
+        }
+    }
+
+    /// The TCP addresses and ports `pid` listens on.
+    pub(crate) fn listening(pid: i32) -> Vec<(IpAddr, u16)> {
+        const MAX: usize = 256;
+        let mut raw: Vec<RawListener> = (0..MAX)
+            .map(|_| RawListener {
+                family: 0,
+                port: 0,
+                addr: [0; 16],
+            })
+            .collect();
+        // SAFETY: raw has room for MAX entries.
+        let n = unsafe { kule_listeners(pid, raw.as_mut_ptr(), MAX as libc::c_int) };
+        raw.truncate(n.max(0) as usize);
+        raw.into_iter()
+            .map(|l| {
+                let ip = if l.family == 6 {
+                    IpAddr::V6(Ipv6Addr::from(l.addr))
+                } else {
+                    IpAddr::V4(Ipv4Addr::new(l.addr[0], l.addr[1], l.addr[2], l.addr[3]))
+                };
+                (ip, l.port)
+            })
+            .collect()
+    }
+
+    /// The parent of `pid`, if it can be read.
+    pub(crate) fn parent_of(pid: i32) -> Option<i32> {
+        // SAFETY: an all-zero proc_bsdinfo is valid; proc_pidinfo fills at
+        // most its size.
+        let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
+        let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
+        let got = unsafe {
+            libc::proc_pidinfo(
+                pid,
+                libc::PROC_PIDTBSDINFO,
+                0,
+                (&mut info as *mut libc::proc_bsdinfo).cast(),
+                size,
+            )
+        };
+        (got == size).then_some(info.pbi_ppid as i32)
+    }
+
+    pub(crate) fn name_of(pid: i32) -> String {
+        let mut buf = [0u8; 256];
+        // SAFETY: buf has room for the name the call writes.
+        let n = unsafe { libc::proc_name(pid, buf.as_mut_ptr().cast(), buf.len() as u32) };
+        String::from_utf8_lossy(&buf[..n.max(0) as usize]).into_owned()
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -194,6 +258,7 @@ fn listeners() -> Result<Vec<Listener>> {
                     pid,
                     process: name.clone(),
                     reachable,
+                    shielded: false,
                 });
             }
         }

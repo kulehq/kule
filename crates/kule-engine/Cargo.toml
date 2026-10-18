@@ -33,6 +33,10 @@ rcgen = { version = "0.14.10", default-features = false, features = ["ring", "pe
 webpki-roots = "1.0.9"
 time = "0.3.55"
 
+[build-dependencies]
+# macOS: compiles listeners.c, which reads listening sockets with libproc.
+cc = "1.8.0"
+
 [dev-dependencies]
 filetime.workspace = true
 tempfile.workspace = true

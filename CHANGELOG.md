@@ -56,9 +56,19 @@
     `NODE_OPTIONS`, `PYTHONPATH` and `RUBYOPT`, which survive every shell on
     the way) give a server that asks for every address the loopback one.
     Express, Next, Vite, `http.server`, Flask, Django, Puma and the like
-    keep working. Another program that listens on every address can still
-    be reached from the network; its chip in the task's header turns amber
-    and says so.
+    keep working.
+  - On macOS, for every other program (Go, Rust, Java, …), Kule shields
+    the port while a run goes on: where a process of the run listens on
+    every address, Kule takes the same port on each of the computer's
+    network addresses (IPv6 and VPNs included). The kernel hands a
+    connection to the most specific address, so what comes from the network
+    reaches Kule, which resets it, while loopback still reaches the server
+    and the browser keeps working. A process that listens on a network
+    address of its own is stopped, and Live says why. Kule looks every
+    fifth of a second, reading sockets from the kernel (libproc), so only
+    that first moment is open. The chip shows 🛡 for a shielded server and
+    turns amber, with a warning, for one the network still reaches (a
+    server you started in a terminal, which Kule leaves to you).
 
 ### Preview
 

@@ -575,6 +575,101 @@ fn a_server_asking_for_every_address_listens_on_loopback() {
     assert_eq!(text(&own).trim(), "127.0.0.1");
 }
 
+/// The address this computer reaches its network with (nothing is sent),
+/// when it has one.
+#[cfg(target_os = "macos")]
+fn network_ip() -> Option<std::net::IpAddr> {
+    let probe = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
+    probe.connect("192.0.2.1:9").ok()?;
+    let ip = probe.local_addr().ok()?.ip();
+    (!ip.is_loopback() && !ip.is_unspecified()).then_some(ip)
+}
+
+/// Asks the server at `ip`:`port` and says whether it answered.
+#[cfg(target_os = "macos")]
+fn answers(ip: std::net::IpAddr, port: u16) -> bool {
+    use std::io::{Read, Write};
+    std::net::TcpStream::connect_timeout(&(ip, port).into(), std::time::Duration::from_secs(3))
+        .and_then(|mut c| {
+            c.set_read_timeout(Some(std::time::Duration::from_secs(3)))?;
+            c.write_all(b"ping")?;
+            let mut buf = [0u8; 2];
+            c.read_exact(&mut buf)?;
+            Ok(buf == *b"hi")
+        })
+        .unwrap_or(false)
+}
+
+/// A sandboxed server, `python3 -I` so no hook reaches it, on `host`; returns
+/// it with its port.
+#[cfg(target_os = "macos")]
+fn raw_server(sandbox: &Sandbox, host: &str) -> (std::process::Child, u16) {
+    use std::io::{BufRead, BufReader};
+    let code = format!(
+        "import socket\ns=socket.socket()\ns.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)\ns.bind(('{host}',0))\ns.listen()\nprint(s.getsockname()[1],flush=True)\nwhile True:\n c,_=s.accept()\n c.settimeout(3)\n try:\n  if c.recv(4)==b'ping': c.sendall(b'hi')\n except Exception: pass\n c.close()"
+    );
+    let mut child = sandbox
+        .command("python3", &["-I".to_owned(), "-c".to_owned(), code])
+        .unwrap()
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut line = String::new();
+    BufReader::new(child.stdout.take().unwrap())
+        .read_line(&mut line)
+        .unwrap();
+    (child, line.trim().parse().unwrap())
+}
+
+/// On macOS, a server no hook reaches that listens on every address answers
+/// this computer and not the network, once Kule shields it; one that takes
+/// a network address of its own is stopped.
+#[cfg(target_os = "macos")]
+#[test]
+fn the_shield_keeps_an_unhooked_server_off_the_network() {
+    use kule_engine::shield::{Shield, descendants};
+    let Some(outward) = network_ip() else {
+        eprintln!("no network address to try from; skipped");
+        return;
+    };
+    let s = Setup::new();
+    let sandbox = s.sandbox();
+    let (mut server, port) = raw_server(&sandbox, "0.0.0.0");
+    let loopback: std::net::IpAddr = "127.0.0.1".parse().unwrap();
+    assert!(
+        answers(outward, port),
+        "the test server should be on the network before the shield"
+    );
+
+    let mut shield = Shield::new();
+    let guarded = shield.guard(&descendants());
+    assert!(guarded.shielded.contains(&port), "{guarded:?}");
+    assert!(
+        answers(loopback, port),
+        "the shield took this computer's own way in"
+    );
+    assert!(
+        !answers(outward, port),
+        "the network still reaches the server"
+    );
+
+    // A server on a network address of its own is stopped.
+    let (mut own, own_port) = raw_server(&sandbox, &outward.to_string());
+    let guarded = shield.guard(&descendants());
+    assert!(
+        guarded.stopped.iter().any(|s| s.port == own_port),
+        "{guarded:?}"
+    );
+    assert!(own.wait().is_ok());
+
+    shield.release();
+    assert!(
+        answers(outward, port),
+        "released, the port is the server's again"
+    );
+    let _ = server.kill();
+}
+
 /// On Linux, without a network of its own, any program's server is held to
 /// loopback by Kule doing its binds, hooks or not (`python3 -I` ignores
 /// them): every address becomes loopback, a listen without a bind listens
