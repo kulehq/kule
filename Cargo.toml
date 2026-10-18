@@ -24,3 +24,10 @@ serde_json = "1.0.154"
 tempfile = "3.27.0"
 thiserror = "2"
 walkdir = "2.5.0"
+
+# Dependencies without debug info: on macOS a debug build keeps it in
+# separate object files that cargo never removes, and with cedar, gix,
+# tree-sitter and tauri they grew target/debug past 60 GB. Kule's own
+# crates keep full debug info.
+[profile.dev.package."*"]
+debug = false
