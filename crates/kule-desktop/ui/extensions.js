@@ -48,10 +48,31 @@ const PERMISSION_WORDS = {
 const READS_WORK = ["events.read", "review.read", "files.read"];
 
 /** Kule's commands an extension may set off, from a key pressed in its
- * frame or from `commands.execute`: ones that only move the view. */
-const VIEW_COMMANDS = new Set(["app.palette", "app.shortcuts", "app.settings", "task.next", "task.prev", "chat.toggle", "terminal.next", "terminal.prev"]);
-const viewOnly = (id) =>
-  VIEW_COMMANDS.has(id) || ((id.startsWith("view.") || id.startsWith("layout.") || id.startsWith("panel.to-")) && id !== "layout.reset");
+ * frame or from `commands.execute`: ones that only show a panel or a
+ * region. Never one that starts something (the terminal starts the
+ * person's shell, outside the sandbox), takes the keyboard (the palette,
+ * whose Enter could run a commit), switches the task or rearranges the
+ * layout; and the keyboard goes back to the frame after (see `steady`). */
+const VIEW_COMMANDS = new Set([
+  "view.tasks",
+  "view.files",
+  "view.live",
+  "view.review",
+  "view.timeline",
+  "chat.toggle",
+  "layout.left",
+  "layout.bottom",
+  "layout.right",
+  "layout.main",
+]);
+const viewOnly = (id) => VIEW_COMMANDS.has(id);
+
+/** Runs a command for a frame, then gives the keyboard back to the frame,
+ * so what the person goes on typing never lands somewhere else. */
+function steady(rec, run) {
+  run();
+  if (document.activeElement !== rec.el && rec.el.isConnected) rec.el.focus();
+}
 
 /** Calls a frame may make in a burst before it waits. */
 const CALLS_PER_10S = 200;
@@ -204,7 +225,7 @@ async function handleCall(rec, method, params) {
   const ext = rec.ext;
   switch (method) {
     case "commands.execute":
-      return executeFor(ext, params || {});
+      return executeFor(rec, params || {});
     case "review.annotate":
       // The app decides on the permission; the notes stay in the window.
       await call("ext_call", { ext: ext.id, method, params: null });
@@ -222,16 +243,17 @@ async function handleCall(rec, method, params) {
 }
 
 /** One of the extension's own commands, or one of Kule's that only moves the view. */
-function executeFor(ext, { id, args }) {
+function executeFor(rec, { id, args }) {
+  const ext = rec.ext;
   if (typeof id !== "string") throw new Error("a command id is a string");
   const command = commandById(id);
   if (command && command.ext === ext.id) {
     if (command.local) runExtCommand(ext.id, command.local, args);
-    else command.run();
+    else steady(rec, () => command.run());
     return null;
   }
   if (command && !command.ext && viewOnly(id)) {
-    command.run();
+    steady(rec, () => command.run());
     return null;
   }
   throw new Error(`${id} is not a command this extension can run`);
@@ -256,7 +278,7 @@ function keyFromFrame(rec, k) {
     const combo = bindingOf(c);
     return combo && combos.includes(combo) && (c.ext === rec.ext.id || (!c.ext && viewOnly(c.id)));
   });
-  if (command) command.run();
+  if (command) steady(rec, () => command.run());
 }
 
 function runExtCommand(extId, local, args) {
