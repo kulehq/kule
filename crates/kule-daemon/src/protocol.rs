@@ -10,7 +10,7 @@ use serde_json::Value;
 
 /// Changes whenever a call, a result or a notice changes shape; a client
 /// and a daemon that disagree on it cannot talk.
-pub const PROTOCOL: u32 = 20;
+pub const PROTOCOL: u32 = 21;
 
 /// What a daemon says about itself.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -160,6 +160,11 @@ pub enum Call {
     /// Deletes a group; its tasks stay, in no group.
     DeleteGroup {
         group: u64,
+    },
+    /// What putting a task in a group would change; nothing changes yet.
+    GroupImpact {
+        task: String,
+        group: Option<u64>,
     },
     /// Puts a task in a group; `None` takes it out.
     SetTaskGroup {

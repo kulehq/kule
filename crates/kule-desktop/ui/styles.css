@@ -340,11 +340,6 @@ body.dragging-task {
   box-shadow: 0 2px 0 var(--accent);
 }
 
-.group-head.drop-into {
-  background: var(--accent-soft, var(--sunken));
-  box-shadow: inset 0 0 0 1px var(--accent);
-}
-
 /* "Tasks" and the + that makes a group. */
 .nav-title-row {
   display: flex;
@@ -381,10 +376,15 @@ body.dragging-task {
   outline-offset: -1px;
 }
 
-/* A group in the list: its head, then its tasks a step in. */
+/* A group in the list: a card in its colour, a folder and its name on
+   top, its tasks inside along a rail of the same colour. */
 .group-row {
+  --group: var(--tag, var(--muted));
   list-style: none;
-  margin: 2px 0 6px;
+  margin: 4px 0 10px;
+  border: 1px solid color-mix(in srgb, var(--group) 35%, var(--border));
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--group) 7%, transparent);
 }
 
 .group-head {
@@ -392,18 +392,12 @@ body.dragging-task {
   display: grid;
   grid-template-columns: 1fr auto;
   align-items: center;
-  border-radius: 6px;
+  border-radius: 8px;
 }
 
-.group-row[class*="color-"] > .group-head::before {
-  position: absolute;
-  top: 6px;
-  bottom: 6px;
-  left: 0;
-  width: 3px;
-  border-radius: 2px;
-  background: var(--tag);
-  content: "";
+.group-row:has(> .group-tasks) > .group-head {
+  border-bottom: 1px solid color-mix(in srgb, var(--group) 25%, var(--border));
+  border-radius: 8px 8px 0 0;
 }
 
 .group-toggle {
@@ -411,19 +405,19 @@ body.dragging-task {
   align-items: center;
   gap: 6px;
   min-width: 0;
-  padding: 6px 4px 6px 10px;
+  padding: 7px 4px 7px 6px;
   border: 0;
-  border-radius: 6px;
+  border-radius: 8px;
   background: transparent;
   color: var(--text);
   font: inherit;
-  font-weight: 600;
+  font-weight: 650;
   text-align: left;
   cursor: pointer;
 }
 
 .group-toggle:hover {
-  background: var(--sunken);
+  background: color-mix(in srgb, var(--group) 12%, transparent);
 }
 
 .group-toggle:focus-visible {
@@ -435,6 +429,13 @@ body.dragging-task {
   width: 10px;
   color: var(--faint);
   font-size: 10px;
+}
+
+.group-icon {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  fill: var(--group);
 }
 
 .group-name {
@@ -458,21 +459,90 @@ body.dragging-task {
 
 .group-count {
   flex: none;
+  min-width: 18px;
   margin-left: auto;
-  color: var(--faint);
+  padding: 0 5px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--group) 18%, transparent);
+  color: var(--muted);
   font-size: 11px;
-  font-weight: 500;
+  font-weight: 600;
+  text-align: center;
 }
 
 .group-tasks {
-  margin: 0 0 0 10px;
-  padding: 0;
+  margin: 4px 4px 4px 14px;
+  padding: 0 0 0 4px;
+  border-left: 2px solid color-mix(in srgb, var(--group) 55%, transparent);
 }
 
 .group-empty {
   list-style: none;
-  padding: 4px 10px 6px;
+  margin: 0;
+  padding: 6px 10px 8px;
   font-size: 12px;
+}
+
+/* Tasks in no group, once there are groups: a head that takes a dropped
+   task out of its group. */
+.loose-row {
+  list-style: none;
+  margin: 8px 0 2px;
+}
+
+.loose-head {
+  display: flex;
+  align-items: center;
+  padding: 4px 6px;
+  border: 1px dashed transparent;
+  color: var(--faint);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+/* While a task is dragged, every place it can go shows. */
+body.dragging-task .group-row {
+  border-style: dashed;
+}
+
+body.dragging-task .loose-head {
+  border-color: var(--border);
+}
+
+.group-head.drop-into,
+.loose-head.drop-into {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+/* Asking before a task moves to a group with another policy. */
+.menu.regroup {
+  max-width: 320px;
+  padding: 10px 12px;
+}
+
+.regroup-title {
+  margin: 0 0 4px;
+  font-weight: 650;
+}
+
+.regroup p {
+  margin: 0 0 6px;
+  font-size: 12.5px;
+}
+
+.regroup-warn {
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: var(--ask-soft);
+  color: var(--ask);
+}
+
+.regroup-note {
+  color: var(--muted);
 }
 
 .menu-note {
@@ -1675,6 +1745,12 @@ select:focus-visible {
   border-radius: 50%;
   background: var(--tag);
   cursor: pointer;
+}
+
+/* No colour of its own: the group's shows, half. */
+.swatch-group {
+  border-color: var(--border);
+  background: linear-gradient(135deg, var(--tag) 50%, transparent 50%);
 }
 
 .swatch-none {

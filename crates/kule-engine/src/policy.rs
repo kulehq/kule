@@ -164,8 +164,22 @@ impl Policy {
     /// built-in one); then the workspace's forbids and what the person
     /// remembered, as [`Policy::load`] adds them.
     pub fn for_task(task: &crate::Task) -> Result<Policy> {
+        Policy::for_task_in(task, task.group()?)
+    }
+
+    /// The policy `task` would be judged by in group `group` (`None` for
+    /// none), as [`Policy::for_task`] puts it together.
+    pub fn for_task_in(task: &crate::Task, group: Option<u64>) -> Result<Policy> {
+        let base = Policy::base_text(task, group)?;
+        Policy::assemble(&base, task.workspace(), Some(&task.home()))
+    }
+
+    /// The rules `task` would be judged by in group `group`, before the
+    /// workspace's forbids and what was remembered: two groups with the same
+    /// text judge alike.
+    pub fn base_text(task: &crate::Task, group: Option<u64>) -> Result<String> {
         let home = task.home();
-        let base = match crate::groups::base_policy(&home, task)? {
+        Ok(match crate::groups::base_policy(&home, group)? {
             Some(text) => text,
             None => {
                 let user = home.join(USER_POLICY);
@@ -175,8 +189,7 @@ impl Policy {
                     DEFAULT_POLICY.to_owned()
                 }
             }
-        };
-        Policy::assemble(&base, task.workspace(), Some(&home))
+        })
     }
 
     /// `base`, the forbids of the repository at `workspace`, and what was

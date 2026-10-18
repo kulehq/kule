@@ -358,6 +358,7 @@ pub fn dispatch(service: &Arc<Service>, call: Call) -> Result<Value, String> {
         Call::GroupPolicyText { group } => json(service.group_policy_text(group)?),
         Call::SetGroupOrder { groups } => json(service.set_group_order(&groups)?),
         Call::DeleteGroup { group } => json(service.delete_group(group)?),
+        Call::GroupImpact { task, group } => json(service.group_impact(&task, group)?),
         Call::SetTaskGroup { task, group } => json(service.set_task_group(&task, group)?),
         Call::Policy => json(service.policy_choice()?),
         Call::ChoosePolicy { choice } => json(service.choose_policy(choice)?),

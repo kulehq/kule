@@ -104,7 +104,8 @@ pub fn groups(home: &Path) -> Result<Vec<Group>> {
 }
 
 /// A new group, last in the order, with the policy that holds for every
-/// task.
+/// task. Without `color`, it gets one of its own: the first no other group
+/// has, else the next in turn. The person can change or clear it later.
 pub fn create_group(home: &Path, name: &str, color: Option<TaskColor>) -> Result<Group> {
     let name = clean_name(name)?;
     let mut groups = load(home)?;
@@ -114,10 +115,16 @@ pub fn create_group(home: &Path, name: &str, color: Option<TaskColor>) -> Result
         )));
     }
     groups.next += 1;
+    let color = color.unwrap_or_else(|| {
+        TaskColor::ALL
+            .into_iter()
+            .find(|c| groups.groups.iter().all(|g| g.color != Some(*c)))
+            .unwrap_or(TaskColor::ALL[(groups.next as usize - 1) % TaskColor::ALL.len()])
+    });
     let group = Group {
         id: groups.next,
         name,
-        color,
+        color: Some(color),
         policy: GroupPolicy::Default,
         collapsed: false,
     };
@@ -238,11 +245,11 @@ pub(crate) fn exists(home: &Path, id: u64) -> Result<bool> {
     Ok(load(home)?.groups.iter().any(|g| g.id == id))
 }
 
-/// The policy text `task`'s group puts in place of the one for every task;
-/// `None` when it has no group, or its group keeps that one. A group's own
-/// policy that is gone is an error, never a quiet fall back to another.
-pub(crate) fn base_policy(home: &Path, task: &Task) -> Result<Option<String>> {
-    let Some(id) = task.group()? else {
+/// The policy text group `group` puts in place of the one for every task;
+/// `None` for no group, or one that keeps that policy. A group's own policy
+/// that is gone is an error, never a quiet fall back to another.
+pub(crate) fn base_policy(home: &Path, group: Option<u64>) -> Result<Option<String>> {
+    let Some(id) = group else {
         return Ok(None);
     };
     let Some(group) = load(home)?.groups.into_iter().find(|g| g.id == id) else {
@@ -282,6 +289,11 @@ mod tests {
         );
         assert!(create_group(home, "  ", None).is_err());
         assert!(create_group(home, "a\u{202E}b", None).is_err());
+        // A group made without a colour gets one no other group has.
+        assert_eq!(b.color, Some(TaskColor::Red));
+        let c = create_group(home, "more", None).unwrap();
+        assert_eq!(c.color, Some(TaskColor::Orange));
+        delete_group(home, c.id).unwrap();
 
         update_group(home, a.id, "work", None, true).unwrap();
         set_group_order(home, &[b.id, a.id]).unwrap();
@@ -298,7 +310,7 @@ mod tests {
 
         // A deleted group's id is never handed out again.
         delete_group(home, a.id).unwrap();
-        assert_eq!(create_group(home, "later", None).unwrap().id, 3);
+        assert_eq!(create_group(home, "later", None).unwrap().id, 4);
         assert!(update_group(home, a.id, "x", None, false).is_err());
     }
 

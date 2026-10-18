@@ -449,6 +449,11 @@ fn delete_group(kule: K<'_>, group: u64) -> Result<()> {
 }
 
 #[tauri::command(async)]
+fn group_impact(kule: K<'_>, task: String, group: Option<u64>) -> Result<kule_daemon::GroupImpact> {
+    kule.call(Call::GroupImpact { task, group })
+}
+
+#[tauri::command(async)]
 fn set_task_group(kule: K<'_>, task: String, group: Option<u64>) -> Result<TaskView> {
     kule.call(Call::SetTaskGroup { task, group })
 }
@@ -813,6 +818,7 @@ fn main() {
             set_group_order,
             delete_group,
             set_task_group,
+            group_impact,
             set_menu_keys,
             terminal_open,
             open_url,

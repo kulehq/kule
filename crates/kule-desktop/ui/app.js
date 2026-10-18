@@ -220,7 +220,7 @@ function taskItem(task, list) {
   );
   return h(
     "li",
-    { class: `task-row${task.color ? ` color-${task.color}` : ""}`, "data-task": task.id },
+    { class: `task-row${colorOf(task) ? ` color-${colorOf(task)}` : ""}`, "data-task": task.id },
     item,
     more
   );
@@ -256,7 +256,8 @@ function taskMenu(task, list, e) {
 
   const siblings = groupMates(task);
   const at = siblings.findIndex((t) => t.id === task.id);
-  const swatches = colorSwatches(task.color, (color) => (closeMenu(true), setColor(task, color)));
+  // Without a colour of its own, a task in a coloured group shows the group's.
+  const swatches = colorSwatches(task.color, (color) => (closeMenu(true), setColor(task, color)), groupOf(task)?.color);
   const group = groupOf(task);
   const items = [
     item("Rename…", () => renameTask(task, menu)),
@@ -285,15 +286,16 @@ function taskMenu(task, list, e) {
 
 /** The colour swatches of a task's or a group's menu; `chosen` hears the
  * one picked, `null` for none. */
-function colorSwatches(current, chosen) {
+function colorSwatches(current, chosen, inherited) {
+  const none = inherited ? `The group's colour (${inherited})` : "No colour";
   return [null, ...COLORS].map((color) =>
     h("button", {
-      class: `swatch ${color ? `color-${color}` : "swatch-none"}`,
+      class: `swatch ${color ? `color-${color}` : inherited ? `swatch-group color-${inherited}` : "swatch-none"}`,
       type: "button",
       role: "menuitemradio",
       "aria-checked": String((current || null) === color),
-      "aria-label": color ? `Colour ${color}` : "No colour",
-      title: color || "No colour",
+      "aria-label": color ? `Colour ${color}` : none,
+      title: color || none,
       onclick: () => chosen(color),
     })
   );
@@ -349,6 +351,7 @@ function closeMenu(refocus) {
   const menu = $("task-menu");
   if (!menu) return;
   menu.remove();
+  menu.closed?.();
   menu.opener?.setAttribute("aria-expanded", "false");
   if (refocus && menu.opener?.isConnected) menu.opener.focus();
 }
@@ -458,10 +461,17 @@ const GROUP_POLICIES = {
 
 /** Which policy judges `task`'s commits and runs, in words. */
 function judgedBy(task) {
-  const group = groupOf(task);
+  return policyWords(groupOf(task));
+}
+
+/** The colour a task shows: its own, else its group's. */
+const colorOf = (task) => task.color || groupOf(task)?.color || null;
+
+/** Which policy judges the tasks of `group` (`null` for none), in words. */
+function policyWords(group) {
+  if (group && group.policy === "own") return "the group's own policy";
   const policy = group && group.policy !== "default" ? group.policy : state.policy;
-  if (policy === "own") return group && group.policy === "own" ? "the group's own policy" : "your own policy";
-  return `the ${policy} policy`;
+  return policy === "own" ? "your own policy" : `the ${policy} policy`;
 }
 
 /** The group a task is in, when that group is there. */
@@ -471,6 +481,40 @@ const groupOf = (task) => (task.group == null ? null : state.groups.find((g) => 
 function groupMates(task) {
   const group = groupOf(task);
   return state.tasks.filter((t) => groupOf(t) === group);
+}
+
+/** A folder, open or shut, in the group's colour. */
+function folderIcon(shut) {
+  const ns = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(ns, "svg");
+  svg.setAttribute("viewBox", "0 0 16 16");
+  svg.setAttribute("class", "group-icon");
+  svg.setAttribute("aria-hidden", "true");
+  const path = document.createElementNS(ns, "path");
+  path.setAttribute(
+    "d",
+    shut
+      ? "M1.5 4.5a1 1 0 0 1 1-1h3.6l1.4 1.5h6a1 1 0 0 1 1 1v6.5a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1z"
+      : "M1.5 4.5a1 1 0 0 1 1-1h3.6l1.4 1.5h5.5a1 1 0 0 1 1 1v1H4.6a1 1 0 0 0-.95.7L1.5 13.2zM3.6 8.2a1 1 0 0 1 .95-.7h10.2a.6.6 0 0 1 .57.8l-1.6 4.8a1 1 0 0 1-.95.7H1.8z"
+  );
+  svg.append(path);
+  return svg;
+}
+
+/** Where tasks in no group are listed once there are groups: dropping a
+ * task here takes it out of its group. */
+function looseHead(count) {
+  return h(
+    "li",
+    { class: "loose-row" },
+    h(
+      "div",
+      { class: "group-head loose-head", "data-group": "" },
+      h("span", { class: "loose-name" }, "Not in a group"),
+      h("span", { class: "group-count", "aria-label": plural(count, "task") }, String(count))
+    ),
+    count ? null : h("p", { class: "group-empty muted" }, "Drag a task here to take it out of its group.")
+  );
 }
 
 function groupRow(group, members) {
@@ -495,6 +539,7 @@ function groupRow(group, members) {
         },
       },
       h("span", { class: "group-chevron", "aria-hidden": "true" }, group.collapsed ? "▸" : "▾"),
+      folderIcon(group.collapsed),
       h("span", { class: "group-name" }, group.name),
       policy ? h("span", { class: "group-policy" }, group.policy === "own" ? "own policy" : policy) : null,
       h("span", { class: "group-count", "aria-label": plural(members.length, "task") }, String(members.length))
@@ -698,16 +743,92 @@ async function createGroup(name) {
   }
 }
 
-/** Puts a task in `group`, or in none. */
-async function setTaskGroup(task, group) {
+/** Puts a task in `group`, or in none, once the person has seen what that
+ * changes; `anchor` is where a question about it shows. */
+async function setTaskGroup(task, group, anchor) {
+  const impact = await regroupImpact(task, group, anchor);
+  if (impact) await applyGroup(task, group, impact);
+  else await refresh();
+}
+
+/** What putting `task` in `group` changes; asked of the person when the
+ * verdict on any of its pending changes would change. `null` when they
+ * keep it where it is. */
+async function regroupImpact(task, group, anchor) {
+  let impact;
+  try {
+    impact = await call("group_impact", { task: task.id, group: group ? group.id : null });
+  } catch (err) {
+    fail(err);
+    return null;
+  }
+  if (!impact.changes.length) return impact;
+  return (await confirmRegroup(task, group, impact, anchor)) ? impact : null;
+}
+
+async function applyGroup(task, group, impact) {
+  const name = taskName(task);
   try {
     await call("set_task_group", { task: task.id, group: group ? group.id : null });
-    const policy = group && group.policy !== "default" ? GROUP_POLICIES[group.policy] : "the policy for every task";
-    toast(group ? `${taskName(task)} is in ${group.name}: ${policy} judges its next commit and run` : `${taskName(task)} is in no group`);
+    const where = group ? `${name} is in ${group.name}` : `${name} is in no group`;
+    let said = impact.same
+      ? `${where}; it is judged as before`
+      : `${where}: ${policyWords(group)} judges its next commit and run, not ${policyWords(groupOf(task))}`;
+    if (!impact.same && impact.running) said += "; the agent at work keeps its connections' policy until its run ends";
+    toast(said);
   } catch (err) {
     fail(err);
   }
   await refresh();
+}
+
+/** How much a verdict lets through: a lower one, more. */
+const STRICTNESS = { allow: 0, ask: 1, deny: 2 };
+
+/** A small question by `anchor`: the move and what it changes for the
+ * task's pending changes. Resolves true to move. */
+function confirmRegroup(task, group, impact, anchor) {
+  return new Promise((resolve) => {
+    closeMenu();
+    const names = (list) => {
+      const shown = list.slice(0, 4).map((c) => c.subject).join(", ");
+      return list.length > 4 ? `${shown} and ${list.length - 4} more` : shown;
+    };
+    const looser = impact.changes.filter((c) => STRICTNESS[c.then] < STRICTNESS[c.now]);
+    const stricter = impact.changes.filter((c) => STRICTNESS[c.then] > STRICTNESS[c.now]);
+    const passing = looser.filter((c) => c.then === "allow");
+    const asked = looser.filter((c) => c.then !== "allow");
+    const lines = [];
+    if (passing.length)
+      lines.push(h("p", { class: "regroup-warn" }, `${plural(passing.length, "change")} waiting for you would pass on its own: ${names(passing)}`));
+    if (asked.length)
+      lines.push(h("p", { class: "regroup-warn" }, `${plural(asked.length, "change")} refused now would be put to you: ${names(asked)}`));
+    if (stricter.length)
+      lines.push(h("p", { class: "regroup-note" }, `${plural(stricter.length, "change")} that ${stricter.length === 1 ? "passes" : "pass"} now would wait for you: ${names(stricter)}`));
+    if (impact.running) lines.push(h("p", { class: "muted" }, "The agent at work keeps its connections' policy until its run ends."));
+    let answered = false;
+    const answer = (yes) => {
+      if (answered) return;
+      answered = true;
+      closeMenu(true);
+      resolve(yes);
+    };
+    const move = h("button", { class: `button ${looser.length ? "ask" : "primary"}`, type: "button", onclick: () => answer(true) }, "Move");
+    const keep = h("button", { class: "button ghost", type: "button", onclick: () => answer(false) }, "Keep it here");
+    const menu = h(
+      "div",
+      { class: "menu regroup", id: "task-menu", role: "alertdialog", "aria-label": `Move ${taskName(task)}` },
+      h("p", { class: "regroup-title" }, `Move ${taskName(task)} ${group ? `to ${group.name}` : "out of its group"}?`),
+      h("p", { class: "muted" }, `It would be judged by ${policyWords(group)}, not ${policyWords(groupOf(task))}.`),
+      lines,
+      h("div", { class: "menu-field-actions" }, keep, move)
+    );
+    const opener = anchor || document.querySelector(`#tasks .task-row[data-task="${CSS.escape(task.id)}"] .task-more`) || $("new-group");
+    showMenu(menu, [keep, move], opener, { type: "click", currentTarget: opener });
+    // Closed any other way (Escape, a click elsewhere): it stays.
+    menu.closed = () => answer(false);
+    (looser.length ? keep : move).focus();
+  });
 }
 
 /** Moves a group `by` places, and keeps the order. */
@@ -819,8 +940,17 @@ async function dragEnd(e) {
   }
   // The dragged task leaves its place first.
   if (to > from) to -= 1;
+  if (group === groupOf(task)) {
+    await putInOrder(id, to);
+    return;
+  }
+  // Into another group only once the person has seen what that changes.
+  renderSidebar();
+  const anchor = $("tasks").querySelector(`.group-head[data-group="${group ? group.id : ""}"]`);
+  const impact = await regroupImpact(task, group, anchor);
+  if (!impact) return;
   await putInOrder(id, to);
-  if (group !== groupOf(task)) await setTaskGroup(task, group);
+  await applyGroup(task, group, impact);
 }
 
 function renderSidebar() {
@@ -831,11 +961,14 @@ function renderSidebar() {
   );
   $("inbox-section").hidden = waiting.length === 0;
   replace($("inbox"), ...waiting.map((t) => taskItem(t, "inbox")));
-  // The groups in their order, each with its tasks; then those in none.
+  // The groups in their order, each with its tasks; then those in none,
+  // under a head of their own once there are groups.
+  const loose = state.tasks.filter((t) => !groupOf(t));
   replace(
     $("tasks"),
     ...state.groups.map((g) => groupRow(g, state.tasks.filter((t) => groupOf(t) === g))),
-    ...state.tasks.filter((t) => !groupOf(t)).map((t) => taskItem(t, "tasks"))
+    state.groups.length ? looseHead(loose.length) : null,
+    ...loose.map((t) => taskItem(t, "tasks"))
   );
   $("tasks-empty").hidden = state.tasks.length > 0 || state.groups.length > 0;
 }
@@ -866,7 +999,7 @@ function renderTask() {
 
   $("task-name").textContent = taskName(task);
   const mark = $("task-name").closest(".task-header");
-  mark.className = `task-header${task.color ? ` color-${task.color}` : ""}`;
+  mark.className = `task-header${colorOf(task) ? ` color-${colorOf(task)}` : ""}`;
   const group = groupOf(task);
   $("task-path").textContent = `${task.workspace} · task ${task.id} · ${when(task.created_unix)}${group ? ` · in ${group.name}` : ""} · ${judgedBy(task)}`;
   const chip = $("task-state");

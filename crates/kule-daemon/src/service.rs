@@ -32,6 +32,27 @@ fn text(e: Error) -> String {
     }
 }
 
+/// What putting a task in another group would change: whether its policy
+/// would, and the verdicts on its pending changes that would.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GroupImpact {
+    /// The group's policy is the one that judges the task now.
+    pub same: bool,
+    /// Its pending changes whose verdict would change, with the verdict now
+    /// and then.
+    pub changes: Vec<VerdictChange>,
+    /// An agent is at work in the task: its connections keep the policy it
+    /// started with until the run ends.
+    pub running: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct VerdictChange {
+    pub subject: String,
+    pub now: Verdict,
+    pub then: Verdict,
+}
+
 /// A group's own policy as written, and Kule's balanced one to start one
 /// from.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -525,6 +546,42 @@ impl Service {
     pub fn set_task_group(&self, id: &str, group: Option<u64>) -> Result<TaskView> {
         self.open(id)?.set_group(group).map_err(text)?;
         self.view(id)
+    }
+
+    /// What putting the task in `group` (`None` for none) would change, for
+    /// the person to see before it does.
+    pub fn group_impact(&self, id: &str, group: Option<u64>) -> Result<GroupImpact> {
+        let task = self.open(id)?;
+        let now = task.group().map_err(text)?;
+        let same = Policy::base_text(&task, now).map_err(text)?
+            == Policy::base_text(&task, group).map_err(text)?;
+        let mut changes = Vec::new();
+        if !same {
+            let pending = task.pending(false).map_err(text)?;
+            let before = self.policy(&task)?.judge(&pending);
+            let after = Policy::for_task_in(&task, group)
+                .map_err(text)?
+                .judge(&pending);
+            for then in after.judgements {
+                let was = before
+                    .judgements
+                    .iter()
+                    .find(|j| j.subject == then.subject)
+                    .map_or(then.verdict, |j| j.verdict);
+                if was != then.verdict {
+                    changes.push(VerdictChange {
+                        subject: then.subject,
+                        now: was,
+                        then: then.verdict,
+                    });
+                }
+            }
+        }
+        Ok(GroupImpact {
+            same,
+            changes,
+            running: self.running.lock().unwrap().contains(id),
+        })
     }
 
     /// Which policy holds.
@@ -1455,6 +1512,56 @@ mod tests {
             s.app.commit(&held, false, false, None).unwrap(),
             Commit::Applied { .. }
         ));
+    }
+
+    #[test]
+    fn moving_a_task_says_first_which_verdicts_would_change() {
+        use kule_engine::GroupPolicy;
+        let s = Setup::new();
+        let (id, copy) = s.task();
+        fs::write(copy.join("a.txt"), "edited\n").unwrap();
+        fs::write(copy.join("Cargo.toml"), "[package]\n").unwrap();
+        let same = s.app.create_group("same", None).unwrap();
+        let careful = s.app.create_group("careful", None).unwrap();
+        s.app
+            .set_group_policy(careful.id, GroupPolicy::Careful, None)
+            .unwrap();
+        let trusting = s.app.create_group("trusting", None).unwrap();
+        s.app
+            .set_group_policy(
+                trusting.id,
+                GroupPolicy::Own,
+                Some(r#"@id("all") permit (principal, action, resource);"#),
+            )
+            .unwrap();
+        let change = |subject: &str, now, then| VerdictChange {
+            subject: subject.to_owned(),
+            now,
+            then,
+        };
+
+        let impact = s.app.group_impact(&id, Some(same.id)).unwrap();
+        assert!(impact.same && impact.changes.is_empty() && !impact.running);
+        let impact = s.app.group_impact(&id, Some(careful.id)).unwrap();
+        assert!(!impact.same);
+        assert_eq!(
+            impact.changes,
+            [change("a.txt", Verdict::Allow, Verdict::Ask)]
+        );
+        let impact = s.app.group_impact(&id, Some(trusting.id)).unwrap();
+        assert_eq!(
+            impact.changes,
+            [change("Cargo.toml", Verdict::Ask, Verdict::Allow)]
+        );
+        // Asking changes nothing; out of the trusting group, it is judged
+        // as the rest again.
+        assert_eq!(s.app.groups().unwrap().len(), 3);
+        s.app.set_task_group(&id, Some(trusting.id)).unwrap();
+        let impact = s.app.group_impact(&id, None).unwrap();
+        assert_eq!(
+            impact.changes,
+            [change("Cargo.toml", Verdict::Allow, Verdict::Ask)]
+        );
     }
 
     #[test]

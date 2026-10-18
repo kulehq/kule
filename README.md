@@ -293,8 +293,13 @@ it writes in Kule reaches it outside; you sign it in there once.
   move it in the list; `kule list` keeps that order, and `kule name` and
   `kule color` do the rest from a terminal.
 - **Groups**: the + next to *Tasks* makes a group, with a name and a
-  colour; put a task in one from its ⋮ menu (*Group…*) or drag it onto
-  the group. A group's tasks are judged by the group's policy: the one for
+  colour of its own (change it from the group's ⋮ menu); its tasks show
+  that colour unless they have their own. Put a task in one from its ⋮
+  menu (*Group…*) or drag it onto the group; drag it onto *Not in a group*
+  to take it out. When the move would change the verdict on any of the
+  task's pending changes (a change waiting for you that would pass on its
+  own, say), Kule asks first and lists them. A group's tasks are judged by
+  the group's policy: the one for
   every task (the default), Kule's balanced or careful one whatever holds
   for the rest, or one you write for the group in *Settings → Policy*,
   checked before it is kept. A repository's refusals and what you told
