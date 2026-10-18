@@ -153,7 +153,9 @@ impl Host {
         self.files.forget();
     }
 
-    /// Records that the window's WebRTC is off.
+    /// Records that the window's WebRTC is off (on macOS; elsewhere it
+    /// ships off and this is never needed).
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub fn webrtc_is_off(&self) {
         self.webrtc_off
             .store(true, std::sync::atomic::Ordering::SeqCst);
