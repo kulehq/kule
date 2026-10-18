@@ -13,7 +13,9 @@ use crate::Result;
 pub const LAYOUT_FILE: &str = "layout.json";
 
 /// The panels the window has.
-pub const PANELS: &[&str] = &["tasks", "live", "review", "timeline", "files", "terminal"];
+pub const PANELS: &[&str] = &[
+    "tasks", "live", "review", "timeline", "files", "preview", "terminal",
+];
 
 /// An extension's panel: `ext.<publisher>.<name>.<panel>`, each part 1 to
 /// 20 (the panel 18) of `a-z0-9-`. Whether the extension is still there is
@@ -130,6 +132,28 @@ fn check(layout: &Layout) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The window's panels are the ones the daemon keeps: a panel the
+    /// window has and the daemon does not know makes every layout the
+    /// window saves a refused one.
+    #[test]
+    fn the_window_and_the_daemon_know_the_same_panels() {
+        let app = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../kule-desktop/ui/app.js"),
+        )
+        .unwrap();
+        let start = app.find("const PANELS = {").expect("PANELS in app.js");
+        let block = &app[start..start + app[start..].find("};").unwrap()];
+        let mut window: Vec<&str> = block
+            .lines()
+            .skip(1)
+            .filter_map(|l| l.trim().split_once(':').map(|(k, _)| k))
+            .collect();
+        let mut daemon = PANELS.to_vec();
+        window.sort();
+        daemon.sort();
+        assert_eq!(window, daemon);
+    }
 
     fn layout() -> Layout {
         let region = |panels: &[&str], open: bool, size: u32| Region {
