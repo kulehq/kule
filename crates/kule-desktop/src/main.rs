@@ -211,6 +211,11 @@ fn fork_task(kule: K<'_>, task: String, step: Option<u32>) -> Result<serde_json:
 }
 
 #[tauri::command(async)]
+fn ports(kule: K<'_>, task: String) -> Result<serde_json::Value> {
+    kule.call(Call::Ports { task })
+}
+
+#[tauri::command(async)]
 fn timeline(kule: K<'_>, task: String) -> Result<Timeline> {
     kule.call(Call::Timeline { task })
 }
@@ -877,6 +882,7 @@ fn main() {
             undo,
             back_to_step,
             fork_task,
+            ports,
             timeline,
             remove_task,
             open_terminal,

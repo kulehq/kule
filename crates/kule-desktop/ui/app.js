@@ -5713,7 +5713,52 @@ async function start() {
       el.textContent = left(Number(el.dataset.deadline));
     }
   }, 1000);
+  // Servers come and go with what runs in the copy; looked for while the
+  // window is in sight.
+  setInterval(() => {
+    if (document.visibilityState === "visible") loadPorts();
+  }, 3000);
   await refresh();
+}
+
+let portsKey = "";
+
+/** The servers working in the task's copy, as chips that open them. */
+async function loadPorts() {
+  const task = currentTask();
+  const box = $("task-ports");
+  if (!task || !box) return;
+  let found = [];
+  try {
+    found = await call("ports", { task: task.id });
+  } catch {
+    found = [];
+  }
+  if (task.id !== state.current) return;
+  const key = `${task.id}:${JSON.stringify(found)}`;
+  if (key === portsKey) return;
+  portsKey = key;
+  replace(
+    box,
+    ...found.map((l) =>
+      h(
+        "button",
+        {
+          class: `port-chip${l.reachable ? "" : " unreachable"}`,
+          type: "button",
+          disabled: !l.reachable,
+          "data-key": `port:${l.port}`,
+          title: l.reachable
+            ? `${l.process} (pid ${l.pid}) listens on ${l.address === "*" ? "every address" : l.address}, port ${l.port}. Open http://localhost:${l.port}/ in the browser`
+            : `${l.process} (pid ${l.pid}) listens inside the sandbox's own network, which this computer does not reach`,
+          onclick: () => call("open_url", { url: `http://localhost:${l.port}/` }).catch(fail),
+        },
+        `localhost:${l.port}`,
+        l.reachable ? h("span", { class: "port-open", "aria-hidden": "true" }, " ↗") : null
+      )
+    )
+  );
+  box.hidden = !found.length;
 }
 
 start();

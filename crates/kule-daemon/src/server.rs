@@ -316,6 +316,9 @@ pub fn dispatch(service: &Arc<Service>, call: Call) -> Result<Value, String> {
         Call::Undo { task } => json(service.undo(&task)?),
         Call::BackToStep { task, step } => json(service.back_to_step(&task, step)?),
         Call::ForkTask { task, step } => json(service.fork(&task, step)?),
+        Call::Ports { task } => {
+            json(kule_engine::listening_in(&service.copy_of(&task)?).map_err(|e| e.to_string())?)
+        }
         Call::Timeline { task } => json(service.timeline(&task)?),
         Call::RemoveTask { task } => json(service.remove(&task)?),
         Call::CopyOf { task } => json(service.copy_of(&task)?),

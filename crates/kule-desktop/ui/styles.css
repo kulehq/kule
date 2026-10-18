@@ -3178,6 +3178,39 @@ body.dragging-panel * {
   font-size: 12px;
 }
 
+/* Servers working in the copy, each opening in the browser. */
+.task-ports {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.port-chip {
+  padding: 2px 9px;
+  border: 1px solid color-mix(in srgb, var(--ok) 45%, transparent);
+  border-radius: 999px;
+  background: var(--ok-soft);
+  color: var(--ok);
+  font: 600 11.5px var(--mono);
+  cursor: pointer;
+}
+
+.port-chip:hover:not(:disabled) {
+  border-color: var(--ok);
+}
+
+.port-chip:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.port-chip.unreachable {
+  border-color: var(--border);
+  background: var(--sunken);
+  color: var(--faint);
+  cursor: default;
+}
+
 /* Asking about a place: the Ask button beside it, the box, the chips. */
 .preview-body {
   position: relative;

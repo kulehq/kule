@@ -74,6 +74,11 @@ pub enum Call {
         task: String,
         step: u32,
     },
+    /// The servers working in the task's copy: processes there that listen
+    /// on a TCP port.
+    Ports {
+        task: String,
+    },
     /// A new task on the same folder from this one's copy: now, or as it
     /// was after a step. Returns the new task.
     ForkTask {

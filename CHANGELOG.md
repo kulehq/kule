@@ -35,6 +35,13 @@
   (with "(fork)"), colour, group, budget and secret stand-ins, and has no
   steps or commits of its own yet. Its changes reach the folder through
   its own review and commit, as any other task's.
+- Servers working in a task's copy show in its header as
+  `localhost:5173 ↗`, whoever started them (the agent, or you in a
+  terminal); a click opens them in the browser. Kule finds them by their
+  working directory and listening port (`lsof` on macOS, `/proc` on
+  Linux). On Linux a server inside the sandbox's own network is shown
+  greyed out, since this computer does not reach it. A server the agent
+  started still ends with its run; one started in a terminal stays.
 
 ### Preview
 

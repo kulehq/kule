@@ -35,6 +35,7 @@ mod namespace;
 mod network;
 mod outline;
 mod policy;
+mod ports;
 mod preview;
 mod protect;
 pub mod remembered;
@@ -72,6 +73,7 @@ pub use policy::{
     CAREFUL_POLICY, DEFAULT_POLICY, Judgement, Policy, PolicyChoice, REPO_POLICY, Ruling,
     USER_POLICY, Verdict, choose_policy, policy_choice,
 };
+pub use ports::{Listener, listening_in};
 pub use preview::{Picture, Preview, previewable};
 pub use protect::{Kept, PutBack};
 pub use remembered::{
