@@ -1425,6 +1425,17 @@ select:focus-visible {
   text-decoration: line-through;
 }
 
+.entry-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.step-back {
+  padding: 2px 8px;
+  font-size: 12px;
+}
+
 .entry-body {
   grid-column: 2 / -1;
   color: var(--muted);

@@ -49,14 +49,60 @@ struct Mark {
     stamps: BTreeMap<String, (Option<Stamp>, Kind)>,
     #[serde(default)]
     digests: BTreeMap<String, String>,
+    /// The bytes of files kept for going back, this transaction.
+    #[serde(default)]
+    kept_bytes: u64,
 }
 
 impl Task {
     /// Records a step: what changed in the copy since the previous one.
     pub fn step(&self, label: &str) -> Result<Step> {
+        let mut mark = self.load_mark()?;
+        let (changes, now, digests) = self.since_mark(&mark)?;
+        mark.next_id += 1;
+        let step = Step {
+            id: mark.next_id,
+            label: label.to_owned(),
+            changes,
+        };
+        // Kept before the step is logged: a step in the log always has its
+        // paths kept, or noted as not kept.
+        crate::step_store::keep(self, &step, &mut mark.kept_bytes)?;
+        mark.stamps = now;
+        mark.digests = digests;
+        write_json(&self.dir().join("steps-mark.json"), &mark)?;
+        let path = self.dir().join("steps.jsonl");
+        let mut log = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .at(&path)?;
+        let line = serde_json::to_string(&step).map_err(|source| Error::State {
+            path: path.clone(),
+            source,
+        })?;
+        writeln!(log, "{line}").at(&path)?;
+        Ok(step)
+    }
+
+    /// Whether the copy changed since the last step.
+    pub(crate) fn unstepped(&self) -> Result<bool> {
+        Ok(!self.since_mark(&self.load_mark()?)?.0.is_empty())
+    }
+
+    /// What moved in the copy since `mark`, and the stamps and digests to
+    /// mark now.
+    #[allow(clippy::type_complexity)]
+    fn since_mark(
+        &self,
+        mark: &Mark,
+    ) -> Result<(
+        Vec<StepChange>,
+        BTreeMap<String, (Option<Stamp>, Kind)>,
+        BTreeMap<String, String>,
+    )> {
         let start = Clock::new(self.dir(), &self.copy())?.now()?;
         let set = self.effects()?;
-        let mut mark = self.load_mark()?;
         let mut now = BTreeMap::new();
         let mut digests = BTreeMap::new();
         let mut changes = Vec::new();
@@ -95,27 +141,7 @@ impl Task {
             }
         }
         changes.sort_by(|a, b| a.path.cmp(&b.path));
-        mark.next_id += 1;
-        let step = Step {
-            id: mark.next_id,
-            label: label.to_owned(),
-            changes,
-        };
-        mark.stamps = now;
-        mark.digests = digests;
-        write_json(&self.dir().join("steps-mark.json"), &mark)?;
-        let path = self.dir().join("steps.jsonl");
-        let mut log = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)
-            .at(&path)?;
-        let line = serde_json::to_string(&step).map_err(|source| Error::State {
-            path: path.clone(),
-            source,
-        })?;
-        writeln!(log, "{line}").at(&path)?;
-        Ok(step)
+        Ok((changes, now, digests))
     }
 
     /// The steps of the uncommitted transaction, oldest first.
@@ -145,6 +171,10 @@ impl Task {
                 Err(e) if e.kind() != ErrorKind::NotFound => return Err(e).at(&path),
                 _ => {}
             }
+        }
+        let store = self.dir().join(crate::step_store::STORE);
+        if store.exists() {
+            crate::fsops::remove_dir_tree(&store)?;
         }
         Ok(())
     }

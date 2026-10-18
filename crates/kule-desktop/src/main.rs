@@ -201,6 +201,11 @@ fn undo(kule: K<'_>, task: String) -> Result<Option<u32>> {
 }
 
 #[tauri::command(async)]
+fn back_to_step(kule: K<'_>, task: String, step: u32) -> Result<serde_json::Value> {
+    kule.call(Call::BackToStep { task, step })
+}
+
+#[tauri::command(async)]
 fn timeline(kule: K<'_>, task: String) -> Result<Timeline> {
     kule.call(Call::Timeline { task })
 }
@@ -865,6 +870,7 @@ fn main() {
             commit,
             rollback,
             undo,
+            back_to_step,
             timeline,
             remove_task,
             open_terminal,

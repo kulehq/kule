@@ -3269,6 +3269,35 @@ async function loadTimeline(id) {
       )
     );
   }
+  // Going back to a step is a step itself, so it needs no second click.
+  const backTo = (n) => {
+    const blocker = (timeline.blockers || {})[n];
+    const why = task && task.running ? "The agent is at work" : blocker ? `${blocker} was not kept then (too large, or not a plain file)` : null;
+    return h(
+      "button",
+      {
+        class: "button ghost step-back",
+        type: "button",
+        disabled: Boolean(why),
+        title: why || (n === 0 ? "Put the copy back as the folder holds it, keeping the steps" : `Put the copy back as it was after step ${n}; this is a step too, so it can be gone back on`),
+        "data-key": `back:${n}`,
+        onclick: () => goBack(id, n),
+      },
+      "Go back here"
+    );
+  };
+  if (timeline.steps.length) {
+    entries.push(
+      h(
+        "div",
+        { class: "entry step" },
+        h("span", { class: "entry-dot" }),
+        h("span", { class: "entry-title" }, "Before the first step"),
+        h("span", { class: "entry-actions" }, backTo(0)),
+        h("div", { class: "entry-body" }, h("div", {}, "the copy as the folder holds it"))
+      )
+    );
+  }
   for (const step of timeline.steps) {
     entries.push(
       h(
@@ -3276,7 +3305,7 @@ async function loadTimeline(id) {
         { class: "entry step" },
         h("span", { class: "entry-dot" }),
         h("span", { class: "entry-title" }, `Step ${step.id} · ${step.label}`),
-        h("span", { class: "chip" }, "uncommitted"),
+        h("span", { class: "entry-actions" }, h("span", { class: "chip" }, "uncommitted"), backTo(step.id)),
         h(
           "div",
           { class: "entry-body" },
@@ -3316,6 +3345,17 @@ async function loadTimeline(id) {
   }
   replace($("timeline"), ...entries);
   tabify($("timeline"));
+}
+
+async function goBack(id, step) {
+  try {
+    const back = await call("back_to_step", { task: id, step });
+    toast(back.label);
+    await refresh();
+    loadTimeline(id);
+  } catch (err) {
+    fail(err);
+  }
 }
 
 function summarizeConnections(log) {

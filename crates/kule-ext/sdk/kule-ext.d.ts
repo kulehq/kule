@@ -60,7 +60,7 @@ declare namespace Kule {
     body: string;
   }
 
-  type TaskChange = "created" | "committed" | "rolled_back" | "undone" | "removed";
+  type TaskChange = "created" | "committed" | "rolled_back" | "undone" | "removed" | "went_back";
 
   interface Events {
     /** An agent's events while it runs (events.read). */

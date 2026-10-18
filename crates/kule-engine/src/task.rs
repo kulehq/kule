@@ -652,6 +652,58 @@ impl Task {
         Ok(set)
     }
 
+    /// Puts `rel` at `to` as the copy held it at the last sync: from the
+    /// base, or from the workspace where the base has no copy of it (too
+    /// large) and the workspace has not changed it since. Nothing when it
+    /// was not there.
+    pub(crate) fn stage_synced(&self, rel: &str, to: &Path) -> Result<()> {
+        let baseline = self.load_baseline()?;
+        let Some(entry) = baseline.entries.get(rel) else {
+            return Ok(());
+        };
+        if let Some(parent) = to.parent() {
+            fs::create_dir_all(parent).at(parent)?;
+        }
+        match entry.copy.kind {
+            Kind::Dir => fs::create_dir_all(to).at(to),
+            Kind::Symlink => {
+                let target = entry.copy.link.clone().unwrap_or_default();
+                std::os::unix::fs::symlink(target, to).at(to)
+            }
+            Kind::File => {
+                let base = self.base_dir().join(rel);
+                let from = if fs::symlink_metadata(&base).is_ok_and(|m| m.is_file()) {
+                    base
+                } else {
+                    let work = self.workspace().join(rel);
+                    match Stamp::of(&work)? {
+                        Some(now) if now.unchanged(&entry.work) => work,
+                        _ => {
+                            return Err(Error::Invalid(format!(
+                                "{rel} changed in the folder since the task last matched it, and the task kept no copy of it"
+                            )));
+                        }
+                    }
+                };
+                reflink_copy::reflink_or_copy(&from, to)
+                    .at(&from)
+                    .map(|_| ())
+            }
+        }
+    }
+
+    /// Puts `paths` in the copy as `staging` holds them (absent there:
+    /// gone), sorted parents first, and masks the settings files again.
+    pub(crate) fn put_back(&self, staging: &Path, paths: &[String]) -> Result<()> {
+        let _lock = self.lock()?;
+        fsops::mirror(staging, &self.copy(), paths, false)?;
+        let mut baseline = self.load_baseline()?;
+        if self.mask_copy(&mut baseline)? {
+            self.save_baseline(&baseline)?;
+        }
+        Ok(())
+    }
+
     /// Reverts the newest applied commit in the workspace and the copy.
     /// Repeating it walks further back. The copy must have no uncommitted
     /// changes, ignored paths aside, and the workspace must still look as

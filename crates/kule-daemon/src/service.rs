@@ -220,6 +220,10 @@ pub struct Timeline {
     pub checkpoints: Vec<Checkpoint>,
     pub connections: Vec<Connection>,
     pub denials: Vec<Denial>,
+    /// For each step (and `0`, before the first), why the copy cannot go
+    /// back to it: a path a later step changed that was not kept then.
+    #[serde(default)]
+    pub blockers: std::collections::BTreeMap<u32, Option<String>>,
 }
 
 /// What a run reports.
@@ -281,6 +285,8 @@ pub enum TaskChange {
     /// The newest commit was taken back.
     Undone,
     Removed,
+    /// The copy went back to one of its steps.
+    WentBack,
 }
 
 /// How many events of a task's runs are kept for a window that opens later.
@@ -984,7 +990,18 @@ impl Service {
             checkpoints: task.checkpoints().map_err(text)?,
             connections: connections(&task).map_err(text)?,
             denials: denials(&task).map_err(text)?,
+            blockers: task.step_blockers().map_err(text)?,
         })
+    }
+
+    /// Puts the task's copy back as it was after step `step` (`0`: before
+    /// the first); returns the step that records it.
+    pub fn back_to_step(&self, id: &str, step: u32) -> Result<Step> {
+        let back = self.idle(id)?.back_to_step(step);
+        let _ = self.rescan(id);
+        let back = back.map_err(text)?;
+        self.changed(id, TaskChange::WentBack);
+        Ok(back)
     }
 
     /// Where the task's copy is, for the person's own terminal.
@@ -1895,6 +1912,28 @@ mod tests {
             panic!("no lines");
         };
         assert_eq!(hunks[0].lines.last().unwrap().text, "b");
+    }
+
+    /// Going back to a step puts the copy back, is refused while an agent
+    /// works in it, and the timeline says which steps can be gone back to.
+    #[test]
+    fn the_copy_goes_back_to_a_step_when_no_agent_is_at_work() {
+        let s = Setup::new();
+        let (id, copy) = s.task();
+        fs::write(copy.join("a.txt"), "changed\n").unwrap();
+        Task::open(&s.app.home, &id).unwrap().step("edit").unwrap();
+        let timeline = s.app.timeline(&id).unwrap();
+        assert_eq!(timeline.blockers.get(&0), Some(&None));
+        assert_eq!(timeline.blockers.get(&1), Some(&None));
+
+        s.app.running.lock().unwrap().insert(id.clone());
+        assert!(s.app.back_to_step(&id, 0).unwrap_err().contains("at work"));
+        s.app.running.lock().unwrap().remove(&id);
+
+        let back = s.app.back_to_step(&id, 0).unwrap();
+        assert_eq!(back.label, "Back to before the first step");
+        assert_eq!(fs::read_to_string(copy.join("a.txt")).unwrap(), "a\n");
+        assert_eq!(s.app.timeline(&id).unwrap().steps.len(), 2);
     }
 
     /// Each tool call's output is kept once, as it was last, at the end: a

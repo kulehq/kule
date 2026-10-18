@@ -18,6 +18,17 @@
     what the sandbox sets (`DYLD_*`, `LD_*`, `*_PROXY`, `HOME`, `TMPDIR`),
     keeps at most 1 MB of output, and stops what a command left running
     when the run ends.
+- Go back to any step in Timeline (or to before the first): the copy is
+  put back as it was then. Going back is a step of its own, so it can be
+  gone back on, and changes since the last step are kept as a step first.
+  - After each step Kule keeps the files it changed: a clone on APFS and
+    btrfs, a copy elsewhere, at most 64 MB a file and 1 GB a transaction.
+    A step whose later changes were not kept (too large, or a file with a
+    second name) cannot be gone back to, and Timeline says why.
+  - Files are read without following a link at any step of their path, so
+    a link the agent puts in place is kept as a link, never as what it
+    points to. Settings files with secrets are masked again on the way back.
+  - `.git` is not put back; a commit starts the steps over.
 
 ### Preview
 

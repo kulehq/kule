@@ -41,6 +41,7 @@ pub mod remembered;
 mod sandbox;
 mod secrets;
 mod snapshot;
+mod step_store;
 mod steps;
 mod task;
 mod textdiff;

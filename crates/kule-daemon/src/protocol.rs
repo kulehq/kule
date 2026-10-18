@@ -10,7 +10,7 @@ use serde_json::Value;
 
 /// Changes whenever a call, a result or a notice changes shape; a client
 /// and a daemon that disagree on it cannot talk.
-pub const PROTOCOL: u32 = 24;
+pub const PROTOCOL: u32 = 25;
 
 /// What a daemon says about itself.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -68,6 +68,11 @@ pub enum Call {
     },
     Undo {
         task: String,
+    },
+    /// Puts the copy back as it was after a step (`0`: before the first).
+    BackToStep {
+        task: String,
+        step: u32,
     },
     Timeline {
         task: String,
