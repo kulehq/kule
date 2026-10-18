@@ -23,7 +23,7 @@
   are checked.
 - Agent profiles and MCP servers from an extension are each approved on
   their own. MCP servers are started by the agent inside its sandbox.
-- Hardened after an OWASP review, each finding shown in the app first:
+- Hardened after an OWASP review:
   - frames may come from the extension server's port only;
   - WebRTC is off in the window;
   - files are read without following links;
