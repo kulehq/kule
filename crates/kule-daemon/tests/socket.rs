@@ -72,6 +72,47 @@ fn calls_reach_the_service_and_errors_come_back() {
     assert!(error.contains("no task nope"), "{error}");
 }
 
+/// The most a prompt may carry (every place it may name, at its longest,
+/// and every picture of a region it may take) fits in one request.
+#[test]
+fn the_largest_prompt_fits_in_a_request() {
+    use kule_view::refs::{Crop, MAX_CROP, MAX_CROPS, MAX_QUOTE, MAX_REFS, Reference};
+    let region = Reference::Region {
+        path: "p".repeat(200),
+        x: 0,
+        y: 0,
+        w: 1,
+        h: 1,
+        width: 1,
+        height: 1,
+        crop: Some(Crop {
+            mime: "image/jpeg".into(),
+            data: "A".repeat(MAX_CROP.div_ceil(3) * 4),
+        }),
+    };
+    let lines = Reference::Lines {
+        path: "p".repeat(200),
+        start: 1,
+        end: 1,
+        // Every character escaped in JSON.
+        quote: "\u{1}".repeat(MAX_QUOTE),
+    };
+    let mut refs = vec![region; MAX_CROPS];
+    refs.resize(MAX_REFS, lines);
+    let request = kule_daemon::Request {
+        id: u64::MAX,
+        token: Some("t".repeat(64)),
+        call: Call::StartRun {
+            task: "t".repeat(40),
+            agent: "a".repeat(40),
+            prompt: "x".repeat(20_000),
+            refs,
+        },
+    };
+    let line = serde_json::to_string(&request).unwrap();
+    assert!(line.len() < MAX_REQUEST, "{} bytes", line.len());
+}
+
 #[test]
 fn the_preview_reads_a_file_of_the_copy_as_its_kind() {
     let home = TempDir::new().unwrap();

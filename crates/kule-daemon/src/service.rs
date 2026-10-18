@@ -1021,7 +1021,7 @@ impl Service {
             ));
         }
         // Each place is a file the copy holds, reached without a link.
-        let refs = refs
+        let mut refs = refs
             .into_iter()
             .map(|r| {
                 let r = r.checked()?;
@@ -1029,6 +1029,15 @@ impl Service {
                 Ok(r)
             })
             .collect::<Result<Vec<_>>>()?;
+        // Pictures of regions go to the agent beside the text, not in the
+        // run's events.
+        let pictures: Vec<kule_acp::Picture> = kule_view::refs::take_crops(&mut refs)?
+            .into_iter()
+            .map(|c| kule_acp::Picture {
+                mime: c.mime,
+                data: c.data,
+            })
+            .collect();
         let limit = budget_left(&self.home, &task)?;
         if !self.running.lock().unwrap().insert(id.to_owned()) {
             return Err(format!("an agent is already at work in task {id}"));
@@ -1054,7 +1063,7 @@ impl Service {
             kule_view::refs::with_places(prompt, &refs),
         );
         std::thread::spawn(move || {
-            let (error, denials) = match service.run(&task, &profile, &prompt, limit) {
+            let (error, denials) = match service.run(&task, &profile, &prompt, &pictures, limit) {
                 Ok(denials) => (None, denials),
                 Err(e) => (Some(e), Vec::new()),
             };
@@ -1073,6 +1082,7 @@ impl Service {
         task: &Task,
         profile: &kule_acp::Profile,
         prompt: &str,
+        pictures: &[kule_acp::Picture],
         limit: Option<kule_engine::Money>,
     ) -> Result<Vec<Denial>> {
         let started = Instant::now();
@@ -1114,10 +1124,11 @@ impl Service {
         // them inside its own sandbox.
         let person = std::env::var_os("HOME").map(PathBuf::from);
         let mcp = crate::extensions::mcp_for_runs(&self.home, person.as_deref());
-        let outcome = runtime.block_on(kule_acp::run_with(
+        let outcome = runtime.block_on(kule_acp::run_pictured(
             task,
             launch.command,
             prompt,
+            pictures,
             launch.mode.as_deref(),
             limit,
             &mcp,

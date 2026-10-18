@@ -985,6 +985,7 @@ async fn print_events(
                 last = Last::Answer { line_open: !ends };
             }
             Event::Thought { .. } => spinner.doing("thinking"),
+            Event::Note { text } => line(paint::dim(&format!("· {text}")), &mut last),
             Event::ToolCall { title, .. } => {
                 spinner.doing(&title);
                 if !tty {

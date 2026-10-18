@@ -476,11 +476,36 @@ function previewImage(v) {
       return;
     }
     offerPlace({
-      ref: { kind: "region", path: preview.path, x, y, w, h: hgt, width: v.width, height: v.height },
+      ref: { kind: "region", path: preview.path, x, y, w, h: hgt, width: v.width, height: v.height, crop: cropOf(img, x, y, w, hgt) },
       rect: box.getBoundingClientRect(),
     });
   });
   return body;
+}
+
+/** The size a region's picture may have, base64; Kule refuses larger. */
+const CROP_LIMIT = 200 * 1024;
+/** The most pictures of regions one prompt carries. */
+const CROPS_LIMIT = 3;
+
+/** The region of `img` as a picture of its own, for an agent that takes
+ * pictures: at most 1024 pixels a side, PNG, or JPEG when that is smaller
+ * than the limit. Nothing when it does not fit. */
+function cropOf(img, x, y, w, hgt) {
+  const scale = Math.min(1, 1024 / Math.max(w, hgt));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(w * scale));
+  canvas.height = Math.max(1, Math.round(hgt * scale));
+  const g = canvas.getContext("2d");
+  if (!g) return undefined;
+  g.drawImage(img, x, y, w, hgt, 0, 0, canvas.width, canvas.height);
+  for (const [mime, quality] of [["image/png"], ["image/jpeg", 0.85], ["image/jpeg", 0.6]]) {
+    const url = canvas.toDataURL(mime, quality);
+    const data = url.slice(url.indexOf(",") + 1);
+    // Base64 of at most CROP_LIMIT bytes.
+    if (url.startsWith(`data:${mime};base64,`) && data.length <= Math.ceil(CROP_LIMIT / 3) * 4) return { mime, data };
+  }
+  return undefined;
 }
 
 // --- Asking about a place ----------------------------------------------------
@@ -715,7 +740,12 @@ function addToPrompt(place, text) {
       toast("A prompt names at most 20 places.", "error");
       return;
     }
-    chips.push({ ref: place.ref });
+    let ref = place.ref;
+    if (ref.crop && chips.filter((c) => c.ref.crop).length >= CROPS_LIMIT) {
+      ref = { ...ref, crop: undefined };
+      toast(`Only ${CROPS_LIMIT} pictures go with one prompt; this region goes as where it is.`);
+    }
+    chips.push({ ref });
   }
   promptRefs.set(task.id, chips);
   const words = text.trim();

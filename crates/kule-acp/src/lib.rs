@@ -24,10 +24,10 @@ use std::time::Duration;
 
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
-    CancelNotification, ContentBlock, InitializeRequest, NewSessionRequest, PermissionOptionKind,
-    PromptRequest, RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
-    SelectedPermissionOutcome, SessionNotification, SessionUpdate, SetSessionModeRequest,
-    TextContent, ToolCallStatus, ToolKind,
+    CancelNotification, ContentBlock, ImageContent, InitializeRequest, NewSessionRequest,
+    PermissionOptionKind, PromptRequest, RequestPermissionOutcome, RequestPermissionRequest,
+    RequestPermissionResponse, SelectedPermissionOutcome, SessionNotification, SessionUpdate,
+    SetSessionModeRequest, TextContent, ToolCallStatus, ToolKind,
 };
 use agent_client_protocol::{Agent, ByteStreams, ConnectionTo};
 use futures::channel::mpsc::UnboundedSender;
@@ -87,6 +87,8 @@ pub enum Event {
     },
     /// The turn ended.
     Done { stop_reason: String },
+    /// Something Kule says about the run, not the agent.
+    Note { text: String },
 }
 
 /// Money, as an agent reports it.
@@ -180,6 +182,30 @@ pub async fn run_with(
     mcp: &[McpCommand],
     events: UnboundedSender<Event>,
 ) -> Result<String, Error> {
+    run_pictured(task, agent, prompt, &[], mode, limit, mcp, events).await
+}
+
+/// A picture that goes with a prompt, base64.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Picture {
+    pub mime: String,
+    pub data: String,
+}
+
+/// [`run_with`], with pictures after the prompt's text for an agent that
+/// says it takes pictures; one that does not gets the text alone, and the
+/// run notes that the pictures were left out.
+#[allow(clippy::too_many_arguments)]
+pub async fn run_pictured(
+    task: &Task,
+    agent: Command,
+    prompt: &str,
+    pictures: &[Picture],
+    mode: Option<&str>,
+    limit: Option<Cost>,
+    mcp: &[McpCommand],
+    events: UnboundedSender<Event>,
+) -> Result<String, Error> {
     let mcp_servers: Vec<_> = mcp.iter().map(McpCommand::to_acp).collect();
     let log = task.copy().with_file_name("agent.log");
     let log = std::fs::OpenOptions::new()
@@ -211,6 +237,7 @@ pub async fn run_with(
 
     let cwd = task.copy();
     let prompt = prompt.to_owned();
+    let pictures = pictures.to_vec();
     let mode = mode.map(str::to_owned);
     let over = Arc::new(tokio::sync::Notify::new());
     let stopped = Arc::new(AtomicBool::new(false));
@@ -280,10 +307,25 @@ pub async fn run_with(
         .connect_with(
             ByteStreams::new(stdin, stdout),
             async move |connection: ConnectionTo<Agent>| {
-                connection
+                let init = connection
                     .send_request(InitializeRequest::new(ProtocolVersion::V1))
                     .block_task()
                     .await?;
+                let mut blocks = vec![ContentBlock::Text(TextContent::new(prompt))];
+                if !pictures.is_empty() {
+                    if init.agent_capabilities.prompt_capabilities.image {
+                        blocks.push(ContentBlock::Text(TextContent::new(
+                            "The pictures that follow are the regions named above, in the order named.",
+                        )));
+                        blocks.extend(pictures.into_iter().map(|p| {
+                            ContentBlock::Image(ImageContent::new(p.data, p.mime))
+                        }));
+                    } else {
+                        let _ = turn_events.unbounded_send(Event::Note {
+                            text: "The agent does not take pictures; it got where the regions are, not what they show".into(),
+                        });
+                    }
+                }
                 let session = connection
                     .send_request(NewSessionRequest::new(cwd).mcp_servers(mcp_servers))
                     .block_task()
@@ -301,10 +343,7 @@ pub async fn run_with(
                 }
                 let session_id = session.session_id.clone();
                 let prompt = connection
-                    .send_request(PromptRequest::new(
-                        session.session_id,
-                        vec![ContentBlock::Text(TextContent::new(prompt))],
-                    ))
+                    .send_request(PromptRequest::new(session.session_id, blocks))
                     .block_task();
                 tokio::pin!(prompt);
                 let response = tokio::select! {

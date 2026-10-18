@@ -29,6 +29,10 @@
     checks that each is a file of the task's copy, reached without a link,
     and sends at most 20, with picked text cut at 500 characters.
   - Live shows a prompt's places as chips over it.
+  - A region of a picture also goes as a picture of its own (at most 1024
+    pixels a side, three to a prompt) to an agent that says it takes
+    pictures. Kule checks each is a PNG or JPEG by its bytes. An agent that
+    does not take pictures gets where the region is, and Live says so.
 - An Excel or Word file is read in memory and never unpacked. Each part it holds
   is inflated through a cap, so a small file that expands to gigabytes is
   not read.

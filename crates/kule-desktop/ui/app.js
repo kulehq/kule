@@ -1868,6 +1868,9 @@ function absorb(id, event) {
     case "tool_call":
       items.push({ kind: "tool", id: event.id, title: event.title, done: false });
       break;
+    case "note":
+      items.push({ kind: "note", text: event.text });
+      break;
     case "tool_done": {
       // Calls that only read or think take no step.
       const files = event.step ? event.step.changes.map((c) => c.path) : [];

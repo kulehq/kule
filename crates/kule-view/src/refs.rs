@@ -19,6 +19,20 @@ const MAX_VALUE: usize = 200;
 const MAX_TRAIL: usize = 6;
 const MAX_NAME: usize = 200;
 const MAX_PATH: usize = 1024;
+/// The most pictures of regions one prompt carries, and the largest: three
+/// of them, base64, stay under the daemon's 1 MiB request.
+pub const MAX_CROPS: usize = 3;
+pub const MAX_CROP: usize = 200 << 10;
+/// A region's picture has at most this many pixels a side.
+const MAX_CROP_SIDE: usize = 2048;
+
+/// A region cut out of its picture, as the window drew it: PNG or JPEG.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Crop {
+    pub mime: String,
+    /// The picture, base64.
+    pub data: String,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -55,7 +69,8 @@ pub enum Reference {
         #[serde(default)]
         values: Vec<Vec<String>>,
     },
-    /// A rectangle of a picture, in its own pixels.
+    /// A rectangle of a picture, in its own pixels, and what it shows for
+    /// an agent that takes pictures.
     Region {
         path: String,
         x: u32,
@@ -64,6 +79,8 @@ pub enum Reference {
         h: u32,
         width: u32,
         height: u32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        crop: Option<Crop>,
     },
     /// A block of a Word document, from 1, and the heading it is under.
     Block {
@@ -194,6 +211,7 @@ impl Reference {
                 h,
                 width,
                 height,
+                crop,
             } => {
                 let fits = w > 0
                     && h > 0
@@ -202,6 +220,7 @@ impl Reference {
                 if !fits {
                     return Err(format!("{path}: the region is not inside the picture"));
                 }
+                let crop = crop.map(|c| checked_crop(&path, c)).transpose()?;
                 Reference::Region {
                     path,
                     x,
@@ -210,6 +229,7 @@ impl Reference {
                     h,
                     width,
                     height,
+                    crop,
                 }
             }
             Reference::Block {
@@ -315,6 +335,7 @@ impl Reference {
                 h,
                 width,
                 height,
+                ..
             } => format!(
                 "{path}, the region x={x} y={y} width={w} height={h} (pixels from the top left) of the {width}x{height} picture"
             ),
@@ -332,6 +353,48 @@ impl Reference {
             }
         }
     }
+}
+
+/// A region's picture as sent: what its bytes prove it to be (PNG or JPEG
+/// only, of a sane size), not what it claims.
+fn checked_crop(path: &str, crop: Crop) -> Result<Crop, String> {
+    use base64::Engine as _;
+    let refused = || format!("{path}: the picture of the region is not one Kule sends");
+    if crop.data.len() > MAX_CROP.div_ceil(3) * 4 {
+        return Err(format!("{path}: the picture of the region is too large"));
+    }
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(&crop.data)
+        .map_err(|_| refused())?;
+    let picture = crate::image::picture(&bytes).map_err(|_| refused())?;
+    if !matches!(picture.mime, "image/png" | "image/jpeg")
+        || picture.width > MAX_CROP_SIDE
+        || picture.height > MAX_CROP_SIDE
+    {
+        return Err(refused());
+    }
+    Ok(Crop {
+        mime: picture.mime.to_owned(),
+        data: crop.data,
+    })
+}
+
+/// The pictures of the regions in `refs`, in order; the references keep
+/// only where the regions are. Fails with more than [`MAX_CROPS`].
+pub fn take_crops(refs: &mut [Reference]) -> Result<Vec<Crop>, String> {
+    let crops: Vec<Crop> = refs
+        .iter_mut()
+        .filter_map(|r| match r {
+            Reference::Region { crop, .. } => crop.take(),
+            _ => None,
+        })
+        .collect();
+    if crops.len() > MAX_CROPS {
+        return Err(format!(
+            "a prompt carries at most {MAX_CROPS} pictures of regions"
+        ));
+    }
+    Ok(crops)
 }
 
 /// `prompt` with the places it is about after it. Each reference must have
@@ -390,6 +453,7 @@ mod tests {
                 h: 120,
                 width: 1280,
                 height: 720,
+                crop: None,
             },
             Reference::Block {
                 path: "contract.docx".into(),
@@ -447,6 +511,7 @@ About these places in the task's files (paths are from the working directory):
                     h: 1,
                     width: 10,
                     height: 10,
+                    crop: None,
                 },
             ),
             (
@@ -481,5 +546,74 @@ About these places in the task's files (paths are from the working directory):
             (MAX_VALUE_ROWS, MAX_VALUE_COLS)
         );
         assert!(values[0][0].chars().count() <= MAX_VALUE + 1);
+    }
+
+    fn region(crop: Option<Crop>) -> Reference {
+        Reference::Region {
+            path: "a.png".into(),
+            x: 0,
+            y: 0,
+            w: 2,
+            h: 2,
+            width: 4,
+            height: 4,
+            crop,
+        }
+    }
+
+    fn crop(mime: &str, bytes: &[u8]) -> Option<Crop> {
+        use base64::Engine as _;
+        Some(Crop {
+            mime: mime.into(),
+            data: base64::engine::general_purpose::STANDARD.encode(bytes),
+        })
+    }
+
+    #[test]
+    fn a_region_s_picture_is_judged_by_its_bytes_and_taken_apart() {
+        let png = crate::image::tests::png(2, 2);
+        // What the bytes are counts, not what the window said they were.
+        let Reference::Region { crop: kept, .. } =
+            region(crop("image/jpeg", &png)).checked().unwrap()
+        else {
+            panic!()
+        };
+        assert_eq!(kept.unwrap().mime, "image/png");
+        for (what, c) in [
+            ("svg", crop("image/png", b"<svg onload=x>")),
+            (
+                "gif",
+                crop("image/gif", b"GIF89a\x02\x00\x02\x00\x00\x00\x00"),
+            ),
+            (
+                "huge",
+                crop("image/png", &crate::image::tests::png(5000, 5000)),
+            ),
+            (
+                "not base64",
+                Some(Crop {
+                    mime: "image/png".into(),
+                    data: "%%%".into(),
+                }),
+            ),
+            (
+                "too long",
+                Some(Crop {
+                    mime: "image/png".into(),
+                    data: "A".repeat(MAX_CROP * 2),
+                }),
+            ),
+        ] {
+            assert!(region(c).checked().is_err(), "{what} was let through");
+        }
+        let mut refs = vec![region(crop("image/png", &png)), region(None)];
+        let crops = take_crops(&mut refs).unwrap();
+        assert_eq!(crops.len(), 1);
+        assert!(
+            refs.iter()
+                .all(|r| matches!(r, Reference::Region { crop: None, .. }))
+        );
+        let mut many = vec![region(crop("image/png", &png)); MAX_CROPS + 1];
+        assert!(take_crops(&mut many).is_err());
     }
 }

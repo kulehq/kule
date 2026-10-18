@@ -17,7 +17,10 @@
 //! - `mcp`: a message naming the MCP servers the session was given, as
 //!   `name: command args`, separated by ` | `;
 //! - `echo`: a message of the whole prompt as it came, and nothing after
-//!   it is run (what Kule adds to a prompt is not a command).
+//!   it is run (what Kule adds to a prompt is not a command);
+//! - `pictures`: a message naming the pictures that came with the prompt,
+//!   as `mime length`, separated by `, `. Started with `--pictures`, the
+//!   agent says it takes pictures; without, it says it does not.
 //!
 //! A cancelled turn stops before its next command and ends as cancelled.
 
@@ -28,10 +31,10 @@ use std::sync::{Arc, Mutex};
 use agent_client_protocol::schema::v1::{
     AgentCapabilities, CancelNotification, ContentBlock, ContentChunk, Cost, InitializeRequest,
     InitializeResponse, McpServer, NewSessionRequest, NewSessionResponse, PermissionOption,
-    PermissionOptionKind, PromptRequest, PromptResponse, RequestPermissionOutcome,
-    RequestPermissionRequest, SessionId, SessionNotification, SessionUpdate, StopReason,
-    TextContent, ToolCall, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields, ToolKind, Usage,
-    UsageUpdate,
+    PermissionOptionKind, PromptCapabilities, PromptRequest, PromptResponse,
+    RequestPermissionOutcome, RequestPermissionRequest, SessionId, SessionNotification,
+    SessionUpdate, StopReason, TextContent, ToolCall, ToolCallStatus, ToolCallUpdate,
+    ToolCallUpdateFields, ToolKind, Usage, UsageUpdate,
 };
 use agent_client_protocol::{Agent, Client, ConnectionTo, Responder, Stdio};
 
@@ -55,9 +58,13 @@ async fn main() -> agent_client_protocol::Result<()> {
         )
         .on_receive_request(
             async move |request: InitializeRequest, responder, _cx| {
+                // `--pictures` makes it an agent that takes pictures.
+                let pictures = std::env::args().any(|a| a == "--pictures");
                 responder.respond(
-                    InitializeResponse::new(request.protocol_version)
-                        .agent_capabilities(AgentCapabilities::new()),
+                    InitializeResponse::new(request.protocol_version).agent_capabilities(
+                        AgentCapabilities::new()
+                            .prompt_capabilities(PromptCapabilities::new().image(pictures)),
+                    ),
                 )
             },
             agent_client_protocol::on_receive_request!(),
@@ -87,14 +94,27 @@ async fn main() -> agent_client_protocol::Result<()> {
             async move |request: PromptRequest,
                         responder: Responder<PromptResponse>,
                         cx: ConnectionTo<Client>| {
+                // The first text block is the script; what follows it is
+                // what Kule sent with it.
                 let script = request
                     .prompt
                     .iter()
-                    .filter_map(|block| match block {
+                    .find_map(|block| match block {
                         ContentBlock::Text(text) => Some(text.text.clone()),
                         _ => None,
                     })
-                    .collect::<String>();
+                    .unwrap_or_default();
+                let pictures = request
+                    .prompt
+                    .iter()
+                    .filter_map(|block| match block {
+                        ContentBlock::Image(image) => {
+                            Some(format!("{} {}", image.mime_type, image.data.len()))
+                        }
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
                 let dir = cwd.lock().unwrap().clone();
                 let servers = mcp.lock().unwrap().clone();
                 let session = request.session_id.clone();
@@ -117,6 +137,11 @@ async fn main() -> agent_client_protocol::Result<()> {
                             let said = format!("say {script}");
                             perform(&connection, &session, &dir, n, &said).await?;
                             break;
+                        }
+                        if command == "pictures" {
+                            let said = format!("say pictures: {pictures}");
+                            perform(&connection, &session, &dir, n, &said).await?;
+                            continue;
                         }
                         if command == "mcp" {
                             let said = format!("say mcp {servers}");

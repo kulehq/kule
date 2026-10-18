@@ -297,6 +297,58 @@ fn a_cost_reported_at_the_end_of_the_turn_stops_nothing() {
     assert_eq!(usage.cost, Some(usd(0.30)));
 }
 
+/// Pictures go after the prompt's text to an agent that takes them; one
+/// that does not gets the text alone, and the run says so.
+#[test]
+fn pictures_go_only_to_an_agent_that_takes_them() {
+    let s = Setup::new();
+    let picture = kule_acp::Picture {
+        mime: "image/png".into(),
+        data: "iVBORw0KGgo=".into(),
+    };
+    let run = |args: &[&str]| {
+        let sandbox = Sandbox::new(&s.task).unwrap();
+        let args: Vec<String> = args.iter().map(|a| a.to_string()).collect();
+        let agent = sandbox
+            .command(env!("CARGO_BIN_EXE_kule-test-agent"), &args)
+            .unwrap();
+        let (tx, rx) = mpsc::unbounded();
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        runtime
+            .block_on(kule_acp::run_pictured(
+                &s.task,
+                agent,
+                "pictures",
+                std::slice::from_ref(&picture),
+                None,
+                None,
+                &[],
+                tx,
+            ))
+            .unwrap();
+        runtime.block_on(rx.collect::<Vec<_>>())
+    };
+    let taken = run(&["--pictures"]);
+    assert!(
+        taken.contains(&Event::Message {
+            text: "pictures: image/png 12".into()
+        }),
+        "{taken:?}"
+    );
+    assert!(!taken.iter().any(|e| matches!(e, Event::Note { .. })));
+    let left = run(&[]);
+    assert!(
+        left.contains(&Event::Message {
+            text: "pictures: ".into()
+        }),
+        "{left:?}"
+    );
+    assert!(
+        left.iter().any(|e| matches!(e, Event::Note { .. })),
+        "{left:?}"
+    );
+}
+
 /// The places Kule lists after a prompt reach the agent whole, as text,
 /// line breaks and all.
 #[test]
