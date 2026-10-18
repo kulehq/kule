@@ -65,8 +65,8 @@
     reaches Kule, which resets it, while loopback still reaches the server
     and the browser keeps working. A process that listens on a network
     address of its own is stopped, and Live says why. Kule looks every
-    fifth of a second, reading sockets from the kernel (libproc), so only
-    that first moment is open. The chip shows 🛡 for a shielded server and
+    50 ms, reading sockets from the kernel (libproc, under a millisecond a
+    look), so only that first moment is open. The chip shows 🛡 for a shielded server and
     turns amber, with a warning, for one the network still reaches (a
     server you started in a terminal, which Kule leaves to you).
 

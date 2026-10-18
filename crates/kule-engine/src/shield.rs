@@ -12,9 +12,9 @@
 //! browser keeps working. A process that listens on a network address of
 //! its own (which Kule cannot take ahead of it) is stopped.
 //!
-//! Kule looks every fifth of a second while a run goes on, reading the
-//! processes' sockets from the kernel; a connection from the network in
-//! that first moment can still get through.
+//! Kule looks every 50 ms while a run goes on, reading the processes'
+//! sockets from the kernel (a look takes under a millisecond); a connection
+//! from the network in that first moment can still get through.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV6, TcpListener};

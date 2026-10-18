@@ -327,7 +327,7 @@ impl Service {
     }
 
     /// macOS: while runs go on, keeps what they listen on off the network,
-    /// looking every fifth of a second; lets go when none does. Runs for
+    /// looking every 50 ms; lets go when none does. Runs for
     /// the life of the daemon.
     #[cfg(target_os = "macos")]
     pub fn shield(self: Arc<Self>) {
@@ -359,7 +359,8 @@ impl Service {
                     self.emit(task, RunEvent::Preparing { text: text.clone() });
                 }
             }
-            std::thread::sleep(Duration::from_millis(200));
+            // A look takes under a millisecond; what is left open is this.
+            std::thread::sleep(Duration::from_millis(50));
         }
     }
 
