@@ -5,7 +5,7 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use kule_ext::{Listed, Package, Source, Store};
+use kule_ext::{Listed, OfferedMcp, Package, Source, Store};
 use serde::Serialize;
 use serde_json::Value;
 
@@ -15,7 +15,7 @@ use crate::themes::{self, ThemeFile};
 /// Installs or updates the `.kulext` at `path`. It waits for approval.
 pub fn install(home: &Path, path: &Path) -> Result<Listed> {
     let package = Package::read_file(path).map_err(|e| e.to_string())?;
-    contributions_ok(&Source::Packed(package.clone()))?;
+    contributions_ok(home, &Source::Packed(package.clone()))?;
     Store::new(home)
         .install(&package)
         .map_err(|e| e.to_string())
@@ -24,23 +24,76 @@ pub fn install(home: &Path, path: &Path) -> Result<Listed> {
 /// Installs a folder under development. It waits for approval, and again
 /// whenever its manifest changes.
 pub fn install_folder(home: &Path, dir: &Path) -> Result<Listed> {
-    contributions_ok(&Source::folder(dir).map_err(|e| e.to_string())?)?;
+    contributions_ok(home, &Source::folder(dir).map_err(|e| e.to_string())?)?;
     Store::new(home)
         .install_folder(dir)
         .map_err(|e| e.to_string())
 }
 
 /// What an extension adds, checked as Kule checks its own.
-fn contributions_ok(source: &Source) -> Result<()> {
+fn contributions_ok(home: &Path, source: &Source) -> Result<()> {
     let manifest = source.manifest();
     for theme in &manifest.contributes.themes {
         let bytes = source.read(theme).map_err(|e| e.to_string())?;
         themes::read_file(&bytes).map_err(|e| format!("{theme}: {e}"))?;
     }
-    if manifest.contributes.agents.is_some() || !manifest.contributes.mcp_servers.is_empty() {
-        return Err("this Kule does not yet take agents or MCP servers from extensions".to_owned());
+    if let Some(path) = &manifest.contributes.agents {
+        let text = String::from_utf8(source.read(path).map_err(|e| e.to_string())?)
+            .map_err(|_| format!("{path} is not UTF-8"))?;
+        let profiles = kule_acp::parse_profiles(&text).map_err(|e| format!("{path}: {e}"))?;
+        if profiles.is_empty() {
+            return Err(format!("{path} holds no [[agent]]"));
+        }
+        let agents = kule_acp::Agents::load(home).map_err(|e| e.to_string())?;
+        for profile in &profiles {
+            agents
+                .check_draft(home, profile)
+                .map_err(|why| format!("{path}: agent {}: {why}", profile.name))?;
+        }
+    }
+    for server in &manifest.contributes.mcp_servers {
+        kule_acp::mcp::pinned(&server.command, &server.args)
+            .map_err(|why| format!("MCP server {}: {why}", server.name))?;
     }
     Ok(())
+}
+
+/// The MCP servers extensions that may run offer, approved or not.
+pub fn mcp_servers(home: &Path) -> Result<Vec<OfferedMcp>> {
+    Store::new(home).mcp_servers().map_err(|e| e.to_string())
+}
+
+pub fn approve_mcp(home: &Path, extension: &str, name: &str, digest: &str) -> Result<()> {
+    Store::new(home)
+        .approve_mcp(extension, name, digest)
+        .map_err(|e| e.to_string())
+}
+
+pub fn revoke_mcp(home: &Path, extension: &str, name: &str) -> Result<()> {
+    Store::new(home)
+        .revoke_mcp(extension, name)
+        .map_err(|e| e.to_string())
+}
+
+/// The approved MCP servers, as an agent is told to start them; npx
+/// packages are installed once under `person` (the person's home), when
+/// given.
+pub fn mcp_for_runs(home: &Path, person: Option<&Path>) -> Vec<kule_acp::McpCommand> {
+    Store::new(home)
+        .mcp_servers()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|o| o.approved)
+        .map(|o| {
+            kule_acp::McpCommand::prepared(
+                person,
+                &o.server.name,
+                &o.server.command,
+                &o.server.args,
+                &o.server.env,
+            )
+        })
+        .collect()
 }
 
 pub fn list(home: &Path) -> Result<Vec<Listed>> {
@@ -60,7 +113,10 @@ pub fn set_enabled(home: &Path, id: &str, enabled: bool) -> Result<Listed> {
 }
 
 pub fn remove(home: &Path, id: &str) -> Result<()> {
-    Store::new(home).remove(id).map_err(|e| e.to_string())
+    Store::new(home).remove(id).map_err(|e| e.to_string())?;
+    // Its agents went with it; their approvals go too, so a later
+    // extension of the same id starts unapproved.
+    kule_acp::Agents::forget_extension(home, id).map_err(|e| e.to_string())
 }
 
 pub fn storage(home: &Path, id: &str) -> Result<Value> {
@@ -117,4 +173,47 @@ pub fn themes(home: &Path) -> Result<Vec<ExtensionTheme>> {
         }
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+
+    #[test]
+    fn runs_are_given_only_the_mcp_servers_the_person_approved() {
+        let (home, src) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+        fs::write(
+            src.path().join("kule-extension.json"),
+            r#"{ "kule_extension": 1, "id": "acme.tools", "name": "Tools", "version": "1.0.0",
+                 "publisher": "acme", "contributes": { "mcpServers": [
+                   { "name": "db", "command": "npx", "args": ["-y", "@acme/db@1.2.3"] },
+                   { "name": "web", "command": "uvx", "args": ["acme-web==2.0.0"] } ] } }"#,
+        )
+        .unwrap();
+        let listed = install_folder(home.path(), src.path()).unwrap();
+        approve(home.path(), "acme.tools", &listed.digest).unwrap();
+        assert!(mcp_for_runs(home.path(), None).is_empty());
+
+        let offered = mcp_servers(home.path()).unwrap();
+        let web = offered.iter().find(|o| o.server.name == "web").unwrap();
+        let stale = approve_mcp(home.path(), "acme.tools", "web", "not-what-you-saw").unwrap_err();
+        assert!(stale.contains("changed since you looked"), "{stale}");
+        approve_mcp(home.path(), "acme.tools", "web", &web.digest).unwrap();
+        let given = mcp_for_runs(home.path(), None);
+        assert_eq!(given.len(), 1);
+        assert_eq!(
+            (
+                given[0].name.as_str(),
+                given[0].program.as_str(),
+                given[0].args.as_slice()
+            ),
+            ("web", "uvx", &["acme-web==2.0.0".to_owned()][..])
+        );
+
+        // An extension turned off offers nothing, approved or not.
+        set_enabled(home.path(), "acme.tools", false).unwrap();
+        assert!(mcp_for_runs(home.path(), None).is_empty());
+    }
 }

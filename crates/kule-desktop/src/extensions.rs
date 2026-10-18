@@ -189,6 +189,30 @@ pub fn extension_themes(kule: K<'_>) -> Result<Vec<Value>> {
     kule.call(Call::ExtensionThemes)
 }
 
+#[tauri::command(async)]
+pub fn mcp_servers(kule: K<'_>) -> Result<Vec<Value>> {
+    kule.call(Call::McpServers)
+}
+
+#[tauri::command(async)]
+pub fn approve_mcp_server(
+    kule: K<'_>,
+    extension: String,
+    name: String,
+    digest: String,
+) -> Result<()> {
+    kule.call(Call::ApproveMcpServer {
+        extension,
+        name,
+        digest,
+    })
+}
+
+#[tauri::command(async)]
+pub fn revoke_mcp_server(kule: K<'_>, extension: String, name: String) -> Result<()> {
+    kule.call(Call::RevokeMcpServer { extension, name })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

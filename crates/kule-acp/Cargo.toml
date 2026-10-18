@@ -16,6 +16,7 @@ async-process = "2.5.0"
 blake3.workspace = true
 futures = "0.3.34"
 kule-engine = { version = "0.2.0", path = "../kule-engine" }
+kule-ext = { version = "0.2.0", path = "../kule-ext" }
 libc = "0.2.190"
 serde.workspace = true
 serde_json.workspace = true

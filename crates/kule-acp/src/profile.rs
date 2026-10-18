@@ -174,6 +174,8 @@ pub enum Origin {
     BuiltIn,
     /// `<kule home>/agents.toml`.
     Person,
+    /// An extension that may run brings it (see [`Listed::extension`]).
+    Extension,
 }
 
 /// A profile as the list shows it.
@@ -198,6 +200,57 @@ pub struct Listed {
     /// Where its home of its own is, when it has one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub own_home_dir: Option<String>,
+    /// The extension that brings it, for [`Origin::Extension`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extension: Option<String>,
+}
+
+impl Listed {
+    /// What its approval is kept under: its name, or for an extension's
+    /// profile `ext/<extension>/<name>`, which no name can be.
+    fn approval_key(&self) -> String {
+        match &self.extension {
+            Some(ext) => format!("ext/{ext}/{}", self.profile.name),
+            None => self.profile.name.clone(),
+        }
+    }
+}
+
+/// The profiles of an `agents.toml`, read but not checked.
+pub fn parse_profiles(text: &str) -> std::result::Result<Vec<Profile>, String> {
+    toml::from_str::<File>(text)
+        .map(|f| f.agent)
+        .map_err(|e| e.to_string())
+}
+
+/// The profiles extensions that may run bring: (extension id, profile).
+/// One whose file cannot be read now is left out (it was read when the
+/// extension was installed).
+fn extension_profiles(kule_home: &Path) -> Vec<(String, Profile)> {
+    let store = kule_ext::Store::new(kule_home);
+    let Ok(all) = store.list() else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for listed in &all {
+        // Only an extension that may run (on, approved as it is) brings any.
+        let Ok(source) = store.runnable(&listed.id) else {
+            continue;
+        };
+        let Some(path) = source.manifest().contributes.agents.clone() else {
+            continue;
+        };
+        let Ok(profiles) = source
+            .read(&path)
+            .map_err(|e| e.to_string())
+            .and_then(|b| String::from_utf8(b).map_err(|e| e.to_string()))
+            .and_then(|t| parse_profiles(&t))
+        else {
+            continue;
+        };
+        out.extend(profiles.into_iter().map(|p| (listed.id.clone(), p)));
+    }
+    out
 }
 
 /// The program `command` starts, when it cannot be: a bare name on no
@@ -238,49 +291,86 @@ impl Agents {
                 warnings: Vec::new(),
                 missing: None,
                 own_home_dir: None,
+                extension: None,
             })
             .collect();
         Agents::complete(listed)
     }
 
-    /// Kule's own profiles and the person's, from `kule_home`.
+    /// Kule's own profiles, the person's from `kule_home`, and those
+    /// extensions that may run bring. The person's and the extensions'
+    /// run only once approved as they stand.
     pub fn load(kule_home: &Path) -> Result<Agents> {
         let mut agents = Agents::built_in();
         let path = kule_home.join(AGENTS_FILE);
         let text = match std::fs::read_to_string(&path) {
-            Ok(text) => text,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(agents),
+            Ok(text) => Some(text),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
             Err(e) => return Err(io(&path, e)),
         };
-        let file: File = toml::from_str(&text)
-            .map_err(|e| Error::Invalid(format!("{}: {e}", path.display())))?;
+        let person = match text {
+            Some(text) => {
+                toml::from_str::<File>(&text)
+                    .map_err(|e| Error::Invalid(format!("{}: {e}", path.display())))?
+                    .agent
+            }
+            None => Vec::new(),
+        };
+        let theirs = extension_profiles(kule_home);
+        if person.is_empty() && theirs.is_empty() {
+            return Ok(agents);
+        }
         let approved = approved(kule_home)?;
         let mut listed = std::mem::take(&mut agents.listed);
-        for profile in file.agent {
-            let held = if listed.iter().any(|l| l.profile.name == profile.name) {
-                Some(format!("another profile is named {}", profile.name))
-            } else if let Err(why) = profile.check(&listed, kule_home_in_home(kule_home).as_deref())
-            {
-                Some(why)
-            } else if approved.get(&profile.name) != Some(&profile.digest()) {
-                Some(format!(
-                    "not approved as it stands; review it with `kule agents show {0}`, then `kule agents approve {0}`",
-                    profile.name
-                ))
-            } else {
-                None
-            };
-            listed.push(Listed {
+        let all = person
+            .into_iter()
+            .map(|p| (None, p))
+            .chain(theirs.into_iter().map(|(ext, p)| (Some(ext), p)));
+        for (extension, profile) in all {
+            let mut entry = Listed {
+                origin: if extension.is_some() {
+                    Origin::Extension
+                } else {
+                    Origin::Person
+                },
                 profile,
-                origin: Origin::Person,
-                held,
+                held: None,
                 digest: String::new(),
                 warnings: Vec::new(),
                 missing: None,
                 own_home_dir: None,
-            });
+                extension,
+            };
+            let name = &entry.profile.name;
+            entry.held = if listed.iter().any(|l| l.profile.name == *name) {
+                Some(format!("another profile is named {name}"))
+            } else if let Err(why) = entry
+                .profile
+                .check(&listed, kule_home_in_home(kule_home).as_deref())
+            {
+                Some(why)
+            } else if approved.get(&entry.approval_key()) != Some(&entry.profile.digest()) {
+                Some(format!(
+                    "not approved as it stands; review it with `kule agents show {name}`, then `kule agents approve {name}`"
+                ))
+            } else {
+                None
+            };
+            listed.push(entry);
         }
         Ok(Agents::complete(listed))
+    }
+
+    /// Takes back the approvals of every profile extension `id` brought.
+    pub fn forget_extension(kule_home: &Path, id: &str) -> Result<()> {
+        let mut approved = approved(kule_home)?;
+        let prefix = format!("ext/{id}/");
+        let before = approved.len();
+        approved.retain(|key, _| !key.starts_with(&prefix));
+        if approved.len() != before {
+            write_approved(kule_home, &approved)?;
+        }
+        Ok(())
     }
 
     /// Notes in each profile what the others hold, to hide it, and what
@@ -397,7 +487,7 @@ impl Agents {
         let seen = agents
             .listed
             .iter()
-            .any(|l| l.profile.name == name && l.origin == Origin::Person && l.digest == digest);
+            .any(|l| l.profile.name == name && l.origin != Origin::BuiltIn && l.digest == digest);
         if !seen {
             return Err(Error::Invalid(format!(
                 "agent {name} changed since you looked at it; look again"
@@ -450,14 +540,15 @@ impl Agents {
         }
     }
 
-    /// Records the person's profile `name`, as it stands now, as approved.
-    /// Refused for one that fails its checks.
+    /// Records the profile `name` (the person's, or one an extension
+    /// brings), as it stands now, as approved. Refused for one that fails
+    /// its checks.
     pub fn approve(kule_home: &Path, name: &str) -> Result<Profile> {
         let agents = Agents::load(kule_home)?;
         let listed = agents
             .listed
             .iter()
-            .find(|l| l.profile.name == name && l.origin == Origin::Person)
+            .find(|l| l.profile.name == name && l.origin != Origin::BuiltIn)
             .ok_or_else(|| {
                 Error::Invalid(format!(
                     "no agent {name} in {}",
@@ -475,15 +566,20 @@ impl Agents {
             .check(&others, kule_home_in_home(kule_home).as_deref())
             .map_err(Error::Invalid)?;
         let mut approved = approved(kule_home)?;
-        approved.insert(name.to_owned(), listed.profile.digest());
+        approved.insert(listed.approval_key(), listed.profile.digest());
         write_approved(kule_home, &approved)?;
         Ok(listed.profile.clone())
     }
 
-    /// Takes the approval of the person's profile `name` back.
+    /// Takes the approval of profile `name` back.
     pub fn revoke(kule_home: &Path, name: &str) -> Result<bool> {
+        let key = Agents::load(kule_home)?
+            .listed
+            .iter()
+            .find(|l| l.profile.name == name && l.origin != Origin::BuiltIn)
+            .map_or_else(|| name.to_owned(), Listed::approval_key);
         let mut approved = approved(kule_home)?;
-        let had = approved.remove(name).is_some();
+        let had = approved.remove(&key).is_some();
         write_approved(kule_home, &approved)?;
         Ok(had)
     }
@@ -1054,7 +1150,7 @@ impl Profile {
 
 /// A command that fetches its package on the fly must name one exact
 /// version: an unpinned one runs whatever the registry serves that day.
-fn check_pinned(program: &str, args: &[String]) -> std::result::Result<(), String> {
+pub(crate) fn check_pinned(program: &str, args: &[String]) -> std::result::Result<(), String> {
     let launcher = Path::new(program)
         .file_name()
         .and_then(|n| n.to_str())

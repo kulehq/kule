@@ -23,6 +23,8 @@ const EXT = {
   notes: new Map(),
   /** The themes running extensions bring, as the Appearance list takes them. */
   themes: [],
+  /** The MCP servers running extensions offer, approved or not. */
+  mcp: [],
   /** task → review digest last told, so a note never loops into a new review. */
   reviewTold: new Map(),
   /** The task the frames were last told about. */
@@ -58,6 +60,7 @@ async function loadExtensions() {
   try {
     EXT.prefix = (await call("extension_host")).prefix;
     EXT.listed = await call("extensions");
+    EXT.mcp = await call("mcp_servers");
     const brought = await call("extension_themes");
     const counts = new Map();
     EXT.themes = brought.map((t) => {
@@ -445,6 +448,18 @@ function extensionCard(l) {
       c.themes?.length ? plural(c.themes.length, "theme") : null,
     ].filter(Boolean);
     if (adds.length) parts.push(h("div", { class: "muted" }, `Adds ${adds.join(", ")}`));
+    if (c.agents) {
+      parts.push(
+        h(
+          "div",
+          {},
+          "Brings agent profiles; each waits for you in ",
+          h("button", { class: "link-button", type: "button", onclick: () => openSettings("agents") }, "Settings → Agents"),
+          " before it runs."
+        )
+      );
+    }
+    for (const offered of EXT.mcp.filter((o) => o.extension === l.id)) parts.push(mcpRow(offered));
     parts.push(h("div", { class: "muted ext-digest" }, `Digest ${l.digest.slice(0, 16)}…`));
   }
   const actions = [];
@@ -469,6 +484,35 @@ function extensionCard(l) {
   parts.push(h("div", { class: "agent-actions" }, ...actions));
   if (m && (m.contributes.configuration || []).length) parts.push(extensionSettings(l));
   return h("li", { class: "agent-card ext-card", "data-key": `ext:${l.id}` }, ...parts);
+}
+
+/** An MCP server an extension offers agents: what starts, and whether agents get it. */
+function mcpRow(o) {
+  const s = o.server;
+  const env = Object.keys(s.env || {});
+  const action = o.approved
+    ? h(
+        "button",
+        { class: "button ghost", type: "button", "data-key": `mcp-revoke:${o.extension}/${s.name}`, onclick: () => extensionAction(() => call("revoke_mcp_server", { extension: o.extension, name: s.name })) },
+        "Stop offering it"
+      )
+    : (() => {
+        const b = armed("Let agents use it", "Click again: agents start it in their sandbox", false, () =>
+          extensionAction(() => call("approve_mcp_server", { extension: o.extension, name: s.name, digest: o.digest }))
+        );
+        b.className = "button";
+        b.dataset.key = `mcp-approve:${o.extension}/${s.name}`;
+        return b;
+      })();
+  return h(
+    "div",
+    { class: "ext-mcp" },
+    h("div", {}, h("strong", {}, `MCP server ${s.name}`), " ", h("span", { class: `chip ${o.approved ? "allow" : "ask"}` }, o.approved ? "agents get it" : "waits for you")),
+    h("code", { class: "ext-mcp-command" }, [s.command, ...(s.args || [])].join(" ")),
+    env.length ? h("div", { class: "muted" }, `Sets ${env.join(", ")}`) : null,
+    h("div", { class: "muted" }, "Started by the agent, inside its sandbox; what it reaches the policy asks about."),
+    action
+  );
 }
 
 /** The extension's settings, drawn by Kule from its manifest. */

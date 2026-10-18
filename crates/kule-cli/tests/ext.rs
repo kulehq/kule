@@ -190,3 +190,89 @@ fn a_theme_that_is_not_a_theme_stops_the_install() {
     assert!(err.contains("dusk.kule-theme.json"), "{err}");
     assert!(stdout(&kule(home.path(), work.path(), &["ext"])).contains("no extensions"));
 }
+
+fn tools(dir: &Path, mcp_args: &str) {
+    fs::write(
+        dir.join("kule-extension.json"),
+        format!(
+            r#"{{ "kule_extension": 1, "id": "acme.tools", "name": "Tools", "version": "1.0.0",
+                 "publisher": "acme",
+                 "contributes": {{ "agents": "agents.toml",
+                   "mcpServers": [{{ "name": "db", "command": "npx", "args": [{mcp_args}] }}] }} }}"#
+        ),
+    )
+    .unwrap();
+    fs::write(
+        dir.join("agents.toml"),
+        "[[agent]]\nname = \"acme-agent\"\ncommand = [\"acme-agent\", \"acp\"]\nstate = [\".acme\"]\n",
+    )
+    .unwrap();
+}
+
+#[test]
+fn an_extension_brings_agents_and_mcp_servers_that_wait_for_the_person() {
+    let (home, work, src) = (
+        TempDir::new().unwrap(),
+        TempDir::new().unwrap(),
+        TempDir::new().unwrap(),
+    );
+    let dir = src.path().to_str().unwrap();
+
+    tools(src.path(), r#""-y", "@acme/db@latest""#);
+    let err = stderr(&kule(home.path(), work.path(), &["ext", "dev", dir]));
+    assert!(
+        err.contains("MCP server db") && err.contains("exact version"),
+        "{err}"
+    );
+
+    tools(src.path(), r#""-y", "@acme/db@1.2.3""#);
+    stdout(&kule(home.path(), work.path(), &["ext", "dev", dir]));
+    // Held with the extension: nothing is offered yet.
+    let mcp = stdout(&kule(home.path(), work.path(), &["ext", "mcp"]));
+    assert!(mcp.contains("no extension that runs offers"), "{mcp}");
+
+    stdout(&kule(
+        home.path(),
+        work.path(),
+        &["ext", "approve", "acme.tools"],
+    ));
+    let mcp = stdout(&kule(home.path(), work.path(), &["ext", "mcp"]));
+    assert!(mcp.contains("acme.tools/db — waits for you"), "{mcp}");
+    assert!(mcp.contains("starts: npx -y @acme/db@1.2.3"), "{mcp}");
+    let agents = stdout(&kule(home.path(), work.path(), &["agents"]));
+    assert!(
+        agents.contains("acme-agent       from extension acme.tools, held: not approved"),
+        "{agents}"
+    );
+
+    stdout(&kule(
+        home.path(),
+        work.path(),
+        &["ext", "mcp", "approve", "acme.tools/db"],
+    ));
+    let mcp = stdout(&kule(home.path(), work.path(), &["ext", "mcp"]));
+    assert!(mcp.contains("acme.tools/db — agents get it"), "{mcp}");
+
+    // A changed server waits again.
+    tools(src.path(), r#""-y", "@acme/db@1.2.4""#);
+    stdout(&kule(
+        home.path(),
+        work.path(),
+        &["ext", "approve", "acme.tools"],
+    ));
+    let mcp = stdout(&kule(home.path(), work.path(), &["ext", "mcp"]));
+    assert!(mcp.contains("acme.tools/db — waits for you"), "{mcp}");
+
+    stdout(&kule(
+        home.path(),
+        work.path(),
+        &["ext", "mcp", "approve", "acme.tools/db"],
+    ));
+    stdout(&kule(
+        home.path(),
+        work.path(),
+        &["ext", "mcp", "revoke", "acme.tools/db"],
+    ));
+    let mcp = stdout(&kule(home.path(), work.path(), &["ext", "mcp"]));
+    assert!(mcp.contains("waits for you"), "{mcp}");
+}

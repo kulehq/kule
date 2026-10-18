@@ -10,6 +10,7 @@
 //! answered yes, because the policy decides at commit what reaches the
 //! workspace; asking twice would only train people to click through.
 
+pub mod mcp;
 pub mod packages;
 mod profile;
 pub mod registry;
@@ -33,7 +34,8 @@ use futures::channel::mpsc::UnboundedSender;
 use kule_engine::{RunUsage, Step, Task};
 use serde::{Deserialize, Serialize};
 
-pub use profile::{AGENTS_FILE, Agents, Launch, Listed, Origin, Profile, profile};
+pub use mcp::McpCommand;
+pub use profile::{AGENTS_FILE, Agents, Launch, Listed, Origin, Profile, parse_profiles, profile};
 
 /// Something the agent did, as the person watching sees it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -164,6 +166,21 @@ pub async fn run_limited(
     limit: Option<Cost>,
     events: UnboundedSender<Event>,
 ) -> Result<String, Error> {
+    run_with(task, agent, prompt, mode, limit, &[], events).await
+}
+
+/// [`run_limited`], with MCP servers offered to the agent's session (it
+/// starts them itself, in its sandbox).
+pub async fn run_with(
+    task: &Task,
+    agent: Command,
+    prompt: &str,
+    mode: Option<&str>,
+    limit: Option<Cost>,
+    mcp: &[McpCommand],
+    events: UnboundedSender<Event>,
+) -> Result<String, Error> {
+    let mcp_servers: Vec<_> = mcp.iter().map(McpCommand::to_acp).collect();
     let log = task.copy().with_file_name("agent.log");
     let log = std::fs::OpenOptions::new()
         .create(true)
@@ -268,7 +285,7 @@ pub async fn run_limited(
                     .block_task()
                     .await?;
                 let session = connection
-                    .send_request(NewSessionRequest::new(cwd))
+                    .send_request(NewSessionRequest::new(cwd).mcp_servers(mcp_servers))
                     .block_task()
                     .await?;
                 if let Some(mode) = mode.filter(|m| {

@@ -13,7 +13,9 @@
 //!   review (a `think` call) runs inside it, the review ending first, as
 //!   Codex does;
 //! - `cost <amount>`: reports what the session cost so far, in USD;
-//! - `tokens <input> <output>`: the token counts the turn's end reports.
+//! - `tokens <input> <output>`: the token counts the turn's end reports;
+//! - `mcp`: a message naming the MCP servers the session was given, as
+//!   `name: command args`, separated by ` | `.
 //!
 //! A cancelled turn stops before its next command and ends as cancelled.
 
@@ -23,7 +25,7 @@ use std::sync::{Arc, Mutex};
 
 use agent_client_protocol::schema::v1::{
     AgentCapabilities, CancelNotification, ContentBlock, ContentChunk, Cost, InitializeRequest,
-    InitializeResponse, NewSessionRequest, NewSessionResponse, PermissionOption,
+    InitializeResponse, McpServer, NewSessionRequest, NewSessionResponse, PermissionOption,
     PermissionOptionKind, PromptRequest, PromptResponse, RequestPermissionOutcome,
     RequestPermissionRequest, SessionId, SessionNotification, SessionUpdate, StopReason,
     TextContent, ToolCall, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields, ToolKind, Usage,
@@ -35,6 +37,8 @@ use agent_client_protocol::{Agent, Client, ConnectionTo, Responder, Stdio};
 async fn main() -> agent_client_protocol::Result<()> {
     let cwd: Arc<Mutex<PathBuf>> = Arc::new(Mutex::new(PathBuf::from(".")));
     let session_cwd = cwd.clone();
+    let mcp: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
+    let session_mcp = mcp.clone();
     let cancelled = Arc::new(AtomicBool::new(false));
     let on_cancel = cancelled.clone();
     Agent
@@ -59,6 +63,20 @@ async fn main() -> agent_client_protocol::Result<()> {
         .on_receive_request(
             async move |request: NewSessionRequest, responder, _cx| {
                 *session_cwd.lock().unwrap() = request.cwd.clone();
+                *session_mcp.lock().unwrap() = request
+                    .mcp_servers
+                    .iter()
+                    .filter_map(|s| match s {
+                        McpServer::Stdio(s) => Some(format!(
+                            "{}: {} {}",
+                            s.name,
+                            s.command.display(),
+                            s.args.join(" ")
+                        )),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" | ");
                 responder.respond(NewSessionResponse::new(SessionId::new("test-session")))
             },
             agent_client_protocol::on_receive_request!(),
@@ -76,6 +94,7 @@ async fn main() -> agent_client_protocol::Result<()> {
                     })
                     .collect::<String>();
                 let dir = cwd.lock().unwrap().clone();
+                let servers = mcp.lock().unwrap().clone();
                 let session = request.session_id.clone();
                 let connection = cx.clone();
                 let cancelled = cancelled.clone();
@@ -90,6 +109,11 @@ async fn main() -> agent_client_protocol::Result<()> {
                             let (input, output) =
                                 (counts.next().unwrap_or(0), counts.next().unwrap_or(0));
                             usage = Some(Usage::new(input + output, input, output));
+                            continue;
+                        }
+                        if command == "mcp" {
+                            let said = format!("say mcp {servers}");
+                            perform(&connection, &session, &dir, n, &said).await?;
                             continue;
                         }
                         perform(&connection, &session, &dir, n, command).await?;

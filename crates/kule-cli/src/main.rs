@@ -170,6 +170,25 @@ enum ExtCmd {
     Disable { id: String },
     /// Remove an extension and what it kept.
     Remove { id: String },
+    /// MCP servers extensions offer agents (the default lists them).
+    Mcp {
+        #[command(subcommand)]
+        action: Option<McpCmd>,
+    },
+}
+
+#[derive(Subcommand)]
+enum McpCmd {
+    List,
+    /// Let agents use EXTENSION/NAME, as it stands now. They start it in
+    /// their own sandbox.
+    Approve {
+        server: String,
+    },
+    /// Stop offering EXTENSION/NAME to agents.
+    Revoke {
+        server: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1717,6 +1736,56 @@ fn ext_cmd(home: &Path, action: ExtCmd) -> Result<()> {
             extensions::remove(home, &id).map_err(|e| anyhow!(e))?;
             println!("removed {id} and what it kept");
         }
+        ExtCmd::Mcp { action } => {
+            let split = |server: &str| {
+                server
+                    .split_once('/')
+                    .map(|(e, n)| (e.to_owned(), n.to_owned()))
+                    .ok_or_else(|| anyhow!("name the server as EXTENSION/NAME"))
+            };
+            match action.unwrap_or(McpCmd::List) {
+                McpCmd::List => {
+                    let all = extensions::mcp_servers(home).map_err(|e| anyhow!(e))?;
+                    if all.is_empty() {
+                        println!("no extension that runs offers an MCP server");
+                    }
+                    for o in &all {
+                        let state = if o.approved {
+                            "agents get it"
+                        } else {
+                            "waits for you"
+                        };
+                        println!("{}/{} — {state}", o.extension, o.server.name);
+                        println!("  starts: {} {}", o.server.command, o.server.args.join(" "));
+                        if !o.server.env.is_empty() {
+                            let names: Vec<&str> =
+                                o.server.env.keys().map(String::as_str).collect();
+                            println!("  sets:   {}", names.join(", "));
+                        }
+                    }
+                }
+                McpCmd::Approve { server } => {
+                    let (ext, name) = split(&server)?;
+                    let offered = extensions::mcp_servers(home)
+                        .map_err(|e| anyhow!(e))?
+                        .into_iter()
+                        .find(|o| o.extension == ext && o.server.name == name)
+                        .ok_or_else(|| anyhow!("no extension that runs offers {server}"))?;
+                    extensions::approve_mcp(home, &ext, &name, &offered.digest)
+                        .map_err(|e| anyhow!(e))?;
+                    println!(
+                        "agents get {server} from their next run: {} {}",
+                        offered.server.command,
+                        offered.server.args.join(" ")
+                    );
+                }
+                McpCmd::Revoke { server } => {
+                    let (ext, name) = split(&server)?;
+                    extensions::revoke_mcp(home, &ext, &name).map_err(|e| anyhow!(e))?;
+                    println!("agents no longer get {server}");
+                }
+            }
+        }
     }
     Ok(())
 }
@@ -1792,8 +1861,12 @@ fn agents_cmd(home: &Path, action: AgentsCmd) -> Result<()> {
             let agents = Agents::load(home)?;
             for listed in agents.listed() {
                 let origin = match listed.origin {
-                    Origin::BuiltIn => "built in",
-                    Origin::Person => "yours",
+                    Origin::BuiltIn => "built in".to_owned(),
+                    Origin::Person => "yours".to_owned(),
+                    Origin::Extension => format!(
+                        "from extension {}",
+                        listed.extension.as_deref().unwrap_or("?")
+                    ),
                 };
                 match &listed.held {
                     None => println!("{:<16} {origin}", listed.profile.name),

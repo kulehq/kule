@@ -2768,11 +2768,16 @@ function opens(profile, ownHome) {
 function agentCard(listed) {
   const { profile, origin, held, digest, warnings, own_home_dir } = listed;
   const yours = origin === "person";
+  // An extension's profile is approved like the person's own, but edited
+  // and removed with its extension.
+  const theirs = origin === "extension";
   const actions = [];
   if (yours) {
     actions.push(
       h("button", { class: "button ghost", type: "button", "data-key": `edit:${profile.name}`, onclick: () => editAgent(profile, false) }, "Edit")
     );
+  }
+  if (yours || theirs) {
     if (held) {
       const approve = armed(
         "Approve",
@@ -2809,6 +2814,8 @@ function agentCard(listed) {
         )
       );
     }
+  }
+  if (yours) {
     const remove = armed("Remove", `Click again to remove ${profile.name}`, false, async () => {
       await call("remove_agent", { name: profile.name }).catch(fail);
       await agentsChanged();
@@ -2823,7 +2830,7 @@ function agentCard(listed) {
       "header",
       { class: "agent-card-head" },
       h("h3", {}, profile.name),
-      h("span", { class: "chip" }, yours ? "yours" : "built in"),
+      h("span", { class: "chip" }, yours ? "yours" : theirs ? `from ${listed.extension}` : "built in"),
       listed.missing
         ? h("span", { class: "chip deny" }, "not installed")
         : h("span", { class: `chip ${held ? "ask" : "allow"}` }, held ? "held" : "can run")

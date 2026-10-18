@@ -434,6 +434,21 @@ pub fn dispatch(service: &Arc<Service>, call: Call) -> Result<Value, String> {
             json(ext::set_config(service.home(), &id, &key, &value)?)
         }
         Call::ExtensionThemes => json(ext::themes(service.home())?),
+        Call::McpServers => json(ext::mcp_servers(service.home())?),
+        Call::ApproveMcpServer {
+            extension,
+            name,
+            digest,
+        } => {
+            ext::approve_mcp(service.home(), &extension, &name, &digest)?;
+            service.extensions_changed();
+            json(())
+        }
+        Call::RevokeMcpServer { extension, name } => {
+            ext::revoke_mcp(service.home(), &extension, &name)?;
+            service.extensions_changed();
+            json(())
+        }
         Call::Hello => json(Hello {
             protocol: PROTOCOL,
             version: env!("CARGO_PKG_VERSION").to_owned(),

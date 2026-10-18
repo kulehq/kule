@@ -10,7 +10,7 @@ use serde_json::Value;
 
 /// Changes whenever a call, a result or a notice changes shape; a client
 /// and a daemon that disagree on it cannot talk.
-pub const PROTOCOL: u32 = 22;
+pub const PROTOCOL: u32 = 23;
 
 /// What a daemon says about itself.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -335,6 +335,18 @@ pub enum Call {
     },
     /// The themes extensions that may run bring.
     ExtensionThemes,
+    /// The MCP servers extensions that may run offer, approved or not.
+    McpServers,
+    /// Lets agents use an offered MCP server, as the person saw it.
+    ApproveMcpServer {
+        extension: String,
+        name: String,
+        digest: String,
+    },
+    RevokeMcpServer {
+        extension: String,
+        name: String,
+    },
     /// Turns the connection into a stream of notices.
     Subscribe,
 }

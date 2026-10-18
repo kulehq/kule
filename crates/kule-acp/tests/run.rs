@@ -296,3 +296,47 @@ fn a_cost_reported_at_the_end_of_the_turn_stops_nothing() {
     }
     assert_eq!(usage.cost, Some(usd(0.30)));
 }
+
+#[test]
+fn the_session_is_given_the_mcp_servers_it_is_offered() {
+    let s = Setup::new();
+    let server = kule_acp::McpCommand::prepared(
+        None,
+        "db",
+        "npx",
+        &["-y".into(), "@acme/db@1.2.3".into(), "--stdio".into()],
+        &[("DB_NAME".to_owned(), "notes".to_owned())].into(),
+    );
+    let sandbox = Sandbox::new(&s.task).unwrap();
+    let agent = sandbox
+        .command(env!("CARGO_BIN_EXE_kule-test-agent"), &[])
+        .unwrap();
+    let (tx, rx) = mpsc::unbounded();
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime
+        .block_on(kule_acp::run_with(
+            &s.task,
+            agent,
+            "mcp",
+            None,
+            None,
+            &[server],
+            tx,
+        ))
+        .unwrap();
+    let events = runtime.block_on(rx.collect::<Vec<_>>());
+    assert!(
+        events.contains(&Event::Message {
+            text: "mcp db: npx -y @acme/db@1.2.3 --stdio".into()
+        }),
+        "{events:?}"
+    );
+    // Without any, the session is given none.
+    let events = s.run("mcp");
+    assert!(
+        events.contains(&Event::Message {
+            text: "mcp ".into()
+        }),
+        "{events:?}"
+    );
+}

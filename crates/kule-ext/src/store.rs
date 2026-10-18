@@ -4,6 +4,8 @@
 //!   one under development;
 //! - `approved.json`: id → the digest, permissions and hosts the person
 //!   approved;
+//! - `mcp-approved.json`: `<id>/<server>` → the digest of each MCP server
+//!   the person let agents use;
 //! - `packages/<id>-<digest>.kulext`: the packages, never unpacked;
 //! - `data/<id>/`: what the extension keeps (`storage.json`) and its
 //!   settings (`config.json`).
@@ -21,11 +23,29 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::error::{At, Error, Result, invalid};
-use crate::manifest::{Manifest, Permission};
+use crate::manifest::{Manifest, McpServer, Permission};
 use crate::package::{Package, Source};
 
 const INSTALLED: &str = "installed.json";
 const APPROVED: &str = "approved.json";
+/// `<extension>/<server>` → the digest of the MCP server the person approved.
+const MCP_APPROVED: &str = "mcp-approved.json";
+
+/// An MCP server an extension offers.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OfferedMcp {
+    pub extension: String,
+    pub extension_name: String,
+    pub server: McpServer,
+    pub digest: String,
+    pub approved: bool,
+}
+
+fn mcp_digest(server: &McpServer) -> String {
+    blake3::hash(&serde_json::to_vec(server).expect("a server serializes"))
+        .to_hex()
+        .to_string()
+}
 /// The most an extension keeps in `storage`.
 const MAX_STORAGE: usize = 1024 * 1024;
 
@@ -270,12 +290,68 @@ impl Store {
         if approved.remove(id).is_some() {
             self.write(APPROVED, &approved)?;
         }
+        let mut mcp: BTreeMap<String, String> = self.read(MCP_APPROVED)?;
+        let before = mcp.len();
+        mcp.retain(|key, _| !key.starts_with(&format!("{id}/")));
+        if mcp.len() != before {
+            self.write(MCP_APPROVED, &mcp)?;
+        }
         if i.dev.is_none() {
             let _ = fs::remove_file(self.package_path(id, &i.digest));
         }
         let data = self.data_dir(id)?;
         if data.exists() {
             fs::remove_dir_all(&data).at(&data)?;
+        }
+        Ok(())
+    }
+
+    /// The MCP servers extensions that may run offer, each with whether the
+    /// person approved it as it stands.
+    pub fn mcp_servers(&self) -> Result<Vec<OfferedMcp>> {
+        let approved: BTreeMap<String, String> = self.read(MCP_APPROVED)?;
+        let mut out = Vec::new();
+        for listed in self.list()?.into_iter().filter(Listed::runs) {
+            let Some(manifest) = listed.manifest else {
+                continue;
+            };
+            for server in manifest.contributes.mcp_servers {
+                let digest = mcp_digest(&server);
+                let key = format!("{}/{}", manifest.id, server.name);
+                out.push(OfferedMcp {
+                    extension: manifest.id.clone(),
+                    extension_name: manifest.name.clone(),
+                    approved: approved.get(&key) == Some(&digest),
+                    server,
+                    digest,
+                });
+            }
+        }
+        Ok(out)
+    }
+
+    /// Approves an offered MCP server as the person saw it.
+    pub fn approve_mcp(&self, ext: &str, name: &str, digest: &str) -> Result<()> {
+        let offered = self
+            .mcp_servers()?
+            .into_iter()
+            .find(|o| o.extension == ext && o.server.name == name)
+            .ok_or_else(|| invalid(format!("{ext} offers no MCP server {name} now")))?;
+        if offered.digest != digest {
+            return Err(invalid(format!(
+                "MCP server {name} changed since you looked at it; look again"
+            )));
+        }
+        let mut approved: BTreeMap<String, String> = self.read(MCP_APPROVED)?;
+        approved.insert(format!("{ext}/{name}"), digest.to_owned());
+        self.write(MCP_APPROVED, &approved)
+    }
+
+    /// Takes an MCP server's approval back.
+    pub fn revoke_mcp(&self, ext: &str, name: &str) -> Result<()> {
+        let mut approved: BTreeMap<String, String> = self.read(MCP_APPROVED)?;
+        if approved.remove(&format!("{ext}/{name}")).is_some() {
+            self.write(MCP_APPROVED, &approved)?;
         }
         Ok(())
     }

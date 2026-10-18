@@ -1081,12 +1081,17 @@ impl Service {
             }
             usage
         });
-        let outcome = runtime.block_on(kule_acp::run_limited(
+        // MCP servers the person approved from extensions; the agent starts
+        // them inside its own sandbox.
+        let person = std::env::var_os("HOME").map(PathBuf::from);
+        let mcp = crate::extensions::mcp_for_runs(&self.home, person.as_deref());
+        let outcome = runtime.block_on(kule_acp::run_with(
             task,
             launch.command,
             prompt,
             launch.mode.as_deref(),
             limit,
+            &mcp,
             tx,
         ));
         if let Ok(usage) = runtime.block_on(forward) {
