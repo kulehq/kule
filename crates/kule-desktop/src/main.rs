@@ -786,6 +786,25 @@ fn main() {
         .plugin(tauri_plugin_notification::init())
         .setup(move |app| {
             let handle = app.handle().clone();
+            #[cfg(target_os = "macos")]
+            if let Some(window) = app.get_webview_window("main") {
+                let off = handle.clone();
+                let _ = window.with_webview(move |webview| {
+                    if extensions::no_webrtc(webview.inner()) {
+                        off.state::<extensions::Host>().webrtc_is_off();
+                        // The window may have asked already: it asks again.
+                        // From another thread: this one is the window's, and
+                        // an emit from here would wait on itself.
+                        std::thread::spawn(move || {
+                            let _ = off.emit("extensions", ());
+                        });
+                    } else {
+                        eprintln!(
+                            "kule-desktop: WebRTC could not be turned off in the window; extensions will not run"
+                        );
+                    }
+                });
+            }
             // Without shortcuts until the window sends the person's.
             app.set_menu(menu::build(&handle, &HashMap::new())?)?;
             std::thread::spawn(move || relay(handle, &home));

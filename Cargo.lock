@@ -3388,6 +3388,7 @@ dependencies = [
  "kule-daemon",
  "kule-ext",
  "libc",
+ "objc2",
  "portable-pty",
  "serde",
  "serde_json",

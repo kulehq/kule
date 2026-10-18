@@ -88,6 +88,9 @@ impl Files for StoreFiles {
 pub struct Host {
     server: Option<Server>,
     files: Arc<StoreFiles>,
+    /// Whether the window has no WebRTC, which the content policy cannot
+    /// close (see [`no_webrtc`]); no extension runs until it is so.
+    webrtc_off: std::sync::atomic::AtomicBool,
 }
 
 impl Host {
@@ -100,16 +103,69 @@ impl Host {
                 None
             }
         };
-        Host { server, files }
+        Host {
+            server,
+            files,
+            // WebKitGTK ships with WebRTC off; macOS turns it off at start.
+            webrtc_off: std::sync::atomic::AtomicBool::new(!cfg!(target_os = "macos")),
+        }
     }
 
     pub fn forget(&self) {
         self.files.forget();
     }
 
+    /// Records that the window's WebRTC is off.
+    pub fn webrtc_is_off(&self) {
+        self.webrtc_off
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Where extension files are, or None when no extension may run.
+    fn prefix(&self) -> Option<String> {
+        let off = self.webrtc_off.load(std::sync::atomic::Ordering::SeqCst);
+        self.server.as_ref().filter(|_| off).map(Server::prefix)
+    }
+
     /// The origin extension frames come from, when they are served.
     pub fn origin(&self) -> Option<String> {
         self.server.as_ref().map(Server::origin)
+    }
+}
+
+/// Turns WebRTC off in the window, so an extension's frame has no
+/// `RTCPeerConnection`: the content policy does not govern it, and a frame
+/// with no `net` permission reached a public STUN server through it (data
+/// can ride in the server's name or the request). Kule itself uses none.
+/// WebKitGTK ships with WebRTC off; on macOS it is a WebKit preference.
+/// Returns whether it is off.
+#[cfg(target_os = "macos")]
+pub fn no_webrtc(webview: *mut std::ffi::c_void) -> bool {
+    use objc2::runtime::AnyObject;
+    use objc2::{msg_send, sel};
+    if webview.is_null() {
+        return false;
+    }
+    // SAFETY: `webview` is the window's WKWebView, alive for this call;
+    // each message is sent only after the object says it answers it.
+    unsafe {
+        let web: &AnyObject = &*(webview as *const AnyObject);
+        let config: *mut AnyObject = msg_send![web, configuration];
+        let Some(config) = config.as_ref() else {
+            return false;
+        };
+        let prefs: *mut AnyObject = msg_send![config, preferences];
+        let Some(prefs) = prefs.as_ref() else {
+            return false;
+        };
+        let setter = sel!(_setPeerConnectionEnabled:);
+        let answers: bool = msg_send![prefs, respondsToSelector: setter];
+        if !answers {
+            return false;
+        }
+        let _: () = msg_send![prefs, _setPeerConnectionEnabled: false];
+        let on: bool = msg_send![prefs, _peerConnectionEnabled];
+        !on
     }
 }
 
@@ -124,7 +180,7 @@ pub struct HostInfo {
 #[tauri::command]
 pub fn extension_host(host: State<'_, Host>) -> HostInfo {
     HostInfo {
-        prefix: host.server.as_ref().map(Server::prefix),
+        prefix: host.prefix(),
     }
 }
 
@@ -240,6 +296,21 @@ mod tests {
         let package = kule_ext::Package::open(kule_ext::pack(src.path()).unwrap()).unwrap();
         Store::new(home).install(&package).unwrap();
         package.digest().to_owned()
+    }
+
+    /// No extension runs while the window could still have WebRTC.
+    #[test]
+    fn extensions_wait_for_webrtc_to_be_off() {
+        let home = TempDir::new().unwrap();
+        let host = Host::start(home.path());
+        if cfg!(target_os = "macos") {
+            assert!(host.prefix().is_none());
+        }
+        host.webrtc_is_off();
+        assert!(
+            host.prefix()
+                .is_some_and(|p| p.starts_with("http://127.0.0.1:"))
+        );
     }
 
     #[test]
