@@ -201,6 +201,13 @@ async function handleCall(rec, method, params) {
     case "review.annotate":
       if (!ext.perms.has("review.annotate")) throw new Error(`review.annotate needs the review.annotate permission, which ${ext.manifest.name} was not given`);
       return annotate(ext, params || {});
+    case "ui.notify": {
+      // The app checks the permission and the rate; with the window in
+      // front it hands the words back to show here.
+      const told = await call("ext_call", { ext: ext.id, method, params: params === undefined ? null : params });
+      if (told && told.shown === "window") toast(told.body ? `${told.title} — ${told.body}` : told.title);
+      return null;
+    }
     default:
       return call("ext_call", { ext: ext.id, method, params: params === undefined ? null : params });
   }

@@ -16,7 +16,7 @@ use kule_daemon::{Call, Result, TaskView};
 use kule_ext::{Permission, Store};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager, State};
 use tauri_plugin_notification::NotificationExt;
 
 use crate::{K, ext_net};
@@ -224,14 +224,15 @@ pub fn ext_call(
         }
         "ui.notify" => {
             let NotifyParams { title, body } = self::params(&method, p)?;
-            let title = format!("{name}: {}", shown(&title, 80));
-            let _ = app
-                .notification()
-                .builder()
-                .title(title)
-                .body(shown(&body, 300))
-                .show();
-            Ok(Value::Null)
+            let in_front = app
+                .get_webview_window("main")
+                .and_then(|w| w.is_focused().ok())
+                .unwrap_or(false);
+            let (answer, system) = notice(&name, &title, &body, in_front);
+            if let Some((title, body)) = system {
+                let _ = app.notification().builder().title(title).body(body).show();
+            }
+            Ok(answer)
         }
         "net.fetch" => {
             let FetchParams { url, init } = self::params(&method, p)?;
@@ -248,6 +249,28 @@ pub fn ext_call(
             Ok(json(&result?))
         }
         _ => Err(format!("there is no call {method}")),
+    }
+}
+
+/// Where an extension's notification goes: back to the window when it is in
+/// front (the system shows no banner for the app in front, as for Kule's
+/// own), else to the system, as (title, body). The title carries the
+/// extension's name.
+fn notice(
+    name: &str,
+    title: &str,
+    body: &str,
+    in_front: bool,
+) -> (Value, Option<(String, String)>) {
+    let title = format!("{name}: {}", shown(title, 80));
+    let body = shown(body, 300);
+    if in_front {
+        (
+            json!({ "shown": "window", "title": title, "body": body }),
+            None,
+        )
+    } else {
+        (json!({ "shown": "system" }), Some((title, body)))
     }
 }
 
@@ -373,6 +396,19 @@ mod tests {
         assert!(limits.take("acme.notes", "ui.notify").is_err());
         assert!(limits.take("other.ext", "ui.notify").is_ok());
         assert!(limits.take("acme.notes", "tasks.list").is_ok());
+    }
+
+    #[test]
+    fn a_notification_shows_in_the_window_while_it_is_in_front() {
+        let (answer, system) = notice("Hello", "Hi\u{202E}", "1 task", true);
+        assert_eq!(
+            answer,
+            json!({ "shown": "window", "title": "Hello: Hi", "body": "1 task" })
+        );
+        assert!(system.is_none());
+        let (answer, system) = notice("Hello", "Hi", "1 task", false);
+        assert_eq!(answer, json!({ "shown": "system" }));
+        assert_eq!(system, Some(("Hello: Hi".to_owned(), "1 task".to_owned())));
     }
 
     #[test]
