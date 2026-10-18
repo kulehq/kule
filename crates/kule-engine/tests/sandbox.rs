@@ -5,7 +5,7 @@
 use std::fs;
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
-use std::process::Output;
+use std::process::{Command, Output};
 
 use kule_engine::{CacheSources, Network, Sandbox, Task, protects_in_place};
 use tempfile::TempDir;
@@ -507,6 +507,155 @@ fn network_can_be_shut() {
     shut.set_network(Network::Deny);
     let out = sh(&shut, &connect_script(port));
     assert!(!ok(&out), "denied connection went through");
+}
+
+/// A server that asks for every address listens on loopback, in each of the
+/// languages Kule hooks, through a shell as an agent's commands go.
+#[test]
+fn a_server_asking_for_every_address_listens_on_loopback() {
+    let s = Setup::new();
+    let sandbox = s.sandbox();
+    let have = |tool: &str| {
+        Command::new(tool)
+            .arg("--version")
+            .output()
+            .is_ok_and(|o| o.status.success())
+    };
+    let mut cases = vec![
+        (
+            "python socket",
+            "python3 -c \"import socket; s=socket.socket(); s.bind(('0.0.0.0', 0)); print(s.getsockname()[0])\"",
+            "127.0.0.1",
+        ),
+        (
+            "python http.server",
+            "python3 -c \"import http.server as h, socket; s=h.ThreadingHTTPServer(('', 0), h.SimpleHTTPRequestHandler); print(s.socket.getsockname()[0])\"",
+            "127.0.0.1",
+        ),
+        (
+            "python dual stack",
+            "python3 -c \"import socket; s=socket.socket(socket.AF_INET6); s.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0); s.bind(('::', 0)); print(s.getsockname()[0])\"",
+            "::ffff:127.0.0.1",
+        ),
+    ];
+    if have("node") {
+        cases.push((
+            "node listen(port)",
+            "node -e \"const s=require('http').createServer(); s.listen(0, () => { console.log(s.address().address); s.close(); })\"",
+            "127.0.0.1",
+        ));
+        cases.push((
+            "node listen(port, ::)",
+            "node -e \"const s=require('net').createServer(); s.listen({ port: 0, host: '::' }, () => { console.log(s.address().address); s.close(); })\"",
+            "127.0.0.1",
+        ));
+    }
+    if have("ruby") {
+        cases.push((
+            "ruby TCPServer",
+            "ruby -e \"puts TCPServer.new('0.0.0.0', 0).addr[3]\"",
+            "127.0.0.1",
+        ));
+        cases.push((
+            "ruby tcp_server_sockets",
+            "ruby -e \"puts Socket.tcp_server_sockets(0).map { |s| s.local_address.ip_address }.uniq\"",
+            "127.0.0.1",
+        ));
+    }
+    for (what, script, wanted) in cases {
+        let out = sh(&sandbox, script);
+        assert!(ok(&out), "{what}: {out:?}");
+        assert_eq!(text(&out).trim(), wanted, "{what}");
+    }
+    // A server given an address of its own keeps it.
+    let own = sh(
+        &sandbox,
+        "python3 -c \"import socket; s=socket.socket(); s.bind(('127.0.0.1', 0)); print(s.getsockname()[0])\"",
+    );
+    assert_eq!(text(&own).trim(), "127.0.0.1");
+}
+
+/// On Linux, without a network of its own, any program's server is held to
+/// loopback by Kule doing its binds, hooks or not (`python3 -I` ignores
+/// them): every address becomes loopback, a listen without a bind listens
+/// on loopback, an address on the network is refused, and Unix sockets and
+/// UDP clients go on as asked.
+#[cfg(target_os = "linux")]
+#[test]
+fn any_program_s_server_is_held_to_loopback_on_linux() {
+    let s = Setup::new();
+    // Network allowed: no namespace of its own, on every Linux.
+    let sandbox = s.sandbox();
+    let py = |code: &str| {
+        let out = sandbox_python_isolated(&sandbox, code);
+        (
+            ok(&out),
+            text(&out),
+            String::from_utf8_lossy(&out.stderr).into_owned(),
+        )
+    };
+    let cases = [
+        (
+            "every address",
+            "import socket; s=socket.socket(); s.bind(('0.0.0.0', 0)); print(s.getsockname()[0])",
+            "127.0.0.1",
+        ),
+        (
+            "listen unbound",
+            "import socket; s=socket.socket(); s.listen(); print(s.getsockname()[0])",
+            "127.0.0.1",
+        ),
+        (
+            "dual stack",
+            "import socket; s=socket.socket(socket.AF_INET6); s.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0); s.bind(('::', 0)); print(s.getsockname()[0])",
+            "::ffff:127.0.0.1",
+        ),
+        (
+            "v6 only",
+            "import socket; s=socket.socket(socket.AF_INET6); s.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1); s.bind(('::', 0)); print(s.getsockname()[0])",
+            "::1",
+        ),
+        (
+            "loopback asked",
+            "import socket; s=socket.socket(); s.bind(('127.0.0.1', 0)); print(s.getsockname()[0])",
+            "127.0.0.1",
+        ),
+        (
+            "udp client",
+            "import socket; s=socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.bind(('0.0.0.0', 0)); print(s.getsockname()[0])",
+            "0.0.0.0",
+        ),
+        (
+            "unix socket",
+            "import socket, os; p=os.path.join(os.environ['TMPDIR'], 'u.sock'); s=socket.socket(socket.AF_UNIX); s.bind(p); print('bound')",
+            "bound",
+        ),
+    ];
+    for (what, code, wanted) in cases {
+        let (worked, said, err) = py(code);
+        assert!(worked, "{what}: {err}");
+        assert_eq!(said, wanted, "{what}");
+    }
+    // An address on the network is refused; Go, Rust and the rest get the
+    // same, since the kernel asks Kule, not the language.
+    let (worked, _, err) = py("import socket; s=socket.socket(); s.bind(('10.1.2.3', 0))");
+    assert!(!worked, "a bind to a network address went through");
+    assert!(
+        err.contains("Permission denied") || err.contains("Errno 13"),
+        "{err}"
+    );
+}
+
+#[cfg(target_os = "linux")]
+fn sandbox_python_isolated(sandbox: &Sandbox, script: &str) -> Output {
+    sandbox
+        .command(
+            "python3",
+            &["-I".to_owned(), "-c".to_owned(), script.to_owned()],
+        )
+        .unwrap()
+        .output()
+        .unwrap()
 }
 
 /// macOS reports each refusal to the system log, tagged per sandbox; Linux

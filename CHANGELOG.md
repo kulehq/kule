@@ -42,6 +42,23 @@
   Linux). On Linux a server inside the sandbox's own network is shown
   greyed out, since this computer does not reach it. A server the agent
   started still ends with its run; one started in a terminal stays.
+- Servers a task starts listen on this computer only, so nothing on your
+  network reaches what an agent runs:
+  - On Linux without a network namespace of the command's own (Ubuntu
+    24.04 by default, or a policy that allows the network), a seccomp
+    filter hands every `bind` and `listen` to Kule, which does the call
+    itself on a copy of the socket: every address becomes loopback, an
+    address on the network is refused, whatever the program (Go and Rust
+    included). With a namespace of its own, the command's servers were
+    already out of the network's reach.
+  - On macOS, where the sandbox can tell a listening port but not its
+    address, hooks loaded into Node, Python and Ruby (through
+    `NODE_OPTIONS`, `PYTHONPATH` and `RUBYOPT`, which survive every shell on
+    the way) give a server that asks for every address the loopback one.
+    Express, Next, Vite, `http.server`, Flask, Django, Puma and the like
+    keep working. Another program that listens on every address can still
+    be reached from the network; its chip in the task's header turns amber
+    and says so.
 
 ### Preview
 

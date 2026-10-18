@@ -5738,21 +5738,26 @@ async function loadPorts() {
   const key = `${task.id}:${JSON.stringify(found)}`;
   if (key === portsKey) return;
   portsKey = key;
+  // Loopback only, or reached from the network too.
+  const local = (a) => a === "::1" || a.startsWith("127.") || a.startsWith("::ffff:127.");
   replace(
     box,
     ...found.map((l) =>
       h(
         "button",
         {
-          class: `port-chip${l.reachable ? "" : " unreachable"}`,
+          class: `port-chip${l.reachable ? "" : " unreachable"}${l.reachable && !local(l.address) ? " exposed" : ""}`,
           type: "button",
           disabled: !l.reachable,
           "data-key": `port:${l.port}`,
-          title: l.reachable
-            ? `${l.process} (pid ${l.pid}) listens on ${l.address === "*" ? "every address" : l.address}, port ${l.port}. Open http://localhost:${l.port}/ in the browser`
-            : `${l.process} (pid ${l.pid}) listens inside the sandbox's own network, which this computer does not reach`,
+          title: !l.reachable
+            ? `${l.process} (pid ${l.pid}) listens inside the sandbox's own network, which this computer does not reach`
+            : local(l.address)
+              ? `${l.process} (pid ${l.pid}) listens on this computer only, port ${l.port}. Open http://localhost:${l.port}/ in the browser`
+              : `${l.process} (pid ${l.pid}) listens on ${l.address === "*" ? "every address" : l.address}, port ${l.port}: other computers on your network can reach it. Open http://localhost:${l.port}/ in the browser`,
           onclick: () => call("open_url", { url: `http://localhost:${l.port}/` }).catch(fail),
         },
+        l.reachable && !local(l.address) ? h("span", { class: "port-exposed", "aria-label": "reachable from the network" }, "⚠ ") : null,
         `localhost:${l.port}`,
         l.reachable ? h("span", { class: "port-open", "aria-hidden": "true" }, " ↗") : null
       )

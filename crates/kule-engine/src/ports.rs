@@ -38,6 +38,7 @@ pub fn listening_in(dir: &Path) -> Result<Vec<Listener>> {
 }
 
 /// What `address` is, said the way the window says it.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn address_of(ip: &str) -> String {
     match ip {
         "*" | "0.0.0.0" | "::" | "[::]" => "*".to_owned(),

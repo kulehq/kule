@@ -399,6 +399,13 @@ impl Sandbox {
         }
         command.current_dir(&self.copy).env("TMPDIR", &self.tmp);
         command.envs(self.env.iter().map(|(k, v)| (k, v)));
+        // Servers listen on this computer only (see `loopback`).
+        let set: Vec<(OsString, OsString)> = command
+            .get_envs()
+            .filter_map(|(k, v)| Some((k.to_owned(), v?.to_owned())))
+            .collect();
+        let current = |name: &str| set.iter().find(|(k, _)| k == name).map(|(_, v)| v.clone());
+        command.envs(crate::loopback::hooks(&self.tmp, current)?);
         if let Network::Proxy(port) = self.network {
             let url = format!("http://127.0.0.1:{port}");
             for var in [
@@ -692,6 +699,7 @@ impl Sandbox {
             Network::Proxy(port) => Net::Own(Some(port)),
         };
         let read_only = self.mounted_read_only();
+        let network_shared = matches!(net, Net::Shared);
         if matches!(net, Net::Own(_)) || !read_only.is_empty() {
             let isolation = Isolation::new(net, &read_only).at(Path::new("/proc/self/ns"))?;
             // SAFETY: enter only makes system calls on buffers and
@@ -716,6 +724,17 @@ impl Sandbox {
                 }
                 Ok(())
             });
+        }
+        // Without a network of its own, the command's servers are held to
+        // loopback by Kule doing their binds (see `bind_filter`); after
+        // Landlock, which set no_new_privs, as seccomp needs.
+        if network_shared && crate::bind_filter::available() {
+            let filter = crate::bind_filter::BindFilter::new().at(Path::new("/proc/self"))?;
+            // SAFETY: enter only makes system calls on data prepared
+            // before the fork.
+            unsafe {
+                command.pre_exec(move || filter.enter());
+            }
         }
         Ok(command)
     }

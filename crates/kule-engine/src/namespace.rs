@@ -241,7 +241,7 @@ fn pipe() -> io::Result<(OwnedFd, OwnedFd)> {
     Ok(unsafe { (OwnedFd::from_raw_fd(fds[0]), OwnedFd::from_raw_fd(fds[1])) })
 }
 
-fn socket_pair() -> io::Result<(OwnedFd, OwnedFd)> {
+pub(crate) fn socket_pair() -> io::Result<(OwnedFd, OwnedFd)> {
     let mut fds = [0; 2];
     // SAFETY: fds has room for the two descriptors.
     check(unsafe {
@@ -324,7 +324,7 @@ unsafe fn listen(port: u16) -> io::Result<RawFd> {
 #[repr(C, align(8))]
 struct Control([u8; 64]);
 
-unsafe fn send_fd(socket: RawFd, fd: RawFd) -> io::Result<()> {
+pub(crate) unsafe fn send_fd(socket: RawFd, fd: RawFd) -> io::Result<()> {
     // SAFETY: the message points at live buffers sized for one descriptor.
     unsafe {
         let mut byte = [0u8; 1];
@@ -352,7 +352,7 @@ unsafe fn send_fd(socket: RawFd, fd: RawFd) -> io::Result<()> {
 
 /// The descriptor sent over `socket`; `None` when the other end closed
 /// without sending one.
-fn receive_fd(socket: &OwnedFd) -> Option<OwnedFd> {
+pub(crate) fn receive_fd(socket: &OwnedFd) -> Option<OwnedFd> {
     // SAFETY: the message points at live buffers sized for one descriptor;
     // a descriptor received is owned here only.
     unsafe {

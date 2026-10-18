@@ -3204,6 +3204,12 @@ body.dragging-panel * {
   outline-offset: 2px;
 }
 
+.port-chip.exposed {
+  border-color: color-mix(in srgb, var(--ask) 55%, transparent);
+  background: var(--ask-soft);
+  color: var(--ask);
+}
+
 .port-chip.unreachable {
   border-color: var(--border);
   background: var(--sunken);

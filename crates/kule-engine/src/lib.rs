@@ -16,6 +16,8 @@
 compile_error!("Kule M0 supports macOS and Linux only");
 
 mod approvals;
+#[cfg(target_os = "linux")]
+mod bind_filter;
 mod caches;
 mod checkpoint;
 mod clock;
@@ -28,6 +30,7 @@ mod history;
 mod home;
 mod ignore;
 mod labels;
+mod loopback;
 mod manifest;
 mod meet;
 #[cfg(target_os = "linux")]
