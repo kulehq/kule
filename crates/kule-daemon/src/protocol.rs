@@ -87,6 +87,9 @@ pub enum Call {
         task: String,
         agent: String,
         prompt: String,
+        /// Places in the task's files the prompt is about.
+        #[serde(default)]
+        refs: Vec<kule_view::refs::Reference>,
     },
     /// The latest events of the task's runs.
     Stream {

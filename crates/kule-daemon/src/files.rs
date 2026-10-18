@@ -69,6 +69,12 @@ fn inside(root: &Path, rel: &str) -> Result<PathBuf> {
     Ok(at)
 }
 
+/// Whether `rel` is a file or directory of the copy at `root`, reached
+/// without a link.
+pub fn existing(root: &Path, rel: &str) -> Result<()> {
+    inside(root, rel).map(|_| ())
+}
+
 /// Opens `rel` (checked by [`inside`]) without following a link at any
 /// step, so one put in place between the check and the open (an agent can
 /// swap files in the copy at will) is not followed either. A FIFO does not

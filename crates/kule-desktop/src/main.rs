@@ -654,11 +654,18 @@ fn set_daily_budget(kule: K<'_>, budget: Option<Money>) -> Result<DailyBudget> {
 }
 
 #[tauri::command(async)]
-fn start_run(kule: K<'_>, task: String, agent: String, prompt: String) -> Result<()> {
+fn start_run(
+    kule: K<'_>,
+    task: String,
+    agent: String,
+    prompt: String,
+    refs: Option<Vec<kule_daemon::Reference>>,
+) -> Result<()> {
     kule.call(Call::StartRun {
         task,
         agent,
         prompt,
+        refs: refs.unwrap_or_default(),
     })
 }
 

@@ -322,7 +322,8 @@ pub fn dispatch(service: &Arc<Service>, call: Call) -> Result<Value, String> {
             task,
             agent,
             prompt,
-        } => json(service.start_run(&task, &agent, &prompt)?),
+            refs,
+        } => json(service.start_run(&task, &agent, &prompt, refs)?),
         Call::Stream { task } => json(service.stream(&task)),
         Call::Questions => json(service.questions()),
         Call::Answer {

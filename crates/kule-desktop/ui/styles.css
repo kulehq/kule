@@ -3022,6 +3022,165 @@ body.dragging-panel * {
   font-size: 12px;
 }
 
+/* Asking about a place: the Ask button beside it, the box, the chips. */
+.preview-body {
+  position: relative;
+}
+
+.preview-ask {
+  position: absolute;
+  z-index: 5;
+  padding: 3px 10px;
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--accent-text);
+  font: 600 12px var(--sans);
+  box-shadow: 0 4px 14px -6px rgba(0, 0, 0, 0.45);
+  cursor: pointer;
+}
+
+.preview-ask:focus-visible {
+  outline: 2px solid var(--text);
+  outline-offset: 2px;
+}
+
+.preview-bubble {
+  position: absolute;
+  z-index: 6;
+  display: flex;
+  width: min(340px, calc(100% - 16px));
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: 0 14px 34px -12px rgba(0, 0, 0, 0.5);
+  font: 13px var(--sans);
+  white-space: normal;
+}
+
+.preview-bubble-ref {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--accent);
+  font: 12px var(--mono);
+}
+
+.preview-bubble-quote {
+  margin: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-style: italic;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+}
+
+.preview-bubble-text {
+  min-height: 52px;
+  padding: 7px 9px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg);
+  color: var(--text);
+  font: 13px var(--sans);
+  resize: vertical;
+}
+
+.preview-bubble-text:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.preview-bubble-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.preview-bubble-hint {
+  margin-left: auto;
+  color: var(--faint);
+  font-size: 11px;
+}
+
+.preview-grid {
+  user-select: none;
+}
+
+.preview-grid td.picked {
+  background: var(--accent-soft);
+}
+
+.preview-image img {
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.preview-region {
+  position: absolute;
+  border: 2px dashed var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  pointer-events: none;
+}
+
+.prompt-refs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.msg.prompt .prompt-refs {
+  margin-bottom: 6px;
+}
+
+.place-chip {
+  display: inline-flex;
+  max-width: 100%;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 4px 2px 8px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  border-radius: 6px;
+  background: var(--accent-soft);
+  color: var(--text);
+  font: 11.5px var(--mono);
+  white-space: nowrap;
+}
+
+.msg .place-chip {
+  padding-right: 8px;
+}
+
+.chip-mark {
+  color: var(--accent);
+  font: 600 11px var(--sans);
+}
+
+.place-chip-remove {
+  padding: 0 4px;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.place-chip-remove:hover {
+  color: var(--text);
+}
+
+.place-chip-remove:focus-visible {
+  outline: 2px solid var(--accent);
+}
+
 /* Word documents: text kept as written, list items with Word's markers. */
 .preview-doc p,
 .preview-doc .preview-item {

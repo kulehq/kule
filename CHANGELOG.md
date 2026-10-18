@@ -16,6 +16,19 @@
   - Word (`.docx`) documents as text to read: headings, paragraphs, list
     items numbered as Word numbers them, and tables. Formatting, pictures,
     notes and deleted tracked changes are left out.
+- Ask the agent about a place in the Preview. Pick some text, drag over
+  cells or over a region of a picture, and an Ask button shows beside it
+  (`Mod+Shift+A` does the same; with nothing picked it asks about the whole
+  file). Its box asks the agent now, or adds the place to the prompt as a
+  chip; chips stay with their task until the prompt goes.
+  - A place is named the way the agent can find it: lines of a file, the
+    source lines and headings of a Markdown section, a range of cells and
+    the values in it, a region in the picture's own pixels, or a numbered
+    paragraph of a Word document.
+  - The agent gets the places as a numbered list after the prompt. Kule
+    checks that each is a file of the task's copy, reached without a link,
+    and sends at most 20, with picked text cut at 500 characters.
+  - Live shows a prompt's places as chips over it.
 - An Excel or Word file is read in memory and never unpacked. Each part it holds
   is inflated through a cap, so a small file that expands to gigabytes is
   not read.

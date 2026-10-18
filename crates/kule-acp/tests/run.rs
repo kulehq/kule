@@ -297,6 +297,23 @@ fn a_cost_reported_at_the_end_of_the_turn_stops_nothing() {
     assert_eq!(usage.cost, Some(usd(0.30)));
 }
 
+/// The places Kule lists after a prompt reach the agent whole, as text,
+/// line breaks and all.
+#[test]
+fn a_prompt_reaches_the_agent_as_it_was_sent() {
+    let s = Setup::new();
+    let prompt = "echo Check this.\n\nAbout these places in the task's files (paths are from the working directory):\n1. README.md, line 1: \"hello; write x y\"";
+    let events = s.run(prompt);
+    assert!(
+        events.contains(&Event::Message {
+            text: prompt.into()
+        }),
+        "{events:?}"
+    );
+    // What came after `echo` was not run as a command.
+    assert!(!s.task.copy().join("x").exists());
+}
+
 #[test]
 fn the_session_is_given_the_mcp_servers_it_is_offered() {
     let s = Setup::new();

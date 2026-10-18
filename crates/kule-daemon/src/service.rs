@@ -230,6 +230,9 @@ pub enum RunEvent {
     Prompt {
         text: String,
         agent: String,
+        /// The places it is about, which the agent gets listed after it.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        refs: Vec<kule_view::refs::Reference>,
     },
     Agent {
         event: kule_acp::Event,
@@ -996,14 +999,36 @@ impl Service {
 
     /// Gives `agent` the prompt in the background. Subscribers hear the
     /// prompt, the agent's events as they come and [`RunEvent::Finished`]
-    /// last, also when the agent could not start.
-    pub fn start_run(self: &Arc<Self>, id: &str, agent: &str, prompt: &str) -> Result<()> {
+    /// last, also when the agent could not start. `refs` are places in the
+    /// task's copy the prompt is about; the agent gets them listed after it.
+    pub fn start_run(
+        self: &Arc<Self>,
+        id: &str,
+        agent: &str,
+        prompt: &str,
+        refs: Vec<kule_view::refs::Reference>,
+    ) -> Result<()> {
         let agents = kule_acp::Agents::load(&self.home).map_err(text)?;
         let profile = agents
             .get(agent)
             .cloned()
             .ok_or_else(|| agents.refusal(agent))?;
         let task = self.open(id)?;
+        if refs.len() > kule_view::refs::MAX_REFS {
+            return Err(format!(
+                "a prompt names at most {} places",
+                kule_view::refs::MAX_REFS
+            ));
+        }
+        // Each place is a file the copy holds, reached without a link.
+        let refs = refs
+            .into_iter()
+            .map(|r| {
+                let r = r.checked()?;
+                crate::files::existing(&task.copy(), r.path())?;
+                Ok(r)
+            })
+            .collect::<Result<Vec<_>>>()?;
         let limit = budget_left(&self.home, &task)?;
         if !self.running.lock().unwrap().insert(id.to_owned()) {
             return Err(format!("an agent is already at work in task {id}"));
@@ -1021,9 +1046,13 @@ impl Service {
             RunEvent::Prompt {
                 text: prompt.to_owned(),
                 agent: agent.to_owned(),
+                refs: refs.clone(),
             },
         );
-        let (service, prompt) = (Arc::clone(self), prompt.to_owned());
+        let (service, prompt) = (
+            Arc::clone(self),
+            kule_view::refs::with_places(prompt, &refs),
+        );
         std::thread::spawn(move || {
             let (error, denials) = match service.run(&task, &profile, &prompt, limit) {
                 Ok(denials) => (None, denials),
@@ -1777,7 +1806,7 @@ mod tests {
             s.app.rollback(&id).map(|_| ()),
             s.app.undo(&id).map(|_| ()),
             s.app.remove(&id),
-            s.app.start_run(&id, "claude-code", "hi"),
+            s.app.start_run(&id, "claude-code", "hi", Vec::new()),
         ] {
             assert!(refused.unwrap_err().contains("at work"));
         }
@@ -1838,6 +1867,33 @@ mod tests {
         assert_eq!(hunks[0].lines.last().unwrap().text, "b");
     }
 
+    /// A place a prompt names is a file the copy holds, reached without a
+    /// link; one that is not refuses the run before anything starts.
+    #[test]
+    fn a_prompt_names_places_in_the_copy_only() {
+        let s = Setup::new();
+        let (id, copy) = s.task();
+        let outside = TempDir::new().unwrap();
+        fs::write(outside.path().join("secret.txt"), "s\n").unwrap();
+        std::os::unix::fs::symlink(outside.path().join("secret.txt"), copy.join("link.txt"))
+            .unwrap();
+        let file = |path: &str| kule_view::refs::Reference::File { path: path.into() };
+        for (why, refs) in [
+            ("nope.txt: ", vec![file("nope.txt")]),
+            ("a link", vec![file("link.txt")]),
+            ("without ..", vec![file("../secret.txt")]),
+            (
+                "at most",
+                vec![file("a.txt"); kule_view::refs::MAX_REFS + 1],
+            ),
+        ] {
+            let e = s.app.start_run(&id, "claude-code", "hi", refs).unwrap_err();
+            assert!(e.contains(why), "{e}");
+            assert!(!s.app.running.lock().unwrap().contains(&id), "{why}");
+        }
+        assert!(s.app.stream(&id).is_empty());
+    }
+
     #[test]
     fn a_task_that_spent_its_budget_runs_no_agent() {
         let s = Setup::new();
@@ -1859,7 +1915,10 @@ mod tests {
         let view = s.app.view(&id).unwrap();
         assert_eq!((view.spent.runs, view.spent.tokens), (1, 500));
 
-        let e = s.app.start_run(&id, "claude-code", "hi").unwrap_err();
+        let e = s
+            .app
+            .start_run(&id, "claude-code", "hi", Vec::new())
+            .unwrap_err();
         assert!(e.contains("spent its budget"), "{e}");
         assert!(!s.app.running.lock().unwrap().contains(&id));
         assert!(s.app.stream(&id).is_empty());
@@ -1891,7 +1950,10 @@ mod tests {
         assert_eq!(s.app.daily_budget().unwrap().spent.runs, 1);
 
         // The second task has no budget of its own and has run nothing.
-        let e = s.app.start_run(&second, "claude-code", "hi").unwrap_err();
+        let e = s
+            .app
+            .start_run(&second, "claude-code", "hi", Vec::new())
+            .unwrap_err();
         assert!(e.contains("daily budget is spent"), "{e}");
         assert!(!s.app.running.lock().unwrap().contains(&second));
 
@@ -1903,7 +1965,10 @@ mod tests {
     fn an_unknown_agent_is_refused_before_anything_starts() {
         let s = Setup::new();
         let (id, _) = s.task();
-        let e = s.app.start_run(&id, "nobody", "hi").unwrap_err();
+        let e = s
+            .app
+            .start_run(&id, "nobody", "hi", Vec::new())
+            .unwrap_err();
         assert_eq!(e, "no agent nobody; known: claude-code, gemini, codex");
         assert!(!s.app.running.lock().unwrap().contains(&id));
     }
@@ -1918,7 +1983,10 @@ mod tests {
         )
         .unwrap();
         assert_eq!(s.app.agents().unwrap(), ["claude-code", "gemini", "codex"]);
-        let e = s.app.start_run(&id, "opencode", "hi").unwrap_err();
+        let e = s
+            .app
+            .start_run(&id, "opencode", "hi", Vec::new())
+            .unwrap_err();
         assert!(
             e.starts_with("agent opencode cannot run: not approved"),
             "{e}"

@@ -1052,6 +1052,7 @@ function renderComposer(task) {
   $("agent").disabled = busy;
   $("timeout").value = String(Math.round(task.approval_timeout_secs / 60));
   renderSpent(task);
+  renderPromptRefs(task);
 }
 
 function money(m) {
@@ -1802,7 +1803,12 @@ function markdown(text, base) {
 function streamItem(item) {
   switch (item.kind) {
     case "prompt":
-      return h("div", { class: "msg prompt" }, item.text);
+      return h(
+        "div",
+        { class: "msg prompt" },
+        item.refs && item.refs.length ? h("div", { class: "prompt-refs" }, ...item.refs.map((r) => placeChip(r))) : null,
+        item.text
+      );
     case "message":
       return h("div", { class: "msg md" }, ...markdown(item.text));
     case "thought":
@@ -1885,7 +1891,7 @@ function absorb(id, event) {
 /** Folds one run event into the task's stream. */
 function fold(task, event) {
   if (event.type === "prompt") {
-    streamOf(task).push({ kind: "prompt", text: event.text });
+    streamOf(task).push({ kind: "prompt", text: event.text, refs: event.refs || [] });
   } else if (event.type === "agent") {
     absorb(task, event.event);
   } else if (event.type === "preparing") {
@@ -1973,9 +1979,13 @@ async function submitPrompt(e) {
   const task = currentTask();
   const prompt = $("prompt").value.trim();
   if (!task || !prompt) return;
+  // The places picked in the Preview go with it, and leave the prompt with it.
+  const refs = (promptRefs.get(task.id) || []).map((c) => c.ref);
   try {
-    await call("start_run", { task: task.id, agent: $("agent").value, prompt });
+    await call("start_run", { task: task.id, agent: $("agent").value, prompt, refs });
     $("prompt").value = "";
+    promptRefs.delete(task.id);
+    renderPromptRefs(task);
     fitPrompt();
     await refresh();
   } catch (err) {
@@ -4999,6 +5009,7 @@ const COMMANDS = [
   { id: "view.review", title: "Show Review", group: "Task", keys: "Mod+2", inFields: true, run: () => withTask(() => showTab("review")) },
   { id: "view.timeline", title: "Show Timeline", group: "Task", keys: "Mod+3", inFields: true, run: () => withTask(() => showTab("timeline")) },
   { id: "view.preview", title: "Show Preview", group: "Task", keys: "Mod+4", inFields: true, run: () => withTask(() => showTab("preview")) },
+  { id: "preview.ask", title: "Ask the agent about what is picked in the Preview", group: "Task", keys: "Mod+Shift+A", inFields: false, run: () => withTask(() => askHere()) },
   { id: "prompt.focus", title: "Write to the agent", group: "Task", keys: "Mod+L", run: () => withTask(() => { showTab("live"); $("prompt").focus(); }) },
   {
     id: "prompt.run", title: "Run the prompt", group: "Task", keys: "Mod+Enter", inFields: true,
@@ -5469,6 +5480,7 @@ async function start() {
   $("new-group").addEventListener("click", newGroup);
   $("empty-new-task").addEventListener("click", newTask);
   $("composer").addEventListener("submit", submitPrompt);
+  watchSelection();
   // Enter alone is a new line in the prompt; running it is a shortcut
   // (prompt.run, ⌘/Ctrl+Enter by default).
   $("send").append(h("kbd", { class: "shortcut", "aria-hidden": "true", id: "send-keys" }));

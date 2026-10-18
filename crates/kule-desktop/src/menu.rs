@@ -59,6 +59,7 @@ const VIEW: &[Entry] = &[
 
 const TASK: &[Entry] = &[
     Command("prompt.focus", "Write to the Agent"),
+    Command("preview.ask", "Ask About the Picked Place"),
     Command("prompt.run", "Run the Prompt"),
     Separator,
     Command("task.rename", "Rename…"),

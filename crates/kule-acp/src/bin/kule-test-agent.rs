@@ -15,7 +15,9 @@
 //! - `cost <amount>`: reports what the session cost so far, in USD;
 //! - `tokens <input> <output>`: the token counts the turn's end reports;
 //! - `mcp`: a message naming the MCP servers the session was given, as
-//!   `name: command args`, separated by ` | `.
+//!   `name: command args`, separated by ` | `;
+//! - `echo`: a message of the whole prompt as it came, and nothing after
+//!   it is run (what Kule adds to a prompt is not a command).
 //!
 //! A cancelled turn stops before its next command and ends as cancelled.
 
@@ -110,6 +112,11 @@ async fn main() -> agent_client_protocol::Result<()> {
                                 (counts.next().unwrap_or(0), counts.next().unwrap_or(0));
                             usage = Some(Usage::new(input + output, input, output));
                             continue;
+                        }
+                        if command.split_whitespace().next() == Some("echo") {
+                            let said = format!("say {script}");
+                            perform(&connection, &session, &dir, n, &said).await?;
+                            break;
                         }
                         if command == "mcp" {
                             let said = format!("say mcp {servers}");

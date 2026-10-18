@@ -102,7 +102,9 @@ async function loadPreview(task) {
     return;
   }
   const key = [task.id, preview.path, task.changes, task.running].join("\n");
-  if (key === preview.key) return;
+  // Not under the person's hands: the file is read again once the box
+  // they write in has closed.
+  if (key === preview.key || document.querySelector(".preview-bubble")) return;
   preview.key = key;
   const token = ++preview.token;
   let view;
@@ -173,6 +175,13 @@ function previewHead(v) {
     preview.change
       ? h("button", { class: "button ghost", type: "button", "data-key": "preview-changes", onclick: () => revealPanel("review") }, "Changes")
       : null,
+    preview.change !== "deleted"
+      ? h(
+          "button",
+          { class: "button ghost", type: "button", "data-key": "preview-ask-file", title: "Ask the agent about the whole file", onclick: askAboutFile },
+          "Ask about it"
+        )
+      : null,
     h(
       "button",
       {
@@ -201,11 +210,7 @@ function previewBody(v) {
         ? previewLines(v.text)
         : h("div", { class: "preview-body preview-md", tabindex: "0" }, ...markdown(v.text, 0));
     case "image":
-      return h(
-        "div",
-        { class: `preview-body preview-image ${previewMode(v)}`, tabindex: "0" },
-        h("img", { src: `data:${v.mime};base64,${v.data}`, alt: preview.path, width: v.width, height: v.height })
-      );
+      return previewImage(v);
     case "table":
       return previewTable(v);
     case "document":
@@ -270,20 +275,68 @@ function previewTable(v) {
       })
     )
   );
+  // A cell picked shows what it holds; dragging, or a shift-click, picks a
+  // range, which can be asked about.
+  let from = null;
+  let dragging = false;
+  const cellOf = (e) => {
+    const td = e.target.closest?.("td");
+    return td && table.contains(td) ? [Number(td.dataset.r), Number(td.dataset.c), td] : null;
+  };
+  const mark = (to) => {
+    const [r0, r1] = [Math.min(from[0], to[0]), Math.max(from[0], to[0])];
+    const [c0, c1] = [Math.min(from[1], to[1]), Math.max(from[1], to[1])];
+    for (const td of table.querySelectorAll("td.picked")) td.classList.remove("picked");
+    for (let r = r0; r <= r1; r++) {
+      const tr = table.tBodies[0].rows[r];
+      for (let c = c0; c <= c1; c++) tr?.cells[c + 1]?.classList.add("picked");
+    }
+    return { r0, r1, c0, c1 };
+  };
+  const done = (to) => {
+    const span = mark(to);
+    const start = `${columnName(span.c0)}${span.r0 + 1}`;
+    const end = `${columnName(span.c1)}${span.r1 + 1}`;
+    const values = [];
+    for (let r = span.r0; r <= Math.min(span.r1, span.r0 + 9); r++) {
+      const row = [];
+      for (let c = span.c0; c <= Math.min(span.c1, span.c0 + 9); c++) row.push(sheet.rows[r]?.[c] ?? "");
+      values.push(row);
+    }
+    const csv = /\.(csv|tsv)$/i.test(preview.path);
+    offerPlace({
+      ref: { kind: "cells", path: preview.path, sheet: csv ? null : sheet.name, range: start === end ? start : `${start}:${end}`, values },
+      rect: to[2].getBoundingClientRect(),
+    });
+  };
   const table = h(
     "table",
     {
       class: "preview-grid",
-      onclick: (e) => {
-        const td = e.target.closest("td");
-        if (!td) return;
+      onpointerdown: (e) => {
+        const at = cellOf(e);
+        if (!at || e.button !== 0) return;
+        e.preventDefault();
+        if (!(e.shiftKey && from)) from = at;
+        dragging = true;
         table.querySelector("td.active")?.classList.remove("active");
-        td.classList.add("active");
-        const r = Number(td.dataset.r);
-        const c = Number(td.dataset.c);
-        where.textContent = `${columnName(c)}${r + 1}`;
-        const f = formulas.get(`${r}:${c}`);
-        what.textContent = f !== undefined ? `=${f}` : sheet.rows[r]?.[c] ?? "";
+        at[2].classList.add("active");
+        const f = formulas.get(`${at[0]}:${at[1]}`);
+        where.textContent = `${columnName(at[1])}${at[0] + 1}`;
+        what.textContent = f !== undefined ? `=${f}` : sheet.rows[at[0]]?.[at[1]] ?? "";
+        mark(at);
+      },
+      onpointerover: (e) => {
+        // A button let go outside the grid ends the drag there.
+        if (dragging && !(e.buttons & 1)) dragging = false;
+        const at = dragging && cellOf(e);
+        if (at) mark(at);
+      },
+      onpointerup: (e) => {
+        if (!dragging) return;
+        dragging = false;
+        const at = cellOf(e);
+        if (at) done(at);
       },
     },
     h("thead", {}, head),
@@ -373,4 +426,371 @@ function previewDocument(v) {
     ),
     v.cut ? h("p", { class: "preview-note" }, "The document goes on past what is shown.") : null,
   ];
+}
+
+/** A picture; dragging over it draws a region to ask about, kept in the
+ * picture's own pixels whatever its size on screen. */
+function previewImage(v) {
+  const img = h("img", { src: `data:${v.mime};base64,${v.data}`, alt: preview.path, width: v.width, height: v.height, draggable: "false" });
+  const box = h("div", { class: "preview-region", hidden: true });
+  const body = h("div", { class: `preview-body preview-image ${previewMode(v)}`, tabindex: "0" }, img, box);
+  let start = null;
+  const inPicture = (e) => {
+    const r = img.getBoundingClientRect();
+    return [Math.min(Math.max(e.clientX, r.left), r.right), Math.min(Math.max(e.clientY, r.top), r.bottom)];
+  };
+  const draw = (a, b) => {
+    const at = body.getBoundingClientRect();
+    const [x0, x1] = [Math.min(a[0], b[0]), Math.max(a[0], b[0])];
+    const [y0, y1] = [Math.min(a[1], b[1]), Math.max(a[1], b[1])];
+    box.hidden = false;
+    box.style.left = `${x0 - at.left + body.scrollLeft}px`;
+    box.style.top = `${y0 - at.top + body.scrollTop}px`;
+    box.style.width = `${x1 - x0}px`;
+    box.style.height = `${y1 - y0}px`;
+    return { x0, x1, y0, y1 };
+  };
+  img.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    img.setPointerCapture(e.pointerId);
+    start = inPicture(e);
+    draw(start, start);
+  });
+  img.addEventListener("pointermove", (e) => {
+    if (start) draw(start, inPicture(e));
+  });
+  img.addEventListener("pointerup", (e) => {
+    if (!start) return;
+    const s = draw(start, inPicture(e));
+    start = null;
+    const r = img.getBoundingClientRect();
+    const scale = v.width / r.width;
+    const x = Math.round((s.x0 - r.left) * scale);
+    const y = Math.round((s.y0 - r.top) * scale);
+    const w = Math.min(Math.round((s.x1 - s.x0) * scale), v.width - x);
+    const hgt = Math.min(Math.round((s.y1 - s.y0) * scale), v.height - y);
+    if (w < 2 || hgt < 2) {
+      box.hidden = true;
+      hideAsk();
+      return;
+    }
+    offerPlace({
+      ref: { kind: "region", path: preview.path, x, y, w, h: hgt, width: v.width, height: v.height },
+      rect: box.getBoundingClientRect(),
+    });
+  });
+  return body;
+}
+
+// --- Asking about a place ----------------------------------------------------
+//
+// A place picked in the Preview (lines, a section, cells, a region, a
+// paragraph) gets a small Ask button beside it; the button opens a box to
+// ask the agent now, or to add the place to the prompt as a chip. Chips are
+// kept per task until the prompt goes.
+
+/** Chips waiting in each task's prompt: task id → [{ ref }]. */
+const promptRefs = new Map();
+/** The place the Ask button or the box is for. */
+let offered = null;
+
+/** A place as a chip shows it: a mark and a short name. */
+function placeLabel(ref) {
+  const base = baseName(ref.path);
+  const lines = (a, b) => (a === b ? `${a}` : `${a}–${b}`);
+  switch (ref.kind) {
+    case "lines":
+      return ["≡", `${base}:${lines(ref.start, ref.end)}`];
+    case "section":
+      return ["§", `${base}:${lines(ref.start, ref.end)}${ref.trail.length ? ` · ${ref.trail[ref.trail.length - 1]}` : ""}`];
+    case "quote":
+      return ["❝", `${base} “${ref.quote.length > 24 ? `${ref.quote.slice(0, 24)}…` : ref.quote}”`];
+    case "cells":
+      return ["▦", `${base} ${ref.sheet ? `${ref.sheet}!` : ""}${ref.range}`];
+    case "region":
+      return ["▭", `${base} ${ref.w}×${ref.h}`];
+    case "block":
+      return ["¶", `${base} ¶${ref.index}`];
+    default:
+      return ["↗", base];
+  }
+}
+
+/** What was picked, for the box to quote back. */
+const placeQuote = (ref) => ref.quote || (ref.values ? ref.values.map((r) => r.join("  ")).join(" / ") : "");
+
+/** The place the window's text selection is in the Preview, if any. */
+function selectedPlace() {
+  const sel = window.getSelection();
+  if (!sel || sel.isCollapsed || !sel.rangeCount || !preview.view) return null;
+  const range = sel.getRangeAt(0);
+  const body = $("preview").querySelector(".preview-body");
+  if (!body || !body.contains(range.commonAncestorContainer)) return null;
+  const quote = sel.toString().trim();
+  if (!quote) return null;
+  const rects = range.getClientRects();
+  const rect = rects.length ? rects[rects.length - 1] : range.getBoundingClientRect();
+  const el = (node) => (node.nodeType === Node.ELEMENT_NODE ? node : node.parentElement);
+  const v = preview.view;
+  const path = preview.path;
+  const code = body.querySelector(".preview-code");
+  if (code && code.contains(range.startContainer) && code.contains(range.endContainer)) {
+    // A formatted view's lines are not the file's.
+    if (v.kind === "text" && v.formatted && previewMode(v) === "formatted") return { ref: { kind: "quote", path, quote }, rect };
+    // Offsets in the text, and the lines they fall on.
+    const offset = (node, at) => {
+      const r = document.createRange();
+      r.selectNodeContents(code);
+      r.setEnd(node, at);
+      return r.toString().length;
+    };
+    const text = code.textContent;
+    const a = offset(range.startContainer, range.startOffset);
+    const b = offset(range.endContainer, range.endOffset);
+    const lineAt = (i) => text.slice(0, i).split("\n").length;
+    return { ref: { kind: "lines", path, start: lineAt(a), end: lineAt(Math.max(a, b - 1)), quote }, rect };
+  }
+  const first = el(range.startContainer)?.closest("[data-line], [data-block]");
+  const last = el(range.endContainer)?.closest("[data-line], [data-block]");
+  if (!first || !body.contains(first)) return null;
+  if (first.dataset.block) {
+    // The heading the block is under.
+    let heading = null;
+    for (const hd of body.querySelectorAll(".md-h[data-block]")) {
+      if (hd === first || first.compareDocumentPosition(hd) & Node.DOCUMENT_POSITION_FOLLOWING) break;
+      heading = hd.textContent;
+    }
+    return { ref: { kind: "block", path, index: Number(first.dataset.block), heading, quote }, rect };
+  }
+  let start = Number(first.dataset.line);
+  let end = Math.max(start, Number((last && body.contains(last) ? last : first).dataset.lineEnd));
+  // Narrowed to the one source line the picked text is on, when it is on one.
+  const source = v.text.split("\n");
+  const probe = quote.split("\n")[0].slice(0, 40);
+  const on = [];
+  for (let n = start; n <= end; n++) if (source[n - 1]?.includes(probe)) on.push(n);
+  if (on.length === 1 && !quote.includes("\n")) start = end = on[0];
+  // The headings the place is under, outermost first.
+  let trail = [];
+  for (const hd of body.querySelectorAll(".md-h[data-level]")) {
+    if (first.compareDocumentPosition(hd) & Node.DOCUMENT_POSITION_FOLLOWING && hd !== first) break;
+    const level = Number(hd.dataset.level);
+    trail = trail.filter((t) => t.level < level);
+    trail.push({ level, text: hd.textContent });
+  }
+  return { ref: { kind: "section", path, start, end, trail: trail.map((t) => t.text), quote }, rect };
+}
+
+/** Puts the Ask button beside a picked place. */
+function offerPlace(place) {
+  closeAsk();
+  offered = place;
+  const button = h(
+    "button",
+    {
+      class: "preview-ask",
+      type: "button",
+      title: `Ask the agent about this (${shortcutText("preview.ask")})`,
+      "data-key": "preview-ask",
+      onpointerdown: (e) => e.preventDefault(),
+      onclick: () => openAsk(place),
+    },
+    "Ask"
+  );
+  placeNear(button, place.rect);
+}
+
+/** The shortcut of command `id`, as the window writes it. */
+function shortcutText(id) {
+  const command = commandById(id);
+  const combo = command ? bindingOf(command) : "";
+  return combo ? formatCombo(combo) : "no shortcut";
+}
+
+/** Places `el` in the Preview's body under (or over) `rect`. */
+function placeNear(el, rect) {
+  const body = $("preview").querySelector(".preview-body") || $("preview");
+  body.append(el);
+  const at = body.getBoundingClientRect();
+  const left = Math.min(Math.max(rect.right - at.left + body.scrollLeft - 20, 8), body.scrollLeft + body.clientWidth - el.offsetWidth - 8);
+  let top = rect.bottom - at.top + body.scrollTop + 6;
+  if (rect.bottom + el.offsetHeight + 12 > at.bottom && rect.top - el.offsetHeight - 6 > at.top) {
+    top = rect.top - at.top + body.scrollTop - el.offsetHeight - 6;
+  }
+  el.style.left = `${Math.max(left, 8)}px`;
+  el.style.top = `${Math.max(top, body.scrollTop + 8)}px`;
+}
+
+function hideAsk() {
+  document.querySelector(".preview-ask")?.remove();
+  if (!document.querySelector(".preview-bubble")) offered = null;
+}
+
+function closeAsk() {
+  document.querySelector(".preview-ask")?.remove();
+  document.querySelector(".preview-bubble")?.remove();
+  offered = null;
+}
+
+/** The box for a place: what it is, a field to write in, Ask now and Add
+ * to prompt. */
+function openAsk(place) {
+  const task = currentTask();
+  if (!task) return;
+  closeAsk();
+  offered = place;
+  const [mark, label] = placeLabel(place.ref);
+  const quote = placeQuote(place.ref);
+  const field = h("textarea", {
+    class: "preview-bubble-text",
+    rows: 2,
+    "aria-label": `What to ask about ${label}`,
+    placeholder: "What should the agent do here?",
+    "data-key": "preview-bubble-text",
+  });
+  const busy = task.running;
+  const now = h("button", { class: "button primary", type: "button", disabled: busy || !state.agents.length, onclick: () => askNow(place, field.value) }, "Ask now");
+  const add = h("button", { class: "button", type: "button", onclick: () => addToPrompt(place, field.value) }, "Add to prompt");
+  const bubble = h(
+    "div",
+    {
+      class: "preview-bubble",
+      role: "dialog",
+      "aria-label": `Ask about ${label}`,
+      onkeydown: (e) => {
+        if (e.key === "Escape") {
+          e.preventDefault();
+          e.stopPropagation();
+          closeAsk();
+          $("preview").querySelector(".preview-body")?.focus();
+        } else if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+          e.preventDefault();
+          if (!now.disabled) now.click();
+        }
+      },
+    },
+    h("div", { class: "preview-bubble-ref" }, h("span", { class: "chip-mark", "aria-hidden": "true" }, mark), label),
+    quote ? h("p", { class: "preview-bubble-quote" }, quote.length > 160 ? `${quote.slice(0, 160)}…` : quote) : null,
+    field,
+    h(
+      "div",
+      { class: "preview-bubble-actions" },
+      now,
+      add,
+      h("span", { class: "preview-bubble-hint" }, busy ? "The agent is at work; add it to the prompt." : `${PLATFORM === "mac" ? "⌘" : "Ctrl+"}↵ asks · Esc closes`)
+    )
+  );
+  placeNear(bubble, place.rect);
+  field.focus();
+}
+
+async function askNow(place, text) {
+  const task = currentTask();
+  const prompt = text.trim();
+  if (!task) return;
+  if (!prompt) {
+    toast("Write what the agent should do here first.");
+    document.querySelector(".preview-bubble-text")?.focus();
+    return;
+  }
+  try {
+    await call("start_run", { task: task.id, agent: $("agent").value, prompt, refs: [place.ref] });
+    closeAsk();
+    window.getSelection()?.removeAllRanges();
+    toast(`Asked ${$("agent").value} about ${placeLabel(place.ref)[1]}`);
+    await refresh();
+  } catch (err) {
+    fail(err);
+  }
+}
+
+function addToPrompt(place, text) {
+  const task = currentTask();
+  if (!task) return;
+  const chips = promptRefs.get(task.id) || [];
+  const key = JSON.stringify(place.ref);
+  if (!chips.some((c) => JSON.stringify(c.ref) === key)) {
+    if (chips.length >= 20) {
+      toast("A prompt names at most 20 places.", "error");
+      return;
+    }
+    chips.push({ ref: place.ref });
+  }
+  promptRefs.set(task.id, chips);
+  const words = text.trim();
+  if (words) {
+    const prompt = $("prompt");
+    prompt.value = prompt.value.trim() ? `${prompt.value.trimEnd()}\n${words}` : words;
+    fitPrompt();
+  }
+  closeAsk();
+  window.getSelection()?.removeAllRanges();
+  renderPromptRefs(task);
+  toast(`${placeLabel(place.ref)[1]} is in the prompt`);
+}
+
+/** A place as a chip; `remove` gives it a button that takes it away. */
+function placeChip(ref, remove) {
+  const [mark, label] = placeLabel(ref);
+  return h(
+    "span",
+    { class: "place-chip", title: `${ref.path}${placeQuote(ref) ? `: ${placeQuote(ref)}` : ""}` },
+    h("span", { class: "chip-mark", "aria-hidden": "true" }, mark),
+    label,
+    remove ? h("button", { class: "place-chip-remove", type: "button", "aria-label": `Take ${label} out of the prompt`, "data-key": `chip:${label}`, onclick: remove }, "×") : null
+  );
+}
+
+/** The chips over the task's prompt. */
+function renderPromptRefs(task) {
+  const box = $("prompt-refs");
+  if (!box) return;
+  const chips = (task && promptRefs.get(task.id)) || [];
+  replace(
+    box,
+    ...chips.map((c, i) =>
+      placeChip(c.ref, () => {
+        chips.splice(i, 1);
+        renderPromptRefs(task);
+        $("prompt").focus();
+      })
+    )
+  );
+  box.hidden = !chips.length;
+}
+
+/** Whatever is picked in the Preview gets the Ask button. */
+function watchSelection() {
+  const root = $("preview");
+  const offer = () =>
+    setTimeout(() => {
+      if (document.querySelector(".preview-bubble")) return;
+      const place = selectedPlace();
+      if (place) offerPlace(place);
+      else if (offered && !["cells", "region"].includes(offered.ref.kind)) hideAsk();
+    }, 0);
+  root.addEventListener("mouseup", offer);
+  root.addEventListener("keyup", (e) => {
+    if (e.shiftKey || e.key === "Shift") offer();
+  });
+  // A click elsewhere closes the box, the way a menu closes.
+  document.addEventListener("pointerdown", (e) => {
+    const bubble = document.querySelector(".preview-bubble");
+    if (bubble && !bubble.contains(e.target)) closeAsk();
+  });
+}
+
+/** Asks about what is picked, or about the whole file when nothing is. */
+function askHere() {
+  if (!preview.path || !isShown("preview")) return toast("Open a file in the Preview first.");
+  const place = selectedPlace() || (offered && !document.querySelector(".preview-bubble") ? offered : null);
+  if (place) return openAsk(place);
+  askAboutFile();
+}
+
+function askAboutFile() {
+  const head = $("preview").querySelector("[data-key='preview-ask-file']");
+  const rect = head ? head.getBoundingClientRect() : $("preview").getBoundingClientRect();
+  openAsk({ ref: { kind: "file", path: preview.path }, rect });
 }
