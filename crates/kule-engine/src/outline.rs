@@ -142,7 +142,7 @@ pub(crate) fn read_file(root: &Path, rel: &str) -> Result<Option<Vec<u8>>> {
 
 /// Opens `rel` under `root`, each component with `O_NOFOLLOW`; `None` when
 /// a component is missing, is a link, or is not what it must be.
-pub(crate) fn open_beneath(root: &Path, rel: &str) -> io::Result<Option<File>> {
+pub fn open_beneath(root: &Path, rel: &str) -> io::Result<Option<File>> {
     let mut dir = File::open(root)?;
     let parts: Vec<&str> = rel.split('/').collect();
     for (i, part) in parts.iter().enumerate() {
