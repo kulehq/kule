@@ -3191,3 +3191,102 @@ body.dragging-panel * {
   color: var(--text);
   font: inherit;
 }
+
+/* Extensions */
+
+.ext-panel {
+  overflow: hidden;
+}
+
+/* Kule's own line above an extension's frame: who is speaking. */
+.ext-strip {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--sunken);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.ext-frame {
+  width: 100%;
+  min-height: 0;
+  flex: 1;
+  border: 0;
+  background: var(--bg);
+}
+
+.ext-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ext-perms {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 4px 0;
+  padding-left: 18px;
+}
+
+.ext-perms .chip {
+  margin-left: 6px;
+}
+
+.ext-warning {
+  margin: 0;
+  padding: 6px 10px;
+  border-radius: var(--radius);
+  background: var(--ask-soft);
+  color: var(--ask);
+}
+
+.ext-digest {
+  font: 12px var(--mono);
+}
+
+.ext-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.ext-settings h3 {
+  margin: 0;
+  font-size: 13px;
+}
+
+.ext-field {
+  display: grid;
+  align-items: center;
+  gap: 4px 12px;
+  grid-template-columns: minmax(120px, max-content) minmax(0, 320px);
+}
+
+.ext-field .muted {
+  grid-column: 2;
+  font-size: 12px;
+}
+
+.ext-notes h3 {
+  margin: 12px 0 4px;
+  font-size: 13px;
+}
+
+.ext-notes-about {
+  margin: 0 0 4px;
+}
+
+.ext-note {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}

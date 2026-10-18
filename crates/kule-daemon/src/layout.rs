@@ -15,6 +15,21 @@ pub const LAYOUT_FILE: &str = "layout.json";
 /// The panels the window has.
 pub const PANELS: &[&str] = &["tasks", "live", "review", "timeline", "files", "terminal"];
 
+/// An extension's panel: `ext.<publisher>.<name>.<panel>`, each part 1 to
+/// 20 (the panel 18) of `a-z0-9-`. Whether the extension is still there is
+/// the window's business; it drops what it does not know.
+fn extension_panel(panel: &str) -> bool {
+    let part = |s: &str, max: usize| {
+        !s.is_empty()
+            && s.len() <= max
+            && s.bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+    };
+    let parts: Vec<&str> = panel.split('.').collect();
+    matches!(parts.as_slice(), ["ext", publisher, name, local]
+        if part(publisher, 20) && part(name, 20) && part(local, 18))
+}
+
 /// The regions they can sit in.
 pub const REGIONS: &[&str] = &["left", "main", "right", "bottom"];
 
@@ -90,7 +105,7 @@ fn check(layout: &Layout) -> Result<()> {
     let mut seen = HashSet::new();
     for (name, region) in &layout.regions {
         for panel in &region.panels {
-            if !PANELS.contains(&panel.as_str()) {
+            if !PANELS.contains(&panel.as_str()) && !extension_panel(panel) {
                 return Err(format!("{name}: {panel:?} is not a panel"));
             }
             if !seen.insert(panel.as_str()) {
@@ -176,5 +191,31 @@ mod tests {
             assert!(save(home.path(), Some(&bad)).is_err(), "{bad:?}");
         }
         assert_eq!(load(home.path()).unwrap(), None);
+    }
+
+    #[test]
+    fn an_extensions_panel_has_the_shape_of_one() {
+        let home = tempfile::TempDir::new().unwrap();
+        let with = |panel: &str| {
+            let mut l = layout();
+            l.regions
+                .get_mut("right")
+                .unwrap()
+                .panels
+                .push(panel.into());
+            l
+        };
+        assert!(save(home.path(), Some(&with("ext.acme.notes.notes"))).is_ok());
+        for bad in [
+            "ext.acme.notes",
+            "ext.acme.notes.notes.more",
+            "ext.Acme.notes.notes",
+            "ext.acme..notes",
+            "ext.acme.notes.n/../x",
+            "ext.acme.notes.this-panel-name-is-too-long",
+            "other.acme.notes.notes",
+        ] {
+            assert!(save(home.path(), Some(&with(bad))).is_err(), "{bad}");
+        }
     }
 }

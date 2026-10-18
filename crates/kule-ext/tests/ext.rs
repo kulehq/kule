@@ -225,6 +225,11 @@ fn manifests_are_refused_for_what_they_should_not_say() {
         (json!({ "kule_extension": 2 }), "format 2"),
         (json!({ "main": null }), "need a main script"),
         (json!({ "main": "../main.js" }), "plain path"),
+        (
+            json!({ "contributes": { "commands": [{ "id": "notes", "title": "N" }],
+                "panels": [{ "id": "notes", "title": "Notes", "entry": "panel.html" }] } }),
+            "both a command and a panel",
+        ),
     ];
     for (extra, says) in cases {
         let m = manifest(extra.clone());

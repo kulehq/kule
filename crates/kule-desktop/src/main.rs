@@ -4,6 +4,8 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod ext_call;
+mod ext_net;
 mod ext_serve;
 mod extensions;
 mod menu;
@@ -787,7 +789,9 @@ fn main() {
         .manage(extensions::Host::start(&kule.home))
         .manage(kule)
         .manage(pty::Terminals::default())
+        .manage(ext_call::Limits::default())
         .invoke_handler(tauri::generate_handler![
+            ext_call::ext_call,
             extensions::extension_host,
             extensions::extensions,
             extensions::install_extension,

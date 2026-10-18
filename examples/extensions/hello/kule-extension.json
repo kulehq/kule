@@ -1,0 +1,18 @@
+{
+  "kule_extension": 1,
+  "id": "kule.hello",
+  "name": "Hello",
+  "version": "1.0.0",
+  "publisher": "kule",
+  "description": "A first extension: a panel listing your tasks, a command, a setting and a theme.",
+  "main": "main.js",
+  "permissions": ["tasks.read", "notify"],
+  "contributes": {
+    "commands": [{ "id": "greet", "title": "Say hello", "keys": "Mod+Alt+H" }],
+    "panels": [{ "id": "tasks", "title": "Hello", "entry": "panel.html" }],
+    "configuration": [
+      { "key": "greeting", "title": "Greeting", "type": "string", "default": "Hello", "description": "What the command says." }
+    ],
+    "themes": ["dusk.kule-theme.json"]
+  }
+}

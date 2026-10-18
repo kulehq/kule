@@ -15,6 +15,8 @@ const backend = window.__TAURI__
       onTasks: (handler) => window.__TAURI__.event.listen("tasks", () => handler()),
       onMenu: (handler) => window.__TAURI__.event.listen("menu", (e) => handler(e.payload)),
       onTerminal: (handler) => window.__TAURI__.event.listen("terminal", (e) => handler(e.payload)),
+      onTaskChanged: (handler) => window.__TAURI__.event.listen("task-changed", (e) => handler(e.payload)),
+      onExtensions: (handler) => window.__TAURI__.event.listen("extensions", () => handler()),
     }
   : window.kuleMock;
 
@@ -977,6 +979,7 @@ function renderSidebar() {
 // --- Task view -------------------------------------------------------------
 
 function renderTask() {
+  extensionsSeeTask();
   const settings = SETTINGS.includes(state.view);
   $("titlebar-title").textContent = settings ? "Settings — Kule" : "Kule";
   $("settings").hidden = !settings;
@@ -1081,11 +1084,11 @@ function renderSpent(task) {
 }
 
 /** Settings' sections, each a value of `state.view`. */
-const SETTINGS = ["agents", "policy", "rules", "secrets", "budget", "appearance", "shortcuts", "profile"];
+const SETTINGS = ["agents", "policy", "rules", "secrets", "budget", "appearance", "shortcuts", "extensions", "profile"];
 
 async function openSettings(view = SETTINGS.includes(state.view) ? state.view : "agents") {
   closeMenu();
-  const opening = { agents: openAgents, policy: openPolicy, rules: openRules, secrets: openSecrets, budget: openBudget, appearance: openAppearance, shortcuts: openShortcuts, profile: openProfile }[view];
+  const opening = { agents: openAgents, policy: openPolicy, rules: openRules, secrets: openSecrets, budget: openBudget, appearance: openAppearance, shortcuts: openShortcuts, extensions: openExtensions, profile: openProfile }[view];
   await opening();
 }
 
@@ -1602,6 +1605,7 @@ async function answer(id, approve, remember) {
 }
 
 async function onQuestions(waiting) {
+  tellExtensions("questions", waiting, "questions.read");
   const before = new Set(state.questions.map((q) => q.id));
   state.questions = waiting;
   for (const q of waiting) {
@@ -1873,6 +1877,7 @@ function fold(task, event) {
 }
 
 async function onRun({ task, seq, event }) {
+  tellExtensions("run", { task, seq, event }, "events.read");
   // What the run at work has cost so far; in the task's spent once it ends.
   if (event.type === "prompt" || event.type === "finished") liveCost.delete(task);
   if (event.type === "agent" && event.event.type === "usage" && event.event.cost) {
@@ -2242,10 +2247,12 @@ async function loadReview(id) {
     ...movesGroup(moves),
     ...gitGroup(review.effects.git),
     ...meetsGroup(task),
+    ...extensionNotesGroup(id),
     ...ignoredGroup(id, ignored, include, held),
     ...homeGroup(id, review.home || [], busy, review.home_applied)
   );
   tabify($("effects"));
+  extensionsSeeReview(id, review.digest);
 }
 
 /** Per task, home paths whose diff the person opened (true) or closed (false). */
@@ -3451,6 +3458,14 @@ function normalLayout(kept) {
       }
     }
   }
+  // An extension's panel the layout has not placed yet goes to the right.
+  for (const p of Object.keys(PANELS)) {
+    if (!seen.has(p)) {
+      regions.right.panels.push(p);
+      regions.right.active ||= p;
+      seen.add(p);
+    }
+  }
   return { version: LAYOUT_VERSION, regions };
 }
 
@@ -4099,6 +4114,7 @@ function mirrorTerminalStyles() {
 
 function retheme() {
   for (const t of terminals.values()) for (const e of t.list) e.term.options.theme = terminalTheme();
+  tellExtensions("theme", themeForFrames());
 }
 
 const b64Bytes = (data) => Uint8Array.from(atob(data), (c) => c.charCodeAt(0));
@@ -4340,7 +4356,7 @@ const appearance = {
   isNew: false,
 };
 
-const allThemes = () => [...BUILT_IN_THEMES, ...appearance.kept.custom];
+const allThemes = () => [...BUILT_IN_THEMES, ...appearance.kept.custom, ...EXT.themes];
 const themeById = (id) => allThemes().find((t) => t.id === id) || BUILT_IN_THEMES[0];
 const currentTheme = () => themeById(appearance.kept.current);
 
@@ -4426,7 +4442,7 @@ function themeCard(theme) {
     },
     themeSwatch(theme),
     h("span", { class: "theme-name" }, theme.name),
-    h("span", { class: "theme-kind" }, theme.scheme ? (theme.scheme === "dark" ? "dark" : "light") : "follows your computer")
+    h("span", { class: "theme-kind" }, theme.scheme ? (theme.scheme === "dark" ? "dark" : "light") : "follows your computer", theme.from ? ` · from ${theme.from}` : "")
   );
 }
 
@@ -4606,6 +4622,9 @@ function renderAppearance() {
     h("section", { class: "key-group", "aria-label": "Kule's themes" }, h("h3", {}, "Kule's themes"), h("div", { class: "theme-grid", role: "radiogroup", "aria-label": "Kule's themes" }, BUILT_IN_THEMES.map(themeCard))),
     appearance.kept.custom.length
       ? h("section", { class: "key-group", "aria-label": "Your themes" }, h("h3", {}, "Your themes"), h("div", { class: "theme-grid", role: "radiogroup", "aria-label": "Your themes" }, appearance.kept.custom.map(themeCard)))
+      : null,
+    EXT.themes.length
+      ? h("section", { class: "key-group", "aria-label": "From extensions" }, h("h3", {}, "From extensions"), h("div", { class: "theme-grid", role: "radiogroup", "aria-label": "Themes from extensions" }, EXT.themes.map(themeCard)))
       : null,
     appearance.editing ? null : h("div", { class: "agent-actions" }, h("span", { class: "muted" }, `In use: ${current.name}`), ...actions)
   );
@@ -5463,7 +5482,9 @@ async function start() {
   document.addEventListener("pointercancel", panelDragEnd);
   for (const n of ["left", "main", "bottom", "right"]) $(`toggle-${n}`).addEventListener("click", () => toggleRegion(n));
   $("files-tree").addEventListener("keydown", filesKey);
-  loadLayout();
+  // Extensions first: the kept layout places their panels and the kept
+  // theme may be one of theirs.
+  const extensionsLoaded = loadExtensions().then(() => loadLayout());
   // A task's menu closes on a click elsewhere, or when the window changes.
   document.addEventListener("pointerdown", (e) => {
     if (!e.target.closest("#task-menu")) closeMenu();
@@ -5474,7 +5495,7 @@ async function start() {
   document.addEventListener("keydown", onKey, true);
   labelControls();
   loadShortcuts();
-  loadThemes();
+  extensionsLoaded.then(() => loadThemes());
   // A theme that follows the computer redraws its pictures when it changes.
   matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => renderAppearance());
 
@@ -5505,6 +5526,8 @@ async function start() {
   if (backend.onTasks) await backend.onTasks(() => refresh());
   if (backend.onMenu) await backend.onMenu(onMenu);
   if (backend.onTerminal) await backend.onTerminal(onTerminal);
+  if (backend.onTaskChanged) await backend.onTaskChanged((change) => tellExtensions("task", change, "events.read"));
+  if (backend.onExtensions) await backend.onExtensions(() => loadExtensions());
   $("terminal-empty-new").addEventListener("click", () => newTerminal());
   $("terminal-find-input").addEventListener("keydown", (e) => {
     if (e.key === "Enter") {

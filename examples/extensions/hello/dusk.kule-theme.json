@@ -1,0 +1,17 @@
+{
+  "kule_theme": 1,
+  "name": "Dusk",
+  "scheme": "dark",
+  "colors": {
+    "bg": "#16131f",
+    "surface": "#1f1b2b",
+    "sunken": "#120f1a",
+    "border": "#2e2940",
+    "text": "#ece8f5",
+    "muted": "#a59cbf",
+    "faint": "#6f6787",
+    "accent": "#b58cff",
+    "accent-text": "#16131f",
+    "accent-soft": "#2f2547"
+  }
+}

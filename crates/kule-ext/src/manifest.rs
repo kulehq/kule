@@ -356,6 +356,14 @@ impl Contributes {
             file("panel entry", &p.entry, &[".html"])?;
         }
         unique("panel", self.panels.iter().map(|p| p.id.as_str()))?;
+        // A panel's id is also the id of the command that shows it.
+        if let Some(p) = self
+            .panels
+            .iter()
+            .find(|p| self.commands.iter().any(|c| c.id == p.id))
+        {
+            return Err(invalid(format!("{:?} is both a command and a panel", p.id)));
+        }
         if self.configuration.len() > MAX_FIELDS {
             return Err(invalid(format!("more than {MAX_FIELDS} settings")));
         }
