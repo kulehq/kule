@@ -6,20 +6,13 @@
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
-use imagesize::ImageType;
 use serde::{Deserialize, Serialize};
 
 use crate::entities::Skip;
 use crate::outline::Side;
 
 /// Larger files are not previewed.
-pub const MAX_IMAGE: usize = 8 << 20;
-/// Pictures with more pixels than this are not previewed: decoded, they
-/// would take more memory than a review is worth.
-const MAX_PIXELS: u64 = 40_000_000;
-
-/// The names previewed, by extension; the bytes decide in the end.
-const EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "gif", "webp"];
+pub const MAX_IMAGE: usize = kule_view::image::MAX_IMAGE;
 
 /// One side of a previewed file.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -50,8 +43,7 @@ pub struct Preview {
 
 /// Whether files at `path` are previewed at all, by their name.
 pub fn previewable(path: &str) -> bool {
-    path.rsplit_once('.')
-        .is_some_and(|(_, ext)| EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str()))
+    kule_view::image::named_like_one(path)
 }
 
 pub(crate) fn picture(side: Side) -> Picture {
@@ -65,25 +57,14 @@ pub(crate) fn picture(side: Side) -> Picture {
         Side::Skipped(Skip::TooLarge) => return skipped("too large to preview"),
         Side::Skipped(_) => return skipped("not previewed"),
     };
-    let mime = match imagesize::image_type(&bytes) {
-        Ok(ImageType::Png) => "image/png",
-        Ok(ImageType::Jpeg) => "image/jpeg",
-        Ok(ImageType::Gif) => "image/gif",
-        Ok(ImageType::Webp) => "image/webp",
-        _ => return skipped("not a picture Kule shows"),
-    };
-    let Ok(size) = imagesize::blob_size(&bytes) else {
-        return skipped("not a picture Kule shows");
-    };
-    let pixels = (size.width as u64).saturating_mul(size.height as u64);
-    if pixels == 0 || pixels > MAX_PIXELS {
-        return skipped("too large to preview");
-    }
-    Picture::Image {
-        mime: mime.to_owned(),
-        width: size.width,
-        height: size.height,
-        data: STANDARD.encode(&bytes),
+    match kule_view::image::picture(&bytes) {
+        Ok(p) => Picture::Image {
+            mime: p.mime.to_owned(),
+            width: p.width,
+            height: p.height,
+            data: STANDARD.encode(&bytes),
+        },
+        Err(why) => skipped(why.reason()),
     }
 }
 

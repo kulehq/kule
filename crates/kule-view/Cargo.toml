@@ -1,0 +1,15 @@
+[package]
+name = "kule-view"
+description = "Kule's file views: what a file of a task's copy looks like in the window, from its bytes"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+base64 = "0.22.1"
+imagesize = "0.15.0"
+quick-xml = "0.42.0"
+serde.workspace = true
+serde_json.workspace = true

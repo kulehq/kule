@@ -61,6 +61,7 @@ const VIEW_COMMANDS = new Set([
   "view.live",
   "view.review",
   "view.timeline",
+  "view.preview",
   "chat.toggle",
   "layout.left",
   "layout.bottom",

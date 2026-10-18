@@ -42,6 +42,7 @@ const VIEW: &[Entry] = &[
     Command("view.live", "Live"),
     Command("view.review", "Review"),
     Command("view.timeline", "Timeline"),
+    Command("view.preview", "Preview"),
     Separator,
     Command("task.next", "Next Task"),
     Command("task.prev", "Previous Task"),

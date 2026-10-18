@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Preview
+
+- A file picked in Files opens large in the main area's new Preview tab
+  (`Mod+4`), as it is now in the task's copy:
+  - text and code with line numbers; JSON or XML packed onto a line or two
+    can be shown formatted;
+  - Markdown laid out, or as its source;
+  - PNG, JPEG, GIF and WebP pictures, fitted or at 100%.
+- Text shows up to 1 MB of a file. A picture is shown only when its bytes
+  prove it to be one of a sane size, the same check Review uses.
+
 ### Extensions
 
 - Extensions add commands, panels, themes, settings, notes on a review,

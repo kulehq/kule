@@ -10,7 +10,7 @@ use serde_json::Value;
 
 /// Changes whenever a call, a result or a notice changes shape; a client
 /// and a daemon that disagree on it cannot talk.
-pub const PROTOCOL: u32 = 23;
+pub const PROTOCOL: u32 = 24;
 
 /// What a daemon says about itself.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -204,6 +204,12 @@ pub enum Call {
     },
     /// A file of the task's copy, as text when it is.
     ReadFile {
+        task: String,
+        path: String,
+    },
+    /// A file of the task's copy as the Preview shows it: a
+    /// [`kule_view::View`].
+    View {
         task: String,
         path: String,
     },

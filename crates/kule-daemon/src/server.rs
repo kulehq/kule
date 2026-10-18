@@ -376,6 +376,7 @@ pub fn dispatch(service: &Arc<Service>, call: Call) -> Result<Value, String> {
         Call::SetLayout { layout } => json(crate::layout::save(service.home(), layout.as_ref())?),
         Call::ListDir { task, path } => json(crate::files::list(&service.copy_of(&task)?, &path)?),
         Call::ReadFile { task, path } => json(crate::files::read(&service.copy_of(&task)?, &path)?),
+        Call::View { task, path } => json(crate::files::view(&service.copy_of(&task)?, &path)?),
         Call::Themes => json(crate::themes::load(service.home())?),
         Call::SetThemes { themes } => json(crate::themes::save(service.home(), &themes)?),
         Call::Shortcuts => json(crate::shortcuts::load(service.home())?),

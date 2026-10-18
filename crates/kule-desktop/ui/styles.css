@@ -2718,7 +2718,7 @@ body.dragging-panel * {
 .files-tree {
   display: flex;
   min-height: 80px;
-  flex: 1 1 55%;
+  flex: 1;
   flex-direction: column;
   padding: 6px 4px;
   overflow: auto;
@@ -2794,35 +2794,258 @@ body.dragging-panel * {
   font-size: 12px;
 }
 
-.files-preview {
+/* Preview: a file of the copy, large, as what it is. */
+.panel-preview {
+  overflow: hidden;
+}
+
+.preview {
   display: flex;
   min-height: 0;
-  flex: 1 1 45%;
+  flex: 1;
   flex-direction: column;
-  border-top: 1px solid var(--border);
-  overflow: auto;
 }
 
-.files-preview:empty {
-  display: none;
-}
-
-.files-preview-head {
+.preview-head {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 6px 10px;
+  gap: 6px 10px;
+  padding: 8px 14px;
   border-bottom: 1px solid var(--border);
 }
 
-.file-text {
-  margin: 0;
-  padding: 10px 12px;
+.preview-path {
+  min-width: 0;
   color: var(--text);
-  font: 12px/1.5 var(--mono);
-  white-space: pre;
+  font-size: 12.5px;
+}
+
+.preview-meta {
+  color: var(--faint);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.preview-change {
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.preview-change.created {
+  background: var(--ok-soft);
+  color: var(--ok);
+}
+
+.preview-change.modified {
+  background: var(--ask-soft);
+  color: var(--ask);
+}
+
+.preview-change.deleted {
+  background: var(--deny-soft);
+  color: var(--deny);
+}
+
+.preview-gap {
+  flex: 1;
+}
+
+.preview-modes {
+  display: inline-flex;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.preview-mode {
+  padding: 4px 10px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font: 12px var(--sans);
+  cursor: pointer;
+}
+
+.preview-mode + .preview-mode {
+  border-left: 1px solid var(--border);
+}
+
+.preview-mode.on {
+  background: var(--sunken);
+  color: var(--text);
+  font-weight: 600;
+}
+
+.preview-mode:focus-visible,
+.preview-body:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.preview-body {
+  min-height: 0;
+  flex: 1;
+  overflow: auto;
+}
+
+.preview-empty,
+.preview-other {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 24px;
+  color: var(--muted);
+}
+
+.preview-note {
+  margin: 0;
+  padding: 8px 14px;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.preview-head + .preview-note {
+  border-top: 0;
+}
+
+.preview-text {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-content: start;
+  font: 12.5px/1.6 var(--mono);
   tab-size: 4;
+}
+
+.preview-text pre {
+  margin: 0;
+  font: inherit;
+  white-space: pre;
+}
+
+.preview-gutter {
+  position: sticky;
+  left: 0;
+  padding: 10px 10px 10px 14px;
+  border-right: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--faint);
+  text-align: right;
+  user-select: none;
+}
+
+.preview-code {
+  padding: 10px 16px;
+  color: var(--text);
+}
+
+.preview-md {
+  padding: 20px 28px 32px;
+  white-space: normal;
+}
+
+.preview-md > *,
+.preview-md blockquote > * {
+  max-width: 76ch;
+  margin: 0 0 12px;
+}
+
+/* A document's lines run together, as Markdown means them to. */
+.preview-md p,
+.preview-md li {
+  line-height: 1.65;
+  white-space: normal;
+}
+
+.preview-md .md-h {
+  margin: 20px 0 8px;
+  line-height: 1.3;
+}
+
+.preview-md > .md-h:first-child {
+  margin-top: 0;
+}
+
+.preview-md h3 { font-size: 22px; }
+.preview-md h4 { font-size: 18px; }
+.preview-md h5 { font-size: 15px; }
+.preview-md h6 { font-size: 14px; }
+
+.preview-md ul,
+.preview-md ol {
+  padding-left: 22px;
+}
+
+.preview-md li.depth-1 { margin-left: 18px; }
+.preview-md li.depth-2 { margin-left: 36px; }
+.preview-md li.depth-3 { margin-left: 54px; }
+.preview-md li.depth-4 { margin-left: 72px; }
+
+.preview-md code {
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: var(--sunken);
+  font: 12.5px var(--mono);
+}
+
+.preview-md pre {
+  max-width: none;
+  padding: 10px 12px;
+  overflow-x: auto;
+  border-radius: var(--radius);
+  background: var(--sunken);
+  white-space: pre;
+}
+
+.preview-md pre code {
+  padding: 0;
+  background: none;
+}
+
+.preview-md blockquote {
+  padding-left: 14px;
+  border-left: 3px solid var(--border);
+  color: var(--muted);
+}
+
+.preview-md hr {
+  border: 0;
+  border-top: 1px solid var(--border);
+}
+
+.preview-md .md-url {
+  color: var(--faint);
+  font-size: 12px;
+}
+
+.preview-image {
+  display: flex;
+  padding: 18px;
+  background: var(--sunken);
+}
+
+/* On a checkerboard, so a transparent picture shows its edges. */
+.preview-image img {
+  margin: auto;
+  flex-shrink: 0;
+  background-color: var(--surface);
+  background-image: linear-gradient(45deg, var(--border) 25%, transparent 25%, transparent 75%, var(--border) 75%),
+    linear-gradient(45deg, var(--border) 25%, transparent 25%, transparent 75%, var(--border) 75%);
+  background-position: 0 0, 8px 8px;
+  background-size: 16px 16px;
+}
+
+.preview-image.fit img {
+  width: auto;
+  max-width: 100%;
+  height: auto;
+  max-height: 100%;
+  flex-shrink: 1;
+  object-fit: contain;
 }
 
 /* The task's header keeps its name on one line and lets its buttons wrap

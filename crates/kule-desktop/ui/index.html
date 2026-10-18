@@ -187,6 +187,9 @@
         <section class="panel" id="panel-timeline" role="tabpanel" data-panel="timeline" hidden>
           <div class="timeline" id="timeline"></div>
         </section>
+        <section class="panel panel-preview" id="panel-preview" role="tabpanel" data-panel="preview" hidden>
+          <div class="preview" id="preview"></div>
+        </section>
         <section class="panel panel-terminal" id="panel-terminal" data-panel="terminal">
           <div class="terminal-find" id="terminal-find" hidden>
             <input id="terminal-find-input" type="search" placeholder="Find" aria-label="Find in the terminal" autocomplete="off" spellcheck="false" />
@@ -204,7 +207,6 @@
         </section>
         <section class="panel panel-files" id="panel-files" data-panel="files">
           <div class="files-tree" id="files-tree" role="tree" aria-label="Files in the task's copy"></div>
-          <div class="files-preview" id="files-preview"></div>
         </section>
     </div>
 
@@ -219,6 +221,7 @@
     <script src="themes.js"></script>
     <script src="keys.js"></script>
     <script src="extensions.js"></script>
+    <script src="preview.js"></script>
     <script src="app.js"></script>
   </body>
 </html>

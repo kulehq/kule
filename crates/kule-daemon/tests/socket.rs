@@ -73,6 +73,46 @@ fn calls_reach_the_service_and_errors_come_back() {
 }
 
 #[test]
+fn the_preview_reads_a_file_of_the_copy_as_its_kind() {
+    let home = TempDir::new().unwrap();
+    daemon(home.path());
+    let client = Client::new(home.path());
+    let ws = workspace();
+    let task: TaskView = client
+        .call(Call::CreateTask {
+            workspace: ws.path().to_owned(),
+        })
+        .unwrap();
+    let copy: std::path::PathBuf = client
+        .call(Call::CopyOf {
+            task: task.id.clone(),
+        })
+        .unwrap();
+    fs::write(copy.join("report.md"), "# Q2\n").unwrap();
+    let view: kule_view::View = client
+        .call(Call::View {
+            task: task.id.clone(),
+            path: "report.md".into(),
+        })
+        .unwrap();
+    assert_eq!(
+        view,
+        kule_view::View::Markdown {
+            text: "# Q2\n".into(),
+            cut: false,
+            size: 5
+        }
+    );
+    let error = client
+        .call::<kule_view::View>(Call::View {
+            task: task.id.clone(),
+            path: "../a.txt".into(),
+        })
+        .unwrap_err();
+    assert!(error.contains("without .."), "{error}");
+}
+
+#[test]
 fn subscribers_hear_questions_come_and_go() {
     let home = TempDir::new().unwrap();
     let service = daemon(home.path());

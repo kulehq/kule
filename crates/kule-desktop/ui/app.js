@@ -1041,6 +1041,7 @@ function renderTask() {
   if (isShown("review")) loadReview(task.id);
   if (isShown("timeline")) loadTimeline(task.id);
   if (isShown("files")) loadFiles(task.id);
+  if (isShown("preview")) loadPreview(task);
   if (isShown("terminal")) showTerminal(task.id);
 }
 
@@ -1682,23 +1683,39 @@ const TABLE_RULE = /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/;
 const LIST_ITEM = /^(\s*)([-*+]|\d{1,9}[.)])\s+(.*)$/;
 
 /** Block Markdown: paragraphs, headings, lists, quotes, code and tables. */
-function markdown(text) {
+/**
+ * Blocks laid out from Markdown `text`. With `base` (the line before the
+ * text's first, 0 for a whole file), each block and list item carries the
+ * source lines it came from as data-line and data-line-end, counted from 1,
+ * so a place picked in the Preview names its line in the file.
+ */
+function markdown(text, base) {
   const lines = text.split("\n");
   const blocks = [];
+  const lined = (el, start, end = start) => {
+    if (base !== undefined) {
+      el.dataset.line = String(base + start + 1);
+      el.dataset.lineEnd = String(base + end + 1);
+    }
+    return el;
+  };
+  const put = (el, start, end) => blocks.push(lined(el, start, end));
   let para = [];
+  let paraStart = 0;
   const flush = () => {
-    if (para.length) blocks.push(h("p", {}, ...inline(para.join("\n"))));
+    if (para.length) put(h("p", {}, ...inline(para.join("\n"))), paraStart, paraStart + para.length - 1);
     para = [];
   };
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
+    const start = i;
     const fence = line.match(/^\s*(`{3,}|~{3,})\s*([\w+-]*)/);
     if (fence) {
       flush();
       const code = [];
       i++;
       while (i < lines.length && !lines[i].trim().startsWith(fence[1])) code.push(lines[i++]);
-      blocks.push(h("pre", {}, h("code", {}, code.join("\n"))));
+      put(h("pre", {}, h("code", {}, code.join("\n"))), start, Math.min(i, lines.length - 1));
       continue;
     }
     if (line.includes("|") && i + 1 < lines.length && TABLE_RULE.test(lines[i + 1]) && lines[i + 1].includes("-")) {
@@ -1711,7 +1728,7 @@ function markdown(text) {
       i--;
       // Classes, not style attributes: the window's CSP allows no inline style.
       const cell = (tag, text, n) => h(tag, { class: `align-${align[n] || "left"}` }, ...inline(text));
-      blocks.push(
+      put(
         h(
           "div",
           { class: "md-table" },
@@ -1721,19 +1738,21 @@ function markdown(text) {
             h("thead", {}, h("tr", {}, ...head.map((c, n) => cell("th", c, n)))),
             h("tbody", {}, ...rows.map((r) => h("tr", {}, ...head.map((_, n) => cell("td", r[n] || "", n)))))
           )
-        )
+        ),
+        start,
+        i
       );
       continue;
     }
     const heading = line.match(/^\s{0,3}(#{1,6})\s+(.*?)\s*#*\s*$/);
     if (heading) {
       flush();
-      blocks.push(h(`h${Math.min(heading[1].length + 2, 6)}`, { class: "md-h" }, ...inline(heading[2])));
+      put(h(`h${Math.min(heading[1].length + 2, 6)}`, { class: "md-h", "data-level": heading[1].length }, ...inline(heading[2])), start);
       continue;
     }
     if (/^\s{0,3}([-*_])(\s*\1){2,}\s*$/.test(line)) {
       flush();
-      blocks.push(h("hr", {}));
+      put(h("hr", {}), start);
       continue;
     }
     const item = line.match(LIST_ITEM);
@@ -1745,17 +1764,19 @@ function markdown(text) {
         const m = lines[i].match(LIST_ITEM);
         if (m && /\d/.test(m[2]) === ordered) {
           const depth = Math.min(Math.floor(m[1].replace(/\t/g, "  ").length / 2), 4);
-          items.push(h("li", { class: `depth-${depth}` }, ...inline(m[3])));
+          items.push(lined(h("li", { class: `depth-${depth}` }, ...inline(m[3])), i));
         } else if (lines[i].trim() !== "" && /^\s+/.test(lines[i]) && items.length) {
           // A continued item.
-          items[items.length - 1].append("\n", ...inline(lines[i].trim()));
+          const last = items[items.length - 1];
+          last.append("\n", ...inline(lines[i].trim()));
+          if (base !== undefined) last.dataset.lineEnd = String(base + i + 1);
         } else {
           break;
         }
         i++;
       }
       i--;
-      blocks.push(h(ordered ? "ol" : "ul", {}, ...items));
+      put(h(ordered ? "ol" : "ul", {}, ...items), start, i);
       continue;
     }
     if (/^\s{0,3}>/.test(line)) {
@@ -1763,11 +1784,14 @@ function markdown(text) {
       const quoted = [];
       while (i < lines.length && /^\s{0,3}>/.test(lines[i])) quoted.push(lines[i++].replace(/^\s{0,3}>\s?/, ""));
       i--;
-      blocks.push(h("blockquote", {}, ...markdown(quoted.join("\n"))));
+      put(h("blockquote", {}, ...markdown(quoted.join("\n"), base === undefined ? undefined : base + start)), start, i);
       continue;
     }
     if (line.trim() === "") flush();
-    else para.push(line);
+    else {
+      if (!para.length) paraStart = i;
+      para.push(line);
+    }
   }
   flush();
   return blocks;
@@ -3414,6 +3438,7 @@ const PANELS = {
   review: { title: "Review", needsTask: true },
   timeline: { title: "Timeline", needsTask: true },
   files: { title: "Files", needsTask: true },
+  preview: { title: "Preview", needsTask: true },
   terminal: { title: "Terminal", needsTask: true },
 };
 
@@ -3429,7 +3454,7 @@ function defaultLayout() {
     version: LAYOUT_VERSION,
     regions: {
       left: { panels: ["tasks", "files"], active: "tasks", open: true, size: 272 },
-      main: { panels: ["review", "timeline"], active: "review", open: true, size: 0 },
+      main: { panels: ["review", "timeline", "preview"], active: "review", open: true, size: 0 },
       right: { panels: [], active: null, open: false, size: 380 },
       // The agent's chat and the terminals share the bottom, side by side.
       bottom: { panels: ["live", "terminal"], active: "live", open: true, size: 420 },
@@ -3924,7 +3949,6 @@ const joinPath = (dir, name) => (dir ? `${dir}/${name}` : name);
 async function loadFiles(id) {
   if (files.task !== id) {
     Object.assign(files, { task: id, open: new Set([""]), listings: new Map(), changes: new Map(), selected: null });
-    replace($("files-preview"));
   }
   const token = ++files.token;
   try {
@@ -4014,29 +4038,11 @@ async function toggleDir(path) {
   renderFiles();
 }
 
-async function openFile(path, change) {
+/** A file picked in the tree opens in the Preview. */
+function openFile(path, change) {
   files.selected = path;
   renderFiles();
-  const head = h(
-    "div",
-    { class: "files-preview-head" },
-    h("span", { class: "path" }, path),
-    change ? h("button", { class: "button ghost", type: "button", onclick: () => revealPanel("review") }, "See it in Review") : null
-  );
-  if (change === "deleted") {
-    replace($("files-preview"), head, h("p", { class: "muted" }, "The task deleted this file; Review shows what it was."));
-    return;
-  }
-  try {
-    const file = await call("read_file", { task: files.task, path });
-    const body =
-      file.kind === "text"
-        ? h("pre", { class: "file-text" }, file.text)
-        : h("p", { class: "muted" }, `A binary file of ${file.size.toLocaleString()} bytes.`);
-    replace($("files-preview"), head, body, file.cut ? h("p", { class: "muted" }, `Only the first ${Math.round(256)} KiB is shown.`) : null);
-  } catch (err) {
-    fail(err);
-  }
+  previewFile(path, change);
 }
 
 /** Arrow keys in the tree move between rows; right opens a directory,
@@ -4992,6 +4998,7 @@ const COMMANDS = [
   { id: "view.live", title: "Show the agent chat", group: "Task", keys: "Mod+1", inFields: true, run: () => withTask(() => showTab("live")) },
   { id: "view.review", title: "Show Review", group: "Task", keys: "Mod+2", inFields: true, run: () => withTask(() => showTab("review")) },
   { id: "view.timeline", title: "Show Timeline", group: "Task", keys: "Mod+3", inFields: true, run: () => withTask(() => showTab("timeline")) },
+  { id: "view.preview", title: "Show Preview", group: "Task", keys: "Mod+4", inFields: true, run: () => withTask(() => showTab("preview")) },
   { id: "prompt.focus", title: "Write to the agent", group: "Task", keys: "Mod+L", run: () => withTask(() => { showTab("live"); $("prompt").focus(); }) },
   {
     id: "prompt.run", title: "Run the prompt", group: "Task", keys: "Mod+Enter", inFields: true,

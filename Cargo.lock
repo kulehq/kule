@@ -3374,6 +3374,7 @@ dependencies = [
  "kule-acp",
  "kule-engine",
  "kule-ext",
+ "kule-view",
  "libc",
  "serde",
  "serde_json",
@@ -3410,8 +3411,8 @@ dependencies = [
  "cedar-policy",
  "filetime",
  "gix",
- "imagesize",
  "kule-entities",
+ "kule-view",
  "landlock",
  "libc",
  "lonca-core",
@@ -3456,6 +3457,17 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
  "zip",
+]
+
+[[package]]
+name = "kule-view"
+version = "0.2.0"
+dependencies = [
+ "base64 0.22.1",
+ "imagesize",
+ "quick-xml",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

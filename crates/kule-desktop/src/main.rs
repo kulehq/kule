@@ -548,6 +548,11 @@ fn read_file(kule: K<'_>, task: String, path: String) -> Result<serde_json::Valu
     kule.call(Call::ReadFile { task, path })
 }
 
+#[tauri::command(async)]
+fn view_file(kule: K<'_>, task: String, path: String) -> Result<serde_json::Value> {
+    kule.call(Call::View { task, path })
+}
+
 /// Puts the person's shortcuts next to the menu's items: command id →
 /// accelerator (`CmdOrCtrl+Shift+K`).
 #[tauri::command]
@@ -894,6 +899,7 @@ fn main() {
             set_layout,
             list_dir,
             read_file,
+            view_file,
             export_profile,
             import_profile,
             apply_profile,

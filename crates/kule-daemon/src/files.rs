@@ -168,9 +168,9 @@ pub fn list(root: &Path, rel: &str) -> Result<Listing> {
     Ok(Listing { entries, cut })
 }
 
-/// File `rel` in the copy at `root`, as text when it is text: its first
-/// [`MAX_READ`] bytes.
-pub fn read(root: &Path, rel: &str) -> Result<FileText> {
+/// The first `max` bytes of file `rel` in the copy at `root`, and the
+/// file's size.
+fn read_start(root: &Path, rel: &str, max: u64) -> Result<(Vec<u8>, u64)> {
     use std::io::Read;
     use std::os::unix::fs::MetadataExt;
     let file = open(root, rel)?;
@@ -187,24 +187,28 @@ pub fn read(root: &Path, rel: &str) -> Result<FileText> {
         ));
     }
     let size = meta.len();
-    let mut bytes = Vec::new();
-    file.take(MAX_READ)
+    let mut bytes = Vec::with_capacity(size.min(max) as usize);
+    file.take(max)
         .read_to_end(&mut bytes)
         .map_err(|e| format!("{rel}: {e}"))?;
-    let cut = size > MAX_READ;
-    if bytes.contains(&0) {
-        return Ok(FileText::Binary { size });
-    }
-    // A cut can fall inside a character; what is whole of it is shown.
-    let text = match String::from_utf8(bytes) {
-        Ok(text) => text,
-        Err(e) if cut && e.utf8_error().error_len().is_none() => {
-            let valid = e.utf8_error().valid_up_to();
-            String::from_utf8_lossy(&e.into_bytes()[..valid]).into_owned()
-        }
-        Err(_) => return Ok(FileText::Binary { size }),
-    };
-    Ok(FileText::Text { text, cut, size })
+    Ok((bytes, size))
+}
+
+/// File `rel` in the copy at `root`, as text when it is text: its first
+/// [`MAX_READ`] bytes.
+pub fn read(root: &Path, rel: &str) -> Result<FileText> {
+    let (bytes, size) = read_start(root, rel, MAX_READ)?;
+    let cut = size > bytes.len() as u64;
+    Ok(match kule_view::text::decode(bytes, cut) {
+        Some(text) => FileText::Text { text, cut, size },
+        None => FileText::Binary { size },
+    })
+}
+
+/// File `rel` in the copy at `root` as the Preview shows it.
+pub fn view(root: &Path, rel: &str) -> Result<kule_view::View> {
+    let (bytes, size) = read_start(root, rel, kule_view::wanted(rel))?;
+    Ok(kule_view::view(rel, bytes, size))
 }
 
 #[cfg(test)]
@@ -305,6 +309,49 @@ mod tests {
         std::fs::write(root.join("d/x.txt"), "x").unwrap();
         assert_eq!(list(root, "d").unwrap().entries[0].name, "x.txt");
         assert!(list(root, "key.txt").is_err());
+    }
+
+    /// The Preview reads what the explorer reads, by the same rules, and as
+    /// much of a file as its view needs.
+    #[test]
+    fn the_preview_views_files_of_the_copy_only() {
+        let (copy, outside) = (
+            tempfile::TempDir::new().unwrap(),
+            tempfile::TempDir::new().unwrap(),
+        );
+        let root = copy.path();
+        let mut png = b"\x89PNG\r\n\x1a\n\0\0\0\x0dIHDR".to_vec();
+        png.extend(2u32.to_be_bytes());
+        png.extend(2u32.to_be_bytes());
+        png.extend([8, 6, 0, 0, 0, 0, 0, 0, 0]);
+        std::fs::write(root.join("logo.png"), &png).unwrap();
+        std::fs::write(root.join("notes.md"), "# Notes\n").unwrap();
+        // Larger than the explorer reads, smaller than the Preview does.
+        let long = "x".repeat(MAX_READ as usize * 2);
+        std::fs::write(root.join("long.txt"), &long).unwrap();
+        std::fs::write(outside.path().join("a.png"), &png).unwrap();
+        std::os::unix::fs::symlink(outside.path().join("a.png"), root.join("away.png")).unwrap();
+        std::fs::hard_link(outside.path().join("a.png"), root.join("twice.png")).unwrap();
+
+        assert!(matches!(
+            view(root, "logo.png").unwrap(),
+            kule_view::View::Image {
+                width: 2,
+                height: 2,
+                ..
+            }
+        ));
+        assert!(matches!(
+            view(root, "notes.md").unwrap(),
+            kule_view::View::Markdown { .. }
+        ));
+        match view(root, "long.txt").unwrap() {
+            kule_view::View::Text { text, cut, .. } => assert!(!cut && text == long),
+            other => panic!("{other:?}"),
+        }
+        assert!(view(root, "away.png").is_err());
+        assert!(view(root, "twice.png").is_err());
+        assert!(view(root, "../x.png").is_err());
     }
 
     #[test]
