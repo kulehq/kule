@@ -1057,7 +1057,7 @@ function renderComposer(task) {
   $("agent").disabled = busy;
   $("timeout").value = String(Math.round(task.approval_timeout_secs / 60));
   $("send").hidden = busy;
-  $("stop").hidden = !busy;
+  renderStop(task);
   renderSpent(task);
   renderMeasure(task);
   renderPromptRefs(task);
@@ -1867,11 +1867,28 @@ function renderMeasure(task) {
   el.classList.toggle("slowed", l.cpu_percent != null && m.cpu_percent >= l.cpu_percent * 0.9);
 }
 
+/** Tasks whose run was told to stop and has not ended yet. */
+const stopping = new Set();
+
+/** The Stop button: "Stopping…" and held while the agent ends its turn,
+ * which can take up to ten seconds. */
+function renderStop(task) {
+  const held = task.running && stopping.has(task.id);
+  $("stop").hidden = !task.running;
+  $("stop").disabled = held;
+  $("stop").textContent = held ? "Stopping…" : "Stop";
+}
+
 async function stopRun(task) {
+  if (stopping.has(task.id)) return;
+  stopping.add(task.id);
+  renderStop(task);
   try {
     await call("stop_run", { task: task.id });
-    toast(`Stopping the agent in ${taskName(task)}`);
+    toast(`Stopping the agent in ${taskName(task)}; it has ten seconds to end its turn`);
   } catch (err) {
+    stopping.delete(task.id);
+    renderStop(task);
     fail(err);
   }
 }
@@ -2285,7 +2302,8 @@ function fold(task, event) {
     const stopped = event.error && event.error.startsWith("stopped: ");
     streamOf(task).push({
       kind: "finished",
-      error: Boolean(event.error),
+      // A person's own stop is no failure; a limit's is.
+      error: Boolean(event.error) && event.error !== "stopped: you stopped the run",
       text: stopped
         ? `Stopped: ${event.error.slice("stopped: ".length)}. Review what it changed before it reaches the folder${refused}.`
         : event.error
@@ -2301,6 +2319,7 @@ async function onRun({ task, seq, event }) {
   if (event.type === "prompt" || event.type === "finished") {
     liveCost.delete(task);
     liveMeasure.delete(task);
+    stopping.delete(task);
   }
   // A limit stopped a run out of sight: said where it is seen.
   if (event.type === "finished" && event.error?.startsWith("stopped: ") && task !== state.current && !event.error.includes("you stopped")) {
