@@ -56,6 +56,9 @@ struct Settings {
     label: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     color: Option<TaskColor>,
+    /// The group the person put the task in; its policy judges the task.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    group: Option<u64>,
 }
 
 fn default_timeout() -> u64 {
@@ -765,6 +768,7 @@ impl Task {
                 budget: None,
                 label: None,
                 color: None,
+                group: None,
             });
         }
         read_json(&path)
@@ -807,6 +811,25 @@ impl Task {
     pub fn set_color(&self, color: Option<TaskColor>) -> Result<()> {
         let mut settings = self.settings()?;
         settings.color = color;
+        write_json(&self.dir.join("settings.json"), &settings)
+    }
+
+    /// The group the person put the task in, if any.
+    pub fn group(&self) -> Result<Option<u64>> {
+        Ok(self.settings()?.group)
+    }
+
+    /// Puts the task in group `group`, one under its home; `None` takes it
+    /// out of its group. Its commits and runs are judged by that group's
+    /// policy from then on.
+    pub fn set_group(&self, group: Option<u64>) -> Result<()> {
+        if let Some(id) = group
+            && !crate::groups::exists(&self.home(), id)?
+        {
+            return Err(Error::Invalid(format!("no group {id}")));
+        }
+        let mut settings = self.settings()?;
+        settings.group = group;
         write_json(&self.dir.join("settings.json"), &settings)
     }
 

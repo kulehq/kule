@@ -156,15 +156,41 @@ impl Policy {
             Some(path) => read(path)?,
             None => DEFAULT_POLICY.to_owned(),
         };
+        Policy::assemble(&base, workspace, user.and_then(Path::parent))
+    }
+
+    /// The policy `task` is judged by: its group's, when the group chose
+    /// one, else the one for every task (`<home>/policy.cedar` or the
+    /// built-in one); then the workspace's forbids and what the person
+    /// remembered, as [`Policy::load`] adds them.
+    pub fn for_task(task: &crate::Task) -> Result<Policy> {
+        let home = task.home();
+        let base = match crate::groups::base_policy(&home, task)? {
+            Some(text) => text,
+            None => {
+                let user = home.join(USER_POLICY);
+                if user.is_file() {
+                    read(&user)?
+                } else {
+                    DEFAULT_POLICY.to_owned()
+                }
+            }
+        };
+        Policy::assemble(&base, task.workspace(), Some(&home))
+    }
+
+    /// `base`, the forbids of the repository at `workspace`, and what was
+    /// remembered in `home`.
+    fn assemble(base: &str, workspace: &Path, home: Option<&Path>) -> Result<Policy> {
         let repo_path = workspace.join(REPO_POLICY);
         let repo = if repo_path.is_file() {
             Some(read(&repo_path)?)
         } else {
             None
         };
-        let policy = Policy::from_texts(&base, repo.as_deref())?;
+        let policy = Policy::from_texts(base, repo.as_deref())?;
         // What the person remembered lives next to their policy.
-        match user.and_then(Path::parent) {
+        match home {
             Some(home) => policy.remembering(&crate::remembered::load(home)?, workspace),
             None => Ok(policy),
         }

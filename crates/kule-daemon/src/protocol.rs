@@ -10,7 +10,7 @@ use serde_json::Value;
 
 /// Changes whenever a call, a result or a notice changes shape; a client
 /// and a daemon that disagree on it cannot talk.
-pub const PROTOCOL: u32 = 19;
+pub const PROTOCOL: u32 = 20;
 
 /// What a daemon says about itself.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -125,6 +125,46 @@ pub enum Call {
     /// first.
     SetOrder {
         tasks: Vec<String>,
+    },
+    /// The groups tasks are put in, in the person's order.
+    Groups,
+    /// A new group, last, with the policy for every task.
+    CreateGroup {
+        name: String,
+        color: Option<kule_engine::TaskColor>,
+    },
+    /// Renames, recolours, folds or unfolds a group.
+    UpdateGroup {
+        group: u64,
+        name: String,
+        color: Option<kule_engine::TaskColor>,
+        #[serde(default)]
+        collapsed: bool,
+    },
+    /// The policy a group's tasks are judged by; `text` writes the group's
+    /// own, which goes with `own`.
+    SetGroupPolicy {
+        group: u64,
+        policy: kule_engine::GroupPolicy,
+        #[serde(default)]
+        text: Option<String>,
+    },
+    /// The policy written for a group, if one was.
+    GroupPolicyText {
+        group: u64,
+    },
+    /// Every group's id, in the order the list shows them.
+    SetGroupOrder {
+        groups: Vec<u64>,
+    },
+    /// Deletes a group; its tasks stay, in no group.
+    DeleteGroup {
+        group: u64,
+    },
+    /// Puts a task in a group; `None` takes it out.
+    SetTaskGroup {
+        task: String,
+        group: Option<u64>,
     },
     /// Which policy holds: Kule's balanced or careful one, or the person's.
     Policy,

@@ -292,6 +292,14 @@ it writes in Kule reaches it outside; you sign it in there once.
   terminal in its copy or deletes it. Drag a task, or press Alt+↑/↓, to
   move it in the list; `kule list` keeps that order, and `kule name` and
   `kule color` do the rest from a terminal.
+- **Groups**: the + next to *Tasks* makes a group, with a name and a
+  colour; put a task in one from its ⋮ menu (*Group…*) or drag it onto
+  the group. A group's tasks are judged by the group's policy: the one for
+  every task (the default), Kule's balanced or careful one whatever holds
+  for the rest, or one you write for the group in *Settings → Policy*,
+  checked before it is kept. A repository's refusals and what you told
+  Kule not to ask about again still hold. `kule group` does the same from
+  a terminal (`new`, `put`, `policy`, `rename`, `color`, `delete`).
 - **Settings**: agents, the policy, remembered rules, secrets and the
   daily budget, one section each.
 - **First run**: with no task yet, the window shows which agents can start

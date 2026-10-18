@@ -342,6 +342,23 @@ pub fn dispatch(service: &Arc<Service>, call: Call) -> Result<Value, String> {
         Call::SetLabel { task, label } => json(service.set_label(&task, label.as_deref())?),
         Call::SetColor { task, color } => json(service.set_color(&task, color)?),
         Call::SetOrder { tasks } => json(service.set_order(&tasks)?),
+        Call::Groups => json(service.groups()?),
+        Call::CreateGroup { name, color } => json(service.create_group(&name, color)?),
+        Call::UpdateGroup {
+            group,
+            name,
+            color,
+            collapsed,
+        } => json(service.update_group(group, &name, color, collapsed)?),
+        Call::SetGroupPolicy {
+            group,
+            policy,
+            text,
+        } => json(service.set_group_policy(group, policy, text.as_deref())?),
+        Call::GroupPolicyText { group } => json(service.group_policy_text(group)?),
+        Call::SetGroupOrder { groups } => json(service.set_group_order(&groups)?),
+        Call::DeleteGroup { group } => json(service.delete_group(group)?),
+        Call::SetTaskGroup { task, group } => json(service.set_task_group(&task, group)?),
         Call::Policy => json(service.policy_choice()?),
         Call::ChoosePolicy { choice } => json(service.choose_policy(choice)?),
         Call::ExportProfile { parts } => {

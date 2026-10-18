@@ -127,6 +127,10 @@ const state = {
   lastSeq: new Map(),
   /** Live events that came while their task's stream was loading. */
   buffered: new Map(),
+  /** The groups tasks are put in, in the person's order. */
+  groups: [],
+  /** The policy for every task: "balanced", "careful" or "own". */
+  policy: "balanced",
 };
 
 const currentTask = () => state.tasks.find((t) => t.id === state.current);
@@ -250,27 +254,17 @@ function taskMenu(task, list, e) {
     await removeTask(task);
   });
 
-  const at = state.tasks.findIndex((t) => t.id === task.id);
-  const swatches = [null, ...COLORS].map((color) =>
-    h(
-      "button",
-      {
-        class: `swatch ${color ? `color-${color}` : "swatch-none"}`,
-        type: "button",
-        role: "menuitemradio",
-        "aria-checked": String((task.color || null) === color),
-        "aria-label": color ? `Colour ${color}` : "No colour",
-        title: color || "No colour",
-        onclick: () => (closeMenu(true), setColor(task, color)),
-      }
-    )
-  );
+  const siblings = groupMates(task);
+  const at = siblings.findIndex((t) => t.id === task.id);
+  const swatches = colorSwatches(task.color, (color) => (closeMenu(true), setColor(task, color)));
+  const group = groupOf(task);
   const items = [
     item("Rename…", () => renameTask(task, menu)),
     ...swatches,
+    item(group ? `Group: ${group.name}…` : "Group…", () => pickGroup(task, menu)),
     item("Move up", () => (closeMenu(true), moveTask(task.id, -1)), { disabled: list !== "tasks" || at <= 0, "aria-keyshortcuts": "Alt+ArrowUp" }),
     item("Move down", () => (closeMenu(true), moveTask(task.id, 1)), {
-      disabled: list !== "tasks" || at === state.tasks.length - 1,
+      disabled: list !== "tasks" || at === siblings.length - 1,
       "aria-keyshortcuts": "Alt+ArrowDown",
     }),
     item("Open terminal", () => (closeMenu(), openTerminal(task))),
@@ -282,10 +276,32 @@ function taskMenu(task, list, e) {
     items[0],
     h("div", { class: "menu-swatches", role: "group", "aria-label": "Colour" }, swatches),
     h("hr", { class: "menu-rule" }),
-    items.slice(swatches.length + 1, swatches.length + 3),
+    items.slice(swatches.length + 1, swatches.length + 4),
     h("hr", { class: "menu-rule" }),
-    items.slice(swatches.length + 3)
+    items.slice(swatches.length + 4)
   );
+  showMenu(menu, items, opener, e);
+}
+
+/** The colour swatches of a task's or a group's menu; `chosen` hears the
+ * one picked, `null` for none. */
+function colorSwatches(current, chosen) {
+  return [null, ...COLORS].map((color) =>
+    h("button", {
+      class: `swatch ${color ? `color-${color}` : "swatch-none"}`,
+      type: "button",
+      role: "menuitemradio",
+      "aria-checked": String((current || null) === color),
+      "aria-label": color ? `Colour ${color}` : "No colour",
+      title: color || "No colour",
+      onclick: () => chosen(color),
+    })
+  );
+}
+
+/** Opens `menu` for `opener`: placed, its first item focused, arrows
+ * moving between its items, Escape and Tab closing it. */
+function showMenu(menu, items, opener, e) {
   menu.items = items;
   menu.opener = opener;
   opener.setAttribute("aria-expanded", "true");
@@ -399,12 +415,15 @@ async function setColor(task, color) {
   await refresh();
 }
 
-/** Moves a task `by` places in the list, and keeps the order. */
+/** Moves a task `by` places among the tasks of its group, or of no group,
+ * and keeps the order. */
 async function moveTask(id, by) {
-  const from = state.tasks.findIndex((t) => t.id === id);
-  const to = from + by;
-  if (from === -1 || to < 0 || to >= state.tasks.length) return;
-  await putInOrder(id, to);
+  const task = state.tasks.find((t) => t.id === id);
+  if (!task) return;
+  const siblings = groupMates(task);
+  const next = siblings[siblings.findIndex((t) => t.id === id) + by];
+  if (!next) return;
+  await putInOrder(id, state.tasks.indexOf(next));
   // The keyboard stays on the task it moved.
   document.querySelector(`#tasks [data-key="${CSS.escape(`tasks:${id}`)}"]`)?.focus();
 }
@@ -425,6 +444,310 @@ async function putInOrder(id, to) {
     fail(err);
     await refresh();
   }
+}
+
+// --- Groups ------------------------------------------------------------------
+
+/** What a group's policy is called in the list and in Settings. */
+const GROUP_POLICIES = {
+  default: "the policy for every task",
+  balanced: "balanced",
+  careful: "careful",
+  own: "its own policy",
+};
+
+/** Which policy judges `task`'s commits and runs, in words. */
+function judgedBy(task) {
+  const group = groupOf(task);
+  const policy = group && group.policy !== "default" ? group.policy : state.policy;
+  if (policy === "own") return group && group.policy === "own" ? "the group's own policy" : "your own policy";
+  return `the ${policy} policy`;
+}
+
+/** The group a task is in, when that group is there. */
+const groupOf = (task) => (task.group == null ? null : state.groups.find((g) => g.id === task.group) || null);
+
+/** The tasks listed with `task`: its group's, or those in none. */
+function groupMates(task) {
+  const group = groupOf(task);
+  return state.tasks.filter((t) => groupOf(t) === group);
+}
+
+function groupRow(group, members) {
+  const policy = group.policy !== "default" ? GROUP_POLICIES[group.policy] : null;
+  const head = h(
+    "div",
+    { class: "group-head", "data-group": String(group.id) },
+    h(
+      "button",
+      {
+        class: "group-toggle",
+        type: "button",
+        "data-key": `group:${group.id}`,
+        "aria-expanded": String(!group.collapsed),
+        title: policy ? `Its tasks are judged by ${policy}` : "Its tasks are judged by the policy for every task",
+        onclick: () => {
+          if (!dragged) foldGroup(group);
+        },
+        oncontextmenu: (e) => {
+          e.preventDefault();
+          groupMenu(group, e);
+        },
+      },
+      h("span", { class: "group-chevron", "aria-hidden": "true" }, group.collapsed ? "▸" : "▾"),
+      h("span", { class: "group-name" }, group.name),
+      policy ? h("span", { class: "group-policy" }, group.policy === "own" ? "own policy" : policy) : null,
+      h("span", { class: "group-count", "aria-label": plural(members.length, "task") }, String(members.length))
+    ),
+    h(
+      "button",
+      {
+        class: "task-more",
+        type: "button",
+        "data-key": `group:${group.id}:more`,
+        "aria-label": `Actions for the group ${group.name}`,
+        "aria-haspopup": "menu",
+        "aria-expanded": "false",
+        onclick: (e) => groupMenu(group, e),
+      },
+      h("span", { "aria-hidden": "true" }, "⋮")
+    )
+  );
+  return h(
+    "li",
+    { class: `group-row${group.color ? ` color-${group.color}` : ""}` },
+    head,
+    group.collapsed
+      ? null
+      : h(
+          "ul",
+          { class: "task-list group-tasks", "aria-label": group.name },
+          members.length
+            ? members.map((t) => taskItem(t, "tasks"))
+            : h("li", { class: "group-empty muted" }, "Drag a task here, or choose Group… in its menu.")
+        )
+  );
+}
+
+/** Fold or unfold a group's tasks; kept with the group. */
+async function foldGroup(group) {
+  await saveGroup(group, { collapsed: !group.collapsed });
+  document.querySelector(`#tasks [data-key="group:${group.id}"]`)?.focus();
+}
+
+/** Changes a group's name, colour or fold, drawn at once, then kept. */
+async function saveGroup(group, change) {
+  const next = { ...group, ...change };
+  state.groups = state.groups.map((g) => (g.id === group.id ? next : g));
+  renderSidebar();
+  try {
+    await call("update_group", { group: group.id, name: next.name, color: next.color || null, collapsed: next.collapsed });
+  } catch (err) {
+    fail(err);
+  }
+  await refresh();
+}
+
+/** A group's actions: rename, colour, policy, order, delete. */
+function groupMenu(group, e) {
+  const opener = e.currentTarget.closest(".group-head").querySelector(".task-more");
+  const wasOpen = $("task-menu")?.opener === opener;
+  closeMenu();
+  if (wasOpen && e.type === "click") return;
+  const item = (label, action, attrs) =>
+    h("button", { class: "menu-item", type: "button", role: "menuitem", onclick: action, ...attrs }, label);
+  const at = state.groups.findIndex((g) => g.id === group.id);
+  const remove = item("Delete group", null, { class: "menu-item danger" });
+  remove.addEventListener("click", async () => {
+    if (!remove.classList.contains("armed")) {
+      remove.classList.add("armed");
+      remove.textContent = "Click again: its tasks stay, in no group";
+      setTimeout(() => {
+        remove.classList.remove("armed");
+        remove.textContent = "Delete group";
+      }, 4000);
+      return;
+    }
+    closeMenu();
+    await deleteGroup(group);
+  });
+  const swatches = colorSwatches(group.color, (color) => (closeMenu(true), saveGroup(group, { color })));
+  const items = [
+    item("Rename…", () =>
+      nameField(menu, {
+        label: "The group's name",
+        value: group.name,
+        save: (name) => saveGroup(group, { name }),
+      })
+    ),
+    ...swatches,
+    item(`Policy: ${GROUP_POLICIES[group.policy]}…`, () => (closeMenu(), openGroupPolicy(group.id))),
+    item("Move up", () => (closeMenu(true), moveGroup(group.id, -1)), { disabled: at <= 0 }),
+    item("Move down", () => (closeMenu(true), moveGroup(group.id, 1)), { disabled: at === state.groups.length - 1 }),
+    remove,
+  ];
+  const menu = h(
+    "div",
+    { class: "menu", id: "task-menu", role: "menu", "aria-label": `Group ${group.name}` },
+    items[0],
+    h("div", { class: "menu-swatches", role: "group", "aria-label": "Colour" }, swatches),
+    h("hr", { class: "menu-rule" }),
+    items.slice(swatches.length + 1, swatches.length + 4),
+    h("hr", { class: "menu-rule" }),
+    remove
+  );
+  showMenu(menu, items, opener, e);
+}
+
+/** Turns `menu` into one field for a name: `save` hears it, trimmed. */
+function nameField(menu, { label, value, placeholder, save }) {
+  const input = h("input", {
+    id: "group-name",
+    type: "text",
+    maxlength: 60,
+    autocomplete: "off",
+    spellcheck: "false",
+    value: value || "",
+    placeholder: placeholder || "",
+  });
+  const done = async () => {
+    const name = input.value.trim();
+    if (!name) {
+      input.focus();
+      return;
+    }
+    closeMenu(true);
+    await save(name);
+  };
+  input.addEventListener("keydown", (k) => {
+    if (k.key === "Enter") {
+      k.preventDefault();
+      done();
+    } else if (k.key === "Escape") {
+      k.preventDefault();
+      closeMenu(true);
+    }
+  });
+  const saveButton = h("button", { class: "button primary", type: "button", onclick: done }, "Save");
+  menu.items = [saveButton];
+  menu.replaceChildren(
+    h("label", { class: "menu-field", for: "group-name" }, h("span", { class: "menu-field-label" }, label), input),
+    h("div", { class: "menu-field-actions" }, saveButton)
+  );
+  input.focus();
+  input.select();
+}
+
+/** Turns a task's menu into the groups it can be put in. */
+function pickGroup(task, menu) {
+  const current = groupOf(task);
+  const choice = (label, group) =>
+    h(
+      "button",
+      {
+        class: "menu-item",
+        type: "button",
+        role: "menuitemradio",
+        "aria-checked": String((current?.id ?? null) === (group?.id ?? null)),
+        onclick: () => (closeMenu(true), setTaskGroup(task, group)),
+      },
+      group ? h("span", { class: `menu-dot${group.color ? ` color-${group.color}` : ""}`, "aria-hidden": "true" }) : null,
+      label
+    );
+  const items = [
+    ...state.groups.map((g) => choice(g.name, g)),
+    choice("No group", null),
+    h(
+      "button",
+      {
+        class: "menu-item",
+        type: "button",
+        role: "menuitem",
+        onclick: () =>
+          nameField(menu, {
+            label: `A new group for ${taskName(task)}`,
+            placeholder: "Clients, side projects…",
+            save: async (name) => {
+              const group = await createGroup(name);
+              if (group) await setTaskGroup(task, group);
+            },
+          }),
+      },
+      "New group…"
+    ),
+  ];
+  menu.items = items;
+  menu.replaceChildren(
+    h("p", { class: "menu-note" }, "Its commits and runs are judged by the group's policy."),
+    ...items.slice(0, -1),
+    h("hr", { class: "menu-rule" }),
+    items[items.length - 1]
+  );
+  (items.find((i) => i.getAttribute("aria-checked") === "true") || items[0]).focus();
+}
+
+async function createGroup(name) {
+  try {
+    const group = await call("create_group", { name, color: null });
+    toast(`Group ${group.name} made; its tasks are judged by the policy for every task until you choose another`);
+    await refresh();
+    return group;
+  } catch (err) {
+    fail(err);
+    return null;
+  }
+}
+
+/** Puts a task in `group`, or in none. */
+async function setTaskGroup(task, group) {
+  try {
+    await call("set_task_group", { task: task.id, group: group ? group.id : null });
+    const policy = group && group.policy !== "default" ? GROUP_POLICIES[group.policy] : "the policy for every task";
+    toast(group ? `${taskName(task)} is in ${group.name}: ${policy} judges its next commit and run` : `${taskName(task)} is in no group`);
+  } catch (err) {
+    fail(err);
+  }
+  await refresh();
+}
+
+/** Moves a group `by` places, and keeps the order. */
+async function moveGroup(id, by) {
+  const groups = state.groups.slice();
+  const from = groups.findIndex((g) => g.id === id);
+  const to = from + by;
+  if (from === -1 || to < 0 || to >= groups.length) return;
+  groups.splice(to, 0, ...groups.splice(from, 1));
+  state.groups = groups;
+  refreshToken++;
+  renderSidebar();
+  try {
+    await call("set_group_order", { groups: groups.map((g) => g.id) });
+  } catch (err) {
+    fail(err);
+  }
+  await refresh();
+  document.querySelector(`#tasks [data-key="group:${id}"]`)?.focus();
+}
+
+async function deleteGroup(group) {
+  try {
+    await call("delete_group", { group: group.id });
+    toast(`Group ${group.name} deleted; its tasks are in no group now`);
+  } catch (err) {
+    fail(err);
+  }
+  await refresh();
+}
+
+/** Asks for a new group's name under the button that makes one. */
+function newGroup() {
+  const button = $("new-group");
+  closeMenu();
+  const menu = h("div", { class: "menu", id: "task-menu", role: "dialog", "aria-label": "New group" });
+  const placeholder = h("span");
+  showMenu(menu, [placeholder], button, { type: "click", currentTarget: button });
+  nameField(menu, { label: "A new group", placeholder: "Clients, side projects…", save: createGroup });
+  placeMenu(menu, { type: "click", currentTarget: button });
 }
 
 // --- Dragging a task in the list ---------------------------------------------
@@ -451,17 +774,18 @@ function dragMove(e) {
     drag.row.classList.add("dragging");
     document.body.classList.add("dragging-task");
   }
-  const rows = [...$("tasks").querySelectorAll(".task-row")];
-  for (const row of rows) row.classList.remove("drop-before", "drop-after");
-  const over = rows.find((row) => {
-    const r = row.getBoundingClientRect();
-    return e.clientY < r.bottom;
-  });
-  if (over) over.classList.add("drop-before");
-  else if (rows.length) rows[rows.length - 1].classList.add("drop-after");
+  const targets = dropTargets();
+  for (const el of targets) el.classList.remove("drop-before", "drop-after", "drop-into");
+  const over = targets.find((el) => e.clientY < el.getBoundingClientRect().bottom);
+  if (over) over.classList.add(over.classList.contains("group-head") ? "drop-into" : "drop-before");
+  else if (targets.length) targets[targets.length - 1].classList.add("drop-after");
 }
 
-function dragEnd(e) {
+/** Where a dragged task can land, top to bottom: tasks, and the heads of
+ * groups, which take it in. */
+const dropTargets = () => [...$("tasks").querySelectorAll(".task-row, .group-head")];
+
+async function dragEnd(e) {
   if (!drag || e.pointerId !== drag.pointer) return;
   const { id, moved, row } = drag;
   drag = null;
@@ -470,18 +794,33 @@ function dragEnd(e) {
   setTimeout(() => (dragged = false), 0);
   document.body.classList.remove("dragging-task");
   row.classList.remove("dragging");
-  const rows = [...$("tasks").querySelectorAll(".task-row")];
-  const before = rows.findIndex((r) => r.classList.contains("drop-before"));
-  for (const r of rows) r.classList.remove("drop-before", "drop-after");
+  const targets = dropTargets();
+  const before = targets.find((el) => el.classList.contains("drop-before"));
+  const into = targets.find((el) => el.classList.contains("drop-into"));
+  for (const el of targets) el.classList.remove("drop-before", "drop-after", "drop-into");
   if (e.type === "pointercancel") {
     renderSidebar();
     return;
   }
-  const from = state.tasks.findIndex((t) => t.id === id);
-  // `before` counts the dragged row itself, which leaves its place.
-  let to = before === -1 ? state.tasks.length : before;
+  const task = state.tasks.find((t) => t.id === id);
+  const from = state.tasks.indexOf(task);
+  // Before a task: in its group, in its place. On a group's head: first in
+  // that group. Past the end: last, in no group.
+  let group = null;
+  let to = state.tasks.length;
+  if (before) {
+    const other = state.tasks.find((t) => t.id === before.dataset.task);
+    group = groupOf(other);
+    to = state.tasks.indexOf(other);
+  } else if (into) {
+    group = state.groups.find((g) => String(g.id) === into.dataset.group) || null;
+    const first = state.tasks.find((t) => t !== task && groupOf(t) === group);
+    to = first ? state.tasks.indexOf(first) : from;
+  }
+  // The dragged task leaves its place first.
   if (to > from) to -= 1;
-  putInOrder(id, to);
+  await putInOrder(id, to);
+  if (group !== groupOf(task)) await setTaskGroup(task, group);
 }
 
 function renderSidebar() {
@@ -492,8 +831,13 @@ function renderSidebar() {
   );
   $("inbox-section").hidden = waiting.length === 0;
   replace($("inbox"), ...waiting.map((t) => taskItem(t, "inbox")));
-  replace($("tasks"), ...state.tasks.map((t) => taskItem(t, "tasks")));
-  $("tasks-empty").hidden = state.tasks.length > 0;
+  // The groups in their order, each with its tasks; then those in none.
+  replace(
+    $("tasks"),
+    ...state.groups.map((g) => groupRow(g, state.tasks.filter((t) => groupOf(t) === g))),
+    ...state.tasks.filter((t) => !groupOf(t)).map((t) => taskItem(t, "tasks"))
+  );
+  $("tasks-empty").hidden = state.tasks.length > 0 || state.groups.length > 0;
 }
 
 // --- Task view -------------------------------------------------------------
@@ -523,7 +867,8 @@ function renderTask() {
   $("task-name").textContent = taskName(task);
   const mark = $("task-name").closest(".task-header");
   mark.className = `task-header${task.color ? ` color-${task.color}` : ""}`;
-  $("task-path").textContent = `${task.workspace} · task ${task.id} · ${when(task.created_unix)}`;
+  const group = groupOf(task);
+  $("task-path").textContent = `${task.workspace} · task ${task.id} · ${when(task.created_unix)}${group ? ` · in ${group.name}` : ""} · ${judgedBy(task)}`;
   const chip = $("task-state");
   chip.className = "chip";
   if (task.running) {
@@ -668,7 +1013,7 @@ function policyPicker(choice, idPrefix, chosen) {
 
 async function choosePolicy(choice, chosen) {
   try {
-    await call("choose_policy", { choice });
+    state.policy = await call("choose_policy", { choice });
     toast(`The ${choice} policy holds from the next commit`);
   } catch (err) {
     fail(err);
@@ -703,8 +1048,146 @@ async function renderPolicy() {
         "What passes on its own, what waits for you and what never passes, for every task. A repository can add its own refusals in .kule/policy.cedar; what you told Kule not to ask about again is under Rules."
       )
     ),
-    policyPicker(choice, "settings", renderPolicy)
+    policyPicker(choice, "settings", renderPolicy),
+    groupPolicies(choice)
   );
+  if (focusGroup != null) {
+    document.querySelector(`#agents-view [data-key="group-policy:${focusGroup}"]`)?.focus();
+    focusGroup = null;
+  }
+}
+
+/** The group whose policy Settings opens on. */
+let focusGroup = null;
+
+/** Opens Settings' Policy on group `id`'s choice. */
+async function openGroupPolicy(id) {
+  focusGroup = id;
+  await openPolicy();
+}
+
+/** Each group's policy: the one above, one of Kule's, or its own. */
+function groupPolicies(choice) {
+  const head = h(
+    "header",
+    { class: "agents-head group-policies-head" },
+    h("h2", {}, "Groups"),
+    h(
+      "p",
+      { class: "muted" },
+      "A group's tasks can be judged by a policy of their own: Kule's balanced or careful one whatever holds above, or one you write. A repository's refusals and what you told Kule not to ask about again still hold. A change counts from the task's next commit and run."
+    )
+  );
+  if (!state.groups.length) {
+    return h("section", { class: "group-policies" }, head, h("p", { class: "muted" }, "No groups yet. Make one with the + next to Tasks, or from a task's menu: Group…"));
+  }
+  const above = choice === "own" ? "your own" : choice;
+  return h(
+    "section",
+    { class: "group-policies" },
+    head,
+    h(
+      "ul",
+      { class: "group-policy-list" },
+      state.groups.map((group) => {
+        const editor = h("div", { class: "group-policy-editor" });
+        const select = h(
+          "select",
+          {
+            id: `group-policy-${group.id}`,
+            "data-key": `group-policy:${group.id}`,
+            onchange: () => {
+              if (select.value === "own") openOwnPolicy(group, editor);
+              else setGroupPolicy(group, select.value, null);
+            },
+          },
+          [
+            ["default", `The one above (${above})`],
+            ["balanced", "Balanced"],
+            ["careful", "Careful"],
+            ["own", "Its own…"],
+          ].map(([value, label]) => h("option", { value, selected: group.policy === value }, label))
+        );
+        const row = h(
+          "li",
+          { class: `group-policy-row${group.color ? ` color-${group.color}` : ""}` },
+          h(
+            "div",
+            { class: "group-policy-line" },
+            h("label", { class: "group-policy-name", for: `group-policy-${group.id}` }, group.name),
+            h("span", { class: "muted" }, plural(state.tasks.filter((t) => groupOf(t) === group).length, "task")),
+            select,
+            group.policy === "own"
+              ? h("button", { class: "button ghost", type: "button", onclick: () => openOwnPolicy(group, editor) }, "Edit")
+              : null
+          ),
+          editor
+        );
+        return row;
+      })
+    )
+  );
+}
+
+/** Opens the editor for a group's own policy: what was written, or Kule's
+ * balanced policy to start from. */
+async function openOwnPolicy(group, editor) {
+  let draft;
+  try {
+    draft = await call("group_policy_text", { group: group.id });
+  } catch (err) {
+    fail(err);
+    return;
+  }
+  const area = h("textarea", {
+    class: "group-policy-text",
+    "data-key": `group-policy-text:${group.id}`,
+    rows: 14,
+    spellcheck: "false",
+    autocomplete: "off",
+    "aria-label": `${group.name}'s own policy, in Cedar`,
+  });
+  area.value = draft.written ?? draft.balanced;
+  const error = h("p", { class: "group-policy-error", role: "alert", hidden: true });
+  const use = h("button", { class: "button primary", type: "button" }, "Check and use");
+  use.addEventListener("click", async () => {
+    error.hidden = true;
+    try {
+      await call("set_group_policy", { group: group.id, policy: "own", text: area.value });
+      toast(`${group.name}: its own policy judges its tasks' next commits and runs`);
+      await refresh();
+      await renderPolicy();
+    } catch (err) {
+      // Cedar's message, by the text it is about.
+      error.textContent = String(err);
+      error.hidden = false;
+    }
+  });
+  const cancel = h("button", { class: "button ghost", type: "button", onclick: () => renderPolicy() }, "Cancel");
+  editor.replaceChildren(
+    h(
+      "p",
+      { class: "muted" },
+      draft.written
+        ? "The policy written for this group, in Cedar. It replaces the one above for its tasks."
+        : "Starts from Kule's balanced policy, in Cedar. It replaces the one above for this group's tasks; a forbid can never be overridden."
+    ),
+    area,
+    error,
+    h("div", { class: "group-policy-actions" }, cancel, use)
+  );
+  area.focus();
+}
+
+async function setGroupPolicy(group, policy, text) {
+  try {
+    await call("set_group_policy", { group: group.id, policy, text });
+    toast(`${group.name}: ${GROUP_POLICIES[policy]} judges its tasks' next commits and runs`);
+  } catch (err) {
+    fail(err);
+  }
+  await refresh();
+  await renderPolicy();
 }
 
 // --- First run ---------------------------------------------------------------
@@ -2601,10 +3084,12 @@ let refreshToken = 0;
 async function refresh() {
   const token = ++refreshToken;
   try {
-    const tasks = await call("tasks");
+    const [tasks, groups, policy] = await Promise.all([call("tasks"), call("groups"), call("policy")]);
     // A refresh that started later has already drawn a newer list.
     if (token !== refreshToken) return;
     state.tasks = tasks;
+    state.groups = groups;
+    state.policy = policy;
   } catch (err) {
     fail(err);
   }
@@ -4223,6 +4708,12 @@ const COMMANDS = [
     id: "task.rename", title: "Rename the task…", group: "Tasks", keys: "F2",
     run: () => withTask((t) => { const menu = openTaskMenu(); if (menu) renameTask(t, menu); }),
   },
+  {
+    id: "task.group", title: "Put the task in a group…", group: "Tasks", keys: "",
+    run: () => withTask((t) => { const menu = openTaskMenu(); if (menu) pickGroup(t, menu); }),
+  },
+  { id: "group.new", title: "New group…", group: "Tasks", keys: "", run: () => { revealPanel("tasks"); newGroup(); } },
+  { id: "group.policy", title: "Group policies", group: "Settings", keys: "", run: () => openPolicy() },
   { id: "task.terminal", title: "Open a terminal in the task's copy", group: "Tasks", keys: "Mod+T", run: () => withTask((t) => openTerminal(t)) },
   { id: "task.delete", title: "Delete the task (press twice)", group: "Tasks", keys: "Mod+Backspace", run: () => withTask(() => press("#remove-task", "The task cannot be deleted while its agent works")) },
   ...[null, ...COLORS].map((color) => ({
@@ -4343,6 +4834,7 @@ function labelControls() {
     else el.removeAttribute("aria-keyshortcuts");
   };
   label($("new-task"), "task.new", "New task");
+  label($("new-group"), "group.new", "New group: tasks in it can have a policy of their own");
   label($("open-settings"), "app.settings", "Settings");
   label($("open-terminal"), "task.terminal", "Opens your terminal in the task's copy, outside the sandbox. What you change there is reviewed like the agent's work.");
   label($("remove-task"), "task.delete", "Delete task");
@@ -4721,6 +5213,7 @@ function recordKey(e) {
 
 async function start() {
   $("new-task").addEventListener("click", newTask);
+  $("new-group").addEventListener("click", newGroup);
   $("open-terminal").addEventListener("click", () => openTerminal());
   $("empty-new-task").addEventListener("click", newTask);
   $("composer").addEventListener("submit", submitPrompt);

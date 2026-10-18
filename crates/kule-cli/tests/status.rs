@@ -185,3 +185,52 @@ fn policy_prints_the_one_that_holds_and_puts_kules_in_place() {
         "// mine\n"
     );
 }
+
+#[test]
+fn a_group_puts_its_policy_over_its_tasks_commits() {
+    let (home, ws) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+    fs::write(ws.path().join("notes.md"), "# Plan\n").unwrap();
+    let created = kule(home.path(), &["new", ws.path().to_str().unwrap()]);
+    let id = created.split_whitespace().nth(1).unwrap();
+    let made = kule(home.path(), &["group", "new", "clients", "--color", "blue"]);
+    assert!(made.contains("group 1 made: clients"), "{made}");
+    kule(home.path(), &["group", "policy", "1", "careful"]);
+    kule(home.path(), &["group", "put", id, "1"]);
+    let list = kule(home.path(), &["list"]);
+    assert!(list.contains(" [clients]"), "{list}");
+    let groups = kule(home.path(), &["group"]);
+    assert!(groups.contains("1  clients · careful (blue)") && groups.contains(id), "{groups}");
+    assert!(kule(home.path(), &["group", "policy", "1"]).contains("@id(\"careful\")"));
+
+    // The careful group holds the edit that the policy for every task lets
+    // through.
+    let copy = home.path().join("tasks").join(id).join("copy");
+    fs::write(copy.join("notes.md"), "# Plan\nMore.\n").unwrap();
+    let commit = |home: &Path| {
+        Command::new(env!("CARGO_BIN_EXE_kule"))
+            .args(["commit", id])
+            .env("KULE_HOME", home)
+            .output()
+            .unwrap()
+    };
+    assert!(!commit(home.path()).status.success());
+    assert_eq!(fs::read_to_string(ws.path().join("notes.md")).unwrap(), "# Plan\n");
+
+    // A policy of its own is checked before it is kept.
+    let own = home.path().join("own.cedar");
+    fs::write(&own, "permit (").unwrap();
+    let refused = Command::new(env!("CARGO_BIN_EXE_kule"))
+        .args(["group", "policy", "1", "own", "--file", own.to_str().unwrap()])
+        .env("KULE_HOME", home.path())
+        .output()
+        .unwrap();
+    assert!(!refused.status.success());
+
+    kule(home.path(), &["group", "delete", "1"]);
+    assert!(!kule(home.path(), &["list"]).contains('['));
+    assert!(commit(home.path()).status.success());
+    assert_eq!(
+        fs::read_to_string(ws.path().join("notes.md")).unwrap(),
+        "# Plan\nMore.\n"
+    );
+}

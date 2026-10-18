@@ -394,6 +394,66 @@ fn set_order(kule: K<'_>, tasks: Vec<String>) -> Result<()> {
 }
 
 #[tauri::command(async)]
+fn groups(kule: K<'_>) -> Result<Vec<kule_daemon::Group>> {
+    kule.call(Call::Groups)
+}
+
+#[tauri::command(async)]
+fn create_group(kule: K<'_>, name: String, color: Option<TaskColor>) -> Result<kule_daemon::Group> {
+    kule.call(Call::CreateGroup { name, color })
+}
+
+#[tauri::command(async)]
+fn update_group(
+    kule: K<'_>,
+    group: u64,
+    name: String,
+    color: Option<TaskColor>,
+    collapsed: bool,
+) -> Result<kule_daemon::Group> {
+    kule.call(Call::UpdateGroup {
+        group,
+        name,
+        color,
+        collapsed,
+    })
+}
+
+#[tauri::command(async)]
+fn set_group_policy(
+    kule: K<'_>,
+    group: u64,
+    policy: kule_daemon::GroupPolicy,
+    text: Option<String>,
+) -> Result<kule_daemon::Group> {
+    kule.call(Call::SetGroupPolicy {
+        group,
+        policy,
+        text,
+    })
+}
+
+#[tauri::command(async)]
+fn group_policy_text(kule: K<'_>, group: u64) -> Result<kule_daemon::GroupPolicyText> {
+    kule.call(Call::GroupPolicyText { group })
+}
+
+#[tauri::command(async)]
+fn set_group_order(kule: K<'_>, groups: Vec<u64>) -> Result<()> {
+    kule.call(Call::SetGroupOrder { groups })
+}
+
+#[tauri::command(async)]
+fn delete_group(kule: K<'_>, group: u64) -> Result<()> {
+    kule.call(Call::DeleteGroup { group })
+}
+
+#[tauri::command(async)]
+fn set_task_group(kule: K<'_>, task: String, group: Option<u64>) -> Result<TaskView> {
+    kule.call(Call::SetTaskGroup { task, group })
+}
+
+#[tauri::command(async)]
 fn policy(kule: K<'_>) -> Result<PolicyChoice> {
     kule.call(Call::Policy)
 }
@@ -745,6 +805,14 @@ fn main() {
             set_order,
             policy,
             choose_policy,
+            groups,
+            create_group,
+            update_group,
+            set_group_policy,
+            group_policy_text,
+            set_group_order,
+            delete_group,
+            set_task_group,
             set_menu_keys,
             terminal_open,
             open_url,

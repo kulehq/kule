@@ -23,6 +23,7 @@ mod effects;
 mod error;
 mod fsops;
 mod git;
+mod groups;
 mod history;
 mod home;
 mod ignore;
@@ -54,6 +55,10 @@ pub use checkpoint::{Checkpoint, State as CheckpointState};
 pub use effects::{Change, Effect, EffectSet, Move};
 pub use error::{Error, Result};
 pub use git::{GitState, GitSummary, RefChange};
+pub use groups::{
+    GROUP_POLICY_DIR, GROUPS_FILE, Group, GroupPolicy, MAX_GROUP_POLICY, MAX_GROUPS, create_group,
+    delete_group, group_policy_text, groups, set_group_order, set_group_policy, update_group,
+};
 pub use history::{Entry as HistoryEntry, Event as HistoryEvent};
 pub use home::{HomeApplied, HomeChange};
 pub use kule_entities as entities;

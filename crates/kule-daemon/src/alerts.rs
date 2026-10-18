@@ -164,6 +164,7 @@ mod tests {
             home_changes: 0,
             label: None,
             color: None,
+            group: None,
         }
     }
 

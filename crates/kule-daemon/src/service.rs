@@ -32,6 +32,14 @@ fn text(e: Error) -> String {
     }
 }
 
+/// A group's own policy as written, and Kule's balanced one to start one
+/// from.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GroupPolicyText {
+    pub written: Option<String>,
+    pub balanced: String,
+}
+
 /// What every task may spend together in any 24 hours, and what they spent
 /// in the last 24.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -82,6 +90,9 @@ pub struct TaskView {
     pub label: Option<String>,
     #[serde(default)]
     pub color: Option<kule_engine::TaskColor>,
+    /// The group the person put the task in.
+    #[serde(default)]
+    pub group: Option<u64>,
 }
 
 /// The ACP registry as the app shows it.
@@ -456,6 +467,64 @@ impl Service {
     /// Puts the task list in the person's order.
     pub fn set_order(&self, ids: &[String]) -> Result<()> {
         kule_engine::set_task_order(&self.home, ids).map_err(text)
+    }
+
+    /// The groups, in the person's order.
+    pub fn groups(&self) -> Result<Vec<kule_engine::Group>> {
+        kule_engine::groups(&self.home).map_err(text)
+    }
+
+    pub fn create_group(
+        &self,
+        name: &str,
+        color: Option<kule_engine::TaskColor>,
+    ) -> Result<kule_engine::Group> {
+        kule_engine::create_group(&self.home, name, color).map_err(text)
+    }
+
+    pub fn update_group(
+        &self,
+        id: u64,
+        name: &str,
+        color: Option<kule_engine::TaskColor>,
+        collapsed: bool,
+    ) -> Result<kule_engine::Group> {
+        kule_engine::update_group(&self.home, id, name, color, collapsed).map_err(text)
+    }
+
+    /// Sets the policy a group's tasks are judged by, from their next
+    /// commit and run.
+    pub fn set_group_policy(
+        &self,
+        id: u64,
+        policy: kule_engine::GroupPolicy,
+        text_: Option<&str>,
+    ) -> Result<kule_engine::Group> {
+        kule_engine::set_group_policy(&self.home, id, policy, text_).map_err(text)
+    }
+
+    /// The policy written for a group, if one was.
+    pub fn group_policy_text(&self, id: u64) -> Result<GroupPolicyText> {
+        Ok(GroupPolicyText {
+            written: kule_engine::group_policy_text(&self.home, id).map_err(text)?,
+            balanced: kule_engine::DEFAULT_POLICY.to_owned(),
+        })
+    }
+
+    pub fn set_group_order(&self, ids: &[u64]) -> Result<()> {
+        kule_engine::set_group_order(&self.home, ids).map_err(text)
+    }
+
+    /// Deletes a group; its tasks stay, in no group.
+    pub fn delete_group(&self, id: u64) -> Result<()> {
+        kule_engine::delete_group(&self.home, id).map_err(text)
+    }
+
+    /// Puts the task in a group, or takes it out with `None`; its next
+    /// commit and run are judged by that group's policy.
+    pub fn set_task_group(&self, id: &str, group: Option<u64>) -> Result<TaskView> {
+        self.open(id)?.set_group(group).map_err(text)?;
+        self.view(id)
     }
 
     /// Which policy holds.
@@ -977,6 +1046,7 @@ impl Service {
             home_changes: task.home_changes().map_or(0, |c| c.len()),
             label: task.label().map_err(text)?,
             color: task.color().map_err(text)?,
+            group: task.group().map_err(text)?,
         })
     }
 
@@ -1086,9 +1156,10 @@ impl Service {
         self.open(id)
     }
 
-    /// The user's policy, or the built-in one, plus the workspace's forbids.
+    /// The task's group's policy, or the one for every task, plus the
+    /// workspace's forbids.
     fn policy(&self, task: &Task) -> Result<Policy> {
-        Policy::load(Some(&self.home.join("policy.cedar")), task.workspace()).map_err(text)
+        Policy::for_task(task).map_err(text)
     }
 }
 
@@ -1343,6 +1414,45 @@ mod tests {
         s.app.choose_policy(PolicyChoice::Balanced).unwrap();
         assert!(matches!(
             s.app.commit(&id, false, false, None).unwrap(),
+            Commit::Applied { .. }
+        ));
+    }
+
+    #[test]
+    fn a_tasks_group_policy_judges_its_commit() {
+        use kule_engine::{GroupPolicy, TaskColor};
+        let s = Setup::new();
+        let (held, held_copy) = s.task();
+        let (free, free_copy) = s.task();
+        let group = s
+            .app
+            .create_group("careful ones", Some(TaskColor::Red))
+            .unwrap();
+        s.app
+            .set_group_policy(group.id, GroupPolicy::Careful, None)
+            .unwrap();
+        let view = s.app.set_task_group(&held, Some(group.id)).unwrap();
+        assert_eq!(view.group, Some(group.id));
+        assert!(s.app.set_task_group(&free, Some(group.id + 1)).is_err());
+
+        // Only the task in the group waits; the other keeps the policy for
+        // every task.
+        fs::write(held_copy.join("a.txt"), "edited\n").unwrap();
+        fs::write(free_copy.join("a.txt"), "edited\n").unwrap();
+        assert!(matches!(
+            s.app.commit(&held, false, false, None).unwrap(),
+            Commit::Held { .. }
+        ));
+        assert!(matches!(
+            s.app.commit(&free, false, false, None).unwrap(),
+            Commit::Applied { .. }
+        ));
+
+        // Out of its group, it is judged as the rest.
+        s.app.delete_group(group.id).unwrap();
+        assert!(s.app.groups().unwrap().is_empty());
+        assert!(matches!(
+            s.app.commit(&held, false, false, None).unwrap(),
             Commit::Applied { .. }
         ));
     }

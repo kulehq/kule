@@ -77,18 +77,23 @@ impl TaskColor {
 /// as something else: control characters and the ones that turn the
 /// direction of text.
 pub(crate) fn clean_label(label: Option<&str>) -> Result<Option<String>> {
+    clean_name("task", label)
+}
+
+/// [`clean_label`] for a `what`: a task's name or a group's.
+pub(crate) fn clean_name(what: &str, label: Option<&str>) -> Result<Option<String>> {
     let Some(label) = label.map(str::trim).filter(|l| !l.is_empty()) else {
         return Ok(None);
     };
     if label.chars().count() > MAX_LABEL {
         return Err(Error::Invalid(format!(
-            "a task's name is at most {MAX_LABEL} characters"
+            "a {what}'s name is at most {MAX_LABEL} characters"
         )));
     }
     if label.chars().any(|c| c.is_control() || turns_text(c)) {
-        return Err(Error::Invalid(
-            "a task's name cannot hold control or text-direction characters".to_owned(),
-        ));
+        return Err(Error::Invalid(format!(
+            "a {what}'s name cannot hold control or text-direction characters"
+        )));
     }
     Ok(Some(label.to_owned()))
 }

@@ -54,6 +54,37 @@ enum RulesCmd {
 }
 
 #[derive(Subcommand)]
+enum GroupCmd {
+    /// List the groups, their policies and tasks (the default).
+    List,
+    /// Make a group; it keeps the policy for every task until you choose
+    /// another.
+    New {
+        name: String,
+        #[arg(long)]
+        color: Option<String>,
+    },
+    /// Rename group ID.
+    Rename { id: u64, name: String },
+    /// Mark group ID with a colour; without COLOR, take it away.
+    Color { id: u64, color: Option<String> },
+    /// The policy group ID's tasks are judged by: default (the one for
+    /// every task), balanced, careful, or own. Without a choice, print the
+    /// rules that hold for the group.
+    Policy {
+        id: u64,
+        choice: Option<String>,
+        /// With `own`: the group's policy, in Cedar.
+        #[arg(long, value_name = "PATH")]
+        file: Option<PathBuf>,
+    },
+    /// Put TASK in group GROUP; without GROUP, take it out of its group.
+    Put { task: String, group: Option<u64> },
+    /// Delete group ID; its tasks stay, in no group.
+    Delete { id: u64 },
+}
+
+#[derive(Subcommand)]
 enum HomeCmd {
     /// List them (the default).
     List,
@@ -252,6 +283,12 @@ enum Cmd {
         #[arg(long, requires = "approve")]
         remember: bool,
     },
+    /// Groups of tasks, each with a name, a colour and the policy its tasks
+    /// are judged by.
+    Group {
+        #[command(subcommand)]
+        action: Option<GroupCmd>,
+    },
     /// What you told Kule not to ask about again.
     Rules {
         #[command(subcommand)]
@@ -341,6 +378,12 @@ fn run() -> Result<ExitCode> {
                 }
                 if let Some(color) = task.color()? {
                     line += &format!(" ({})", color.name());
+                }
+                if let Some(id) = task.group()?
+                    && let Some(group) =
+                        kule_engine::groups(&home)?.into_iter().find(|g| g.id == id)
+                {
+                    line += &format!(" [{}]", group.name);
                 }
                 println!("{line}");
             }
@@ -749,6 +792,7 @@ fn run() -> Result<ExitCode> {
             }
         }
         Cmd::Agents { action } => agents_cmd(&home, action.unwrap_or(AgentsCmd::List))?,
+        Cmd::Group { action } => group_cmd(&home, action.unwrap_or(GroupCmd::List))?,
         Cmd::Rules { action } => rules_cmd(&home, action.unwrap_or(RulesCmd::List))?,
         Cmd::Secrets { action } => secrets_cmd(&home, action.unwrap_or(SecretsCmd::List))?,
         Cmd::Home { task, action } => home_cmd(&home, &task, action.unwrap_or(HomeCmd::List))?,
@@ -814,13 +858,11 @@ fn run() -> Result<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
-/// The user's policy from `<home>/policy.cedar` (or the built-in one), plus
-/// the forbid rules of the task's real workspace.
-fn load_policy(home: &Path, task: &Task) -> Result<Policy> {
-    Ok(Policy::load(
-        Some(&home.join("policy.cedar")),
-        task.workspace(),
-    )?)
+/// The task's group's policy, or the one for every task from
+/// `<home>/policy.cedar` (or the built-in one), plus the forbid rules of the
+/// task's real workspace.
+fn load_policy(_home: &Path, task: &Task) -> Result<Policy> {
+    Ok(Policy::for_task(task)?)
 }
 
 /// Prints an agent's events as they come: its answer as running text, tool
@@ -1270,6 +1312,102 @@ fn describe_allowance(allowance: &kule_engine::Allowance) -> String {
         kule_engine::Allowance::Connect { host, port } => format!("connections to {host}:{port}"),
         kule_engine::Allowance::File { path, rule } => format!("changes to {path} ({rule})"),
     }
+}
+
+fn group_cmd(home: &Path, action: GroupCmd) -> Result<()> {
+    use kule_engine::GroupPolicy;
+    let color = |name: Option<&str>| name.map(TaskColor::parse).transpose();
+    match action {
+        GroupCmd::List => {
+            let groups = kule_engine::groups(home)?;
+            if groups.is_empty() {
+                println!("no groups: every task is judged by the policy for every task");
+            }
+            let tasks = kule_engine::arranged(home)?;
+            for group in groups {
+                let policy = match group.policy {
+                    GroupPolicy::Default => "the policy for every task",
+                    GroupPolicy::Balanced => "balanced",
+                    GroupPolicy::Careful => "careful",
+                    GroupPolicy::Own => "its own policy",
+                };
+                let mut line = format!("{}  {} · {policy}", group.id, group.name);
+                if let Some(color) = group.color {
+                    line += &format!(" ({})", color.name());
+                }
+                println!("{line}");
+                for info in &tasks {
+                    if Task::open(home, &info.id)?.group()? == Some(group.id) {
+                        println!("    {}  {}", info.id, info.workspace.display());
+                    }
+                }
+            }
+        }
+        GroupCmd::New { name, color: c } => {
+            let group = kule_engine::create_group(home, &name, color(c.as_deref())?)?;
+            println!("group {} made: {}", group.id, group.name);
+        }
+        GroupCmd::Rename { id, name } => {
+            let group = find_group(home, id)?;
+            kule_engine::update_group(home, id, &name, group.color, group.collapsed)?;
+        }
+        GroupCmd::Color { id, color: c } => {
+            let group = find_group(home, id)?;
+            kule_engine::update_group(
+                home,
+                id,
+                &group.name,
+                color(c.as_deref())?,
+                group.collapsed,
+            )?;
+        }
+        GroupCmd::Policy { id, choice, file } => {
+            let Some(choice) = choice else {
+                let group = find_group(home, id)?;
+                let text = match group.policy {
+                    GroupPolicy::Default => match policy_choice(home)? {
+                        PolicyChoice::Balanced => DEFAULT_POLICY.to_owned(),
+                        PolicyChoice::Careful => CAREFUL_POLICY.to_owned(),
+                        PolicyChoice::Own => std::fs::read_to_string(home.join(USER_POLICY))?,
+                    },
+                    GroupPolicy::Balanced => DEFAULT_POLICY.to_owned(),
+                    GroupPolicy::Careful => CAREFUL_POLICY.to_owned(),
+                    GroupPolicy::Own => {
+                        kule_engine::group_policy_text(home, id)?.unwrap_or_default()
+                    }
+                };
+                print!("{text}");
+                return Ok(());
+            };
+            let policy = match choice.as_str() {
+                "default" => GroupPolicy::Default,
+                "balanced" => GroupPolicy::Balanced,
+                "careful" => GroupPolicy::Careful,
+                "own" => GroupPolicy::Own,
+                _ => bail!("{choice}: a group's policy is default, balanced, careful or own"),
+            };
+            let text = file
+                .map(|path| {
+                    std::fs::read_to_string(&path).with_context(|| path.display().to_string())
+                })
+                .transpose()?;
+            kule_engine::set_group_policy(home, id, policy, text.as_deref())?;
+            println!("group {id}'s tasks are judged by it from their next commit and run");
+        }
+        GroupCmd::Put { task, group } => Task::open(home, &task)?.set_group(group)?,
+        GroupCmd::Delete { id } => {
+            kule_engine::delete_group(home, id)?;
+            println!("group {id} deleted; its tasks are in no group");
+        }
+    }
+    Ok(())
+}
+
+fn find_group(home: &Path, id: u64) -> Result<kule_engine::Group> {
+    kule_engine::groups(home)?
+        .into_iter()
+        .find(|g| g.id == id)
+        .ok_or_else(|| anyhow!("no group {id}"))
 }
 
 fn rules_cmd(home: &Path, action: RulesCmd) -> Result<()> {

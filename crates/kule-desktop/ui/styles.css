@@ -335,8 +335,228 @@ body.dragging-task {
   box-shadow: 0 -2px 0 var(--accent);
 }
 
-.task-row.drop-after {
+.task-row.drop-after,
+.group-head.drop-after {
   box-shadow: 0 2px 0 var(--accent);
+}
+
+.group-head.drop-into {
+  background: var(--accent-soft, var(--sunken));
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+/* "Tasks" and the + that makes a group. */
+.nav-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+
+.nav-title-row .nav-title {
+  margin-bottom: 0;
+}
+
+.nav-add {
+  width: 22px;
+  height: 22px;
+  margin-right: 4px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--faint);
+  font: 500 16px/1 var(--sans);
+  cursor: pointer;
+}
+
+.nav-add:hover,
+.nav-add[aria-expanded="true"] {
+  background: var(--sunken);
+  color: var(--text);
+}
+
+.nav-add:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+
+/* A group in the list: its head, then its tasks a step in. */
+.group-row {
+  list-style: none;
+  margin: 2px 0 6px;
+}
+
+.group-head {
+  position: relative;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  border-radius: 6px;
+}
+
+.group-row[class*="color-"] > .group-head::before {
+  position: absolute;
+  top: 6px;
+  bottom: 6px;
+  left: 0;
+  width: 3px;
+  border-radius: 2px;
+  background: var(--tag);
+  content: "";
+}
+
+.group-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 6px 4px 6px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+
+.group-toggle:hover {
+  background: var(--sunken);
+}
+
+.group-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.group-chevron {
+  width: 10px;
+  color: var(--faint);
+  font-size: 10px;
+}
+
+.group-name {
+  overflow: hidden;
+  min-width: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.group-policy {
+  flex: none;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--sunken);
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.group-count {
+  flex: none;
+  margin-left: auto;
+  color: var(--faint);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.group-tasks {
+  margin: 0 0 0 10px;
+  padding: 0;
+}
+
+.group-empty {
+  list-style: none;
+  padding: 4px 10px 6px;
+  font-size: 12px;
+}
+
+.menu-note {
+  max-width: 240px;
+  margin: 2px 8px 6px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.menu-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 8px;
+  border-radius: 50%;
+  background: var(--tag, var(--border));
+}
+
+/* Settings: each group's policy. */
+.group-policies {
+  margin-top: 28px;
+}
+
+.group-policy-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.group-policy-row {
+  position: relative;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  margin-bottom: 8px;
+}
+
+.group-policy-row[class*="color-"] {
+  border-left: 4px solid var(--tag);
+}
+
+.group-policy-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.group-policy-name {
+  font-weight: 600;
+}
+
+.group-policy-line select {
+  margin-left: auto;
+}
+
+.group-policy-editor:not(:empty) {
+  margin-top: 10px;
+}
+
+.group-policy-text {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--sunken);
+  color: var(--text);
+  font: 12px/1.5 var(--mono);
+  resize: vertical;
+}
+
+.group-policy-error {
+  margin: 6px 0 0;
+  color: var(--deny);
+  font: 12px/1.4 var(--mono);
+  white-space: pre-wrap;
+}
+
+.group-policy-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 8px;
 }
 
 /* Buttons and chips */

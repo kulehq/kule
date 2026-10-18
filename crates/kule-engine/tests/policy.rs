@@ -435,3 +435,66 @@ fn a_person_chooses_between_kules_policies_but_keeps_their_own() {
     }
     assert_eq!(fs::read_to_string(&user).unwrap(), own);
 }
+
+#[test]
+fn a_tasks_group_chooses_the_policy_it_is_judged_by() {
+    use kule_engine::{
+        GROUP_POLICY_DIR, GroupPolicy, PolicyChoice, choose_policy, create_group, delete_group,
+        set_group_policy,
+    };
+    let forbid_docs = r#"@id("docs-reviewed") forbid (principal, action == Kule::Action::"auto", resource) when { resource.path like "docs/*" };"#;
+    let mut files = PROJECT.to_vec();
+    files.push((".kule/policy.cedar", forbid_docs));
+    let s = Setup::new(&files, false);
+    let home = s._home.path();
+    write(&s.copy().join("README.md"), "hello again\n");
+    write(&s.copy().join("docs/guide.md"), "# Guide\n");
+    let judged = |subject: &str| {
+        let policy = Policy::for_task(&s.task).unwrap();
+        on(&policy.judge(&s.task.effects().unwrap()), subject)
+    };
+    let allowed = (Verdict::Allow, rules(&["files"]));
+    let careful = (Verdict::Ask, rules(&["careful"]));
+
+    // In no group, the policy for every task holds.
+    assert_eq!(judged("README.md"), allowed);
+    choose_policy(home, PolicyChoice::Careful).unwrap();
+    assert_eq!(judged("README.md"), careful);
+    choose_policy(home, PolicyChoice::Balanced).unwrap();
+
+    let group = create_group(home, "clients", None).unwrap();
+    assert!(s.task.set_group(Some(group.id + 1)).is_err());
+    s.task.set_group(Some(group.id)).unwrap();
+    assert_eq!(s.task.group().unwrap(), Some(group.id));
+    // A new group keeps the policy for every task.
+    assert_eq!(judged("README.md"), allowed);
+    set_group_policy(home, group.id, GroupPolicy::Careful, None).unwrap();
+    assert_eq!(judged("README.md"), careful);
+    // The group's choice holds whatever holds for the rest.
+    choose_policy(home, PolicyChoice::Careful).unwrap();
+    set_group_policy(home, group.id, GroupPolicy::Balanced, None).unwrap();
+    assert_eq!(judged("README.md"), allowed);
+    choose_policy(home, PolicyChoice::Balanced).unwrap();
+
+    // A policy of the group's own; the repository's forbids still hold.
+    let trusting = r#"@id("trust-everything") permit (principal, action, resource);"#;
+    set_group_policy(home, group.id, GroupPolicy::Own, Some(trusting)).unwrap();
+    assert_eq!(
+        judged("README.md"),
+        (Verdict::Allow, rules(&["trust-everything"]))
+    );
+    assert_eq!(judged("docs/guide.md").0, Verdict::Ask);
+    // Gone, it refuses rather than fall back to another.
+    fs::remove_file(
+        home.join(GROUP_POLICY_DIR)
+            .join(format!("{}.cedar", group.id)),
+    )
+    .unwrap();
+    assert!(Policy::for_task(&s.task).is_err());
+
+    // A deleted group lets go of its tasks.
+    set_group_policy(home, group.id, GroupPolicy::Careful, None).unwrap();
+    delete_group(home, group.id).unwrap();
+    assert_eq!(s.task.group().unwrap(), None);
+    assert_eq!(judged("README.md"), allowed);
+}
