@@ -18,16 +18,30 @@ directory caught for review. macOS and Linux. See [CHANGELOG.md](CHANGELOG.md).
 
 From [the releases](https://github.com/kulehq/kule/releases):
 
-- **macOS 13 or later:** `Kule_<version>_universal.dmg`, signed and
-  notarized. The `kule` command is inside the app: link
-  `/Applications/Kule.app/Contents/MacOS/kule` onto your `PATH`. Each
-  release also carries `kule.rb`, a Homebrew cask that installs the app
-  and links the command.
+- **macOS 13 or later:** `Kule_<version>_universal.dmg`. The `kule`
+  command is inside the app: link `/Applications/Kule.app/Contents/MacOS/kule`
+  onto your `PATH`.
+  - A notarized release also carries `kule.rb`, a Homebrew cask that
+    installs the app and links the command.
+  - A preview is signed ad hoc, not notarized, so macOS refuses it the first
+    time. After checking the download (below), choose **Open Anyway** in
+    System Settings → Privacy & Security, or run `xattr -dr
+    com.apple.quarantine /Applications/Kule.app` once. Its release notes say
+    which kind it is.
 - **Linux (x86_64):** the `.deb` (Debian, Ubuntu) or the `.rpm` (Fedora)
   puts `kule-desktop` and `kule` in `/usr/bin`;
   `kule-<version>-linux-x86_64.tar.gz` is the command alone.
 - **From source:** `cargo build --release -p kule -p kule-desktop` (Linux
   needs `libwebkit2gtk-4.1-dev`).
+
+Every release file is listed in `SHA256SUMS` and carries a build provenance
+attestation. The attestation says the file was built from this repository by
+the release workflow. Check them before opening anything:
+
+```sh
+shasum -a 256 -c SHA256SUMS --ignore-missing
+gh attestation verify Kule_<version>_universal.dmg --repo kulehq/kule
+```
 
 The agents are installed and signed in the way they are without Kule:
 Claude Code and Codex need Node.js (`npx`), Gemini its CLI. The app's

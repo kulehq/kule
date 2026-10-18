@@ -1,9 +1,11 @@
 name: release
 
-# A tag vX.Y.Z builds the macOS app (universal, signed and notarized) and the
-# Linux .deb and .rpm, each with the kule CLI inside, and opens a draft release with
-# them, their checksums and the Homebrew cask. Run by hand, it builds the
-# same unsigned and publishes nothing.
+# A tag vX.Y.Z builds the macOS app (universal) and the Linux .deb and .rpm,
+# each with the kule CLI inside, and opens a draft release with them, their
+# checksums and build provenance attestations. With the APPLE_* secrets set the
+# app is signed and notarized (and a Homebrew cask comes with it); without
+# them it is signed ad hoc, a preview the notes say how to open. Run by hand,
+# it builds and publishes nothing.
 
 on:
   push:
@@ -20,6 +22,8 @@ env:
 jobs:
   macos:
     runs-on: macos-latest
+    outputs:
+      signed: ${{ steps.build.outputs.signed }}
     env:
       MACOSX_DEPLOYMENT_TARGET: "13.0"
     steps:
@@ -47,10 +51,10 @@ jobs:
           mkdir -p "$bin"
           for t in aarch64-apple-darwin x86_64-apple-darwin; do cp "target/$t/release/kule" "$bin/kule-$t"; done
           lipo -create -output "$bin/kule-universal-apple-darwin" "$bin/kule-aarch64-apple-darwin" "$bin/kule-x86_64-apple-darwin"
-      - name: Build, sign and notarize
+      - name: Build, and sign (notarized with a certificate, ad hoc without)
+        id: build
         working-directory: crates/kule-desktop
         env:
-          RELEASE: ${{ startsWith(github.ref, 'refs/tags/v') }}
           CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
@@ -62,25 +66,30 @@ jobs:
             export APPLE_CERTIFICATE="$CERTIFICATE" APPLE_CERTIFICATE_PASSWORD="$CERTIFICATE_PASSWORD"
             export APPLE_SIGNING_IDENTITY="$SIGNING_IDENTITY"
             export APPLE_ID="$NOTARY_ID" APPLE_PASSWORD="$NOTARY_PASSWORD" APPLE_TEAM_ID="$TEAM_ID"
-          elif [ "$RELEASE" = "true" ]; then
-            echo "A release is signed and notarized: set the APPLE_* secrets."
-            exit 1
+            echo "signed=true" >> "$GITHUB_OUTPUT"
+          else
+            # Ad hoc: what Apple silicon needs to run it, with no identity
+            # behind it. Gatekeeper asks once; the release notes say how.
+            export APPLE_SIGNING_IDENTITY="-"
+            echo "signed=false" >> "$GITHUB_OUTPUT"
           fi
           cargo tauri build --target universal-apple-darwin --bundles app,dmg \
             --config tauri.release.conf.json
       - name: Check what was built
         env:
-          RELEASE: ${{ startsWith(github.ref, 'refs/tags/v') }}
+          SIGNED: ${{ steps.build.outputs.signed }}
         run: |
           bundle=target/universal-apple-darwin/release/bundle
           app="$bundle/macos/Kule.app"
           "$app/Contents/MacOS/kule" --version
           lipo -archs "$app/Contents/MacOS/kule-desktop" | grep -q arm64
           lipo -archs "$app/Contents/MacOS/kule-desktop" | grep -q x86_64
-          if [ "$RELEASE" = "true" ]; then
-            codesign --verify --deep --strict --verbose=2 "$app"
+          codesign --verify --deep --strict --verbose=2 "$app"
+          if [ "$SIGNED" = "true" ]; then
             spctl --assess --type execute --verbose=2 "$app"
             xcrun stapler validate "$app"
+          else
+            codesign -dv "$app" 2>&1 | grep -q "Signature=adhoc"
           fi
           mkdir dist
           cp "$bundle"/dmg/*.dmg dist/
@@ -141,8 +150,12 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: [macos, linux]
     runs-on: ubuntu-latest
+    # Only this job may mint an OIDC token (for the attestations): it builds
+    # nothing and runs no dependency's code.
     permissions:
       contents: write
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -154,15 +167,30 @@ jobs:
       - name: Checksums, the Homebrew cask and the notes
         env:
           TAG: ${{ github.ref_name }}
+          SIGNED: ${{ needs.macos.outputs.signed }}
         run: |
           version="${TAG#v}"
           dmg="dist/Kule_${version}_universal.dmg"
           test -f "$dmg"
-          sed -e "s/@VERSION@/$version/" -e "s/@SHA256@/$(sha256sum "$dmg" | cut -d' ' -f1)/" \
-            packaging/homebrew/kule.rb.in > dist/kule.rb
+          # The cask only for a notarized app: Homebrew installs it without
+          # asking, which an app Gatekeeper refuses should not be.
+          if [ "$SIGNED" = "true" ]; then
+            sed -e "s/@VERSION@/$version/" -e "s/@SHA256@/$(sha256sum "$dmg" | cut -d' ' -f1)/" \
+              packaging/homebrew/kule.rb.in > dist/kule.rb
+          fi
           (cd dist && sha256sum -- * > SHA256SUMS)
-          awk -v v="$version" '$0 ~ "^## " v "( |$)" {on=1; next} /^## / {on=0} on' CHANGELOG.md > notes.md
-          test -s notes.md || { echo "CHANGELOG.md has no section for $version"; exit 1; }
+          awk -v v="$version" '$0 ~ "^## " v "( |$)" {on=1; next} /^## / {on=0} on' CHANGELOG.md > changes.md
+          test -s changes.md || { echo "CHANGELOG.md has no section for $version"; exit 1; }
+          if [ "$SIGNED" = "true" ]; then
+            cp changes.md notes.md
+          else
+            sed "s/@VERSION@/$version/g" packaging/unsigned-notes.md > notes.md
+            cat changes.md >> notes.md
+          fi
+      - name: Build provenance for every file
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/*
       - name: Draft release
         env:
           GH_TOKEN: ${{ github.token }}
