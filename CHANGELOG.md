@@ -1,5 +1,31 @@
 # Changes
 
+## Unreleased
+
+### Extensions
+
+- Extensions add commands, panels, themes, settings, notes on a review,
+  agent profiles and MCP servers. They are written in JavaScript and shared
+  as `.kulext` files (`kule ext new | dev | pack | info | install | approve
+  | enable | disable | remove | mcp`, or Settings → Extensions).
+- Approval is pinned by digest:
+  - an extension asks for permissions from a closed list;
+  - it runs only once approved as it stands, and waits again after any
+    change;
+  - the approval screen names what is new since last time.
+- Its code runs in sandboxed frames served from loopback, which reach
+  nothing but Kule. Kule answers each call only if the approved permissions
+  cover it:
+  - `net.fetch` reaches the approved hosts over https only, and never an
+    address on the computer or its network;
+  - keys pressed in a frame only move the view.
+- A `.kulext` is never unpacked. Each entry's path, kind and inflated size
+  are checked.
+- Agent profiles and MCP servers from an extension are each approved on
+  their own. MCP servers are started by the agent inside its sandbox.
+- Daemon protocol 23. The new `TaskChanged` notice says when a task is
+  created, committed, rolled back, undone or removed.
+
 ## 0.2.0
 
 The first release: the macOS app (universal, signed and notarized), Linux

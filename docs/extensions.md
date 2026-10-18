@@ -1,0 +1,230 @@
+# Writing a Kule extension
+
+An extension adds to Kule: commands, panels, themes, settings, notes on a
+review, agent profiles and MCP servers for agents. It is plain JavaScript and
+HTML in a folder, shared as a `.kulext` file.
+
+Kule treats an extension the way it treats an agent: as code it does not
+trust. The extension asks for permissions from a closed list. The person
+approves exactly the version they saw, and any change waits for them again.
+Its code runs in sandboxed frames that can reach nothing but Kule, and Kule
+answers only the calls those permissions cover.
+
+## Start
+
+```sh
+kule ext new me.hello        # a folder: manifest, main script, panel, types
+kule ext dev hello           # install it from the folder, read live
+kule ext approve me.hello    # let it run
+```
+
+Open the panel from the command palette (`Show Hello`), or drag its tab where
+you want it. While you write, code changes run as they are; a change to
+`kule-extension.json` waits for approval again. To share it:
+
+```sh
+kule ext pack hello          # me.hello-0.1.0.kulext
+kule ext info me.hello-0.1.0.kulext
+kule ext install me.hello-0.1.0.kulext
+```
+
+The desktop app does the same under **Settings → Extensions**.
+
+`examples/extensions/` has three to read:
+
+| Example | What it shows |
+| --- | --- |
+| `hello` | A panel, a command, a setting and a theme |
+| `lockfile-notes` | A review helper: it notes changed lockfiles |
+| `webhook-notify` | Watching tasks and posting to a webhook |
+
+## The manifest: `kule-extension.json`
+
+```json
+{
+  "kule_extension": 1,
+  "id": "acme.notes",
+  "name": "Notes",
+  "version": "1.0.0",
+  "publisher": "acme",
+  "description": "One sentence.",
+  "main": "main.js",
+  "permissions": ["tasks.read", "net"],
+  "hosts": ["hooks.slack.com"],
+  "contributes": {
+    "commands": [{ "id": "scan", "title": "Scan", "keys": "Mod+Alt+S" }],
+    "panels": [{ "id": "notes", "title": "Notes", "entry": "panel.html", "needsTask": true }],
+    "configuration": [
+      { "key": "level", "title": "Level", "type": "enum", "values": ["info", "warn"], "default": "warn" }
+    ],
+    "themes": ["dusk.kule-theme.json"],
+    "agents": "agents.toml",
+    "mcpServers": [{ "name": "db", "command": "npx", "args": ["-y", "@acme/db-mcp@1.2.3"] }]
+  }
+}
+```
+
+Kule checks every field. An unknown field or permission refuses the
+extension; nothing is ignored.
+
+| Field | Rules |
+| --- | --- |
+| `id` | `publisher.name`, each part 1–20 of `a-z 0-9 -`; it starts with `publisher` |
+| `publisher` | Shown as "not verified by anyone" |
+| `name`, `description` | Text without control or text-direction characters (40 and 300 characters) |
+| `version` | `X.Y.Z`, with an optional `-pre` or `+build` |
+| `main` | A `.js` file that runs in a hidden frame while the app is open; needed for commands |
+| `hosts` | Plain host names (`api.example.com`), with `net` and only with it |
+| command and panel ids | 1–18 of `a-z 0-9 -`. A panel's id is also the id of the command that shows it, so a command and a panel cannot share one |
+| `configuration` | Up to 32 settings of type `string`, `boolean`, `number` or `enum`. Kule draws the form and keeps the values |
+
+Paths in the manifest are plain: letters, digits, `-`, `_` and `.`, with no
+`..` and no hidden names.
+
+## Permissions
+
+| Permission | Lets the extension |
+| --- | --- |
+| `tasks.read` | See tasks: names, folders, how many changes, whether an agent works. Not budgets, spending or home changes |
+| `events.read` | Hear what agents say and do while they run, and when tasks are created, committed, rolled back, undone or removed |
+| `questions.read` | See the questions waiting for the person. It cannot answer them |
+| `review.read` | Read a task's changes and the policy's verdicts. Not what waits in the person's home |
+| `review.annotate` | Add notes to a task's review. Notes only |
+| `files.read` | Read files in a task's copy |
+| `storage` | Keep up to 1 MiB of JSON of its own |
+| `notify` | Show notifications, named for the extension, 5 a minute |
+| `net` | `fetch` over https to the listed `hosts` |
+
+No permission reaches any of these:
+- secrets;
+- answering a question;
+- commit, roll back or undo;
+- policies, rules, budgets or settings files;
+- agent approvals;
+- the terminal;
+- the daemon's token.
+
+The approval screen warns when an extension can both read the person's work
+and send data out.
+
+## The SDK
+
+Every page of an extension loads Kule's SDK from beside it:
+
+```html
+<script src="_kule/sdk.js"></script>
+```
+
+`kule-ext.d.ts`, which `kule ext new` writes, has the types. Every call
+returns a promise. A refused call rejects with an `Error` that says why,
+such as `files.read needs the files.read permission, which Notes was not
+given`.
+
+```js
+await kule.ready;                          // connected
+kule.extension;                            // { id, name, version }
+kule.context;                              // { main: true } or { panel, task }
+
+kule.commands.register("scan", (args) => { /* … */ });
+await kule.commands.execute("ext.acme.notes.scan");
+await kule.commands.execute("view.files"); // Kule's commands that only move the view
+
+kule.events.on("task", ({ task, change }) => { /* … */ });
+
+await kule.tasks.list();                   // tasks.read
+await kule.tasks.get(id);
+await kule.review.get(task);               // review.read
+await kule.review.annotate(task, [{ path, level: "warn", text }]); // review.annotate
+await kule.files.list(task, "src");        // files.read
+await kule.files.read(task, "README.md");
+await kule.storage.get();                  // storage
+await kule.storage.set({ seen: 3 });
+await kule.config.get();                   // the extension's own settings
+await kule.ui.notify("Title", "Body");     // notify
+await kule.net.fetch("https://hooks.slack.com/…", { method: "POST", headers, body }); // net
+```
+
+### Events
+
+| Event | Data | Needs |
+| --- | --- | --- |
+| `run` | `{ task, seq, event }`: an agent's events | `events.read` |
+| `task` | `{ task, change }`: `created`, `committed`, `rolled_back`, `undone`, `removed` | `events.read` |
+| `questions` | The questions waiting now | `questions.read` |
+| `review` | `{ task, digest }`: a review was drawn with new changes | `review.read` |
+| `task-selected` | `{ task }`: the person chose another task | — |
+| `theme` | `{ scheme, colors }`. The SDK already set `--kule-<part>` CSS variables (`--kule-bg`, `--kule-text`, `--kule-accent`, …) | — |
+| `config` | `{ key, value }`: the person changed a setting | — |
+
+Events arrive only while the desktop app is open.
+
+## Contributions
+
+- **Commands** appear in the palette and in Settings → Shortcuts as
+  `ext.<id>.<command>`. A suggested key that Kule or another extension already
+  uses is dropped; the person can give the command one.
+- **Panels** sit in the window's regions like Kule's own; a new one goes to
+  the right. Kule draws a line above each, naming the extension, which the
+  frame cannot paint over.
+- **Themes** are `.kule-theme.json` files, colours only, checked as Kule's
+  own. They are listed in Appearance under "From extensions".
+- **Notes on a review** appear under "From extensions" with the extension's
+  name. They are plain text and cannot approve or refuse anything.
+- **Agent profiles** (`agents.toml`, the format of `kule agents show
+  claude-code`) go through the same checks as the person's own. Each waits in
+  Settings → Agents (or `kule agents approve NAME`) until approved.
+- **MCP servers** start with `npx` or `uvx` and name one exact version. Each
+  waits until the person lets agents use it (in the extension's card, or with
+  `kule ext mcp approve EXT/NAME`). The agent starts it inside its own sandbox
+  and behind the task's proxy, so it can do no more than the agent can; the
+  policy asks about every host it reaches.
+
+## What a frame can and cannot do
+
+Kule serves an extension's files from `127.0.0.1` under a random key. Its
+frames are sandboxed (`allow-scripts` only, an opaque origin) and their
+content policy keeps them to their own files:
+- no network (`connect-src 'none'`);
+- no frames of their own;
+- no forms;
+- no `localStorage` or cookies (use `kule.storage`).
+
+To Tauri a frame there is a remote origin, which reaches none of Kule's
+commands. A frame talks to Kule only over the MessagePort it is handed when
+it loads. What comes over that port belongs to the extension the port was
+made for, whatever the frame says it is.
+
+A shortcut pressed inside a frame reaches the window only for commands that
+move the view, or for the extension's own commands. A frame cannot commit,
+roll back or delete through a key.
+
+## The package
+
+A `.kulext` is a zip that Kule never unpacks to disk. When a package is
+installed, every entry is checked:
+- a plain path of a kind extensions carry: html, js, css, json, png, svg,
+  woff2, toml, md, txt, ts, or a name without an extension;
+- no links and no encryption;
+- the file list is consistent: no name twice, and the headers agree;
+- at most 5 MiB per file and 40 MiB in all once inflated, 20 MiB packed, 500
+  files.
+
+Approval pins the blake3 of the whole package. Kule checks it again before
+serving a file. `kule ext pack` makes the same bytes from the same folder, so
+the digest the person approved names exactly what they read.
+
+## Where things are
+
+`<KULE_HOME>/extensions/` holds:
+
+| Path | What it holds |
+| --- | --- |
+| `installed.json` | What is installed, on or off |
+| `approved.json` | What the person approved |
+| `mcp-approved.json` | The MCP servers agents may use |
+| `packages/` | The packages |
+| `data/<id>/storage.json` | What an extension keeps |
+| `data/<id>/config.json` | Its settings |
+| `data/<id>/network.jsonl` | One line per fetch: method, host, status, size. Never the path or the query |
+
+Removing an extension removes all of it, its approvals included.

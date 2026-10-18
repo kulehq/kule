@@ -276,3 +276,57 @@ fn an_extension_brings_agents_and_mcp_servers_that_wait_for_the_person() {
     let mcp = stdout(&kule(home.path(), work.path(), &["ext", "mcp"]));
     assert!(mcp.contains("waits for you"), "{mcp}");
 }
+
+#[test]
+fn a_new_extension_installs_as_it_is() {
+    let (home, work) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+    let made = stdout(&kule(
+        home.path(),
+        work.path(),
+        &["ext", "new", "me.first-try"],
+    ));
+    assert!(made.contains("wrote me.first-try into first-try"), "{made}");
+    assert!(work.path().join("first-try/kule-ext.d.ts").is_file());
+    stdout(&kule(
+        home.path(),
+        work.path(),
+        &["ext", "dev", "first-try"],
+    ));
+    stdout(&kule(
+        home.path(),
+        work.path(),
+        &["ext", "approve", "me.first-try"],
+    ));
+    assert!(stdout(&kule(home.path(), work.path(), &["ext"])).contains("First Try (dev) — runs"));
+    // Never over a folder with something in it.
+    let err = stderr(&kule(
+        home.path(),
+        work.path(),
+        &["ext", "new", "me.first-try"],
+    ));
+    assert!(err.contains("is not empty"), "{err}");
+}
+
+/// The examples in the repository stay extensions Kule takes.
+#[test]
+fn every_example_extension_reads() {
+    let (home, work) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+    let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/extensions");
+    let mut seen = 0;
+    for entry in fs::read_dir(&examples).unwrap() {
+        let dir = entry.unwrap().path();
+        let info = stdout(&kule(
+            home.path(),
+            work.path(),
+            &["ext", "info", dir.to_str().unwrap()],
+        ));
+        assert!(info.contains("publisher:"), "{}: {info}", dir.display());
+        stdout(&kule(
+            home.path(),
+            work.path(),
+            &["ext", "dev", dir.to_str().unwrap()],
+        ));
+        seen += 1;
+    }
+    assert!(seen >= 3, "{seen}");
+}

@@ -486,6 +486,28 @@ placeholder split by a chunk edge or in a body larger than 1 MiB,
 WebSocket upgrades, and Go programs on macOS, which trust the system
 keychain alone (Kule never adds its authority there).
 
+## Extensions
+
+An extension adds commands, panels, themes, settings, notes on a review,
+agent profiles or MCP servers. It is JavaScript in a folder, shared as a
+`.kulext` file. Kule trusts it no more than an agent:
+- it asks for permissions from a closed list, and runs only once the person
+  approves exactly the version they saw;
+- a change waits for approval again;
+- its code runs in sandboxed frames that reach nothing but Kule.
+
+No permission reaches secrets, answers to questions, commit, rollback, undo
+or policies. Agents and MCP servers it brings each wait for their own
+approval.
+
+```sh
+kule ext new me.hello && kule ext dev hello && kule ext approve me.hello
+```
+
+[docs/extensions.md](docs/extensions.md) covers the manifest, the
+permissions, the SDK and the package format;
+[examples/extensions](examples/extensions) has three to read.
+
 ## Not yet
 
 - Linux: Landlock reports refusals only to the audit log, so they are not

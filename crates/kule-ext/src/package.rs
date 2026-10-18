@@ -54,7 +54,7 @@ pub fn media_type(path: &str) -> Option<&'static str> {
         "png" => "image/png",
         "svg" => "image/svg+xml",
         "woff2" => "font/woff2",
-        "toml" | "md" | "txt" => "text/plain; charset=utf-8",
+        "toml" | "md" | "txt" | "ts" => "text/plain; charset=utf-8",
         _ => return None,
     })
 }
@@ -403,7 +403,7 @@ fn collect(dir: &Path, prefix: &str, files: &mut Vec<String>) -> Result<()> {
         }
         if media_type(&rel).is_none() {
             return Err(invalid(format!(
-                "{rel}: extensions carry html, js, css, json, png, svg, woff2, toml, md and txt files"
+                "{rel}: extensions carry html, js, css, json, png, svg, woff2, toml, md, txt and ts files"
             )));
         }
         files.push(rel);

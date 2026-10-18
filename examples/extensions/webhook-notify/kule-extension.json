@@ -1,0 +1,18 @@
+{
+  "kule_extension": 1,
+  "id": "kule.webhook-notify",
+  "name": "Webhook notify",
+  "version": "1.0.0",
+  "publisher": "kule",
+  "description": "Posts a line to a Slack webhook when a task is committed, rolled back or undone.",
+  "main": "main.js",
+  "permissions": ["events.read", "tasks.read", "net"],
+  "hosts": ["hooks.slack.com"],
+  "contributes": {
+    "commands": [{ "id": "test", "title": "Send a test message" }],
+    "configuration": [
+      { "key": "webhook", "title": "Webhook URL", "type": "string", "description": "https://hooks.slack.com/services/…" },
+      { "key": "on", "title": "Post when", "type": "enum", "values": ["commits", "everything"], "default": "commits" }
+    ]
+  }
+}

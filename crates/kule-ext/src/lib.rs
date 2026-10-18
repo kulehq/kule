@@ -11,6 +11,7 @@
 mod error;
 mod manifest;
 mod package;
+mod scaffold;
 mod store;
 mod text;
 
@@ -19,5 +20,6 @@ pub use manifest::{
     Command, Contributes, Field, FieldKind, MANIFEST, Manifest, McpServer, Panel, Permission,
 };
 pub use package::{MAX_ENTRY, MAX_PACKAGE, Package, Source, media_type, pack, plain_path};
+pub use scaffold::{SDK_TYPES, scaffold};
 pub use store::{Approval, Listed, OfferedMcp, Store};
 pub use text::host_ok;

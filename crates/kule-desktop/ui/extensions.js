@@ -165,6 +165,11 @@ function connectFrame(rec) {
     "*",
     [channel.port2]
   );
+  // What happened before the frame was there: the review on screen.
+  const task = state.current;
+  if (task && rec.ext.perms.has("review.read") && EXT.reviewTold.has(task)) {
+    rec.port.postMessage({ event: "review", data: { task, digest: EXT.reviewTold.get(task) } });
+  }
 }
 
 function fromFrame(rec, m) {

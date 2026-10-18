@@ -147,6 +147,14 @@ enum SecretsCmd {
 enum ExtCmd {
     /// List them, and why the ones that cannot run cannot (the default).
     List,
+    /// Start an extension: a folder with a manifest, a main script, a panel
+    /// and the SDK's types, that installs as it is.
+    New {
+        /// publisher.name, each 1 to 20 of a-z, 0-9 and -.
+        id: String,
+        /// Where to write it; the name part of the id by default.
+        dir: Option<PathBuf>,
+    },
     /// Show what a .kulext or an extension's folder asks for, without
     /// installing it.
     Info { path: PathBuf },
@@ -1672,6 +1680,17 @@ fn ext_cmd(home: &Path, action: ExtCmd) -> Result<()> {
                     listed.id, listed.version
                 );
             }
+        }
+        ExtCmd::New { id, dir } => {
+            let dir = dir.unwrap_or_else(|| {
+                PathBuf::from(id.split_once('.').map_or(id.as_str(), |(_, name)| name))
+            });
+            kule_ext::scaffold(&dir, &id)?;
+            println!("wrote {id} into {}", dir.display());
+            println!(
+                "try it: kule ext dev {}, then kule ext approve {id}",
+                dir.display()
+            );
         }
         ExtCmd::Info { path } => {
             let source = if path.is_dir() {
