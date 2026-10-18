@@ -2,6 +2,9 @@
 // extension has once it loads `_kule/sdk.js`. Every call is a request to
 // Kule, answered or refused by the permissions the person approved; a
 // refused call rejects with an Error that says why.
+//
+// A preview: the SDK may still change before Kule 1.0; the changelog names
+// any change that breaks extensions.
 
 declare namespace Kule {
   type Permission =

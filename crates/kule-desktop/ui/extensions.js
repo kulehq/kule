@@ -469,7 +469,7 @@ function renderExtensions() {
       h(
         "p",
         { class: "muted" },
-        "Extensions add commands, panels, themes and helpers to Kule. Each runs in a sandboxed frame and may do only what you approve below; a change to it waits for you again. None can answer a question, commit, roll back, read your secrets or change a policy."
+        "Extensions add commands, panels, themes and helpers to Kule. Each runs in a sandboxed frame and may do only what you approve below; a change to it waits for you again. None can answer a question, commit, roll back, read your secrets or change a policy. Extensions are a preview: what they can use may still change."
       ),
       h("div", { class: "agent-actions" }, install, dev)
     ),

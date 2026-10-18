@@ -1,5 +1,10 @@
 # Writing a Kule extension
 
+> **A preview.** The extension format (`"kule_extension": 1`) and the SDK may
+> still change before Kule 1.0. Any change that breaks extensions will be
+> named in the changelog, with what to do about it. Tell us what gets in
+> your way: [issues](https://github.com/kulehq/kule/issues).
+
 An extension adds to Kule: commands, panels, themes, settings, notes on a
 review, agent profiles and MCP servers for agents. It is plain JavaScript and
 HTML in a folder, shared as a `.kulext` file.

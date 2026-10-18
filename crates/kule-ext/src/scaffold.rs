@@ -94,7 +94,8 @@ pub fn scaffold(dir: &Path, id: &str) -> Result<()> {
                  Try it while you write it:\n\n    kule ext dev .\n    kule ext approve {id}\n\n\
                  Code changes run as they are; a changed manifest waits for approval again.\n\
                  Pack it to share it:\n\n    kule ext pack .\n\n\
-                 See docs/extensions.md in Kule's repository for the manifest and the SDK.\n"
+                 See docs/extensions.md in Kule's repository for the manifest and the SDK.\n\
+                 Extensions are a preview: the format and the SDK may still change before Kule 1.0.\n"
             ),
         ),
     ];
