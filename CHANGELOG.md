@@ -23,6 +23,16 @@
   are checked.
 - Agent profiles and MCP servers from an extension are each approved on
   their own. MCP servers are started by the agent inside its sandbox.
+- Hardened after an OWASP review, each finding shown in the app first:
+  - frames may come from the extension server's port only;
+  - WebRTC is off in the window;
+  - files are read without following links;
+  - folders under development may not sit where agents can write;
+  - a frame can only show panels;
+  - MCP servers start one exact registry package;
+  - `kule ext` goes through the daemon and asks before approving;
+  - the publisher `kule` is reserved;
+  - a safe mode, `--no-extensions`, is added.
 - Daemon protocol 23. The new `TaskChanged` notice says when a task is
   created, committed, rolled back, undone or removed.
 

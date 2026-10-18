@@ -772,7 +772,9 @@ fn main() {
     if let Err(e) = kule.start() {
         eprintln!("kule-desktop: {e}");
     }
-    let host = extensions::Host::start(&kule.home);
+    let safe_mode = std::env::args().any(|a| a == "--no-extensions")
+        || std::env::var_os("KULE_NO_EXTENSIONS").is_some();
+    let host = extensions::Host::start(&kule.home, !safe_mode);
     let mut context = tauri::generate_context!();
     // Frames only from the extension server's own port (the config says
     // none, and stays that way when the server could not start).

@@ -20,7 +20,17 @@ kule ext approve me.hello    # let it run
 
 Open the panel from the command palette (`Show Hello`), or drag its tab where
 you want it. While you write, code changes run as they are; a change to
-`kule-extension.json` waits for approval again. To share it:
+`kule-extension.json` waits for approval again.
+
+`kule ext approve` shows what it approves and asks first; a script passes
+`--yes`. With the app open, `kule ext` makes its changes through the daemon,
+so the app hears of them at once.
+
+The folder must be somewhere only you can write. Because its code runs
+unapproved, Kule refuses folders an agent could rewrite: those under `/tmp`,
+`/var/tmp`, `/dev/shm`, Kule's home, or an agent's own directories.
+
+To share it:
 
 ```sh
 kule ext pack hello          # me.hello-0.1.0.kulext
@@ -127,7 +137,7 @@ kule.context;                              // { main: true } or { panel, task }
 
 kule.commands.register("scan", (args) => { /* … */ });
 await kule.commands.execute("ext.acme.notes.scan");
-await kule.commands.execute("view.files"); // Kule's commands that only move the view
+await kule.commands.execute("view.files"); // a few of Kule's that only show a panel (below)
 
 kule.events.on("task", ({ task, change }) => { /* … */ });
 
@@ -173,11 +183,19 @@ Events arrive only while the desktop app is open.
 - **Agent profiles** (`agents.toml`, the format of `kule agents show
   claude-code`) go through the same checks as the person's own. Each waits in
   Settings → Agents (or `kule agents approve NAME`) until approved.
-- **MCP servers** start with `npx` or `uvx` and name one exact version. Each
-  waits until the person lets agents use it (in the extension's card, or with
-  `kule ext mcp approve EXT/NAME`). The agent starts it inside its own sandbox
-  and behind the task's proxy, so it can do no more than the agent can; the
-  policy asks about every host it reaches.
+- **MCP servers** each wait until the person lets agents use it, in the
+  extension's card or with `kule ext mcp approve EXT/NAME`. The card shows
+  every variable's value.
+  - A server starts one exact registry package and nothing else:
+    `npx [-y] name@1.2.3 …` or `uvx name==1.2.3 …`.
+  - Options before the package (`--with`, `--from`, `--package`,
+    `--registry`, …), URLs, paths, git specs, aliases and extras are
+    refused.
+  - Variables that move a package manager or an interpreter (`NPM_*`,
+    `UV_*`, `PIP_*`, `PYTHON*`, `NODE_*`, `GIT_*`, …) are refused too.
+  - The agent starts the server inside its own sandbox and behind the
+    task's proxy. The server can read what the agent can, the agent's
+    sign-in included, and the policy asks about every host it reaches.
 
 ## What a frame can and cannot do
 
@@ -187,16 +205,33 @@ content policy keeps them to their own files:
 - no network (`connect-src 'none'`);
 - no frames of their own;
 - no forms;
-- no `localStorage` or cookies (use `kule.storage`).
+- no `localStorage` or cookies (use `kule.storage`);
+- no devices, clipboard or fullscreen (`Permissions-Policy`).
+
+The window lets frames come from the extension server's exact port only, so
+a frame that navigates itself cannot reach another server on the computer.
+WebRTC is off in the window: the content policy cannot govern it. No
+extension runs until it is off.
 
 To Tauri a frame there is a remote origin, which reaches none of Kule's
 commands. A frame talks to Kule only over the MessagePort it is handed when
 it loads. What comes over that port belongs to the extension the port was
 made for, whatever the frame says it is.
 
-A shortcut pressed inside a frame reaches the window only for commands that
-move the view, or for the extension's own commands. A frame cannot commit,
-roll back or delete through a key.
+A frame can run only the extension's own commands and a short list of
+Kule's that show a panel or a region. The list is `view.tasks`, `files`,
+`live`, `review` and `timeline`, `chat.toggle`, and
+`layout.left/main/bottom/right`. This holds both for `commands.execute` and
+for a shortcut pressed inside the frame. After any of them, the keyboard
+goes back to the frame. A frame cannot start the terminal, open the
+palette, commit, roll back or delete.
+
+The publisher `kule`, and names whose first word is "Kule", are Kule's own;
+no extension may take them.
+
+If an extension makes the window unusable, start the app with
+`--no-extensions` (or `KULE_NO_EXTENSIONS=1`) and turn it off with `kule ext
+disable ID`, which works without the app.
 
 ## The package
 

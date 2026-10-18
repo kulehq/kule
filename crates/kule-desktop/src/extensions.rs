@@ -124,13 +124,21 @@ pub struct Host {
 }
 
 impl Host {
-    pub fn start(home: &Path) -> Host {
+    /// Serves extensions unless `serve` is false: the safe mode
+    /// (`--no-extensions`, or KULE_NO_EXTENSIONS set) for an extension
+    /// that makes the window unusable; `kule ext disable` then turns it off.
+    pub fn start(home: &Path, serve: bool) -> Host {
         let files = Arc::new(StoreFiles::new(home));
-        let server = match ext_serve::start(files.clone()) {
-            Ok(server) => Some(server),
-            Err(e) => {
-                eprintln!("kule-desktop: extensions cannot be served: {e}");
-                None
+        let server = if !serve {
+            eprintln!("kule-desktop: no extensions this time (safe mode)");
+            None
+        } else {
+            match ext_serve::start(files.clone()) {
+                Ok(server) => Some(server),
+                Err(e) => {
+                    eprintln!("kule-desktop: extensions cannot be served: {e}");
+                    None
+                }
             }
         };
         Host {
@@ -332,7 +340,7 @@ mod tests {
     #[test]
     fn extensions_wait_for_webrtc_to_be_off() {
         let home = TempDir::new().unwrap();
-        let host = Host::start(home.path());
+        let host = Host::start(home.path(), true);
         if cfg!(target_os = "macos") {
             assert!(host.prefix().is_none());
         }
@@ -341,6 +349,15 @@ mod tests {
             host.prefix()
                 .is_some_and(|p| p.starts_with("http://127.0.0.1:"))
         );
+    }
+
+    #[test]
+    fn the_safe_mode_runs_no_extension() {
+        let home = TempDir::new().unwrap();
+        let host = Host::start(home.path(), false);
+        host.webrtc_is_off();
+        assert!(host.prefix().is_none());
+        assert!(host.origin().is_none(), "and the window frames nothing");
     }
 
     /// A folder that became an agent's after it was installed (a profile
