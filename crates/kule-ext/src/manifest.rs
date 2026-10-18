@@ -21,6 +21,32 @@ const MAX_PANELS: usize = 8;
 const MAX_FIELDS: usize = 32;
 const MAX_THEMES: usize = 8;
 const MAX_MCP: usize = 8;
+/// Variables an MCP server may not set: the loader's, interpreters' and
+/// package managers' (a registry or index elsewhere, code run at start).
+const RISKY_PREFIXES: [&str; 22] = [
+    "LD_",
+    "DYLD_",
+    "NODE_",
+    "NPM_",
+    "YARN_",
+    "PNPM_",
+    "BUN_",
+    "COREPACK_",
+    "UV_",
+    "PIP_",
+    "PYTHON",
+    "VIRTUAL_ENV",
+    "CONDA",
+    "PERL",
+    "RUBY",
+    "GEM_",
+    "BUNDLE_",
+    "JAVA_",
+    "CARGO_",
+    "RUSTUP_",
+    "GIT_",
+    "SSL_",
+];
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -464,11 +490,9 @@ impl McpServer {
                 && name
                     .bytes()
                     .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_');
-            let risky = name == "PATH"
-                || name == "HOME"
-                || name.starts_with("LD_")
-                || name.starts_with("DYLD_")
-                || name.starts_with("NODE_")
+            // Ones that change what code runs or where packages come from.
+            let risky = ["PATH", "HOME", "TMPDIR", "SHELL", "CLASSPATH"].contains(&name.as_str())
+                || RISKY_PREFIXES.iter().any(|p| name.starts_with(p))
                 || name.ends_with("PROXY");
             if !plain || risky {
                 return Err(invalid(format!(

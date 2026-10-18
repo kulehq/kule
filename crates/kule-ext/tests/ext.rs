@@ -252,6 +252,11 @@ fn mcp_servers_may_not_set_the_loader_or_the_proxy() {
         (json!({ "HTTPS_PROXY": "x" }), false),
         (json!({ "NODE_OPTIONS": "--require x" }), false),
         (json!({ "PATH": "/tmp" }), false),
+        (json!({ "UV_INDEX_URL": "https://evil" }), false),
+        (json!({ "NPM_CONFIG_REGISTRY": "https://evil" }), false),
+        (json!({ "PYTHONPATH": "/tmp" }), false),
+        (json!({ "PIP_INDEX_URL": "https://evil" }), false),
+        (json!({ "GIT_SSH_COMMAND": "x" }), false),
     ] {
         let m = manifest(json!({ "contributes": {
             "mcpServers": [{ "name": "db", "command": "npx", "args": ["-y", "@acme/db@1.2.3"], "env": env }]

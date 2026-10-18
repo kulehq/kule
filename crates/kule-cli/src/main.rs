@@ -1767,6 +1767,10 @@ fn ext_cmd(home: &Path, action: ExtCmd) -> Result<()> {
                     let all = extensions::mcp_servers(home).map_err(|e| anyhow!(e))?;
                     if all.is_empty() {
                         println!("no extension that runs offers an MCP server");
+                    } else {
+                        println!(
+                            "An agent starts each inside its sandbox: it reads what the agent can, its sign-in included.\n"
+                        );
                     }
                     for o in &all {
                         let state = if o.approved {
@@ -1776,10 +1780,8 @@ fn ext_cmd(home: &Path, action: ExtCmd) -> Result<()> {
                         };
                         println!("{}/{} — {state}", o.extension, o.server.name);
                         println!("  starts: {} {}", o.server.command, o.server.args.join(" "));
-                        if !o.server.env.is_empty() {
-                            let names: Vec<&str> =
-                                o.server.env.keys().map(String::as_str).collect();
-                            println!("  sets:   {}", names.join(", "));
+                        for (name, value) in &o.server.env {
+                            println!("  sets:   {name}={value}");
                         }
                     }
                 }

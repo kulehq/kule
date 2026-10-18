@@ -553,8 +553,12 @@ function mcpRow(o) {
     { class: "ext-mcp" },
     h("div", {}, h("strong", {}, `MCP server ${s.name}`), " ", h("span", { class: `chip ${o.approved ? "allow" : "ask"}` }, o.approved ? "agents get it" : "waits for you")),
     h("code", { class: "ext-mcp-command" }, [s.command, ...(s.args || [])].join(" ")),
-    env.length ? h("div", { class: "muted" }, `Sets ${env.join(", ")}`) : null,
-    h("div", { class: "muted" }, "Started by the agent, inside its sandbox; what it reaches the policy asks about."),
+    env.length ? h("code", { class: "ext-mcp-command" }, env.map((k) => `${k}=${s.env[k]}`).join(" ")) : null,
+    h(
+      "div",
+      { class: "muted" },
+      "The agent starts it inside its sandbox, so it can read what the agent can, the agent's sign-in included; the policy asks about every host it reaches."
+    ),
     action
   );
 }

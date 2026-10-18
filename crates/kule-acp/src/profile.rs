@@ -1193,7 +1193,7 @@ pub(crate) fn check_pinned(program: &str, args: &[String]) -> std::result::Resul
 
 /// `1.2.3`, with an optional pre-release or build: nothing that matches
 /// more than one release.
-fn exact_version(version: &str) -> bool {
+pub(crate) fn exact_version(version: &str) -> bool {
     let core = version.split(['-', '+']).next().unwrap_or("");
     let parts: Vec<&str> = core.split('.').collect();
     parts.len() == 3
