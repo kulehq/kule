@@ -144,6 +144,35 @@ enum SecretsCmd {
 }
 
 #[derive(Subcommand)]
+enum ExtCmd {
+    /// List them, and why the ones that cannot run cannot (the default).
+    List,
+    /// Show what a .kulext or an extension's folder asks for, without
+    /// installing it.
+    Info { path: PathBuf },
+    /// Pack an extension's folder into a .kulext.
+    Pack {
+        dir: PathBuf,
+        /// Where to write it; <id>-<version>.kulext here by default.
+        #[arg(short, long)]
+        out: Option<PathBuf>,
+    },
+    /// Install or update a .kulext. It runs only once approved.
+    Install { file: PathBuf },
+    /// Install a folder you are working on, read live. Code changes run
+    /// as they are; a changed manifest waits for approval again.
+    Dev { dir: PathBuf },
+    /// Let an extension run, as it stands now.
+    Approve { id: String },
+    /// Let an approved extension run again.
+    Enable { id: String },
+    /// Stop an extension without removing it.
+    Disable { id: String },
+    /// Remove an extension and what it kept.
+    Remove { id: String },
+}
+
+#[derive(Subcommand)]
 enum AgentsCmd {
     /// List them, and why the ones that cannot run cannot (the default).
     List,
@@ -314,6 +343,12 @@ enum Cmd {
     Agents {
         #[command(subcommand)]
         action: Option<AgentsCmd>,
+    },
+    /// Extensions: what each may do, and whether it may run. One runs only
+    /// once approved, and waits again whenever it changes.
+    Ext {
+        #[command(subcommand)]
+        action: Option<ExtCmd>,
     },
     /// Print the policy that holds, or put one of Kule's in place:
     /// `balanced` (the built-in one) or `careful` (every change to a file
@@ -792,6 +827,7 @@ fn run() -> Result<ExitCode> {
             }
         }
         Cmd::Agents { action } => agents_cmd(&home, action.unwrap_or(AgentsCmd::List))?,
+        Cmd::Ext { action } => ext_cmd(&home, action.unwrap_or(ExtCmd::List))?,
         Cmd::Group { action } => group_cmd(&home, action.unwrap_or(GroupCmd::List))?,
         Cmd::Rules { action } => rules_cmd(&home, action.unwrap_or(RulesCmd::List))?,
         Cmd::Secrets { action } => secrets_cmd(&home, action.unwrap_or(SecretsCmd::List))?,
@@ -1592,6 +1628,160 @@ impl Drop for Echo {
                 libc::tcsetattr(0, libc::TCSANOW, saved);
             }
         }
+    }
+}
+
+fn ext_cmd(home: &Path, action: ExtCmd) -> Result<()> {
+    use kule_daemon::extensions;
+    use kule_ext::{Package, Source};
+    match action {
+        ExtCmd::List => {
+            let all = extensions::list(home).map_err(|e| anyhow!(e))?;
+            if all.is_empty() {
+                println!("no extensions; `kule ext install FILE.kulext` adds one");
+            }
+            for listed in &all {
+                let name = listed.manifest.as_ref().map_or("?", |m| m.name.as_str());
+                let state = match (&listed.held, listed.enabled) {
+                    (Some(why), _) => format!("held: {why}"),
+                    (None, false) => "turned off".to_owned(),
+                    (None, true) => "runs".to_owned(),
+                };
+                let dev = if listed.dev.is_some() { " (dev)" } else { "" };
+                println!(
+                    "{:<32} {:<10} {name}{dev} — {state}",
+                    listed.id, listed.version
+                );
+            }
+        }
+        ExtCmd::Info { path } => {
+            let source = if path.is_dir() {
+                Source::folder(&path)?
+            } else {
+                Source::Packed(Package::read_file(&path)?)
+            };
+            print_extension(source.manifest(), source.digest(), &[], &[]);
+        }
+        ExtCmd::Pack { dir, out } => {
+            let bytes = kule_ext::pack(&dir)?;
+            let package = Package::open(bytes)?;
+            let m = package.manifest();
+            let out =
+                out.unwrap_or_else(|| PathBuf::from(format!("{}-{}.kulext", m.id, m.version)));
+            std::fs::write(&out, package.bytes()).map_err(|e| anyhow!("{}: {e}", out.display()))?;
+            println!("packed {} {} into {}", m.id, m.version, out.display());
+            println!("digest {}", package.digest());
+        }
+        ExtCmd::Install { file } => {
+            let listed = extensions::install(home, &file).map_err(|e| anyhow!(e))?;
+            print_listed(&listed);
+            println!("\ninstalled; `kule ext approve {}` lets it run", listed.id);
+        }
+        ExtCmd::Dev { dir } => {
+            let listed = extensions::install_folder(home, &dir).map_err(|e| anyhow!(e))?;
+            print_listed(&listed);
+            println!(
+                "\ninstalled from {}; `kule ext approve {}` lets it run",
+                dir.display(),
+                listed.id
+            );
+        }
+        ExtCmd::Approve { id } => {
+            let all = extensions::list(home).map_err(|e| anyhow!(e))?;
+            let listed = all
+                .iter()
+                .find(|l| l.id == id)
+                .ok_or_else(|| anyhow!("no extension {id}"))?;
+            if listed.manifest.is_none() {
+                return Err(anyhow!(
+                    "{id} cannot be read: {}",
+                    listed.held.as_deref().unwrap_or("")
+                ));
+            }
+            let listed = extensions::approve(home, &id, &listed.digest).map_err(|e| anyhow!(e))?;
+            print_listed(&listed);
+            println!("\napproved {id} as it stands; a change to it needs approval again");
+        }
+        ExtCmd::Enable { id } => {
+            let listed = extensions::set_enabled(home, &id, true).map_err(|e| anyhow!(e))?;
+            match &listed.held {
+                Some(why) => println!("{id} is on, but held: {why}"),
+                None => println!("{id} runs"),
+            }
+        }
+        ExtCmd::Disable { id } => {
+            extensions::set_enabled(home, &id, false).map_err(|e| anyhow!(e))?;
+            println!("{id} is turned off");
+        }
+        ExtCmd::Remove { id } => {
+            extensions::remove(home, &id).map_err(|e| anyhow!(e))?;
+            println!("removed {id} and what it kept");
+        }
+    }
+    Ok(())
+}
+
+fn print_listed(listed: &kule_ext::Listed) {
+    if let Some(m) = &listed.manifest {
+        print_extension(
+            m,
+            &listed.digest,
+            &listed.new_permissions,
+            &listed.new_hosts,
+        );
+    }
+    if let Some(why) = &listed.held {
+        println!("held:        {why}");
+    }
+}
+
+fn print_extension(
+    m: &kule_ext::Manifest,
+    digest: &str,
+    new_permissions: &[kule_ext::Permission],
+    new_hosts: &[String],
+) {
+    println!("{} {} — {}", m.id, m.version, m.name);
+    println!("publisher:   {} (not verified by anyone)", m.publisher);
+    if let Some(d) = &m.description {
+        println!("about:       {d}");
+    }
+    println!("digest:      {digest}");
+    if m.permissions.is_empty() {
+        println!("may:         nothing beyond showing its own panels and commands");
+    }
+    for p in &m.permissions {
+        let new = if new_permissions.contains(p) {
+            "  (new)"
+        } else {
+            ""
+        };
+        println!("may:         {} — {}{new}", p.as_str(), p.describe());
+    }
+    for host in &m.hosts {
+        let new = if new_hosts.contains(host) {
+            "  (new)"
+        } else {
+            ""
+        };
+        println!("reaches:     {host}{new}");
+    }
+    if m.has(kule_ext::Permission::Net) && m.permissions.iter().any(|p| p.reads_work()) {
+        println!("warning:     it can read your work and send data to the hosts above");
+    }
+    let c = &m.contributes;
+    for command in &c.commands {
+        println!(
+            "command:     {} ({})",
+            command.title,
+            m.qualified(&command.id)
+        );
+    }
+    for panel in &c.panels {
+        println!("panel:       {}", panel.title);
+    }
+    for theme in &c.themes {
+        println!("theme:       {theme}");
     }
 }
 
