@@ -199,7 +199,10 @@ fn a_group_puts_its_policy_over_its_tasks_commits() {
     let list = kule(home.path(), &["list"]);
     assert!(list.contains(" [clients]"), "{list}");
     let groups = kule(home.path(), &["group"]);
-    assert!(groups.contains("1  clients · careful (blue)") && groups.contains(id), "{groups}");
+    assert!(
+        groups.contains("1  clients · careful (blue)") && groups.contains(id),
+        "{groups}"
+    );
     assert!(kule(home.path(), &["group", "policy", "1"]).contains("@id(\"careful\")"));
 
     // The careful group holds the edit that the policy for every task lets
@@ -214,13 +217,23 @@ fn a_group_puts_its_policy_over_its_tasks_commits() {
             .unwrap()
     };
     assert!(!commit(home.path()).status.success());
-    assert_eq!(fs::read_to_string(ws.path().join("notes.md")).unwrap(), "# Plan\n");
+    assert_eq!(
+        fs::read_to_string(ws.path().join("notes.md")).unwrap(),
+        "# Plan\n"
+    );
 
     // A policy of its own is checked before it is kept.
     let own = home.path().join("own.cedar");
     fs::write(&own, "permit (").unwrap();
     let refused = Command::new(env!("CARGO_BIN_EXE_kule"))
-        .args(["group", "policy", "1", "own", "--file", own.to_str().unwrap()])
+        .args([
+            "group",
+            "policy",
+            "1",
+            "own",
+            "--file",
+            own.to_str().unwrap(),
+        ])
         .env("KULE_HOME", home.path())
         .output()
         .unwrap();
