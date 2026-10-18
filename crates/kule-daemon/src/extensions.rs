@@ -23,9 +23,10 @@ pub fn install(home: &Path, path: &Path) -> Result<Listed> {
 
 /// Installs a folder under development. It waits for approval, and again
 /// whenever its manifest changes. Its code runs unapproved, so it may not
-/// sit where an agent can write (see [`agents_write`]).
+/// sit where an agent can write (see [`agent_dirs`]).
 pub fn install_folder(home: &Path, dir: &Path) -> Result<Listed> {
-    let refused = agents_write(home)?;
+    let person = std::env::var_os("HOME").map(std::path::PathBuf::from);
+    let refused = agent_dirs(home, person.as_deref())?;
     contributions_ok(home, &Source::folder(dir).map_err(|e| e.to_string())?)?;
     Store::new(home)
         .install_folder(dir, &refused)
@@ -33,9 +34,9 @@ pub fn install_folder(home: &Path, dir: &Path) -> Result<Listed> {
 }
 
 /// What every agent may write besides the task's copy and `/tmp`: its
-/// state, logins and home of its own, under the person's home.
-fn agents_write(home: &Path) -> Result<Vec<std::path::PathBuf>> {
-    let Some(person) = std::env::var_os("HOME").map(std::path::PathBuf::from) else {
+/// state, logins and home of its own, under `person` (the person's home).
+pub fn agent_dirs(home: &Path, person: Option<&Path>) -> Result<Vec<std::path::PathBuf>> {
+    let Some(person) = person else {
         return Ok(Vec::new());
     };
     let agents = kule_acp::Agents::load(home).map_err(|e| e.to_string())?;

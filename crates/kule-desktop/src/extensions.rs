@@ -26,32 +26,62 @@ const SDK: &str = include_str!("../ext/sdk.js");
 
 pub struct StoreFiles {
     home: PathBuf,
-    packed: Mutex<HashMap<String, Source>>,
+    /// Packages read once, shared rather than copied per request.
+    packed: Mutex<HashMap<String, Arc<Source>>>,
+    /// Where agents may write (their own directories), read once.
+    agent_dirs: Mutex<Option<Vec<PathBuf>>>,
+    /// The person's home, which agents' directories are under.
+    person: Option<PathBuf>,
 }
 
 impl StoreFiles {
     pub fn new(home: &Path) -> StoreFiles {
+        StoreFiles::with_person(home, std::env::var_os("HOME").map(PathBuf::from))
+    }
+
+    fn with_person(home: &Path, person: Option<PathBuf>) -> StoreFiles {
         StoreFiles {
             home: home.to_path_buf(),
             packed: Mutex::new(HashMap::new()),
+            agent_dirs: Mutex::new(None),
+            person,
         }
     }
 
     /// Drops what was read, after any change to the extensions.
     pub fn forget(&self) {
         self.packed.lock().unwrap().clear();
+        *self.agent_dirs.lock().unwrap() = None;
     }
 
-    fn source(&self, ext: &str) -> Option<Source> {
+    fn agent_dirs(&self) -> Vec<PathBuf> {
+        let mut kept = self.agent_dirs.lock().unwrap();
+        kept.get_or_insert_with(|| {
+            kule_daemon::extensions::agent_dirs(&self.home, self.person.as_deref())
+                .unwrap_or_default()
+        })
+        .clone()
+    }
+
+    fn source(&self, ext: &str) -> Option<Arc<Source>> {
         if let Some(source) = self.packed.lock().unwrap().get(ext) {
             return Some(source.clone());
         }
-        let source = Store::new(&self.home).runnable(ext).ok()?;
-        if matches!(source, Source::Packed(_)) {
-            self.packed
-                .lock()
-                .unwrap()
-                .insert(ext.to_owned(), source.clone());
+        let source = Arc::new(Store::new(&self.home).runnable(ext).ok()?);
+        match source.as_ref() {
+            Source::Packed(_) => {
+                self.packed
+                    .lock()
+                    .unwrap()
+                    .insert(ext.to_owned(), source.clone());
+            }
+            // A folder an agent could rewrite since it was installed (an
+            // agent's directory named after) is not served.
+            Source::Folder { dir, .. } => {
+                if kule_ext::under_any(dir, &self.agent_dirs()).is_some() {
+                    return None;
+                }
+            }
         }
         Some(source)
     }
@@ -311,6 +341,40 @@ mod tests {
             host.prefix()
                 .is_some_and(|p| p.starts_with("http://127.0.0.1:"))
         );
+    }
+
+    /// A folder that became an agent's after it was installed (a profile
+    /// added later names it) is no longer served, nor its calls answered.
+    #[test]
+    fn a_folder_that_became_an_agents_is_no_longer_served() {
+        let base = concat!(env!("CARGO_MANIFEST_DIR"), "/../../target");
+        let (home, person) = (TempDir::new().unwrap(), TempDir::new_in(base).unwrap());
+        let dir = person.path().join(".acme/ext");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("kule-extension.json"),
+            r#"{ "kule_extension": 1, "id": "acme.notes", "name": "Notes", "version": "1.0.0",
+                 "publisher": "acme", "permissions": ["tasks.read"],
+                 "contributes": { "panels": [{ "id": "notes", "title": "Notes", "entry": "panel.html" }] } }"#,
+        )
+        .unwrap();
+        fs::write(dir.join("panel.html"), "<p>notes</p>").unwrap();
+        let store = Store::new(home.path());
+        let listed = store.install_folder(&dir, &[]).unwrap();
+        store.approve("acme.notes", &listed.digest).unwrap();
+        let files = StoreFiles::with_person(home.path(), Some(person.path().to_path_buf()));
+        assert!(files.get("acme.notes", "panel.html").is_some());
+
+        fs::write(
+            home.path().join("agents.toml"),
+            "[[agent]]\nname = \"acme-agent\"\ncommand = [\"acme-agent\"]\nstate = [\".acme\"]\n",
+        )
+        .unwrap();
+        files.forget();
+        assert!(files.get("acme.notes", "panel.html").is_none());
+        let e =
+            crate::ext_call::granted(home.path(), "acme.notes", Some(person.path())).unwrap_err();
+        assert!(e.contains("where an agent can write"), "{e}");
     }
 
     #[test]

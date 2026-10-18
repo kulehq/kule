@@ -551,7 +551,7 @@ const AGENT_WRITABLE: [&str; 4] = ["/tmp", "/var/tmp", "/dev/shm", "/private/tmp
 
 /// The first of `roots` that `dir` is in, both compared as they really are
 /// (`/tmp` is `/private/tmp` on macOS) and as written.
-fn under_any(dir: &Path, roots: &[PathBuf]) -> Option<PathBuf> {
+pub fn under_any(dir: &Path, roots: &[PathBuf]) -> Option<PathBuf> {
     let real = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
     roots.iter().find_map(|r| {
         let root = r.canonicalize().unwrap_or_else(|_| r.clone());

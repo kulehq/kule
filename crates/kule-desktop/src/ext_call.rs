@@ -49,10 +49,20 @@ pub struct Granted {
 /// What `ext` was given, if it may run now: on, and approved as it is.
 /// Reading this opens the extension's package, so the window keeps it
 /// (see [`Grants`]) until the extensions change.
-pub fn granted(home: &Path, ext: &str) -> Result<Granted> {
+pub fn granted(home: &Path, ext: &str, person: Option<&Path>) -> Result<Granted> {
     let listed = Store::new(home).get(ext).map_err(|e| e.to_string())?;
     if let Some(why) = &listed.held {
         return Err(format!("extension {ext} is held: {why}"));
+    }
+    // A folder an agent could have rewritten since it was installed.
+    if let Some(dir) = &listed.dev
+        && let Some(root) =
+            kule_ext::under_any(dir, &kule_daemon::extensions::agent_dirs(home, person)?)
+    {
+        return Err(format!(
+            "extension {ext} is held: its folder is under {}, where an agent can write",
+            root.display()
+        ));
     }
     if !listed.enabled {
         return Err(format!("extension {ext} is turned off"));
@@ -83,7 +93,7 @@ pub fn permits(granted: &Granted, method: &str) -> Result<()> {
 /// Whether `ext` may make the call `method` now.
 #[cfg(test)]
 fn allowed(home: &Path, ext: &str, method: &str) -> Result<Granted> {
-    let g = granted(home, ext)?;
+    let g = granted(home, ext, None)?;
     permits(&g, method)?;
     Ok(g)
 }
@@ -99,7 +109,8 @@ impl Grants {
         if let Some(g) = self.0.lock().unwrap().get(ext) {
             return Ok(g.clone());
         }
-        let g = granted(home, ext)?;
+        let person = std::env::var_os("HOME").map(std::path::PathBuf::from);
+        let g = granted(home, ext, person.as_deref())?;
         self.0.lock().unwrap().insert(ext.to_owned(), g.clone());
         Ok(g)
     }
