@@ -33,6 +33,12 @@
     pixels a side, three to a prompt) to an agent that says it takes
     pictures. Kule checks each is a PNG or JPEG by its bytes. An agent that
     does not take pictures gets where the region is, and Live says so.
+- Files shows each file and folder with its icon as VS Code's Material
+  Icon Theme draws it, and the Preview colours code as an editor does
+  (Prism, 53 languages, up to 300 KB of a file), as do code blocks in the
+  agent's answers. The colours come from the theme in use. Both are
+  vendored at pinned versions by `scripts/vendor-ui-assets.py`, which checks
+  their digests and refuses an SVG with a script or an outside link.
 - An Excel or Word file is read in memory and never unpacked. Each part it holds
   is inflated through a cap, so a small file that expands to gigabytes is
   not read.

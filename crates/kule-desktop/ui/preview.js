@@ -147,6 +147,7 @@ function previewHead(v) {
   return h(
     "div",
     { class: "preview-head" },
+    fileGlyph(baseName(preview.path), false, false),
     h("span", { class: "path preview-path", title: preview.path }, preview.path),
     v ? h("span", { class: "preview-meta" }, [sizeText(v.size), kindText(v)].filter(Boolean).join(" · ")) : null,
     preview.change ? h("span", { class: `preview-change ${preview.change}` }, preview.change) : null,
@@ -205,10 +206,10 @@ function previewHead(v) {
 function previewBody(v) {
   switch (v.kind) {
     case "text":
-      return previewLines(previewMode(v) === "formatted" && v.formatted ? v.formatted : v.text);
+      return previewLines(previewMode(v) === "formatted" && v.formatted ? v.formatted : v.text, v.lang);
     case "markdown":
       return previewMode(v) === "source"
-        ? previewLines(v.text)
+        ? previewLines(v.text, "markdown")
         : h("div", { class: "preview-body preview-md", tabindex: "0" }, ...markdown(v.text, 0));
     case "image":
       return previewImage(v);
@@ -226,15 +227,15 @@ function previewBody(v) {
   }
 }
 
-/** Text with its line numbers beside it. */
-function previewLines(text) {
+/** Text with its line numbers beside it, coloured as `language`. */
+function previewLines(text, language) {
   const count = (text.endsWith("\n") ? text.slice(0, -1) : text).split("\n").length;
   const numbers = Array.from({ length: count }, (_, i) => i + 1).join("\n");
   return h(
     "div",
     { class: "preview-body preview-text", tabindex: "0" },
     h("pre", { class: "preview-gutter", "aria-hidden": "true" }, numbers),
-    h("pre", { class: "preview-code" }, text)
+    h("pre", { class: "preview-code" }, ...highlighted(text, language))
   );
 }
 

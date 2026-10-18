@@ -1716,7 +1716,7 @@ function markdown(text, base) {
       const code = [];
       i++;
       while (i < lines.length && !lines[i].trim().startsWith(fence[1])) code.push(lines[i++]);
-      put(h("pre", {}, h("code", {}, code.join("\n"))), start, Math.min(i, lines.length - 1));
+      put(h("pre", {}, h("code", {}, ...highlighted(code.join("\n"), fence[2]))), start, Math.min(i, lines.length - 1));
       continue;
     }
     if (line.includes("|") && i + 1 < lines.length && TABLE_RULE.test(lines[i + 1]) && lines[i + 1].includes("-")) {
@@ -4015,6 +4015,7 @@ function fileRows(dir, depth) {
           onclick: () => (isDir ? toggleDir(path) : entry.kind === "link" ? toast(`${path} is a link; Files does not follow links`) : openFile(path, change)),
         },
         h("span", { class: "file-icon", "aria-hidden": "true" }, isDir ? (open ? "▾" : "▸") : entry.kind === "link" ? "↪" : ""),
+        fileGlyph(entry.name, isDir, open),
         h("span", { class: "file-name" }, entry.name),
         change
           ? h("span", { class: "file-mark", title: change }, CHANGE_MARK[change])
@@ -4140,6 +4141,9 @@ function mirrorTerminalStyles() {
 
 function retheme() {
   for (const t of terminals.values()) for (const e of t.list) e.term.options.theme = terminalTheme();
+  // Some file icons are drawn for a light background.
+  if (files.task) renderFiles();
+  if (preview.view) renderPreview(true);
   tellExtensions("theme", themeForFrames());
 }
 

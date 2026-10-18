@@ -2726,7 +2726,7 @@ body.dragging-panel * {
 
 .file-row {
   display: grid;
-  grid-template-columns: 14px minmax(0, 1fr) auto;
+  grid-template-columns: 14px 16px minmax(0, 1fr) auto;
   align-items: center;
   gap: 4px;
   padding: 2px 8px;
@@ -2755,6 +2755,108 @@ body.dragging-panel * {
 .file-icon {
   color: var(--faint);
   font-size: 11px;
+}
+
+.file-glyph {
+  display: block;
+  width: 16px;
+  height: 16px;
+  margin-right: 3px;
+}
+
+.file-row.gone .file-glyph {
+  opacity: 0.5;
+}
+
+.preview-head .file-glyph {
+  flex-shrink: 0;
+}
+
+/* Code as an editor colours it, from the theme's tag colours, so each
+   theme, light or dark, has its own. Close to VS Code's Dark+ and Light+. */
+.tok-comment,
+.tok-prolog,
+.tok-doctype,
+.tok-cdata,
+.tok-shebang {
+  color: var(--faint);
+  font-style: italic;
+}
+
+.tok-keyword,
+.tok-tag,
+.tok-boolean,
+.tok-atrule,
+.tok-rule,
+.tok-title,
+.tok-lifetime-annotation {
+  color: var(--tag-blue);
+}
+
+.tok-control-flow,
+.tok-macro,
+.tok-directive,
+.tok-important {
+  color: var(--tag-purple);
+}
+
+.tok-string,
+.tok-char,
+.tok-attr-value,
+.tok-template-string,
+.tok-url,
+.tok-code {
+  color: var(--tag-orange);
+}
+
+.tok-number,
+.tok-constant,
+.tok-inserted,
+.tok-unit {
+  color: var(--tag-green);
+}
+
+.tok-function,
+.tok-selector,
+.tok-function-definition {
+  color: var(--tag-yellow);
+}
+
+.tok-class-name,
+.tok-builtin,
+.tok-namespace,
+.tok-type,
+.tok-attribute,
+.tok-annotation,
+.tok-decorator {
+  color: var(--tag-teal);
+}
+
+.tok-property,
+.tok-attr-name,
+.tok-key,
+.tok-parameter,
+.tok-variable {
+  color: var(--accent);
+}
+
+.tok-regex,
+.tok-deleted,
+.tok-entity {
+  color: var(--tag-red);
+}
+
+.tok-punctuation,
+.tok-operator {
+  color: var(--muted);
+}
+
+.tok-bold {
+  font-weight: 600;
+}
+
+.tok-italic {
+  font-style: italic;
 }
 
 .file-name {
