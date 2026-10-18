@@ -19,6 +19,13 @@
 //! - `run <text>`: a command's tool call that shows `<text>` (`\n` for a
 //!   line break) in two updates, half and then all; `run-raw <text>` the
 //!   same as raw output; `run-big <n>`: the same with `n` bytes of `x`;
+//! - `stream <a> <b> …`: a command the agent runs itself, its output (each
+//!   word a line) reported in `_meta` piece by piece to a client that
+//!   asks for `terminal_output_delta`, as text content at the end otherwise;
+//! - `shell <script>`: has the client run `sh -c <script>` in a terminal
+//!   (ACP `terminal/*`) shown in a tool call, and says `exit <code>:
+//!   <output>`, `refused: <why>`, or `no terminals` when the client offers
+//!   none; `shell-env NAME=value <script>` asks for the variable too;
 //! - `echo`: a message of the whole prompt as it came, and nothing after
 //!   it is run (what Kule adds to a prompt is not a command);
 //! - `pictures`: a message naming the pictures that came with the prompt,
@@ -32,12 +39,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use agent_client_protocol::schema::v1::{
-    AgentCapabilities, CancelNotification, ContentBlock, ContentChunk, Cost, InitializeRequest,
-    InitializeResponse, McpServer, NewSessionRequest, NewSessionResponse, PermissionOption,
-    PermissionOptionKind, PromptCapabilities, PromptRequest, PromptResponse,
-    RequestPermissionOutcome, RequestPermissionRequest, SessionId, SessionNotification,
-    SessionUpdate, StopReason, TextContent, ToolCall, ToolCallContent, ToolCallStatus,
-    ToolCallUpdate, ToolCallUpdateFields, ToolKind, Usage, UsageUpdate,
+    AgentCapabilities, CancelNotification, ContentBlock, ContentChunk, Cost, CreateTerminalRequest,
+    EnvVariable, InitializeRequest, InitializeResponse, McpServer, NewSessionRequest,
+    NewSessionResponse, PermissionOption, PermissionOptionKind, PromptCapabilities, PromptRequest,
+    PromptResponse, ReleaseTerminalRequest, RequestPermissionOutcome, RequestPermissionRequest,
+    SessionId, SessionNotification, SessionUpdate, StopReason, Terminal, TerminalOutputRequest,
+    TextContent, ToolCall, ToolCallContent, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields,
+    ToolKind, Usage, UsageUpdate, WaitForTerminalExitRequest,
 };
 use agent_client_protocol::{Agent, Client, ConnectionTo, Responder, Stdio};
 
@@ -49,6 +57,12 @@ async fn main() -> agent_client_protocol::Result<()> {
     let session_mcp = mcp.clone();
     let cancelled = Arc::new(AtomicBool::new(false));
     let on_cancel = cancelled.clone();
+    // Whether the client offered to run commands (`terminal/*`).
+    let terminals = Arc::new(AtomicBool::new(false));
+    let offered = terminals.clone();
+    // Whether the client renders output sent in tool calls' _meta.
+    let deltas = Arc::new(AtomicBool::new(false));
+    let renders = deltas.clone();
     Agent
         .builder()
         .name("kule-test-agent")
@@ -63,6 +77,14 @@ async fn main() -> agent_client_protocol::Result<()> {
             async move |request: InitializeRequest, responder, _cx| {
                 // `--pictures` makes it an agent that takes pictures.
                 let pictures = std::env::args().any(|a| a == "--pictures");
+                offered.store(request.client_capabilities.terminal, Ordering::SeqCst);
+                let delta = request
+                    .client_capabilities
+                    .meta
+                    .as_ref()
+                    .and_then(|m| m.get("terminal_output_delta"))
+                    .and_then(|v| v.as_bool());
+                renders.store(delta == Some(true), Ordering::SeqCst);
                 responder.respond(
                     InitializeResponse::new(request.protocol_version).agent_capabilities(
                         AgentCapabilities::new()
@@ -123,6 +145,8 @@ async fn main() -> agent_client_protocol::Result<()> {
                 let session = request.session_id.clone();
                 let connection = cx.clone();
                 let cancelled = cancelled.clone();
+                let terminals = terminals.clone();
+                let deltas = deltas.clone();
                 cx.spawn(async move {
                     let mut usage = None;
                     for (n, command) in script.split(';').map(str::trim).enumerate() {
@@ -151,6 +175,20 @@ async fn main() -> agent_client_protocol::Result<()> {
                             perform(&connection, &session, &dir, n, &said).await?;
                             continue;
                         }
+                        if let Some(pieces) = command.strip_prefix("stream ") {
+                            let deltas = deltas.load(Ordering::SeqCst);
+                            stream(&connection, &session, n, pieces, deltas).await?;
+                            continue;
+                        }
+                        if command.starts_with("shell ") || command.starts_with("shell-env ") {
+                            let said = if terminals.load(Ordering::SeqCst) {
+                                shell(&connection, &session, n, command).await?
+                            } else {
+                                "no terminals".to_owned()
+                            };
+                            perform(&connection, &session, &dir, n, &format!("say {said}")).await?;
+                            continue;
+                        }
                         perform(&connection, &session, &dir, n, command).await?;
                     }
                     responder.respond(PromptResponse::new(StopReason::EndTurn).usage(usage))
@@ -160,6 +198,153 @@ async fn main() -> agent_client_protocol::Result<()> {
         )
         .connect_to(Stdio::new())
         .await
+}
+
+/// A command the agent runs itself, its output reported as Claude Code's
+/// and Codex's adapters report it: to a client that renders it, each
+/// space-separated piece as a line in `_meta.terminal_output_delta`; to one
+/// that does not, all of it as text content at the end.
+async fn stream(
+    cx: &ConnectionTo<Client>,
+    session: &SessionId,
+    n: usize,
+    pieces: &str,
+    deltas: bool,
+) -> agent_client_protocol::Result<()> {
+    let id = format!("call-{n}");
+    let meta = |pairs: serde_json::Value| pairs.as_object().cloned();
+    let mut call = ToolCall::new(id.clone(), format!("stream {n}"))
+        .kind(ToolKind::Execute)
+        .status(ToolCallStatus::InProgress);
+    if deltas {
+        call = call
+            .content(vec![ToolCallContent::Terminal(Terminal::new(id.clone()))])
+            .meta(meta(
+                serde_json::json!({ "terminal_info": { "terminal_id": id } }),
+            ));
+    }
+    cx.send_notification(SessionNotification::new(
+        session.clone(),
+        SessionUpdate::ToolCall(call),
+    ))?;
+    let mut all = String::new();
+    for piece in pieces.split(' ') {
+        let line = format!("{piece}\n");
+        all.push_str(&line);
+        if deltas {
+            cx.send_notification(SessionNotification::new(
+                session.clone(),
+                SessionUpdate::ToolCallUpdate(
+                    ToolCallUpdate::new(id.clone(), ToolCallUpdateFields::new()).meta(meta(
+                        serde_json::json!({
+                            "terminal_output_delta": { "terminal_id": id, "data": line }
+                        }),
+                    )),
+                ),
+            ))?;
+        }
+    }
+    let mut done = ToolCallUpdate::new(
+        id.clone(),
+        ToolCallUpdateFields::new().status(ToolCallStatus::Completed),
+    );
+    if deltas {
+        done = done.meta(meta(serde_json::json!({
+            "terminal_exit": { "terminal_id": id, "exit_code": 0, "signal": null }
+        })));
+    } else {
+        done.fields.content = Some(vec![ToolCallContent::from(ContentBlock::Text(
+            TextContent::new(all),
+        ))]);
+    }
+    cx.send_notification(SessionNotification::new(
+        session.clone(),
+        SessionUpdate::ToolCallUpdate(done),
+    ))
+}
+
+/// Has the client run `sh -c <script>` (after `shell-env`, a `NAME=value`
+/// first) in a terminal shown in a tool call; returns what to say: how it
+/// ended and what it printed, or why the client refused.
+async fn shell(
+    cx: &ConnectionTo<Client>,
+    session: &SessionId,
+    n: usize,
+    command: &str,
+) -> agent_client_protocol::Result<String> {
+    let (verb, rest) = command.split_once(' ').unwrap_or((command, ""));
+    let (env, script) = if verb == "shell-env" {
+        let (pair, script) = rest.split_once(' ').unwrap_or((rest, ""));
+        let (name, value) = pair.split_once('=').unwrap_or((pair, ""));
+        (vec![EnvVariable::new(name, value)], script)
+    } else {
+        (Vec::new(), rest)
+    };
+    let id = format!("call-{n}");
+    cx.send_notification(SessionNotification::new(
+        session.clone(),
+        SessionUpdate::ToolCall(
+            ToolCall::new(id.clone(), format!("shell {n}"))
+                .kind(ToolKind::Execute)
+                .status(ToolCallStatus::InProgress),
+        ),
+    ))?;
+    let created = cx
+        .send_request(
+            CreateTerminalRequest::new(session.clone(), "/bin/sh")
+                .args(vec!["-c".to_owned(), script.to_owned()])
+                .env(env),
+        )
+        .block_task()
+        .await;
+    let terminal = match created {
+        Ok(created) => created.terminal_id,
+        Err(e) => return Ok(format!("refused: {}", e.message)),
+    };
+    cx.send_notification(SessionNotification::new(
+        session.clone(),
+        SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
+            id.clone(),
+            ToolCallUpdateFields::new().content(vec![ToolCallContent::Terminal(Terminal::new(
+                terminal.clone(),
+            ))]),
+        )),
+    ))?;
+    let exit = cx
+        .send_request(WaitForTerminalExitRequest::new(
+            session.clone(),
+            terminal.clone(),
+        ))
+        .block_task()
+        .await?
+        .exit_status;
+    let output = cx
+        .send_request(TerminalOutputRequest::new(
+            session.clone(),
+            terminal.clone(),
+        ))
+        .block_task()
+        .await?;
+    cx.send_request(ReleaseTerminalRequest::new(session.clone(), terminal))
+        .block_task()
+        .await?;
+    let status = if exit.exit_code == Some(0) {
+        ToolCallStatus::Completed
+    } else {
+        ToolCallStatus::Failed
+    };
+    cx.send_notification(SessionNotification::new(
+        session.clone(),
+        SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
+            id,
+            ToolCallUpdateFields::new().status(status),
+        )),
+    ))?;
+    Ok(format!(
+        "exit {}: {}",
+        exit.exit_code.map_or("none".to_owned(), |c| c.to_string()),
+        output.output.trim_end()
+    ))
 }
 
 async fn perform(

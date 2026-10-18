@@ -14,20 +14,25 @@ pub mod mcp;
 pub mod packages;
 mod profile;
 pub mod registry;
+pub mod terminals;
 pub mod trial;
 
 use std::collections::HashMap;
 use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
-    CancelNotification, ContentBlock, ImageContent, InitializeRequest, NewSessionRequest,
-    PermissionOptionKind, PromptRequest, RequestPermissionOutcome, RequestPermissionRequest,
-    RequestPermissionResponse, SelectedPermissionOutcome, SessionNotification, SessionUpdate,
-    SetSessionModeRequest, TextContent, ToolCallStatus, ToolKind,
+    CancelNotification, ClientCapabilities, ContentBlock, CreateTerminalRequest,
+    CreateTerminalResponse, ImageContent, InitializeRequest, KillTerminalRequest,
+    KillTerminalResponse, NewSessionRequest, PermissionOptionKind, PromptRequest,
+    ReleaseTerminalRequest, ReleaseTerminalResponse, RequestPermissionOutcome,
+    RequestPermissionRequest, RequestPermissionResponse, SelectedPermissionOutcome,
+    SessionNotification, SessionUpdate, SetSessionModeRequest, TerminalExitStatus,
+    TerminalOutputRequest, TerminalOutputResponse, TextContent, ToolCallStatus, ToolKind,
+    WaitForTerminalExitRequest, WaitForTerminalExitResponse,
 };
 use agent_client_protocol::{Agent, ByteStreams, ConnectionTo};
 use futures::channel::mpsc::UnboundedSender;
@@ -97,10 +102,45 @@ pub enum Event {
 
 /// The most of one tool call's output kept.
 pub const MAX_OUTPUT: usize = 64 << 10;
+/// How often output that comes in pieces is passed on.
+const PRINT_EVERY: Duration = Duration::from_millis(150);
+
+fn display_terminals() -> serde_json::Map<String, serde_json::Value> {
+    let mut meta = serde_json::Map::new();
+    meta.insert("terminal_output".into(), true.into());
+    meta.insert("terminal_output_delta".into(), true.into());
+    meta
+}
+
+/// What a tool call's `_meta` says its command printed: all of it so far
+/// (`terminal_output`), or the next piece (`terminal_output_delta`).
+enum Printed {
+    All(String),
+    More(String),
+}
+
+fn printed(meta: Option<&serde_json::Map<String, serde_json::Value>>) -> Option<Printed> {
+    let meta = meta?;
+    let data = |key: &str| {
+        meta.get(key)
+            .and_then(|v| v.get("data"))
+            .and_then(|d| d.as_str())
+            .map(str::to_owned)
+    };
+    data("terminal_output")
+        .map(Printed::All)
+        .or_else(|| data("terminal_output_delta").map(Printed::More))
+}
+
+fn exit_status(exit: terminals::Exit) -> TerminalExitStatus {
+    TerminalExitStatus::new()
+        .exit_code(exit.code)
+        .signal(exit.signal)
+}
 
 /// The end of `text`, at most [`MAX_OUTPUT`] bytes, cut on a character and
 /// marked when cut.
-fn tail(text: String) -> String {
+pub(crate) fn tail(text: String) -> String {
     if text.len() <= MAX_OUTPUT {
         return text;
     }
@@ -242,7 +282,7 @@ pub async fn run_with(
     mcp: &[McpCommand],
     events: UnboundedSender<Event>,
 ) -> Result<String, Error> {
-    run_pictured(task, agent, prompt, &[], mode, limit, mcp, events).await
+    run_pictured(task, agent, prompt, &[], mode, limit, mcp, None, events).await
 }
 
 /// A picture that goes with a prompt, base64.
@@ -254,7 +294,9 @@ pub struct Picture {
 
 /// [`run_with`], with pictures after the prompt's text for an agent that
 /// says it takes pictures; one that does not gets the text alone, and the
-/// run notes that the pictures were left out.
+/// run notes that the pictures were left out. With `sandbox` (the agent's
+/// own), Kule offers to run the agent's commands for it there, so their
+/// output comes as they print (see [`terminals`]).
 #[allow(clippy::too_many_arguments)]
 pub async fn run_pictured(
     task: &Task,
@@ -264,8 +306,11 @@ pub async fn run_pictured(
     mode: Option<&str>,
     limit: Option<Cost>,
     mcp: &[McpCommand],
+    sandbox: Option<kule_engine::Sandbox>,
     events: UnboundedSender<Event>,
 ) -> Result<String, Error> {
+    let terminals =
+        sandbox.map(|s| Arc::new(terminals::Terminals::new(s, task.copy(), events.clone())));
     let mcp_servers: Vec<_> = mcp.iter().map(McpCommand::to_acp).collect();
     let log = task.copy().with_file_name("agent.log");
     let log = std::fs::OpenOptions::new()
@@ -307,12 +352,15 @@ pub async fn run_pictured(
         titles: HashMap::new(),
         kinds: HashMap::new(),
         outputs: HashMap::new(),
+        printing: HashMap::new(),
+        terminals: terminals.clone(),
         limit: limit.clone(),
         over: Arc::clone(&over),
         stopped: Arc::clone(&stopped),
     };
     let mut watcher = Some(watcher);
     let turn_events = events.clone();
+    let offers_terminals = terminals.is_some();
     let stop = agent_client_protocol::Client
         .builder()
         .on_receive_notification(
@@ -365,11 +413,109 @@ pub async fn run_pictured(
             },
             agent_client_protocol::on_receive_request!(),
         )
+        .on_receive_request(
+            {
+                let terminals = terminals.clone();
+                async move |request: CreateTerminalRequest, responder, _cx| {
+                    let Some(terminals) = &terminals else {
+                        return responder.respond_with_internal_error("Kule runs no commands for this agent");
+                    };
+                    let env: Vec<(String, String)> =
+                        request.env.into_iter().map(|v| (v.name, v.value)).collect();
+                    match terminals.create(
+                        &request.command,
+                        &request.args,
+                        &env,
+                        request.cwd.as_deref(),
+                        request.output_byte_limit,
+                    ) {
+                        Ok(id) => responder.respond(CreateTerminalResponse::new(id)),
+                        Err(e) => responder.respond_with_internal_error(e),
+                    }
+                }
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            {
+                let terminals = terminals.clone();
+                async move |request: TerminalOutputRequest, responder, _cx| {
+                    let Some(terminals) = &terminals else {
+                        return responder.respond_with_internal_error("no terminals");
+                    };
+                    match terminals.output(&request.terminal_id.0) {
+                        Ok((text, truncated, exit)) => responder.respond(
+                            TerminalOutputResponse::new(text, truncated).exit_status(exit.map(exit_status)),
+                        ),
+                        Err(e) => responder.respond_with_internal_error(e),
+                    }
+                }
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            {
+                let terminals = terminals.clone();
+                async move |request: WaitForTerminalExitRequest, responder, cx: ConnectionTo<Agent>| {
+                    let Some(terminals) = terminals.clone() else {
+                        return responder.respond_with_internal_error("no terminals");
+                    };
+                    // Waited for apart, so the connection goes on meanwhile.
+                    cx.spawn(async move {
+                        match terminals.wait(&request.terminal_id.0).await {
+                            Ok(exit) => responder.respond(WaitForTerminalExitResponse::new(exit_status(exit))),
+                            Err(e) => responder.respond_with_internal_error(e),
+                        }
+                    })
+                }
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            {
+                let terminals = terminals.clone();
+                async move |request: KillTerminalRequest, responder, _cx| {
+                    let Some(terminals) = &terminals else {
+                        return responder.respond_with_internal_error("no terminals");
+                    };
+                    match terminals.kill(&request.terminal_id.0) {
+                        Ok(()) => responder.respond(KillTerminalResponse::new()),
+                        Err(e) => responder.respond_with_internal_error(e),
+                    }
+                }
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            {
+                let terminals = terminals.clone();
+                async move |request: ReleaseTerminalRequest, responder, _cx| {
+                    let Some(terminals) = &terminals else {
+                        return responder.respond_with_internal_error("no terminals");
+                    };
+                    match terminals.release(&request.terminal_id.0) {
+                        Ok(()) => responder.respond(ReleaseTerminalResponse::new()),
+                        Err(e) => responder.respond_with_internal_error(e),
+                    }
+                }
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
         .connect_with(
             ByteStreams::new(stdin, stdout),
             async move |connection: ConnectionTo<Agent>| {
                 let init = connection
-                    .send_request(InitializeRequest::new(ProtocolVersion::V1))
+                    .send_request(
+                        InitializeRequest::new(ProtocolVersion::V1).client_capabilities(
+                            ClientCapabilities::new()
+                                .terminal(offers_terminals)
+                                // The terminal extension of agents that run
+                                // their commands themselves (Claude Code's
+                                // and Codex's adapters): output in each tool
+                                // call's _meta, in chunks as it comes.
+                                .meta(display_terminals()),
+                        ),
+                    )
                     .block_task()
                     .await?;
                 let mut blocks = vec![ContentBlock::Text(TextContent::new(prompt))];
@@ -475,6 +621,12 @@ struct Watcher {
     kinds: HashMap<String, ToolKind>,
     /// What each tool call showed last, so an unchanged one is not sent again.
     outputs: HashMap<String, String>,
+    /// For a call printing in pieces: all it printed, and when it was last
+    /// passed on.
+    printing: HashMap<String, (String, Instant)>,
+    /// The commands Kule runs for the agent, whose output goes to the tool
+    /// call that shows them.
+    terminals: Option<Arc<terminals::Terminals>>,
     /// The cost the run may reach; `over` is told, once, when it does.
     limit: Option<Cost>,
     over: Arc<tokio::sync::Notify>,
@@ -502,7 +654,9 @@ impl Watcher {
                     id: id.clone(),
                     title: call.title,
                 });
+                self.attach(&id, &call.content);
                 self.output(&id, shown(Some(&call.content), call.raw_output.as_ref()));
+                self.print(&id, printed(call.meta.as_ref()));
                 self.maybe_done(id, call.status);
             }
             SessionUpdate::ToolCallUpdate(update) => {
@@ -513,6 +667,9 @@ impl Watcher {
                 if let Some(kind) = update.fields.kind {
                     self.kinds.insert(id.clone(), kind);
                 }
+                if let Some(content) = &update.fields.content {
+                    self.attach(&id, content);
+                }
                 if update.fields.content.is_some() || update.fields.raw_output.is_some() {
                     let text = shown(
                         update.fields.content.as_deref(),
@@ -520,6 +677,7 @@ impl Watcher {
                     );
                     self.output(&id, text);
                 }
+                self.print(&id, printed(update.meta.as_ref()));
                 if let Some(status) = update.fields.status {
                     self.maybe_done(id, status);
                 }
@@ -552,6 +710,55 @@ impl Watcher {
         }
     }
 
+    /// A command Kule runs, shown in tool call `id`: its output goes there.
+    fn attach(&mut self, id: &str, content: &[agent_client_protocol::schema::v1::ToolCallContent]) {
+        use agent_client_protocol::schema::v1::ToolCallContent;
+        let Some(terminals) = &self.terminals else {
+            return;
+        };
+        for c in content {
+            if let ToolCallContent::Terminal(t) = c {
+                terminals.attach(&t.terminal_id.0, id);
+            }
+        }
+    }
+
+    /// Output from the terminal extension: the whole of it, or a piece
+    /// that goes after what came before.
+    /// A command that prints in many small pieces is passed on at most
+    /// every [`PRINT_EVERY`]; what is left goes when its call ends.
+    fn print(&mut self, id: &str, printed: Option<Printed>) {
+        let last = self.printing.get(id).map(|(_, at)| *at);
+        let text = match printed {
+            None => return,
+            Some(Printed::All(text)) => text,
+            Some(Printed::More(piece)) => {
+                let mut text = match self.printing.get(id) {
+                    Some((held, _)) => held.clone(),
+                    None => self.outputs.get(id).cloned().unwrap_or_default(),
+                };
+                text.push_str(&piece);
+                tail(text)
+            }
+        };
+        match last {
+            Some(at) if at.elapsed() < PRINT_EVERY => {
+                self.printing.insert(id.to_owned(), (text, at));
+            }
+            _ => {
+                self.output(id, Some(text.clone()));
+                self.printing.insert(id.to_owned(), (text, Instant::now()));
+            }
+        }
+    }
+
+    /// What a call printed and was held back, passed on as it ends.
+    fn flush(&mut self, id: &str) {
+        if let Some((text, _)) = self.printing.remove(id) {
+            self.output(id, Some(text));
+        }
+    }
+
     /// Passes on what a tool call shows now, when it is new.
     fn output(&mut self, id: &str, text: Option<String>) {
         let Some(text) = text.map(tail) else { return };
@@ -571,6 +778,7 @@ impl Watcher {
             ToolCallStatus::Failed => true,
             _ => return,
         };
+        self.flush(&id);
         let title = self.titles.get(&id).cloned().unwrap_or_default();
         // A call that only looks or thinks takes no step: what changed while
         // it ran belongs to a call that can change files and is still going,

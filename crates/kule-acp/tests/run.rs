@@ -326,6 +326,34 @@ fn a_command_s_output_is_passed_on_as_it_grows() {
     assert_eq!(outputs(&s.run("run-raw abcd")), ["ab", "abcd"]);
 }
 
+/// An agent that runs its commands itself and reports their output in
+/// pieces (the terminal extension Claude Code's and Codex's adapters speak)
+/// gets asked to, and the pieces add up as they come.
+#[test]
+fn output_reported_in_pieces_adds_up_as_it_comes() {
+    let s = Setup::new();
+    let outputs = |script: &str| -> Vec<String> {
+        s.run(script)
+            .iter()
+            .filter_map(|e| match e {
+                Event::ToolOutput { text, .. } => Some(text.clone()),
+                _ => None,
+            })
+            .collect()
+    };
+    // The first piece goes at once; the ones close behind it wait for the
+    // call to end, and none is lost.
+    assert_eq!(
+        outputs("stream one two three"),
+        ["one\n", "one\ntwo\nthree\n"]
+    );
+    // A thousand pieces in a burst are not a thousand messages.
+    let words: Vec<String> = (0..1000).map(|n| n.to_string()).collect();
+    let many = outputs(&format!("stream {}", words.join(" ")));
+    assert!(many.len() < 10, "{} messages", many.len());
+    assert_eq!(many.last().unwrap(), &format!("{}\n", words.join("\n")));
+}
+
 /// Only the end of a long output is kept.
 #[test]
 fn a_long_output_keeps_its_end() {
@@ -342,6 +370,112 @@ fn a_long_output_keeps_its_end() {
         .unwrap();
     assert!(last.starts_with('…'));
     assert_eq!(last.len(), kule_acp::MAX_OUTPUT + '…'.len_utf8());
+}
+
+impl Setup {
+    /// [`Setup::run`], with Kule running the agent's commands for it in
+    /// the agent's sandbox when `terminals` is set.
+    fn run_terminals(&self, script: &str, terminals: bool) -> Vec<Event> {
+        let sandbox = Sandbox::new(&self.task).unwrap();
+        let agent = sandbox
+            .command(env!("CARGO_BIN_EXE_kule-test-agent"), &[])
+            .unwrap();
+        let (tx, rx) = mpsc::unbounded();
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        runtime
+            .block_on(kule_acp::run_pictured(
+                &self.task,
+                agent,
+                script,
+                &[],
+                None,
+                None,
+                &[],
+                terminals.then_some(sandbox),
+                tx,
+            ))
+            .unwrap();
+        runtime.block_on(rx.collect::<Vec<_>>())
+    }
+}
+
+fn said(events: &[Event]) -> Vec<String> {
+    events
+        .iter()
+        .filter_map(|e| match e {
+            Event::Message { text } => Some(text.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// A command the agent has Kule run: it runs in the task's copy, its
+/// output (both streams) reaches the agent and the tool call that shows
+/// it, and how it ended reaches the agent.
+#[test]
+fn kule_runs_the_agent_s_commands_and_passes_their_output_on() {
+    let s = Setup::new();
+    let events = s.run_terminals("shell pwd && echo out && echo err >&2 && exit 3", true);
+    let copy = fs::canonicalize(s.task.copy()).unwrap();
+    let said = said(&events);
+    assert_eq!(said.len(), 1, "{events:?}");
+    assert!(said[0].starts_with("exit 3: "), "{said:?}");
+    for part in [copy.to_str().unwrap(), "out", "err"] {
+        assert!(said[0].contains(part), "{part} missing from {said:?}");
+    }
+    let shown = events.iter().rev().find_map(|e| match e {
+        Event::ToolOutput { text, .. } => Some(text.clone()),
+        _ => None,
+    });
+    assert!(
+        shown.is_some_and(|t| t.contains("out") && t.contains("err")),
+        "{events:?}"
+    );
+    // Without a sandbox to run them in, Kule offers no terminals.
+    assert_eq!(said_of(&s, "shell echo hi", false), ["no terminals"]);
+}
+
+fn said_of(s: &Setup, script: &str, terminals: bool) -> Vec<String> {
+    said(&s.run_terminals(script, terminals))
+}
+
+/// The agent's commands are held by its sandbox, may not set what the
+/// sandbox sets or what loads code into every program, and run in the
+/// copy only.
+#[test]
+fn the_agent_s_commands_run_inside_its_sandbox() {
+    let s = Setup::new();
+    let outside = s.outside.path().join("written");
+    let said = said_of(&s, &format!("shell echo x > {}", outside.display()), true);
+    assert!(!said[0].starts_with("exit 0"), "{said:?}");
+    assert!(!outside.exists());
+    for name in ["DYLD_INSERT_LIBRARIES", "LD_PRELOAD", "HTTPS_PROXY", "HOME"] {
+        let said = said_of(&s, &format!("shell-env {name}=x echo hi"), true);
+        assert!(said[0].starts_with("refused: "), "{name}: {said:?}");
+    }
+}
+
+/// What a command leaves running, such as a server it started in the
+/// background, ends with the run; the command itself ends when its own
+/// process does, though the leftover holds its output open.
+#[test]
+fn what_a_command_leaves_running_ends_with_the_run() {
+    let s = Setup::new();
+    let started = std::time::Instant::now();
+    let said = said_of(&s, "shell sleep 30 & echo $!", true);
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(10),
+        "{:?}",
+        started.elapsed()
+    );
+    let pid: i32 = said[0]
+        .trim_start_matches("exit 0: ")
+        .trim()
+        .parse()
+        .unwrap_or_else(|_| panic!("{said:?}"));
+    // SAFETY: signal 0 only asks whether the process is there.
+    let alive = unsafe { libc::kill(pid, 0) } == 0;
+    assert!(!alive, "the background process {pid} outlived the run");
 }
 
 /// Pictures go after the prompt's text to an agent that takes them; one
@@ -370,6 +504,7 @@ fn pictures_go_only_to_an_agent_that_takes_them() {
                 None,
                 None,
                 &[],
+                None,
                 tx,
             ))
             .unwrap();

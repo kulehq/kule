@@ -8,6 +8,16 @@
   as it comes: under the call's line, open while it runs or when it
   failed, closed once it went well. Terminal colours and cursor moves are
   left out, and the last 64 KB of each call's output are kept.
+- A command's output comes while it runs:
+  - Claude Code's and Codex's adapters send it in pieces once Kule asks
+    for them (ACP's terminal extension); Kule passes them on at most every
+    150 ms.
+  - An agent that asks Kule to run its commands (ACP `terminal/*`) gets
+    them run in its own sandbox, behind the same proxy, in the task's copy.
+    Kule refuses variables that load code into every program or override
+    what the sandbox sets (`DYLD_*`, `LD_*`, `*_PROXY`, `HOME`, `TMPDIR`),
+    keeps at most 1 MB of output, and stops what a command left running
+    when the run ends.
 
 ### Preview
 

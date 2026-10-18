@@ -1148,6 +1148,9 @@ impl Service {
             launch.mode.as_deref(),
             limit,
             &mcp,
+            // The agent's commands, when it asks Kule to run them, run in
+            // its own sandbox.
+            Some(launch.sandbox.clone()),
             tx,
         ));
         if let Ok(usage) = runtime.block_on(forward) {
