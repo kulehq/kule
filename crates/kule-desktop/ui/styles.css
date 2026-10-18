@@ -100,9 +100,14 @@ body {
   margin: 0;
 }
 
+:root {
+  --titlebar: 34px;
+}
+
 body {
   display: grid;
   grid-template-columns: 48px minmax(0, 1fr);
+  grid-template-rows: var(--titlebar) minmax(0, 1fr);
   background: var(--bg);
   color: var(--text);
   font: 14px/1.45 var(--sans);
@@ -1123,12 +1128,6 @@ select:focus-visible {
   background: var(--surface);
   color: var(--text);
   font: inherit;
-}
-
-.hint {
-  flex: 1;
-  color: var(--faint);
-  font-size: 12px;
 }
 
 /* Review */
@@ -2289,7 +2288,86 @@ select:focus-visible {
   font-weight: 600;
 }
 
-/* The activity bar: the mark, the regions' switches, Settings. */
+/* The title bar: the window's title in the middle, the regions' switches
+   on the right. On macOS it is the window's own, its buttons on the left;
+   elsewhere it sits under the system's. Empty space in it moves the window. */
+.titlebar {
+  position: relative;
+  display: flex;
+  grid-column: 1 / -1;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 0 8px 0 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.titlebar-title {
+  position: absolute;
+  left: 50%;
+  max-width: 50%;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12.5px;
+  font-weight: 550;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transform: translateX(-50%);
+}
+
+.titlebar-actions {
+  position: relative;
+  display: flex;
+  gap: 2px;
+}
+
+.title-button {
+  display: grid;
+  width: 28px;
+  height: 26px;
+  place-items: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.title-button svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.2;
+  stroke-linejoin: round;
+}
+
+.title-button svg .fill {
+  fill: currentColor;
+  opacity: 0.3;
+}
+
+.title-button[aria-pressed="true"] {
+  color: var(--text);
+}
+
+.title-button[aria-pressed="true"] svg .fill {
+  opacity: 1;
+}
+
+.title-button:hover {
+  background: var(--sunken);
+  color: var(--text);
+}
+
+.title-button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* The activity bar: the mark and Settings. */
 .activity {
   display: flex;
   flex-direction: column;
@@ -2361,7 +2439,7 @@ select:focus-visible {
   display: grid;
   min-width: 0;
   min-height: 0;
-  height: 100vh;
+  height: 100%;
   grid-template-columns: 272px 5px minmax(0, 1fr) 0 0;
 }
 
@@ -2966,9 +3044,10 @@ body.dragging-panel * {
 
 #panel-live .composer-bar {
   flex-wrap: wrap;
+  justify-content: flex-start;
   gap: 4px 14px;
   margin: 6px -18px -8px;
-  padding: 5px 18px 6px 36px;
+  padding: 5px 18px 6px;
   border-top: 1px solid var(--border);
   background: var(--surface);
   color: var(--faint);
@@ -3056,4 +3135,59 @@ body.dragging-panel * {
 
 .section-pane > .ignored-group {
   margin-top: 0;
+}
+
+/* Settings > Budget: each task's own. */
+.task-budgets {
+  margin-top: 28px;
+}
+
+.task-budget-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.task-budget-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 14px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  margin-bottom: 6px;
+}
+
+.task-budget-row[class*="color-"] {
+  border-left: 4px solid var(--tag);
+}
+
+.task-budget-name {
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-budget-spent {
+  font: 12px var(--mono);
+}
+
+.task-budget-field {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+}
+
+.task-budget-field input {
+  width: 90px;
+  min-height: 30px;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
 }

@@ -269,6 +269,7 @@ function taskMenu(task, list, e) {
       "aria-keyshortcuts": "Alt+ArrowDown",
     }),
     item("Open terminal", () => (closeMenu(), openTerminal(task))),
+    item(task.budget ? `Budget: ${money(task.budget)}…` : "Budget…", () => (closeMenu(), openTaskBudget(task.id))),
     remove,
   ];
   const menu = h(
@@ -977,6 +978,7 @@ function renderSidebar() {
 
 function renderTask() {
   const settings = SETTINGS.includes(state.view);
+  $("titlebar-title").textContent = settings ? "Settings — Kule" : "Kule";
   $("settings").hidden = !settings;
   $("open-settings").setAttribute("aria-current", settings ? "page" : "false");
   for (const tab of document.querySelectorAll("#settings-tabs .tab")) {
@@ -998,6 +1000,7 @@ function renderTask() {
   if (!task) return;
 
   $("task-name").textContent = taskName(task);
+  $("titlebar-title").textContent = `${taskName(task)} — Kule`;
   const mark = $("task-name").closest(".task-header");
   mark.className = `task-header${colorOf(task) ? ` color-${colorOf(task)}` : ""}`;
   const group = groupOf(task);
@@ -1043,17 +1046,7 @@ function renderComposer(task) {
   $("send").disabled = busy || state.agents.length === 0;
   $("prompt").disabled = busy;
   $("agent").disabled = busy;
-  $("remove-task").disabled = busy;
-  $("composer-hint").textContent = busy
-    ? "at work · its steps appear above as it goes"
-    : "↵ run · ⇧↵ new line · sandboxed";
-  $("composer-hint").title = "Runs in the sandbox; its network goes through the task's proxy.";
   $("timeout").value = String(Math.round(task.approval_timeout_secs / 60));
-  // Not while the person is typing in it.
-  if (document.activeElement !== $("budget")) {
-    $("budget").value = task.budget ? String(task.budget.amount) : "";
-  }
-  $("budget-currency").textContent = task.budget ? task.budget.currency : "USD";
   renderSpent(task);
 }
 
@@ -1384,7 +1377,7 @@ async function openBudget() {
       h(
         "p",
         { class: "muted" },
-        "What every task may cost together in any 24 hours, as the agents report it. No run starts anywhere once it is spent, and a run is held to what is left. A task's own budget is set under its prompt; the tighter of the two holds."
+        "What every task may cost together in any 24 hours, as the agents report it. No run starts anywhere once it is spent, and a run is held to what is left. Each task can have its own budget too, below; the tighter of the two holds."
       )
     ),
     h(
@@ -1408,9 +1401,87 @@ async function openBudget() {
       ),
       h("span", { class: "daily-spent", id: "daily-spent", "aria-live": "polite" }),
       h("span", { class: "muted" }, "Empty for no limit.")
-    )
+    ),
+    taskBudgets()
   );
   await loadDaily();
+  if (focusBudget) {
+    document.querySelector(`#agents-view [data-key="budget:${CSS.escape(focusBudget)}"]`)?.focus();
+    focusBudget = null;
+  }
+}
+
+/** The task whose budget Settings opens on. */
+let focusBudget = null;
+
+/** Opens Settings' Budget on task `id`'s budget. */
+async function openTaskBudget(id) {
+  focusBudget = id;
+  await openBudget();
+}
+
+/** Each task's own budget, and what its runs spent. */
+function taskBudgets() {
+  const head = h(
+    "header",
+    { class: "agents-head task-budgets-head" },
+    h("h2", {}, "Each task"),
+    h(
+      "p",
+      { class: "muted" },
+      "What a task's runs may cost together, as its agents report it. None starts once it is spent. Claude Code reports the cost as each turn ends, so a turn may go over and the next run is refused; an agent that reports it as it works is stopped when it gets there. Agents that report no cost are not held by it. Empty for no limit."
+    )
+  );
+  if (!state.tasks.length) return h("section", { class: "task-budgets" }, head, h("p", { class: "muted" }, "No tasks yet."));
+  return h(
+    "section",
+    { class: "task-budgets" },
+    head,
+    h(
+      "ul",
+      { class: "task-budget-list" },
+      state.tasks.map((task) => {
+        const spent = task.spent || { runs: 0, tokens: 0, cost: [] };
+        const used = spent.cost.length
+          ? `${spent.cost.map(money).join(" + ")} spent`
+          : spent.tokens
+            ? `${spent.tokens.toLocaleString()} tokens`
+            : "nothing spent yet";
+        const currency = task.budget ? task.budget.currency : "USD";
+        const input = h("input", {
+          id: `budget-${task.id}`,
+          "data-key": `budget:${task.id}`,
+          type: "number",
+          min: 0,
+          step: 0.5,
+          inputmode: "decimal",
+          placeholder: "none",
+          value: task.budget ? String(task.budget.amount) : "",
+          disabled: task.running,
+          onchange: () => setTaskBudget(task, input.value, currency),
+        });
+        return h(
+          "li",
+          { class: `task-budget-row${colorOf(task) ? ` color-${colorOf(task)}` : ""}` },
+          h("label", { class: "task-budget-name", for: `budget-${task.id}` }, taskName(task), h("span", { class: "muted" }, ` · ${task.id}`)),
+          h("span", { class: "muted task-budget-spent" }, used),
+          h("span", { class: "task-budget-field" }, input, currency)
+        );
+      })
+    )
+  );
+}
+
+async function setTaskBudget(task, text, currency) {
+  const value = text.trim();
+  const budget = value === "" ? null : { amount: Number(value), currency };
+  try {
+    await call("set_budget", { task: task.id, budget });
+    toast(budget ? `${taskName(task)} may spend ${money(budget)}` : `${taskName(task)} has no budget of its own`);
+  } catch (err) {
+    fail(err);
+  }
+  await refresh();
 }
 
 /** What every task spent in the last 24 hours, against the daily budget;
@@ -1454,19 +1525,6 @@ async function setDailyBudget() {
   } catch (err) {
     fail(err);
     await loadDaily();
-  }
-}
-
-async function setBudgetFor() {
-  const task = currentTask();
-  if (!task) return;
-  const text = $("budget").value.trim();
-  const budget = text === "" ? null : { amount: Number(text), currency: task.budget ? task.budget.currency : "USD" };
-  try {
-    await call("set_budget", { task: task.id, budget });
-    await refresh();
-  } catch (err) {
-    fail(err);
   }
 }
 
@@ -3236,7 +3294,7 @@ async function refresh() {
 
 function select(id) {
   if (id !== state.current) {
-    $("remove-task").disarm?.();
+    disarmDelete();
     clearPanels();
   }
   state.view = "tasks";
@@ -3284,6 +3342,31 @@ async function openTerminal(task = currentTask()) {
   } catch (err) {
     fail(err);
   }
+}
+
+/** The task the delete shortcut was pressed for once, and when that ends. */
+let deleteArmed = null;
+
+function disarmDelete() {
+  clearTimeout(deleteArmed?.timer);
+  deleteArmed = null;
+}
+
+/** The delete shortcut: the first press says what a second one does, the
+ * second, within four seconds, deletes. */
+function deleteByKey(task) {
+  if (task.running) {
+    toast("The task cannot be deleted while its agent works");
+    return;
+  }
+  if (deleteArmed?.id === task.id) {
+    disarmDelete();
+    removeTask(task);
+    return;
+  }
+  disarmDelete();
+  deleteArmed = { id: task.id, timer: setTimeout(disarmDelete, 4000) };
+  toast(`Press again to delete ${taskName(task)} (${task.id}); the folder is not touched`);
 }
 
 async function removeTask(task = currentTask()) {
@@ -4848,7 +4931,7 @@ const COMMANDS = [
   { id: "group.new", title: "New group…", group: "Tasks", keys: "", run: () => { revealPanel("tasks"); newGroup(); } },
   { id: "group.policy", title: "Group policies", group: "Settings", keys: "", run: () => openPolicy() },
   { id: "task.terminal", title: "Open a terminal in the task's copy", group: "Tasks", keys: "Mod+T", run: () => withTask((t) => openTerminal(t)) },
-  { id: "task.delete", title: "Delete the task (press twice)", group: "Tasks", keys: "Mod+Backspace", run: () => withTask(() => press("#remove-task", "The task cannot be deleted while its agent works")) },
+  { id: "task.delete", title: "Delete the task (press twice)", group: "Tasks", keys: "Mod+Backspace", run: () => withTask((t) => deleteByKey(t)) },
   ...[null, ...COLORS].map((color) => ({
     id: `task.color.${color || "none"}`,
     title: color ? `Colour the task ${COLOR_NAMES[color].toLowerCase()}` : "Take the task's colour away",
@@ -4888,7 +4971,7 @@ const COMMANDS = [
     id: "prompt.run", title: "Run the prompt", group: "Task", keys: "Mod+Enter", inFields: true,
     run: () => withTask(() => { if (!$("send").disabled) $("composer").requestSubmit(); }),
   },
-  { id: "task.budget", title: "Set the task's budget", group: "Task", keys: "", run: () => withTask(() => { showTab("live"); $("budget").focus(); }) },
+  { id: "task.budget", title: "Set the task's budget", group: "Task", keys: "", run: () => withTask((t) => openTaskBudget(t.id)) },
   { id: "task.wait", title: "Set how long the agent waits for you", group: "Task", keys: "", run: () => withTask(() => { showTab("live"); $("timeout").focus(); }) },
 
   {
@@ -4969,8 +5052,10 @@ function labelControls() {
   label($("new-task"), "task.new", "New task");
   label($("new-group"), "group.new", "New group: tasks in it can have a policy of their own");
   label($("open-settings"), "app.settings", "Settings");
-  label($("open-terminal"), "task.terminal", "Opens your terminal in the task's copy, outside the sandbox. What you change there is reviewed like the agent's work.");
-  label($("remove-task"), "task.delete", "Delete task");
+  label($("toggle-left"), "layout.left", "Show or hide the left side");
+  label($("toggle-main"), "layout.main", "Show or hide the main area");
+  label($("toggle-bottom"), "layout.bottom", "Show or hide the bottom panel");
+  label($("toggle-right"), "layout.right", "Show or hide the right side");
   label($("send"), "prompt.run", "Run (Enter; Shift+Enter for a new line)");
   $("send-keys").textContent = "↵";
   renderLayout();
@@ -5345,9 +5430,10 @@ function recordKey(e) {
 // --- Start -----------------------------------------------------------------
 
 async function start() {
+  // The title bar leaves room for macOS's window buttons, which sit in it.
+  document.documentElement.dataset.platform = PLATFORM;
   $("new-task").addEventListener("click", newTask);
   $("new-group").addEventListener("click", newGroup);
-  $("open-terminal").addEventListener("click", () => openTerminal());
   $("empty-new-task").addEventListener("click", newTask);
   $("composer").addEventListener("submit", submitPrompt);
   // Enter alone is a new line in the prompt; running it is a shortcut
@@ -5378,17 +5464,6 @@ async function start() {
   for (const n of ["left", "main", "bottom", "right"]) $(`toggle-${n}`).addEventListener("click", () => toggleRegion(n));
   $("files-tree").addEventListener("keydown", filesKey);
   loadLayout();
-  const remove = armed(
-    "Delete task",
-    () => {
-      const task = currentTask();
-      return task ? `Click again to delete ${taskName(task)} (${task.id})` : "Click again to delete";
-    },
-    false,
-    removeTask
-  );
-  remove.id = "remove-task";
-  $("remove-task").replaceWith(remove);
   // A task's menu closes on a click elsewhere, or when the window changes.
   document.addEventListener("pointerdown", (e) => {
     if (!e.target.closest("#task-menu")) closeMenu();
@@ -5470,7 +5545,6 @@ async function start() {
     fail(err);
   }
   $("timeout").addEventListener("change", setTimeoutFor);
-  $("budget").addEventListener("change", setBudgetFor);
   // Counts down the deadlines without re-rendering the cards.
   setInterval(() => {
     for (const el of document.querySelectorAll(".countdown")) {

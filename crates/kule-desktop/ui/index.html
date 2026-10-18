@@ -8,6 +8,15 @@
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
+    <header class="titlebar" data-tauri-drag-region>
+      <span class="titlebar-title" id="titlebar-title" data-tauri-drag-region>Kule</span>
+      <div class="titlebar-actions" role="toolbar" aria-label="Layout">
+        <button id="toggle-left" class="title-button" type="button" aria-pressed="true" aria-label="Left side"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="11" rx="2"/><rect class="fill" x="1.5" y="2.5" width="4.5" height="11" rx="2"/></svg></button>
+        <button id="toggle-main" class="title-button" type="button" aria-pressed="true" aria-label="Main area"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="11" rx="2"/><rect class="fill" x="1.5" y="2.5" width="13" height="6.5" rx="2"/></svg></button>
+        <button id="toggle-bottom" class="title-button" type="button" aria-pressed="false" aria-label="Bottom panel"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="11" rx="2"/><rect class="fill" x="1.5" y="9" width="13" height="4.5" rx="2"/></svg></button>
+        <button id="toggle-right" class="title-button" type="button" aria-pressed="false" aria-label="Right side"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="11" rx="2"/><rect class="fill" x="10" y="2.5" width="4.5" height="11" rx="2"/></svg></button>
+      </div>
+    </header>
     <nav class="activity" aria-label="Kule">
       <svg class="brand-mark" viewBox="100 100 824 824" aria-hidden="true">
         <rect x="100" y="100" width="824" height="824" rx="185" />
@@ -15,10 +24,6 @@
         <rect class="brand-glyph" x="336" y="318" width="352" height="112" rx="56" />
         <path class="brand-glyph" d="M466 470 L558 470 L588 806 Q590 826 570 826 L454 826 Q434 826 436 806 Z" />
       </svg>
-      <button id="toggle-left" class="activity-button" type="button" aria-pressed="true" aria-label="Left side"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="11" rx="2"/><rect class="fill" x="1.5" y="2.5" width="4.5" height="11" rx="2"/></svg></button>
-      <button id="toggle-main" class="activity-button" type="button" aria-pressed="true" aria-label="Main area"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="11" rx="2"/><rect class="fill" x="1.5" y="2.5" width="13" height="6.5" rx="2"/></svg></button>
-      <button id="toggle-bottom" class="activity-button" type="button" aria-pressed="false" aria-label="Bottom panel"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="11" rx="2"/><rect class="fill" x="1.5" y="9" width="13" height="4.5" rx="2"/></svg></button>
-      <button id="toggle-right" class="activity-button" type="button" aria-pressed="false" aria-label="Right side"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="11" rx="2"/><rect class="fill" x="10" y="2.5" width="4.5" height="11" rx="2"/></svg></button>
       <span class="activity-spacer"></span>
       <button id="open-settings" class="activity-button settings-button" type="button" aria-label="Settings">
             <svg viewBox="0 0 16 16" aria-hidden="true">
@@ -95,15 +100,6 @@
               title="What the task's runs used, as their agents reported it. An agent signed in with a subscription may report tokens alone."
               hidden
             ></span>
-            <button
-              id="open-terminal"
-              class="button"
-              type="button"
-              title="Opens your terminal in the task's copy, outside the sandbox. What you change there is reviewed like the agent's work."
-            >
-              Open terminal
-            </button>
-            <button id="remove-task" class="button ghost danger" type="button">Delete task</button>
           </div>
         </header>
       </section>
@@ -177,15 +173,6 @@
                   <option value="480">8 hours</option>
                 </select>
               </label>
-              <label
-                class="agent-pick"
-                title="What the task's runs may cost together, as the agents report it. None starts once it is spent. Claude Code reports the cost as each turn ends, so a turn may go over and the next run is refused; an agent that reports it as it works is stopped when it gets there. Agents that report no cost are not held by it. Empty for no limit."
-              >
-                budget
-                <input id="budget" type="number" min="0" step="0.5" inputmode="decimal" placeholder="none" />
-                <span id="budget-currency">USD</span>
-              </label>
-              <span class="hint" id="composer-hint"></span>
             </div>
           </form>
         </section>

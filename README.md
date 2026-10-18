@@ -306,7 +306,7 @@ it writes in Kule reaches it outside; you sign it in there once.
   Kule not to ask about again still hold. `kule group` does the same from
   a terminal (`new`, `put`, `policy`, `rename`, `color`, `delete`).
 - **Settings**: agents, the policy, remembered rules, secrets and the
-  daily budget, one section each.
+  budgets (the daily one and each task's), one section each.
 - **First run**: with no task yet, the window shows which agents can start
   (and what to install for those that cannot), lets you choose the
   balanced or careful policy, then asks for a folder. Opened from the
@@ -334,13 +334,14 @@ it writes in Kule reaches it outside; you sign it in there once.
   each holding panels as tabs. By default the agent's chat and the
   terminals share the bottom, side by side (`Agent | zsh 1 | zsh 2 | +`),
   and the main area shows Review and Timeline. Any region hides with the
-  button at the end of its tab bar or from the bar on the left; the bottom
+  button at the end of its tab bar or from the switches at the right of the
+  title bar (on macOS the window's own, as in VS Code); the bottom
   panel can fill the window, and the main area and the bottom panel are
   never hidden together. Mod+Shift+J shows or hides the chat, Ctrl+\` the
   terminal. The panels are Tasks, Agent, Review, Timeline, Files (the
   task's copy as a tree, changed files marked, any file shown as text)
   and Terminal (your shells in the copy, as many as you open, each a tab;
-  outside the sandbox like *Open terminal*; Ctrl+\` shows it,
+  outside the sandbox like a task's *Open terminal*; Ctrl+\` shows it,
   Ctrl+Shift+\` opens another, ⌘F or Ctrl+Shift+F finds text, ⌘/Ctrl+click
   opens an http or https link; outside macOS only Ctrl+Shift shortcuts and
   function keys leave it, so Ctrl+L and the rest stay the shell's). The
@@ -404,7 +405,8 @@ What each run used, as its agent reported it, is kept with the task
 (`usage.jsonl`, outside the copy): tokens, the context window, and the
 cost when the agent says. `kule status` and the app's task header add it
 up. `kule budget TASK 5` (USD unless a currency follows; `off` takes it
-away), or *Budget* in the app, caps what the task's runs may cost
+away), or *Settings → Budget* in the app (also a task's ⋮ menu), caps
+what the task's runs may cost
 together: no run starts once it is spent, and a run whose agent reports
 its cost as it works is cancelled when it gets there. Claude Code reports
 the cost as each turn ends, so its turn can go over and the next run is

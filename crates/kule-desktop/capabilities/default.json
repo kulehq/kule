@@ -3,5 +3,9 @@
   "identifier": "default",
   "description": "The main window: Kule's own commands and events, nothing else",
   "windows": ["main"],
-  "permissions": ["core:default"]
+  "permissions": [
+    "core:default",
+    "core:window:allow-start-dragging",
+    "core:window:allow-internal-toggle-maximize"
+  ]
 }
