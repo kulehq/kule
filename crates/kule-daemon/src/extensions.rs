@@ -22,12 +22,37 @@ pub fn install(home: &Path, path: &Path) -> Result<Listed> {
 }
 
 /// Installs a folder under development. It waits for approval, and again
-/// whenever its manifest changes.
+/// whenever its manifest changes. Its code runs unapproved, so it may not
+/// sit where an agent can write (see [`agents_write`]).
 pub fn install_folder(home: &Path, dir: &Path) -> Result<Listed> {
+    let refused = agents_write(home)?;
     contributions_ok(home, &Source::folder(dir).map_err(|e| e.to_string())?)?;
     Store::new(home)
-        .install_folder(dir)
+        .install_folder(dir, &refused)
         .map_err(|e| e.to_string())
+}
+
+/// What every agent may write besides the task's copy and `/tmp`: its
+/// state, logins and home of its own, under the person's home.
+fn agents_write(home: &Path) -> Result<Vec<std::path::PathBuf>> {
+    let Some(person) = std::env::var_os("HOME").map(std::path::PathBuf::from) else {
+        return Ok(Vec::new());
+    };
+    let agents = kule_acp::Agents::load(home).map_err(|e| e.to_string())?;
+    Ok(agents
+        .listed()
+        .iter()
+        .flat_map(|l| {
+            let p = &l.profile;
+            p.state
+                .iter()
+                .chain(&p.login)
+                .cloned()
+                .chain(p.own_home.as_ref().map(|_| p.own_home_path()))
+                .map(|rel| person.join(rel))
+                .collect::<Vec<_>>()
+        })
+        .collect())
 }
 
 /// What an extension adds, checked as Kule checks its own.
@@ -183,7 +208,9 @@ mod tests {
 
     #[test]
     fn runs_are_given_only_the_mcp_servers_the_person_approved() {
-        let (home, src) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+        let home = TempDir::new().unwrap();
+        // Not under /tmp, where a folder under development is refused.
+        let src = TempDir::new_in(concat!(env!("CARGO_MANIFEST_DIR"), "/../../target")).unwrap();
         fs::write(
             src.path().join("kule-extension.json"),
             r#"{ "kule_extension": 1, "id": "acme.tools", "name": "Tools", "version": "1.0.0",

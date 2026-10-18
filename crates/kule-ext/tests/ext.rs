@@ -33,7 +33,8 @@ fn manifest(extra: serde_json::Value) -> String {
 }
 
 fn folder(manifest: &str) -> TempDir {
-    let dir = TempDir::new().unwrap();
+    // Not under /tmp, where a folder under development is refused.
+    let dir = TempDir::new_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
     fs::write(dir.path().join("kule-extension.json"), manifest).unwrap();
     fs::write(
         dir.path().join("main.js"),
@@ -353,7 +354,7 @@ fn a_folder_under_development_needs_approval_again_only_when_its_manifest_change
     let home = TempDir::new().unwrap();
     let store = Store::new(home.path());
     let dir = folder(&manifest(json!({})));
-    let listed = store.install_folder(dir.path()).unwrap();
+    let listed = store.install_folder(dir.path(), &[]).unwrap();
     assert!(listed.dev.is_some());
     store.approve("acme.notes", &listed.digest).unwrap();
     fs::write(dir.path().join("main.js"), "// new code").unwrap();
@@ -459,4 +460,71 @@ fn a_file_is_read_through_its_cap() {
     );
     assert!(package.read("missing.js").is_err());
     let _ = Path::new("unused");
+}
+
+#[test]
+fn a_folder_agents_can_write_is_not_taken_for_development() {
+    let home = TempDir::new_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
+    let store = Store::new(home.path());
+    let m = manifest(json!({}));
+    let write = |dir: &Path| {
+        fs::write(dir.join("kule-extension.json"), &m).unwrap();
+        fs::write(dir.join("main.js"), "1").unwrap();
+        fs::write(dir.join("panel.html"), "<p>").unwrap();
+    };
+    // /tmp: every sandboxed command may write there.
+    let tmp = TempDir::new_in("/tmp").unwrap();
+    write(tmp.path());
+    let e = store
+        .install_folder(tmp.path(), &[])
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("where agents can write"), "{e}");
+    // Kule's home: the tasks' copies are there.
+    let inside = home.path().join("tasks/abc/copy/ext");
+    fs::create_dir_all(&inside).unwrap();
+    write(&inside);
+    assert!(store.install_folder(&inside, &[]).is_err());
+    // An agent's own directory, which the caller names.
+    let agent = TempDir::new_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
+    let ext = agent.path().join("plugins/x");
+    fs::create_dir_all(&ext).unwrap();
+    write(&ext);
+    let e = store
+        .install_folder(&ext, &[agent.path().to_path_buf()])
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("where agents can write"), "{e}");
+    // Elsewhere it is taken.
+    assert!(store.install_folder(&ext, &[]).is_ok());
+    assert!(
+        store
+            .list()
+            .unwrap()
+            .iter()
+            .all(|l| l.dev.as_deref() != Some(tmp.path()))
+    );
+}
+
+#[test]
+fn a_folder_already_installed_where_agents_can_write_is_held() {
+    let home = TempDir::new_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
+    let store = Store::new(home.path());
+    let dir = folder(&manifest(json!({})));
+    let listed = store.install_folder(dir.path(), &[]).unwrap();
+    store.approve("acme.notes", &listed.digest).unwrap();
+    // Installed by an older Kule from /tmp: it no longer runs.
+    let tmp = TempDir::new_in("/tmp").unwrap();
+    for f in ["kule-extension.json", "main.js", "panel.html"] {
+        fs::copy(dir.path().join(f), tmp.path().join(f)).unwrap();
+    }
+    let installed = home.path().join("extensions/installed.json");
+    let text = fs::read_to_string(&installed).unwrap();
+    let real = dir.path().canonicalize().unwrap();
+    let json = serde_json::to_string(&real.display().to_string()).unwrap();
+    let to = serde_json::to_string(&tmp.path().display().to_string()).unwrap();
+    fs::write(&installed, text.replace(&json, &to)).unwrap();
+    let held = store.get("acme.notes").unwrap().held.unwrap();
+    assert!(held.contains("where agents can write"), "{held}");
+    assert!(store.runnable("acme.notes").is_err());
 }

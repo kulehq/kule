@@ -136,8 +136,23 @@ impl Store {
     }
 
     /// Installs a folder under development, read live from where it is.
-    pub fn install_folder(&self, dir: &Path) -> Result<Listed> {
+    ///
+    /// A folder under development runs its code as it is, unapproved, so it
+    /// must sit where no agent can write: not under a temporary directory,
+    /// Kule's home (the tasks' copies) or any of `also_refused` (the agents'
+    /// own directories, which the caller knows).
+    pub fn install_folder(&self, dir: &Path, also_refused: &[PathBuf]) -> Result<Listed> {
         let dir = dir.canonicalize().at(dir)?;
+        if let Some(root) = self
+            .agent_writable(&dir)
+            .or_else(|| under_any(&dir, also_refused))
+        {
+            return Err(invalid(format!(
+                "{} is under {}, where agents can write; an extension under development must sit where only you can change it",
+                dir.display(),
+                root.display()
+            )));
+        }
         let source = Source::folder(&dir)?;
         let id = source.manifest().id.clone();
         let mut installed = self.installed()?;
@@ -224,7 +239,27 @@ impl Store {
         }
     }
 
+    /// The temporary directory or Kule home `dir` is under, if any: places
+    /// a sandboxed agent can write.
+    fn agent_writable(&self, dir: &Path) -> Option<PathBuf> {
+        let kule_home = self.dir.parent().map(Path::to_path_buf);
+        let roots: Vec<PathBuf> = AGENT_WRITABLE
+            .iter()
+            .map(PathBuf::from)
+            .chain(kule_home)
+            .collect();
+        under_any(dir, &roots)
+    }
+
     fn source(&self, id: &str, i: &Installed) -> Result<Source> {
+        if let Some(dir) = &i.dev
+            && let Some(root) = self.agent_writable(dir)
+        {
+            return Err(invalid(format!(
+                "its folder is under {}, where agents can write",
+                root.display()
+            )));
+        }
         let source = match &i.dev {
             Some(dir) => Source::folder(dir)?,
             None => Source::Packed(Package::read_file(&self.package_path(id, &i.digest))?),
@@ -509,6 +544,19 @@ impl Store {
         let bytes = serde_json::to_vec_pretty(value).map_err(|e| invalid(e.to_string()))?;
         write_atomic(&self.dir.join(name), &bytes)
     }
+}
+
+/// Directories any sandboxed command may write.
+const AGENT_WRITABLE: [&str; 4] = ["/tmp", "/var/tmp", "/dev/shm", "/private/tmp"];
+
+/// The first of `roots` that `dir` is in, both compared as they really are
+/// (`/tmp` is `/private/tmp` on macOS) and as written.
+fn under_any(dir: &Path, roots: &[PathBuf]) -> Option<PathBuf> {
+    let real = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
+    roots.iter().find_map(|r| {
+        let root = r.canonicalize().unwrap_or_else(|_| r.clone());
+        (real.starts_with(&root) || dir.starts_with(r)).then_some(root)
+    })
 }
 
 fn read_json<T: DeserializeOwned>(path: &Path) -> Result<T> {

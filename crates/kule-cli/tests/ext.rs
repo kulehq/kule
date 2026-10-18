@@ -55,9 +55,9 @@ fn extension(dir: &Path, version: &str, permissions: &str) {
 #[test]
 fn a_packed_extension_runs_once_approved_and_waits_again_when_updated() {
     let (home, work, src) = (
-        TempDir::new().unwrap(),
-        TempDir::new().unwrap(),
-        TempDir::new().unwrap(),
+        TempDir::new_in(env!("CARGO_TARGET_TMPDIR")).unwrap(),
+        TempDir::new_in(env!("CARGO_TARGET_TMPDIR")).unwrap(),
+        TempDir::new_in(env!("CARGO_TARGET_TMPDIR")).unwrap(),
     );
     extension(src.path(), "1.0.0", r#""tasks.read""#);
 
@@ -172,9 +172,9 @@ fn a_packed_extension_runs_once_approved_and_waits_again_when_updated() {
 #[test]
 fn a_theme_that_is_not_a_theme_stops_the_install() {
     let (home, work, src) = (
-        TempDir::new().unwrap(),
-        TempDir::new().unwrap(),
-        TempDir::new().unwrap(),
+        TempDir::new_in(env!("CARGO_TARGET_TMPDIR")).unwrap(),
+        TempDir::new_in(env!("CARGO_TARGET_TMPDIR")).unwrap(),
+        TempDir::new_in(env!("CARGO_TARGET_TMPDIR")).unwrap(),
     );
     extension(src.path(), "1.0.0", "");
     fs::write(
@@ -212,9 +212,9 @@ fn tools(dir: &Path, mcp_args: &str) {
 #[test]
 fn an_extension_brings_agents_and_mcp_servers_that_wait_for_the_person() {
     let (home, work, src) = (
-        TempDir::new().unwrap(),
-        TempDir::new().unwrap(),
-        TempDir::new().unwrap(),
+        TempDir::new_in(env!("CARGO_TARGET_TMPDIR")).unwrap(),
+        TempDir::new_in(env!("CARGO_TARGET_TMPDIR")).unwrap(),
+        TempDir::new_in(env!("CARGO_TARGET_TMPDIR")).unwrap(),
     );
     let dir = src.path().to_str().unwrap();
 
@@ -279,7 +279,10 @@ fn an_extension_brings_agents_and_mcp_servers_that_wait_for_the_person() {
 
 #[test]
 fn a_new_extension_installs_as_it_is() {
-    let (home, work) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+    let (home, work) = (
+        TempDir::new_in(env!("CARGO_TARGET_TMPDIR")).unwrap(),
+        TempDir::new_in(env!("CARGO_TARGET_TMPDIR")).unwrap(),
+    );
     let made = stdout(&kule(
         home.path(),
         work.path(),
@@ -310,7 +313,10 @@ fn a_new_extension_installs_as_it_is() {
 /// The examples in the repository stay extensions Kule takes.
 #[test]
 fn every_example_extension_reads() {
-    let (home, work) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+    let (home, work) = (
+        TempDir::new_in(env!("CARGO_TARGET_TMPDIR")).unwrap(),
+        TempDir::new_in(env!("CARGO_TARGET_TMPDIR")).unwrap(),
+    );
     let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/extensions");
     let mut seen = 0;
     for entry in fs::read_dir(&examples).unwrap() {
