@@ -222,6 +222,12 @@ fn manifests_are_refused_for_what_they_should_not_say() {
         (json!({ "id": "acme" }), "publisher.name"),
         (json!({ "id": "acme.Notes" }), "lowercase"),
         (json!({ "name": "Pay\u{202E}lacol" }), "text-direction"),
+        (json!({ "name": "Kule: Update" }), "Kule's own"),
+        (json!({ "name": "kule notes" }), "Kule's own"),
+        (
+            json!({ "id": "kule.notes", "publisher": "kule" }),
+            "Kule's own",
+        ),
         (json!({ "version": "1.0" }), "X.Y.Z"),
         (json!({ "kule_extension": 2 }), "format 2"),
         (json!({ "main": null }), "need a main script"),

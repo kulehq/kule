@@ -316,6 +316,22 @@ impl Manifest {
             )));
         }
         words("name", &self.name, 40)?;
+        // Notifications and notes carry the extension's name; none may
+        // pass for Kule's own.
+        if publisher == "kule" {
+            return Err(invalid("the publisher kule is Kule's own"));
+        }
+        let first = self
+            .name
+            .split(|c: char| !c.is_alphanumeric())
+            .next()
+            .unwrap_or("");
+        if first.eq_ignore_ascii_case("kule") {
+            return Err(invalid(format!(
+                "name {:?} would read as Kule's own",
+                self.name
+            )));
+        }
         if !version_ok(&self.version) {
             return Err(invalid(format!(
                 "version {:?} must be X.Y.Z (with an optional -pre or +build)",

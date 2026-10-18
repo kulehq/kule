@@ -1,9 +1,9 @@
 {
   "kule_extension": 1,
-  "id": "kule.webhook-notify",
+  "id": "example.webhook-notify",
   "name": "Webhook notify",
   "version": "1.0.0",
-  "publisher": "kule",
+  "publisher": "example",
   "description": "Posts a line to a Slack webhook when a task is committed, rolled back or undone.",
   "main": "main.js",
   "permissions": ["events.read", "tasks.read", "net"],

@@ -1,9 +1,9 @@
 {
   "kule_extension": 1,
-  "id": "kule.lockfile-notes",
+  "id": "example.lockfile-notes",
   "name": "Lockfile notes",
   "version": "1.0.0",
-  "publisher": "kule",
+  "publisher": "example",
   "description": "Adds a note to a review when an agent changed a lockfile, so you look at its packages before committing.",
   "main": "main.js",
   "permissions": ["review.read", "review.annotate"]

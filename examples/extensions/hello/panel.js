@@ -13,7 +13,7 @@ async function render() {
   );
 }
 
-document.getElementById("greet").addEventListener("click", () => kule.commands.execute("ext.kule.hello.greet"));
+document.getElementById("greet").addEventListener("click", () => kule.commands.execute("ext.example.hello.greet"));
 kule.ready.then(render);
 kule.events.on("task-selected", ({ task }) => {
   kule.context.task = task;

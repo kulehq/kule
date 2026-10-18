@@ -1,9 +1,9 @@
 {
   "kule_extension": 1,
-  "id": "kule.hello",
+  "id": "example.hello",
   "name": "Hello",
   "version": "1.0.0",
-  "publisher": "kule",
+  "publisher": "example",
   "description": "A first extension: a panel listing your tasks, a command, a setting and a theme.",
   "main": "main.js",
   "permissions": ["tasks.read", "notify"],
