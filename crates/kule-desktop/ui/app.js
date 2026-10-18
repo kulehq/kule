@@ -1813,8 +1813,8 @@ function streamItem(item) {
       return h("div", { class: "msg md" }, ...markdown(item.text));
     case "thought":
       return h("div", { class: "msg thought" }, item.text);
-    case "tool":
-      return h(
+    case "tool": {
+      const line = h(
         "div",
         { class: `event ${item.done ? (item.failed ? "failed" : "done") : ""}` },
         h("span", { class: "event-mark" }, item.done ? (item.failed ? "✗" : "✓") : "·"),
@@ -1823,6 +1823,24 @@ function streamItem(item) {
           ? h("span", { class: "event-files" }, `→ ${item.files.join(", ")}`)
           : null
       );
+      if (!item.output) return line;
+      // What the call showed: open while it runs or when it failed, closed
+      // once it went well, unless the person opened or closed it.
+      const open = item.expanded ?? (!item.done || item.failed);
+      const output = h(
+        "details",
+        {
+          class: "tool-output",
+          open,
+          ontoggle: (e) => {
+            item.expanded = e.currentTarget.open;
+          },
+        },
+        h("summary", { "data-key": `output:${item.id}` }, line),
+        h("pre", {}, stripAnsi(item.output))
+      );
+      return output;
+    }
     case "note":
       return h("div", { class: "event" }, h("span", { class: "event-mark" }, "·"), h("span", {}, item.text));
     case "finished":
@@ -1880,6 +1898,11 @@ function absorb(id, event) {
       if (!open) items.push(entry);
       break;
     }
+    case "tool_output": {
+      const call = items.findLast((i) => i.kind === "tool" && i.id === event.id);
+      if (call) call.output = event.text;
+      break;
+    }
     case "permission":
       items.push({ kind: "note", text: `Permission “${event.title}”: ${event.chosen}${event.granted === false ? " (not granted)" : ""}` });
       break;
@@ -1889,6 +1912,18 @@ function absorb(id, event) {
     default:
       break;
   }
+}
+
+/** A command's output without terminal escapes (colours, cursor moves);
+ * a carriage return keeps what was written after it, as a terminal does. */
+function stripAnsi(text) {
+  return text
+    .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, "")
+    .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
+    .replace(/\x1b[@-_]/g, "")
+    .split("\n")
+    .map((line) => line.slice(line.lastIndexOf("\r", line.length - 2) + 1).replace(/\r$/, ""))
+    .join("\n");
 }
 
 /** Folds one run event into the task's stream. */

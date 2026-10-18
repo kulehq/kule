@@ -89,6 +89,66 @@ pub enum Event {
     Done { stop_reason: String },
     /// Something Kule says about the run, not the agent.
     Note { text: String },
+    /// What a tool call has shown so far, such as a command's output: the
+    /// whole of it, in place of the one before, its last [`MAX_OUTPUT`]
+    /// bytes when longer.
+    ToolOutput { id: String, text: String },
+}
+
+/// The most of one tool call's output kept.
+pub const MAX_OUTPUT: usize = 64 << 10;
+
+/// The end of `text`, at most [`MAX_OUTPUT`] bytes, cut on a character and
+/// marked when cut.
+fn tail(text: String) -> String {
+    if text.len() <= MAX_OUTPUT {
+        return text;
+    }
+    let mut at = text.len() - MAX_OUTPUT;
+    while !text.is_char_boundary(at) {
+        at += 1;
+    }
+    format!("…{}", &text[at..])
+}
+
+/// What a tool call shows: its content's text, else what its raw output
+/// says it printed. Diffs are left to Review, embedded terminals to their
+/// own output.
+fn shown(
+    content: Option<&[agent_client_protocol::schema::v1::ToolCallContent]>,
+    raw: Option<&serde_json::Value>,
+) -> Option<String> {
+    use agent_client_protocol::schema::v1::ToolCallContent;
+    let texts: Vec<String> = content
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|c| match c {
+            ToolCallContent::Content(c) => text_of(&c.content),
+            _ => None,
+        })
+        .filter(|t| !t.is_empty())
+        .collect();
+    if !texts.is_empty() {
+        return Some(texts.join("\n"));
+    }
+    match raw? {
+        serde_json::Value::String(s) if !s.is_empty() => Some(s.clone()),
+        serde_json::Value::Object(o) => {
+            let parts: Vec<&str> = [
+                "output",
+                "formatted_output",
+                "aggregated_output",
+                "stdout",
+                "stderr",
+            ]
+            .iter()
+            .filter_map(|k| o.get(*k).and_then(|v| v.as_str()))
+            .filter(|s| !s.is_empty())
+            .collect();
+            (!parts.is_empty()).then(|| parts.join("\n"))
+        }
+        _ => None,
+    }
 }
 
 /// Money, as an agent reports it.
@@ -246,6 +306,7 @@ pub async fn run_pictured(
         events: events.clone(),
         titles: HashMap::new(),
         kinds: HashMap::new(),
+        outputs: HashMap::new(),
         limit: limit.clone(),
         over: Arc::clone(&over),
         stopped: Arc::clone(&stopped),
@@ -412,6 +473,8 @@ struct Watcher {
     events: UnboundedSender<Event>,
     titles: HashMap<String, String>,
     kinds: HashMap<String, ToolKind>,
+    /// What each tool call showed last, so an unchanged one is not sent again.
+    outputs: HashMap<String, String>,
     /// The cost the run may reach; `over` is told, once, when it does.
     limit: Option<Cost>,
     over: Arc<tokio::sync::Notify>,
@@ -439,6 +502,7 @@ impl Watcher {
                     id: id.clone(),
                     title: call.title,
                 });
+                self.output(&id, shown(Some(&call.content), call.raw_output.as_ref()));
                 self.maybe_done(id, call.status);
             }
             SessionUpdate::ToolCallUpdate(update) => {
@@ -448,6 +512,13 @@ impl Watcher {
                 }
                 if let Some(kind) = update.fields.kind {
                     self.kinds.insert(id.clone(), kind);
+                }
+                if update.fields.content.is_some() || update.fields.raw_output.is_some() {
+                    let text = shown(
+                        update.fields.content.as_deref(),
+                        update.fields.raw_output.as_ref(),
+                    );
+                    self.output(&id, text);
                 }
                 if let Some(status) = update.fields.status {
                     self.maybe_done(id, status);
@@ -479,6 +550,19 @@ impl Watcher {
             }
             _ => {}
         }
+    }
+
+    /// Passes on what a tool call shows now, when it is new.
+    fn output(&mut self, id: &str, text: Option<String>) {
+        let Some(text) = text.map(tail) else { return };
+        if self.outputs.get(id) == Some(&text) {
+            return;
+        }
+        self.outputs.insert(id.to_owned(), text.clone());
+        self.send(Event::ToolOutput {
+            id: id.to_owned(),
+            text,
+        });
     }
 
     fn maybe_done(&mut self, id: String, status: ToolCallStatus) {

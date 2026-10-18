@@ -384,6 +384,22 @@ impl Service {
             }
             _ => false,
         };
+        // A tool call's output comes whole each time: the newer one takes
+        // the older one's place, at the end, so the order stays the order
+        // of `seq`.
+        if let RunEvent::Agent {
+            event: kule_acp::Event::ToolOutput { id, .. },
+        } = &event
+        {
+            let same = |s: &Sequenced| {
+                matches!(&s.event, RunEvent::Agent {
+                    event: kule_acp::Event::ToolOutput { id: kept_id, .. },
+                } if kept_id == id)
+            };
+            if let Some(at) = kept.iter().rposition(same) {
+                kept.remove(at);
+            }
+        }
         if !merged {
             if kept.len() == KEPT_EVENTS {
                 kept.pop_front();
@@ -1876,6 +1892,30 @@ mod tests {
             panic!("no lines");
         };
         assert_eq!(hunks[0].lines.last().unwrap().text, "b");
+    }
+
+    /// Each tool call's output is kept once, as it was last, at the end: a
+    /// command that prints for long does not push the run out of reach.
+    #[test]
+    fn a_tool_call_s_output_is_kept_once() {
+        let s = Setup::new();
+        let (id, _) = s.task();
+        let output = |call: &str, text: &str| RunEvent::Agent {
+            event: kule_acp::Event::ToolOutput {
+                id: call.into(),
+                text: text.into(),
+            },
+        };
+        for n in 0..(KEPT_EVENTS * 2) {
+            s.app.emit(&id, output("a", &format!("line {n}")));
+        }
+        s.app.emit(&id, output("b", "other"));
+        s.app.emit(&id, output("a", "last"));
+        let kept = s.app.stream(&id);
+        assert_eq!(kept.len(), 2);
+        assert!(kept.windows(2).all(|w| w[0].seq < w[1].seq));
+        assert_eq!(kept[0].event, output("b", "other"));
+        assert_eq!(kept[1].event, output("a", "last"));
     }
 
     /// A place a prompt names is a file the copy holds, reached without a

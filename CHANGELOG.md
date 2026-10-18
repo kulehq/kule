@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Agent runs
+
+- Live shows what each tool call printed, such as a command's output,
+  as it comes: under the call's line, open while it runs or when it
+  failed, closed once it went well. Terminal colours and cursor moves are
+  left out, and the last 64 KB of each call's output are kept.
+
 ### Preview
 
 - A file picked in Files opens large in the main area's new Preview tab

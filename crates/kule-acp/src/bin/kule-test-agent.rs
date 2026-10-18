@@ -16,6 +16,9 @@
 //! - `tokens <input> <output>`: the token counts the turn's end reports;
 //! - `mcp`: a message naming the MCP servers the session was given, as
 //!   `name: command args`, separated by ` | `;
+//! - `run <text>`: a command's tool call that shows `<text>` (`\n` for a
+//!   line break) in two updates, half and then all; `run-raw <text>` the
+//!   same as raw output; `run-big <n>`: the same with `n` bytes of `x`;
 //! - `echo`: a message of the whole prompt as it came, and nothing after
 //!   it is run (what Kule adds to a prompt is not a command);
 //! - `pictures`: a message naming the pictures that came with the prompt,
@@ -33,8 +36,8 @@ use agent_client_protocol::schema::v1::{
     InitializeResponse, McpServer, NewSessionRequest, NewSessionResponse, PermissionOption,
     PermissionOptionKind, PromptCapabilities, PromptRequest, PromptResponse,
     RequestPermissionOutcome, RequestPermissionRequest, SessionId, SessionNotification,
-    SessionUpdate, StopReason, TextContent, ToolCall, ToolCallStatus, ToolCallUpdate,
-    ToolCallUpdateFields, ToolKind, Usage, UsageUpdate,
+    SessionUpdate, StopReason, TextContent, ToolCall, ToolCallContent, ToolCallStatus,
+    ToolCallUpdate, ToolCallUpdateFields, ToolKind, Usage, UsageUpdate,
 };
 use agent_client_protocol::{Agent, Client, ConnectionTo, Responder, Stdio};
 
@@ -233,6 +236,45 @@ async fn perform(
             end(&edit)
         }
         "say" => say(rest.to_owned()),
+        "run" | "run-raw" | "run-big" => {
+            // A command's tool call, its output shown in two updates: half,
+            // then all of it (as content, or for `run-raw` as raw output).
+            let text = match verb {
+                "run-big" => "x".repeat(rest.parse().unwrap_or(0)),
+                _ => rest.replace("\\n", "\n"),
+            };
+            let id = format!("call-{n}");
+            cx.send_notification(SessionNotification::new(
+                session.clone(),
+                SessionUpdate::ToolCall(
+                    ToolCall::new(id.clone(), format!("run {n}"))
+                        .kind(ToolKind::Execute)
+                        .status(ToolCallStatus::InProgress),
+                ),
+            ))?;
+            let half: String = text.chars().take(text.chars().count() / 2).collect();
+            for (part, status) in [
+                (half, ToolCallStatus::InProgress),
+                (text.clone(), ToolCallStatus::Completed),
+            ] {
+                let fields = if verb == "run-raw" {
+                    ToolCallUpdateFields::new()
+                        .raw_output(serde_json::json!({ "stdout": part, "exit_code": 0 }))
+                } else {
+                    ToolCallUpdateFields::new().content(vec![ToolCallContent::from(
+                        ContentBlock::Text(TextContent::new(part)),
+                    )])
+                };
+                cx.send_notification(SessionNotification::new(
+                    session.clone(),
+                    SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
+                        id.clone(),
+                        fields.status(status),
+                    )),
+                ))?;
+            }
+            Ok(())
+        }
         "cost" => cx.send_notification(SessionNotification::new(
             session.clone(),
             SessionUpdate::UsageUpdate(

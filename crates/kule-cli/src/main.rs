@@ -975,7 +975,12 @@ async fn print_events(
     while let Some(event) = rx.next().await {
         event.tally(&mut usage);
         match event {
-            Event::Usage { .. } | Event::Tokens { .. } | Event::Done { .. } => {}
+            // A command's output shows in the window; here the spinner says
+            // what runs, and `kule steps` what it changed.
+            Event::Usage { .. }
+            | Event::Tokens { .. }
+            | Event::Done { .. }
+            | Event::ToolOutput { .. } => {}
             Event::Message { text } => {
                 if tty && last == Last::Line {
                     spinner.print("\n", true);

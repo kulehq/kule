@@ -297,6 +297,53 @@ fn a_cost_reported_at_the_end_of_the_turn_stops_nothing() {
     assert_eq!(usage.cost, Some(usd(0.30)));
 }
 
+/// What a command shows reaches the run as it grows, each time whole, from
+/// the tool call's content or its raw output.
+#[test]
+fn a_command_s_output_is_passed_on_as_it_grows() {
+    let s = Setup::new();
+    let outputs = |events: &[Event]| -> Vec<String> {
+        events
+            .iter()
+            .filter_map(|e| match e {
+                Event::ToolOutput { text, .. } => Some(text.clone()),
+                _ => None,
+            })
+            .collect()
+    };
+    let events = s.run("run ok 1\\nok 2");
+    assert_eq!(outputs(&events), ["ok 1", "ok 1\nok 2"]);
+    // The output names its call.
+    let call = events.iter().find_map(|e| match e {
+        Event::ToolCall { id, .. } => Some(id.clone()),
+        _ => None,
+    });
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, Event::ToolOutput { id, .. } if Some(id) == call.as_ref()))
+    );
+    assert_eq!(outputs(&s.run("run-raw abcd")), ["ab", "abcd"]);
+}
+
+/// Only the end of a long output is kept.
+#[test]
+fn a_long_output_keeps_its_end() {
+    let s = Setup::new();
+    let size = kule_acp::MAX_OUTPUT * 3;
+    let events = s.run(&format!("run-big {size}"));
+    let last = events
+        .iter()
+        .rev()
+        .find_map(|e| match e {
+            Event::ToolOutput { text, .. } => Some(text.clone()),
+            _ => None,
+        })
+        .unwrap();
+    assert!(last.starts_with('…'));
+    assert_eq!(last.len(), kule_acp::MAX_OUTPUT + '…'.len_utf8());
+}
+
 /// Pictures go after the prompt's text to an agent that takes them; one
 /// that does not gets the text alone, and the run says so.
 #[test]
