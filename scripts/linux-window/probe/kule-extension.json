@@ -1,0 +1,12 @@
+{
+  "kule_extension": 1,
+  "id": "check.window",
+  "name": "Window check",
+  "version": "1.0.0",
+  "publisher": "check",
+  "description": "Looks at what an extension's frame can and cannot do, and keeps what it saw.",
+  "permissions": ["storage"],
+  "contributes": {
+    "panels": [{ "id": "probe", "title": "Window check", "entry": "panel.html" }]
+  }
+}
