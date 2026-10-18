@@ -31,21 +31,25 @@ pub fn needs(method: &str) -> Option<Option<Permission>> {
         "files.list" | "files.read" => Permission::FilesRead,
         "storage.get" | "storage.set" => Permission::Storage,
         "ui.notify" => Permission::Notify,
+        // The notes live in the window; it asks here first all the same.
+        "review.annotate" => Permission::ReviewAnnotate,
         "net.fetch" => Permission::Net,
         _ => return None,
     }))
 }
 
 /// What a running extension was given.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Granted {
+    pub permissions: Vec<Permission>,
     pub hosts: Vec<String>,
     pub name: String,
 }
 
-/// Whether `ext` may make the call `method` now: it is on, approved as it
-/// is, and its approved permissions cover the call.
-pub fn allowed(home: &Path, ext: &str, method: &str) -> Result<Granted> {
+/// What `ext` was given, if it may run now: on, and approved as it is.
+/// Reading this opens the extension's package, so the window keeps it
+/// (see [`Grants`]) until the extensions change.
+pub fn granted(home: &Path, ext: &str) -> Result<Granted> {
     let listed = Store::new(home).get(ext).map_err(|e| e.to_string())?;
     if let Some(why) = &listed.held {
         return Err(format!("extension {ext} is held: {why}"));
@@ -56,17 +60,52 @@ pub fn allowed(home: &Path, ext: &str, method: &str) -> Result<Granted> {
     let approval = listed
         .approved
         .ok_or_else(|| format!("extension {ext} is not approved"))?;
-    let name = listed.manifest.map(|m| m.name).unwrap_or_default();
+    Ok(Granted {
+        permissions: approval.permissions,
+        hosts: approval.hosts,
+        name: listed.manifest.map(|m| m.name).unwrap_or_default(),
+    })
+}
+
+/// Whether what was given covers the call `method`.
+pub fn permits(granted: &Granted, method: &str) -> Result<()> {
     match needs(method) {
         None => Err(format!("there is no call {method}")),
-        Some(Some(need)) if !approval.permissions.contains(&need) => Err(format!(
-            "{method} needs the {} permission, which {name} was not given",
-            need.as_str()
+        Some(Some(need)) if !granted.permissions.contains(&need) => Err(format!(
+            "{method} needs the {} permission, which {} was not given",
+            need.as_str(),
+            granted.name
         )),
-        Some(_) => Ok(Granted {
-            hosts: approval.hosts,
-            name,
-        }),
+        Some(_) => Ok(()),
+    }
+}
+
+/// Whether `ext` may make the call `method` now.
+#[cfg(test)]
+fn allowed(home: &Path, ext: &str, method: &str) -> Result<Granted> {
+    let g = granted(home, ext)?;
+    permits(&g, method)?;
+    Ok(g)
+}
+
+/// What each running extension was given, read once rather than on every
+/// call (each read opens the package, up to 40 MiB inflated). Dropped
+/// whenever the extensions change.
+#[derive(Default)]
+pub struct Grants(Mutex<HashMap<String, Granted>>);
+
+impl Grants {
+    pub fn get(&self, home: &Path, ext: &str) -> Result<Granted> {
+        if let Some(g) = self.0.lock().unwrap().get(ext) {
+            return Ok(g.clone());
+        }
+        let g = granted(home, ext)?;
+        self.0.lock().unwrap().insert(ext.to_owned(), g.clone());
+        Ok(g)
+    }
+
+    pub fn forget(&self) {
+        self.0.lock().unwrap().clear();
     }
 }
 
@@ -167,11 +206,14 @@ pub fn ext_call(
     app: AppHandle,
     kule: K<'_>,
     limits: State<'_, Limits>,
+    grants: State<'_, Grants>,
     ext: String,
     method: String,
     params: Value,
 ) -> Result<Value> {
-    let Granted { hosts, name } = allowed(&kule.home, &ext, &method)?;
+    let g = grants.get(&kule.home, &ext)?;
+    permits(&g, &method)?;
+    let Granted { hosts, name, .. } = g;
     limits.take(&ext, &method)?;
     let p = params;
     match method.as_str() {
@@ -216,6 +258,7 @@ pub fn ext_call(
             let FileParams { task, path } = self::params(&method, p)?;
             kule.call(Call::ReadFile { task, path })
         }
+        "review.annotate" => Ok(Value::Null),
         "storage.get" => kule.call(Call::ExtensionStorage { id: ext }),
         "storage.set" => {
             let StorageParams { value } = self::params(&method, p)?;
@@ -357,6 +400,7 @@ mod tests {
         assert_eq!(net.hosts, ["hooks.slack.com"]);
         for (method, says) in [
             ("review.get", "needs the review.read permission"),
+            ("review.annotate", "needs the review.annotate permission"),
             ("files.read", "needs the files.read permission"),
             ("storage.set", "needs the storage permission"),
             ("ui.notify", "needs the notify permission"),
@@ -385,6 +429,26 @@ mod tests {
             .unwrap();
         let e = allowed(home.path(), "acme.notes", "tasks.list").unwrap_err();
         assert!(e.contains("turned off"), "{e}");
+    }
+
+    /// A call does not open the package again (an extension could make it
+    /// inflate up to 40 MiB on every call); what changes the extensions
+    /// drops what was kept.
+    #[test]
+    fn what_an_extension_was_given_is_read_once_until_the_extensions_change() {
+        let home = TempDir::new().unwrap();
+        installed(home.path(), r#""tasks.read""#, true);
+        let grants = Grants::default();
+        assert!(grants.get(home.path(), "acme.notes").is_ok());
+        let packages = home.path().join("extensions/packages");
+        for f in fs::read_dir(&packages).unwrap() {
+            fs::remove_file(f.unwrap().path()).unwrap();
+        }
+        let kept = grants.get(home.path(), "acme.notes").unwrap();
+        assert!(permits(&kept, "tasks.list").is_ok());
+        assert!(permits(&kept, "files.read").is_err());
+        grants.forget();
+        assert!(grants.get(home.path(), "acme.notes").is_err());
     }
 
     #[test]

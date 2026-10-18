@@ -55,6 +55,8 @@ const viewOnly = (id) =>
 
 /** Calls a frame may make in a burst before it waits. */
 const CALLS_PER_10S = 200;
+/** The largest request a frame may send on, as JSON. */
+const MAX_PARAMS = 1024 * 1024;
 
 async function loadExtensions() {
   try {
@@ -187,6 +189,11 @@ function fromFrame(rec, m) {
     return;
   }
   if (typeof m.id !== "number" || typeof m.method !== "string") return;
+  // The app takes at most 1 MiB a request; a larger one goes no further.
+  if (m.params !== undefined && JSON.stringify(m.params).length > MAX_PARAMS) {
+    rec.port.postMessage({ id: m.id, error: "the request is larger than 1 MiB" });
+    return;
+  }
   handleCall(rec, m.method, m.params).then(
     (result) => rec.port?.postMessage({ id: m.id, result: result === undefined ? null : result }),
     (err) => rec.port?.postMessage({ id: m.id, error: String((err && err.message) || err) })
@@ -199,7 +206,8 @@ async function handleCall(rec, method, params) {
     case "commands.execute":
       return executeFor(ext, params || {});
     case "review.annotate":
-      if (!ext.perms.has("review.annotate")) throw new Error(`review.annotate needs the review.annotate permission, which ${ext.manifest.name} was not given`);
+      // The app decides on the permission; the notes stay in the window.
+      await call("ext_call", { ext: ext.id, method, params: null });
       return annotate(ext, params || {});
     case "ui.notify": {
       // The app checks the permission and the rate; with the window in
@@ -267,6 +275,8 @@ function extText(text, max) {
 /** Replaces the extension's notes on a task's review. */
 function annotate(ext, { task, notes }) {
   if (typeof task !== "string" || !Array.isArray(notes)) throw new Error("annotate(task, [notes])");
+  // Notes on tasks that exist only: made-up ids would grow without end.
+  if (!state.tasks.some((t) => t.id === task)) throw new Error(`no task ${task}`);
   if (notes.length > 50) throw new Error("at most 50 notes on a task");
   const kept = notes.map((n) => {
     if (!n || typeof n.text !== "string" || !n.text.trim()) throw new Error("a note needs text");

@@ -734,6 +734,7 @@ fn relay(app: AppHandle, home: &Path) {
                 }
                 Notice::Extensions => {
                     app.state::<extensions::Host>().forget();
+                    app.state::<ext_call::Grants>().forget();
                     let _ = app.emit("extensions", ());
                 }
             });
@@ -799,6 +800,7 @@ fn main() {
         .manage(kule)
         .manage(pty::Terminals::default())
         .manage(ext_call::Limits::default())
+        .manage(ext_call::Grants::default())
         .invoke_handler(tauri::generate_handler![
             ext_call::ext_call,
             extensions::extension_host,
