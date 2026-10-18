@@ -765,11 +765,21 @@ select:focus-visible {
 .empty-state {
   display: flex;
   max-width: 620px;
+  /* Centred while it fits; when the window is shorter, it shrinks to the
+     main area and scrolls there instead of running over the bottom panel. */
+  min-height: 0;
   margin: auto;
   padding: 32px;
   flex-direction: column;
+  flex-shrink: 1;
   align-items: flex-start;
   gap: 12px;
+  overflow-y: auto;
+}
+
+/* A scroller, not a control: the buttons in it show where the keyboard is. */
+.empty-state:focus {
+  outline: none;
 }
 
 .empty-state h1 {
@@ -2455,6 +2465,8 @@ select:focus-visible {
   min-width: 0;
   min-height: 0;
   flex-direction: column;
+  /* What it holds stays in it; nothing paints over the bottom panel. */
+  overflow: hidden;
 }
 
 .region {
