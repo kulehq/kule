@@ -347,13 +347,13 @@ it writes in Kule reaches it outside; you sign it in there once.
 - **Layout**: the window is four regions, left, main, right and bottom,
   each holding panels as tabs. By default the agent's chat and the
   terminals share the bottom, side by side (`Agent | zsh 1 | zsh 2 | +`),
-  and the main area shows Review and Timeline. Any region hides with the
+  and the main area shows Review, Timeline and Preview. Any region hides with the
   button at the end of its tab bar or from the switches at the right of the
   title bar (on macOS the window's own, as in VS Code); the bottom
   panel can fill the window, and the main area and the bottom panel are
   never hidden together. Mod+Shift+J shows or hides the chat, Ctrl+\` the
   terminal. The panels are Tasks, Agent, Review, Timeline, Files (the
-  task's copy as a tree, changed files marked, any file shown as text)
+  task's copy as a tree, changed files marked), Preview (see below)
   and Terminal (your shells in the copy, as many as you open, each a tab;
   outside the sandbox like a task's *Open terminal*; Ctrl+\` shows it,
   Ctrl+Shift+\` opens another, ⌘F or Ctrl+Shift+F finds text, ⌘/Ctrl+click
@@ -364,8 +364,23 @@ it writes in Kule reaches it outside; you sign it in there once.
   write. Drag a panel's tab to another region, or use its menu or the
   keyboard; open and close the regions from the bar on the left (Mod+B,
   Mod+J, Mod+Alt+B) and resize them by their edges. The layout is kept in
-  `layout.json`; *Reset the layout* goes back to Kule's own. Files never
-  follows a link or leaves the copy, and shows at most 256 KiB of a file.
+  `layout.json`; *Reset the layout* goes back to Kule's own. Files and
+  the Preview never follow a link or leave the copy.
+- **Preview**: a file picked in Files opens large in the main area
+  (Mod+4), as it is now in the task's copy: text and code with line
+  numbers (packed JSON or XML formatted on request, up to 1 MB), Markdown
+  laid out, PNG, JPEG, GIF and WebP pictures, CSV and Excel files as
+  sheets from A1 with each cell's value or formula, and Word documents as
+  headings, paragraphs, numbered lists and tables. Excel and Word files
+  are read in memory, never unpacked, each part inflated through a cap.
+  To ask the agent about a place, pick text, drag over cells or over part
+  of a picture: an **Ask** button shows beside it (Mod+Shift+A, or, with
+  nothing picked, the whole file). Its box asks the agent now or adds the
+  place to the prompt as a chip; a prompt names up to 20 places. The agent
+  gets them as a numbered list after the prompt, each named so it can find
+  it: lines, a section and its headings, cells and their values, a region
+  in the picture's pixels, a numbered paragraph. An agent that takes
+  pictures also gets each region as a picture (three to a prompt).
 - **Menu bar**: File, Edit, View, Task and Help (with Kule and Window on
   macOS), at the top of the screen on macOS and of the window on Windows
   and Linux. Every item runs the same command as its shortcut and shows

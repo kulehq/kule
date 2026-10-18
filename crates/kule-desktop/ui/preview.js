@@ -22,8 +22,9 @@ const preview = {
   rows: 0,
 };
 
-/** Rows of a sheet drawn at first, and added at a time after. */
-const PREVIEW_ROWS = 1000;
+/** Cells of a sheet drawn at first, and added at a time after, in whole
+ * rows: a wide sheet shows fewer rows at once. */
+const PREVIEW_CELLS = 20000;
 
 const PREVIEW_MODES = {
   markdown: [
@@ -73,7 +74,7 @@ function kindText(v) {
 
 /** Shows file `path` of the task Files is on, and brings the Preview up. */
 function previewFile(path, change) {
-  Object.assign(preview, { task: files.task, path, change: change || null, view: null, key: null, sheet: 0, rows: PREVIEW_ROWS });
+  Object.assign(preview, { task: files.task, path, change: change || null, view: null, key: null, sheet: 0, rows: 0 });
   activatePanel("preview");
 }
 
@@ -252,7 +253,8 @@ function previewTable(v) {
   const at = Math.min(preview.sheet, v.sheets.length - 1);
   const sheet = v.sheets[at];
   const cols = sheet.rows.reduce((n, r) => Math.max(n, r.length), 1);
-  const shown = Math.min(sheet.rows.length, preview.rows || PREVIEW_ROWS);
+  const step = Math.max(50, Math.min(1000, Math.floor(PREVIEW_CELLS / cols)));
+  const shown = Math.min(sheet.rows.length, preview.rows || step);
   const formulas = new Map((sheet.formulas || []).map((f) => [`${f.row}:${f.col}`, f.text]));
   const where = h("span", { class: "preview-fx-cell" }, "");
   const what = h("span", { class: "preview-fx-text" }, "Pick a cell to see what it holds.");
@@ -354,12 +356,12 @@ function previewTable(v) {
             class: "button ghost preview-more",
             type: "button",
             onclick: () => {
-              preview.rows = shown + PREVIEW_ROWS;
+              preview.rows = shown + step;
               renderPreview(true);
             },
           },
-          more > PREVIEW_ROWS
-            ? `Show ${PREVIEW_ROWS.toLocaleString()} more rows (${more.toLocaleString()} left)`
+          more > step
+            ? `Show ${step.toLocaleString()} more rows (${more.toLocaleString()} left)`
             : `Show the other ${more.toLocaleString()} rows`
         )
       : null
@@ -380,7 +382,7 @@ function previewTable(v) {
                 "data-key": `preview-sheet:${i}`,
                 onclick: () => {
                   preview.sheet = i;
-                  preview.rows = PREVIEW_ROWS;
+                  preview.rows = 0;
                   renderPreview(false);
                 },
               },
