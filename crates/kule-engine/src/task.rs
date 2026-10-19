@@ -316,7 +316,7 @@ impl Task {
             return Ok(false);
         }
         let vault = self.vault()?;
-        let mut kept = TaskSecrets::load(&self.dir)?;
+        let mut kept = TaskSecrets::load(&self.dir, &self.home())?;
         let mut writes = Vec::new();
         for path in candidates {
             let full = copy.join(&path);
@@ -340,7 +340,7 @@ impl Task {
         }
         // The values first: a masked file whose values were lost could only
         // ever be committed as placeholders.
-        kept.save(&self.dir)?;
+        kept.save(&self.dir, &self.home())?;
         let mut latest = (i64::MIN, 0);
         let mut moved = Vec::new();
         for (path, masked, synced) in writes {

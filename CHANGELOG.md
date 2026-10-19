@@ -120,6 +120,11 @@
   copy as from the folder. `kule new` names what the folder builds from.
 - Daemon protocol 29: `Besides`, `SuggestBeside`, `AddBeside`,
   `RemoveBeside`.
+- The values a task masks in its copy's `.env` files are kept sealed in
+  the task's `secrets.json`, with the key the kept secrets use, each to
+  the setting it came from; a task's file from before is sealed at its
+  next read. Kule never makes a second key where the system already keeps
+  one for its home.
 - Go programs in a task check certificates against the roots the proxy
   names (`GODEBUG=x509sslcertoverrideplatform=1`, after your own
   settings), so their HTTPS works through the proxy on macOS. A refusal

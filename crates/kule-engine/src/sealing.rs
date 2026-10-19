@@ -41,8 +41,14 @@ impl Sealer {
         let (bytes, where_) = match kept {
             Some(KeyHome::System) => (system_get(&account)?, KeyHome::System),
             Some(KeyHome::File) => (file_get(home)?, KeyHome::File),
-            // Made before, by a write that did not get to say so.
+            // Made before, by a write that did not get to say so: a file
+            // that says which key it was sealed with is not the only one
+            // (a task's keeps no record), so a key the system already
+            // keeps is used, never replaced.
             None if home.join(KEY_FILE).is_file() => (file_get(home)?, KeyHome::File),
+            None if persons_home(home) && system_has(&account)? => {
+                (system_get(&account)?, KeyHome::System)
+            }
             None => {
                 let fresh = random::<32>()?;
                 if persons_home(home) && system_set(&account, &fresh).is_ok() {
@@ -140,6 +146,22 @@ fn system_get(account: &str) -> Result<Vec<u8>> {
     base64::engine::general_purpose::STANDARD
         .decode(text)
         .map_err(|_| Error::Invalid("the key in the keychain is not Kule's".into()))
+}
+
+/// Whether the system keeps a key for `account`; an error where it cannot
+/// say (a locked keychain), so a key is never made over one it keeps.
+fn system_has(account: &str) -> Result<bool> {
+    let entry = keyring::Entry::new(SERVICE, account)
+        .map_err(|e| Error::Invalid(format!("the system's keychain: {e}")))?;
+    match entry.get_password() {
+        Ok(_) => Ok(true),
+        Err(keyring::Error::NoEntry) => Ok(false),
+        // No keychain at all (a Linux without Secret Service): none kept.
+        Err(keyring::Error::PlatformFailure(_) | keyring::Error::NoStorageAccess(_)) => Ok(false),
+        Err(e) => Err(Error::Invalid(format!(
+            "the key to your secrets may be in the system's keychain and could not be read: {e}"
+        ))),
+    }
 }
 
 fn system_set(account: &str, key: &[u8]) -> std::result::Result<(), keyring::Error> {

@@ -335,19 +335,18 @@ fn new_placeholder() -> Result<String> {
 }
 
 /// A task's placeholders, kept in the task's directory (outside the copy,
-/// hidden from the sandbox) so they stay the same from run to run.
-#[derive(Debug, Default, Serialize, Deserialize)]
+/// hidden from the sandbox) so they stay the same from run to run, with
+/// the values masked in its copy sealed with the key to the secrets (see
+/// [`TaskDisk`]).
+#[derive(Debug, Default)]
 pub(crate) struct TaskSecrets {
     /// Kept secret name → its placeholder in this task.
-    #[serde(default)]
     pub placeholders: BTreeMap<String, String>,
     /// The values masked in the copy, by placeholder.
-    #[serde(default)]
     pub masked: BTreeMap<String, Masked>,
     /// Every other setting a placeholder took the place of: a kept
     /// secret's in a second file, say. A placeholder goes back to a value
     /// only where it was put (see [`Vault::unmask`]).
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub also: Vec<Place>,
 }
 
@@ -367,17 +366,158 @@ pub(crate) struct Masked {
     pub value: String,
 }
 
+/// A task's `secrets.json` as it is on disk: each masked value sealed with
+/// the key to the secrets of Kule's home, to the setting it was taken from
+/// (see [`task_bound`]), and which key that is. A file from before sealing
+/// holds the values themselves, sealed at the next read.
+#[derive(Debug, Default, Serialize, Deserialize)]
+struct TaskDisk {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    key: Option<KeyHome>,
+    #[serde(default)]
+    placeholders: BTreeMap<String, String>,
+    #[serde(default)]
+    masked: BTreeMap<String, DiskMasked>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    also: Vec<DiskPlace>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct DiskMasked {
+    path: String,
+    key: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    sealed: Option<String>,
+    /// Only in a file from before sealing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    value: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct DiskPlace {
+    placeholder: String,
+    #[serde(flatten)]
+    masked: DiskMasked,
+}
+
+/// What a masked value is sealed to: its placeholder and the setting it
+/// was taken from. A sealed value moved to another entry does not open.
+fn task_bound(placeholder: &str, path: &str, key: &str) -> Result<Vec<u8>> {
+    serde_json::to_vec(&("kule-task-secret/1", placeholder, path, key))
+        .map_err(|e| Error::Invalid(format!("{path}: {e}")))
+}
+
 impl TaskSecrets {
-    pub fn load(dir: &Path) -> Result<TaskSecrets> {
+    /// The task's in `dir`, its values opened with the key to the secrets
+    /// of Kule's `home`; values kept unsealed by an older Kule are sealed
+    /// on the way.
+    pub fn load(dir: &Path, home: &Path) -> Result<TaskSecrets> {
         let path = dir.join(SECRETS_FILE);
         if !path.is_file() {
             return Ok(TaskSecrets::default());
         }
-        read_json(&path)
+        let disk: TaskDisk = read_json(&path)?;
+        let sealed = disk
+            .masked
+            .values()
+            .chain(disk.also.iter().map(|p| &p.masked))
+            .any(|m| m.sealed.is_some());
+        let sealer = if sealed {
+            Some(Sealer::open(home, disk.key.or(read_disk(home)?.key))?)
+        } else {
+            None
+        };
+        let mut rewrite = false;
+        let mut open = |placeholder: &str, m: DiskMasked| -> Result<Masked> {
+            let value = match (m.sealed, m.value) {
+                (Some(sealed), _) => sealer
+                    .as_ref()
+                    .expect("opened for what is sealed")
+                    .unseal(&sealed, &task_bound(placeholder, &m.path, &m.key)?)?,
+                (None, Some(value)) => {
+                    rewrite = true;
+                    value
+                }
+                (None, None) => {
+                    return Err(Error::Invalid(format!("{}: kept without a value", m.path)));
+                }
+            };
+            Ok(Masked {
+                path: m.path,
+                key: m.key,
+                value,
+            })
+        };
+        let masked = disk
+            .masked
+            .into_iter()
+            .map(|(p, m)| Ok((p.clone(), open(&p, m)?)))
+            .collect::<Result<_>>()?;
+        let also = disk
+            .also
+            .into_iter()
+            .map(|p| {
+                Ok(Place {
+                    masked: open(&p.placeholder, p.masked)?,
+                    placeholder: p.placeholder,
+                })
+            })
+            .collect::<Result<_>>()?;
+        let task = TaskSecrets {
+            placeholders: disk.placeholders,
+            masked,
+            also,
+        };
+        if rewrite {
+            task.save(dir, home)?;
+        }
+        Ok(task)
     }
 
-    pub fn save(&self, dir: &Path) -> Result<()> {
-        write_private(&dir.join(SECRETS_FILE), self)
+    /// Writes the task's to `dir`, every value sealed with the key to the
+    /// secrets of Kule's `home`.
+    pub fn save(&self, dir: &Path, home: &Path) -> Result<()> {
+        let path = dir.join(SECRETS_FILE);
+        let values = !self.masked.is_empty() || !self.also.is_empty();
+        // The key only for values: placeholders alone are no secret.
+        let sealer = if values {
+            let kept = match path.is_file() {
+                true => read_json::<TaskDisk>(&path)?.key,
+                false => None,
+            };
+            Some(Sealer::open(home, kept.or(read_disk(home)?.key))?)
+        } else {
+            None
+        };
+        let seal = |placeholder: &str, m: &Masked| -> Result<DiskMasked> {
+            let sealer = sealer.as_ref().expect("opened for the values");
+            Ok(DiskMasked {
+                sealed: Some(sealer.seal(&m.value, &task_bound(placeholder, &m.path, &m.key)?)?),
+                path: m.path.clone(),
+                key: m.key.clone(),
+                value: None,
+            })
+        };
+        let disk = TaskDisk {
+            key: sealer.as_ref().map(|s| s.home),
+            placeholders: self.placeholders.clone(),
+            masked: self
+                .masked
+                .iter()
+                .map(|(p, m)| Ok((p.clone(), seal(p, m)?)))
+                .collect::<Result<_>>()?,
+            also: self
+                .also
+                .iter()
+                .map(|p| {
+                    Ok(DiskPlace {
+                        placeholder: p.placeholder.clone(),
+                        masked: seal(&p.placeholder, &p.masked)?,
+                    })
+                })
+                .collect::<Result<_>>()?,
+        };
+        write_private(&path, &disk)
     }
 
     fn placeholder_of(&mut self, name: &str) -> Result<String> {
@@ -463,7 +603,7 @@ impl Vault {
     /// the task's copy, with the placeholders of the task in `dir`.
     pub(crate) fn load(home: &Path, workspace: &Path, dir: &Path) -> Result<Vault> {
         let store = read_store(home)?;
-        let mut task = TaskSecrets::load(dir)?;
+        let mut task = TaskSecrets::load(dir, home)?;
         let before = task.placeholders.len();
         let mut held = Vec::new();
         // Kept for this folder before kept for every folder, so the narrower
@@ -487,7 +627,7 @@ impl Vault {
             });
         }
         if task.placeholders.len() != before {
-            task.save(dir)?;
+            task.save(dir, home)?;
         }
         for (placeholder, m) in &task.masked {
             // A masked value has no hosts of its own; it goes where a kept
@@ -1291,7 +1431,7 @@ mod tests {
         );
         let vault = vault_with(&home, &ws, &dir);
         let p = vault.env()[0].1.clone();
-        let mut task = TaskSecrets::load(dir.path()).unwrap();
+        let mut task = TaskSecrets::load(dir.path(), home.path()).unwrap();
         let text = "STRIPE_KEY=sk_test_real\nOTHER_TOKEN=abc\nPORT=1\n";
         let out = mask_with(".env", text, &mut task, &vault).unwrap();
         let other = task
@@ -1306,13 +1446,13 @@ mod tests {
         );
         // Masking again gives the same text.
         assert_eq!(mask_with(".env", text, &mut task, &vault).unwrap(), out);
-        task.save(dir.path()).unwrap();
+        task.save(dir.path(), home.path()).unwrap();
 
         // The kept secret masked in a second file too.
         let local = "STRIPE_KEY=sk_test_real\n";
         let local_out = mask_with(".env.local", local, &mut task, &vault).unwrap();
         assert_eq!(local_out, format!("STRIPE_KEY={p}\n"));
-        task.save(dir.path()).unwrap();
+        task.save(dir.path(), home.path()).unwrap();
 
         let vault = Vault::load(home.path(), ws.path(), dir.path()).unwrap();
         assert_eq!(vault.unmask(".env", &out), text);
@@ -1396,5 +1536,79 @@ mod tests {
         let sealed = now.secrets[0].sealed.as_deref().unwrap();
         assert!(sealer.unseal(sealed, b"").is_err());
         assert_eq!(read_store(home.path()).unwrap().secrets[0].value, "sk-old");
+    }
+
+    /// The values masked in a task's copy are kept sealed, each to the
+    /// setting it came from: the file holds none of them, and a value moved
+    /// to another entry does not open.
+    #[test]
+    fn a_tasks_masked_values_are_kept_sealed_to_their_setting() {
+        let (home, dir) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+        let mut task = TaskSecrets::default();
+        for (p, key, value) in [
+            ("kule_secret_a", "A_TOKEN", "sk-one"),
+            ("kule_secret_b", "B_TOKEN", "sk-two"),
+        ] {
+            task.masked.insert(
+                p.to_owned(),
+                Masked {
+                    path: ".env".into(),
+                    key: key.into(),
+                    value: value.into(),
+                },
+            );
+        }
+        task.also.push(Place {
+            placeholder: "kule_secret_a".into(),
+            masked: Masked {
+                path: ".env.local".into(),
+                key: "A_TOKEN".into(),
+                value: "sk-one".into(),
+            },
+        });
+        task.save(dir.path(), home.path()).unwrap();
+        let path = dir.path().join(SECRETS_FILE);
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            !text.contains("sk-one") && !text.contains("sk-two"),
+            "{text}"
+        );
+        let back = TaskSecrets::load(dir.path(), home.path()).unwrap();
+        assert_eq!(back.masked, task.masked);
+        assert_eq!(back.also, task.also);
+
+        // Swapped between entries, or its setting renamed: refused.
+        let mut disk: serde_json::Value = serde_json::from_str(&text).unwrap();
+        let a = disk["masked"]["kule_secret_a"]["sealed"].clone();
+        disk["masked"]["kule_secret_a"]["sealed"] =
+            disk["masked"]["kule_secret_b"]["sealed"].clone();
+        disk["masked"]["kule_secret_b"]["sealed"] = a;
+        std::fs::write(&path, disk.to_string()).unwrap();
+        assert!(TaskSecrets::load(dir.path(), home.path()).is_err());
+        let mut disk: serde_json::Value = serde_json::from_str(&text).unwrap();
+        disk["masked"]["kule_secret_a"]["key"] = "OTHER".into();
+        std::fs::write(&path, disk.to_string()).unwrap();
+        assert!(TaskSecrets::load(dir.path(), home.path()).is_err());
+    }
+
+    /// A task's file from before sealing opens, and is sealed at that read.
+    #[test]
+    fn a_tasks_values_kept_unsealed_are_sealed_at_the_next_read() {
+        let (home, dir) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+        let path = dir.path().join(SECRETS_FILE);
+        let old = serde_json::json!({
+            "placeholders": { "A_KEY": "kule_secret_k" },
+            "masked": { "kule_secret_m": { "path": ".env", "key": "DB_PASSWORD", "value": "hunter2" } },
+        });
+        std::fs::write(&path, old.to_string()).unwrap();
+        let task = TaskSecrets::load(dir.path(), home.path()).unwrap();
+        assert_eq!(task.masked["kule_secret_m"].value, "hunter2");
+        assert_eq!(task.placeholders["A_KEY"], "kule_secret_k");
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(!text.contains("hunter2"), "{text}");
+        assert_eq!(
+            TaskSecrets::load(dir.path(), home.path()).unwrap().masked["kule_secret_m"].value,
+            "hunter2"
+        );
     }
 }

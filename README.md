@@ -565,15 +565,19 @@ Values in the copy's `.env` files (`.env`, `.env.local`, `*.env`,
 their shape, are replaced with placeholders when the task is made, after
 each commit, rollback and undo, and before every run. The folder keeps the
 real ones: a commit puts them back into a settings file the agent changed,
-and merges with the real values. A masked value that is also a kept secret
+and merges with the real values. The task keeps the values it masked in
+its own `secrets.json`, sealed with the same key as the kept secrets, each
+to the setting it came from. A masked value that is also a kept secret
 gets that secret's placeholder, so it reaches the secret's hosts; any other
 stays where it is. The app's Settings have a *Secrets* section; `kule
 secrets list` and `remove` do the rest.
 
 What it does not do yet: HTTP/2 (clients fall back to HTTP/1.1), a
 placeholder split by a chunk edge or in a body larger than 1 MiB,
-WebSocket upgrades, and Go programs on macOS, which trust the system
-keychain alone (Kule never adds its authority there).
+WebSocket upgrades, and tools on macOS that check certificates only
+through the system's own services (pip 24.2 and later without
+`--use-deprecated=legacy-certs`; Kule never adds its authority to the
+keychain). Go programs are told to use the roots the proxy names.
 
 ## Extensions
 
