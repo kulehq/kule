@@ -63,8 +63,32 @@ pub(crate) fn check(shortcuts: &Shortcuts) -> Result<()> {
         if !keys_ok {
             return Err(format!("{id}: {keys:?} is not a key combination"));
         }
+        if !keys.is_empty() && !stands_alone(keys) {
+            return Err(format!(
+                "{id}: {keys} would fire as it is typed; a shortcut needs a modifier other than Shift, or a function key"
+            ));
+        }
     }
     Ok(())
+}
+
+/// Whether `keys` can stand on its own as a shortcut, as the window holds
+/// it too (`isUsable`): a modifier other than Shift, or a function key. A
+/// key alone would be typed, and could answer a question as it is.
+fn stands_alone(keys: &str) -> bool {
+    let mut parts: Vec<&str> = keys.split('+').collect();
+    let key = parts.pop().unwrap_or_default();
+    let modified = parts.iter().any(|m| {
+        [
+            "mod", "ctrl", "control", "alt", "option", "meta", "cmd", "command", "super",
+        ]
+        .contains(&m.to_ascii_lowercase().as_str())
+    });
+    let function = key
+        .strip_prefix('F')
+        .and_then(|n| n.parse::<u8>().ok())
+        .is_some_and(|n| (1..=12).contains(&n));
+    modified || function
 }
 
 #[cfg(test)]
@@ -79,6 +103,8 @@ mod tests {
         let mut chosen = Shortcuts::new();
         chosen.insert("task.new".into(), "Mod+Shift+N".into());
         chosen.insert("task.terminal".into(), String::new());
+        chosen.insert("view.live".into(), "F5".into());
+        chosen.insert("view.files".into(), "Alt+Shift+F".into());
         save(home.path(), &chosen).unwrap();
         assert_eq!(load(home.path()).unwrap(), chosen);
 
@@ -89,6 +115,10 @@ mod tests {
             ("task/../x", "Mod+N"),
             ("task.new", "Mod+\u{1b}"),
             ("task.new", &"K".repeat(65)),
+            // A key that is typed: a profile could make "e" approve.
+            ("question.approve", "E"),
+            ("review.commit", "Shift+Enter"),
+            ("review.commit", "Enter"),
         ] {
             let mut bad = chosen.clone();
             bad.insert(id.into(), keys.into());

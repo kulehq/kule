@@ -6072,9 +6072,11 @@ function onKey(e) {
     const key = parts[parts.length - 1];
     return !(parts.includes("Mod") && parts.includes("Shift")) && !/^F([1-9]|1[0-2])$/.test(key);
   };
+  // A binding that is a key alone (kept from before, or brought in some
+  // other way) never fires: it would answer as the person types.
   const command = COMMANDS.find((c) => {
     const combo = bindingOf(c);
-    return combo && combos.includes(combo) && (!typing || c.inFields) && !shellOwns(combo);
+    return combo && isUsable(combo) && combos.includes(combo) && (!typing || c.inFields) && !shellOwns(combo);
   });
   if (!command) return;
   e.preventDefault();
