@@ -110,6 +110,11 @@ struct Layer {
     /// Names whose changes are the agent's own business: a path is left out
     /// when its first component starts with one (`.claude.json.tmp.1`).
     ignored: Vec<String>,
+    /// Who the layer was made for: its linked, hidden and ignored paths,
+    /// hashed. Another agent's run never takes it over, with what the first
+    /// wrote in it (its state, perhaps its login).
+    #[serde(default)]
+    made_for: String,
 }
 
 /// One change a task's commands made in the home layer.
@@ -189,11 +194,34 @@ impl Task {
     ) -> Result<PathBuf> {
         let real = fs::canonicalize(real).at(real)?;
         let dir = self.home_layer();
+        let canonical = |p: &PathBuf| fs::canonicalize(p).unwrap_or_else(|_| p.clone());
+        let made_for = {
+            let mut hasher = blake3::Hasher::new();
+            for (what, paths) in [("linked", linked), ("hidden", hidden)] {
+                let mut paths: Vec<String> = paths
+                    .iter()
+                    .map(|p| canonical(p).display().to_string())
+                    .collect();
+                paths.sort();
+                hasher.update(format!("{what}:{paths:?}\n").as_bytes());
+            }
+            let mut ignored = ignored.to_vec();
+            ignored.sort();
+            hasher.update(format!("ignored:{ignored:?}\n").as_bytes());
+            hasher.finalize().to_hex().to_string()
+        };
         if let Some(layer) = self.load_layer()?
             && layer.real == real
             && dir.is_dir()
             && !self.home_changes()?.is_empty()
         {
+            // Changes waiting in a layer made for another agent: neither
+            // given to this one nor thrown away.
+            if layer.made_for != made_for {
+                return Err(Error::Invalid(
+                    "changes another agent made in your home wait for review in this task; apply or discard them first".to_owned(),
+                ));
+            }
             return Ok(dir);
         }
         fsops::remove(&dir)?;
@@ -201,9 +229,9 @@ impl Task {
         let mut layer = Layer {
             real: real.clone(),
             ignored: ignored.to_vec(),
+            made_for,
             ..Layer::default()
         };
-        let canonical = |p: &PathBuf| fs::canonicalize(p).unwrap_or_else(|_| p.clone());
         let linked: Vec<PathBuf> = linked.iter().map(canonical).collect();
         let hidden: Vec<PathBuf> = hidden.iter().map(canonical).collect();
         let clock = crate::clock::Clock::new(self.dir(), &dir)?;

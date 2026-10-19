@@ -153,8 +153,14 @@ impl Interceptor {
 
     /// Serves one tunnel to `host`: TLS with the client under the task's
     /// authority, TLS with the host, each request filled with the secrets
-    /// bound there. Returns the names of the secrets that went in.
-    pub fn serve(&self, host: &str, tunnel: lonca_net::Tunnel) -> Result<Vec<String>> {
+    /// bound there. Notes in `used` the name of each secret as it goes in:
+    /// a connection that ends in an error has still used them.
+    pub fn serve_noting(
+        &self,
+        host: &str,
+        tunnel: lonca_net::Tunnel,
+        used: &mut BTreeSet<String>,
+    ) -> Result<()> {
         let io = |e: io::Error| Error::Invalid(format!("{host}: {e}"));
         tunnel
             .client
@@ -188,7 +194,6 @@ impl Interceptor {
         let conn = ClientConnection::new(Arc::clone(&self.upstream), name).map_err(tls_error)?;
         let mut upstream = Conn::new(StreamOwned::new(conn, tunnel.upstream));
 
-        let mut used = BTreeSet::new();
         let mut served = 0;
         loop {
             let head = match client.head() {
@@ -242,9 +247,10 @@ impl Interceptor {
                 break;
             }
             let (head, names) = self.vault.fill(host, &forward(&head, request.close));
-            used.extend(names);
             // The body as it came: a secret goes in the credentials alone.
+            // Noted once written: a host that fails the handshake got none.
             upstream.stream.write_all(head.as_bytes()).map_err(io)?;
+            used.extend(names);
             relay(request.framing, &mut client, &mut upstream.stream, false).map_err(io)?;
             upstream.stream.flush().map_err(io)?;
             // The response, as it comes, with any secret it repeats blanked
@@ -272,7 +278,7 @@ impl Interceptor {
         }
         client.stream.conn.send_close_notify();
         let _ = client.stream.flush();
-        Ok(used.into_iter().collect())
+        Ok(())
     }
 }
 
@@ -935,8 +941,8 @@ mod tests {
         host: &str,
         requests: &str,
     ) -> (io::Result<String>, Vec<String>) {
-        let (reply, served) = ask_until(interceptor, up, host, requests, None, false);
-        (reply, served.unwrap_or_default())
+        let (reply, _, used) = ask_until(interceptor, up, host, requests, None, false);
+        (reply, used)
     }
 
     /// As [`ask`], but with `until`, the client reads only until the reply
@@ -949,7 +955,7 @@ mod tests {
         requests: &str,
         until: Option<&str>,
         hold: bool,
-    ) -> (io::Result<String>, Result<Vec<String>>) {
+    ) -> (io::Result<String>, Result<()>, Vec<String>) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
         let (proxy_end, _) = listener.accept().unwrap();
@@ -959,7 +965,11 @@ mod tests {
             early: Vec::new(),
         };
         let (served, host_owned) = (Arc::clone(interceptor), host.to_owned());
-        let serving = std::thread::spawn(move || served.serve(&host_owned, tunnel));
+        let serving = std::thread::spawn(move || {
+            let mut used = BTreeSet::new();
+            let served = served.serve_noting(&host_owned, tunnel, &mut used);
+            (served, used.into_iter().collect::<Vec<_>>())
+        });
         let mut roots = RootCertStore::empty();
         roots.add(interceptor.ca_der.clone()).unwrap();
         let config = ClientConfig::builder_with_provider(provider())
@@ -990,7 +1000,7 @@ mod tests {
             }
         });
         // Held: open and quiet until the proxy gives up on it.
-        let served = if hold {
+        let (served, used) = if hold {
             let served = serving.join().unwrap();
             drop(tls);
             served
@@ -999,7 +1009,7 @@ mod tests {
             drop(tls);
             serving.join().unwrap()
         };
-        (reply, served)
+        (reply, served, used)
     }
 
     fn interceptor(home: &TempDir, roots: RootCertStore) -> (Arc<Interceptor>, String) {
@@ -1240,7 +1250,7 @@ mod tests {
         let head = format!("GET /v1 HTTP/1.1\r\nHost: {HOST}\r\nAuthorization: Bearer {p}\r\n\r\n");
         // Closed by the client, or kept open and quiet past the idle time.
         for hold in [false, true] {
-            let (reply, served) = ask_until(
+            let (reply, served, used) = ask_until(
                 &interceptor,
                 host.port,
                 HOST,
@@ -1249,7 +1259,8 @@ mod tests {
                 hold,
             );
             assert!(reply.unwrap().starts_with("HTTP/1.1 200 OK"));
-            assert_eq!(served.unwrap(), ["API_KEY"], "held: {hold}");
+            served.unwrap();
+            assert_eq!(used, ["API_KEY"], "held: {hold}");
         }
     }
 
@@ -1264,6 +1275,22 @@ mod tests {
         let (reply, used) = ask(&interceptor, host.port, "other.example", &head);
         assert!(reply.is_err(), "{reply:?}");
         assert!(used.is_empty());
+    }
+
+    /// A connection that ends in an error still says which secrets went
+    /// out before it did.
+    #[test]
+    fn secrets_used_before_an_error_are_still_told() {
+        let host = echo_host();
+        let home = TempDir::new().unwrap();
+        let (interceptor, p) = interceptor(&home, host.roots);
+        let requests = format!(
+            "GET /v1 HTTP/1.1\r\nHost: {HOST}\r\nx-api-key: {p}\r\n\r\n\
+             POST /v1 HTTP/1.1\r\nHost: {HOST}\r\nContent-Length: x\r\n\r\n"
+        );
+        let (_, served, used) = ask_until(&interceptor, host.port, HOST, &requests, None, false);
+        assert!(served.is_err());
+        assert_eq!(used, ["API_KEY"]);
     }
 
     #[test]

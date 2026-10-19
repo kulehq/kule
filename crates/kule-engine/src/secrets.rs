@@ -587,39 +587,55 @@ impl Vault {
         if going.is_empty() {
             return None;
         }
-        // A key in the address (Google's `?key=`) is as much a credential.
+        // Exactly one of Kule's placeholders: nothing of anyone else's
+        // beside it.
+        let ours = |said: &str| going.iter().any(|h| said == h.placeholder);
+        // A key in the address (Google's `?key=`) is as much a credential,
+        // however its name is written.
         let target = head.lines().next()?.split(' ').nth(1).unwrap_or_default();
         let query = target.split_once('?').map_or("", |(_, q)| q);
         let in_query = query.split('&').find_map(|pair| {
             let (name, value) = pair.split_once('=').unwrap_or((pair, ""));
+            let name = percent_decoded(name);
             let credential = CREDENTIAL_PARAMS
                 .iter()
                 .any(|c| name.eq_ignore_ascii_case(c));
-            let ours = going.iter().any(|h| value.contains(&h.placeholder));
-            (credential && !ours).then(|| format!("?{name}="))
+            (credential && !ours(&percent_decoded(value))).then(|| format!("?{name}="))
         });
         if in_query.is_some() {
             return in_query;
         }
-        head.split_inclusive('\n')
-            .skip(1)
-            .filter(|line| is_credential(line))
-            .find_map(|line| {
-                let (name, value) = line.split_once(':')?;
-                let value = value.trim();
-                let basic = value
-                    .strip_prefix("Basic ")
-                    .or_else(|| value.strip_prefix("basic "))
-                    .and_then(|v| {
-                        base64::engine::general_purpose::STANDARD
-                            .decode(v.trim())
-                            .ok()
-                    })
-                    .and_then(|d| String::from_utf8(d).ok());
-                let said = basic.as_deref().unwrap_or(value);
-                let ours = going.iter().any(|h| said.contains(&h.placeholder));
-                (!ours).then(|| name.trim().to_owned())
-            })
+        head.split_inclusive('\n').skip(1).find_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            let (name, value) = (name.trim(), value.trim());
+            // Cookies carry sessions: someone else's account, as much
+            // as a key.
+            if name.eq_ignore_ascii_case("cookie") {
+                return Some(name.to_owned());
+            }
+            if !is_credential(line) {
+                return None;
+            }
+            // `<placeholder>`, or one scheme word before it; with Basic,
+            // one side of `user:password`.
+            let scheme_and_rest = value.split_once(' ');
+            let basic = scheme_and_rest
+                .filter(|(scheme, _)| scheme.eq_ignore_ascii_case("basic"))
+                .and_then(|(_, v)| {
+                    base64::engine::general_purpose::STANDARD
+                        .decode(v.trim())
+                        .ok()
+                })
+                .and_then(|d| String::from_utf8(d).ok());
+            let fine = match (&basic, scheme_and_rest) {
+                (Some(pair), _) => pair
+                    .split_once(':')
+                    .is_some_and(|(user, password)| ours(user) || ours(password)),
+                (None, Some((_, rest))) => ours(rest.trim()),
+                (None, None) => ours(value),
+            };
+            (!fine).then(|| name.to_owned())
+        })
     }
 
     /// Every real value the vault holds, as it is and as it reads in JSON
@@ -662,6 +678,34 @@ pub const CREDENTIAL_HEADERS: &[&str] = &[
     "x-auth-token",
     "private-token",
 ];
+
+/// `text` with its `%XX` escapes read; one that is not an escape stays.
+fn percent_decoded(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let hex = bytes
+            .get(i + 1..i + 3)
+            .and_then(|h| std::str::from_utf8(h).ok())
+            .and_then(|h| u8::from_str_radix(h, 16).ok());
+        match (bytes[i], hex) {
+            (b'%', Some(b)) => {
+                out.push(b);
+                i += 3;
+            }
+            (b'+', _) => {
+                out.push(b' ');
+                i += 1;
+            }
+            (b, _) => {
+                out.push(b);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
 
 /// Query parameters that carry credentials, on a host Kule holds a secret
 /// for.
@@ -1150,6 +1194,8 @@ mod tests {
             "/v1/x?key=AIza-other",
             "/v1/x?alt=sse&API_KEY=other",
             "/x?access_token=t",
+            "/v1/x?%6Bey=AIza-other",
+            "/v1/x?ke%79=AIza-other",
         ] {
             let theirs = format!("POST {target} HTTP/1.1\r\nHost: {host}\r\n\r\n");
             assert!(
@@ -1163,6 +1209,19 @@ mod tests {
         let basic = base64::engine::general_purpose::STANDARD.encode(format!("x:{p}"));
         let ours = format!("GET / HTTP/1.1\r\nAuthorization: Basic {basic}\r\n\r\n");
         assert_eq!(vault.foreign_credential(host, &ours), None);
+        // Someone else's beside Kule's placeholder, or a session cookie.
+        for line in [
+            format!("Authorization: Bearer {p} sk-other"),
+            format!("x-api-key: sk-other{p}"),
+            format!(
+                "Authorization: Basic {}",
+                base64::engine::general_purpose::STANDARD.encode(format!("sk-other:x{p}"))
+            ),
+            "Cookie: session=other".to_owned(),
+        ] {
+            let theirs = format!("GET / HTTP/1.1\r\n{line}\r\n\r\n");
+            assert!(vault.foreign_credential(host, &theirs).is_some(), "{line}");
+        }
 
         // A response that repeats it may hold any of those forms.
         assert_eq!(

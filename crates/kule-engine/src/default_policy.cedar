@@ -62,7 +62,9 @@ when {
   resource.kind like "fs.*" &&
   (resource.parts.containsAny([
      ".github", ".circleci", ".devcontainer", ".vscode", ".idea", ".zed", ".kule",
-     ".husky", ".claude", ".cursor", ".gemini", ".codex", ".cargo", ".mvn"
+     ".husky", ".claude", ".cursor", ".gemini", ".codex", ".cargo", ".mvn", ".yarn",
+     ".buildkite", ".gitea", ".forgejo", ".woodpecker",
+     ".windsurf", ".continue", ".roo", ".clinerules"
    ]) ||
    resource.folded_path like "gradle/wrapper/*" || resource.folded_path like "*/gradle/wrapper/*" ||
    resource.folded_name like ".gitlab-ci*" ||
@@ -70,7 +72,10 @@ when {
      ".envrc", ".gitattributes", ".gitmodules", ".npmrc", ".yarnrc", ".yarnrc.yml", ".pnpmfile.cjs",
      "build.rs", "gradlew", "gradlew.bat", "mise.toml", ".mise.toml", ".tool-versions",
      ".pre-commit-config.yaml", "lefthook.yml", ".lefthook.yml",
-     ".mcp.json", "claude.md", "claude.local.md", "agents.md", "gemini.md", ".cursorrules", ".windsurfrules"
+     ".mcp.json", "claude.md", "claude.local.md", "agents.md", "gemini.md", ".cursorrules", ".windsurfrules",
+     ".devcontainer.json", "rust-toolchain", "rust-toolchain.toml", "mvnw", "mvnw.cmd", "bunfig.toml",
+     "dotnet-tools.json", "azure-pipelines.yml", ".travis.yml", "jenkinsfile", "bitbucket-pipelines.yml",
+     ".clinerules", "opencode.json", ".aider.conf.yml"
    ].contains(resource.folded_name))
 };
 
@@ -100,10 +105,11 @@ forbid (principal, action == Kule::Action::"auto", resource)
 when { !context.repository && context.deletes > 20 };
 
 // Git: moving a branch forward and creating one pass on their own; rewriting
-// history, deleting a branch or switching HEAD wait for a person.
+// history, deleting a branch, switching HEAD, and moving any other ref (a
+// tag, a note, a replacement) wait for a person.
 @id("branch-forward")
 permit (principal, action == Kule::Action::"auto", resource)
-when { resource.kind == "git.ref" && resource.change == "modified" && resource.fast_forward && resource.ref != "HEAD" };
+when { resource.kind == "git.ref" && resource.change == "modified" && resource.fast_forward && resource.ref like "refs/heads/*" };
 
 // A new branch alone: a tag, a note or a replacement (which makes git show
 // other content in place of a commit or a file) waits.

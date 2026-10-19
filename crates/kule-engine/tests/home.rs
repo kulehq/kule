@@ -355,3 +355,20 @@ fn a_replaced_link_comes_back_a_link() {
         Path::new("real.toml")
     );
 }
+
+/// A layer holding changes one agent made waits for them to be reviewed:
+/// another agent's run does not take it over, the same agent's does.
+#[test]
+fn a_layer_with_changes_waiting_is_never_given_to_another_agent() {
+    let s = Setup::new();
+    s.run(SCRIPT);
+    assert!(!s.task.home_changes().unwrap().is_empty());
+    // The same agent again: its layer, with what it holds.
+    s.run("true");
+    assert!(!s.task.home_changes().unwrap().is_empty());
+    let p = s.person.path();
+    let other = s
+        .task
+        .prepare_home(p, &[p.join(".codex")], &[], &[".codex".to_owned()]);
+    assert!(other.unwrap_err().to_string().contains("apply or discard"));
+}

@@ -351,6 +351,25 @@ fn is_vanished(e: &Error) -> bool {
 /// With `atomic`, files and symlinks arrive through a rename, so nobody
 /// reading `dst` sees half a file.
 pub fn mirror(src: &Path, dst: &Path, paths: &[String], atomic: bool) -> Result<()> {
+    // Under `dst`, every directory on the way to a path is one: a link there
+    // (put in place meanwhile, or a name that a case-insensitive disk reads
+    // as another) would take the write, or the removal, somewhere else.
+    let on_the_way = |p: &str| -> Result<()> {
+        let mut at = dst.to_path_buf();
+        for part in Path::new(p).parent().into_iter().flat_map(Path::components) {
+            at.push(part);
+            match fs::symlink_metadata(&at) {
+                Ok(m) if m.file_type().is_symlink() => {
+                    return Err(Error::Invalid(format!(
+                        "{} is a link, which a commit does not write through",
+                        at.display()
+                    )));
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    };
     let stamps = paths
         .iter()
         .map(|p| Ok((Stamp::of(&src.join(p))?, Stamp::of(&dst.join(p))?)))
@@ -365,6 +384,7 @@ pub fn mirror(src: &Path, dst: &Path, paths: &[String], atomic: bool) -> Result<
             Some(_) => atomic,
         };
         if !keep {
+            on_the_way(p)?;
             let gone = dst.join(p);
             in_parent(&gone, || remove(&gone))?;
         }
@@ -373,6 +393,7 @@ pub fn mirror(src: &Path, dst: &Path, paths: &[String], atomic: bool) -> Result<
     // 2. Bring in what `src` has, parents before children.
     for (p, (s, _)) in paths.iter().zip(&stamps) {
         let Some(s) = s else { continue };
+        on_the_way(p)?;
         let to = dst.join(p);
         in_parent(&to, || {
             if s.kind == Kind::Dir {
@@ -397,6 +418,10 @@ pub fn mirror(src: &Path, dst: &Path, paths: &[String], atomic: bool) -> Result<
     // 3. Directory modes and times last: adding a child moves a directory's mtime.
     for (p, (s, _)) in paths.iter().zip(&stamps).rev() {
         if let Some(s) = s.as_ref().filter(|s| s.kind == Kind::Dir) {
+            on_the_way(p)?;
+            if fs::symlink_metadata(dst.join(p)).is_ok_and(|m| m.file_type().is_symlink()) {
+                continue;
+            }
             finish(&dst.join(p), s)?;
         }
     }
@@ -737,6 +762,37 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
+
+    /// A link on the way to a path under `dst` takes neither a write nor a
+    /// removal anywhere else.
+    #[test]
+    fn nothing_is_written_or_removed_through_a_link_on_the_way() {
+        let dir = TempDir::new().unwrap();
+        let (src, dst, outside) = (
+            dir.path().join("src"),
+            dir.path().join("dst"),
+            dir.path().join("outside"),
+        );
+        fs::create_dir_all(src.join("docs")).unwrap();
+        fs::write(src.join("docs/new.txt"), "ours\n").unwrap();
+        fs::create_dir_all(&dst).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        fs::write(outside.join("new.txt"), "theirs\n").unwrap();
+        fs::write(outside.join("gone.txt"), "theirs\n").unwrap();
+        std::os::unix::fs::symlink(&outside, dst.join("docs")).unwrap();
+
+        let paths = ["docs/new.txt".to_owned(), "docs/gone.txt".to_owned()];
+        assert!(mirror(&src, &dst, &paths, true).is_err());
+        assert!(mirror(&src, &dst, &paths, false).is_err());
+        assert_eq!(
+            fs::read_to_string(outside.join("new.txt")).unwrap(),
+            "theirs\n"
+        );
+        assert_eq!(
+            fs::read_to_string(outside.join("gone.txt")).unwrap(),
+            "theirs\n"
+        );
+    }
 
     #[test]
     fn a_tree_cloned_at_once_is_put_right_where_it_changed_meanwhile() {

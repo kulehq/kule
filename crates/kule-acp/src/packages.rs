@@ -80,6 +80,12 @@ const LOCKS: &[(&str, &str)] = &[
     ),
 ];
 
+/// Whether Kule ships a lockfile for `spec`: it installs as locked or not
+/// at all.
+pub(crate) fn locked(spec: &str) -> bool {
+    shipped_lock(spec).is_some()
+}
+
 fn shipped_lock(spec: &str) -> Option<&'static str> {
     LOCKS
         .iter()

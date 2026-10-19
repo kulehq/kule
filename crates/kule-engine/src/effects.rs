@@ -62,6 +62,12 @@ pub struct EffectSet {
     /// digest: a commit takes only the content that was reviewed.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub contents: BTreeMap<String, String>,
+    /// Folders in the copy that hold a repository of their own without a
+    /// `.git` in their name (a bare one: `HEAD`, `objects/`, `refs/`). Git
+    /// run there reads its config and hooks; the policy judges what is in
+    /// them as it judges what is in a `.git`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub git_dirs: Vec<String>,
 }
 
 /// A path the copy renamed.
@@ -130,17 +136,17 @@ impl EffectSet {
             repository: self.repository,
             effects,
             contents,
+            git_dirs: self.git_dirs.clone(),
         }
     }
 
-    /// Reads what each file and link of the set holds now under `root`
-    /// (the copy), without following a link on the way, into
-    /// [`EffectSet::contents`].
+    /// Reads what each path of the set is now under `root` (the copy),
+    /// without following a link on the way, into [`EffectSet::contents`]:
+    /// a file's or link's content, a directory, or nothing (deleted).
     pub(crate) fn read_contents(&mut self, root: &Path) -> Result<()> {
         self.contents = self
             .effects
             .iter()
-            .filter(|e| e.change != Change::Deleted && e.kind != Kind::Dir)
             .map(|e| Ok((e.path.clone(), fsops::content_hash(root, &e.path)?)))
             .collect::<Result<_>>()?;
         Ok(())
@@ -198,7 +204,25 @@ pub(crate) fn compute(copy: &Path, work: &Path, baseline: &Baseline) -> Result<E
         moves,
         repository: baseline.git.is_some(),
         contents: BTreeMap::new(),
+        git_dirs: git_dirs(&now),
     })
+}
+
+/// The folders of `tree` that hold a repository's own files (`HEAD`, with
+/// `objects/` and `refs/` beside it), but for the copy's own `.git`.
+fn git_dirs(tree: &Tree) -> Vec<String> {
+    let is = |path: &str, kind: Kind| tree.get(path).is_some_and(|s| s.kind == kind);
+    tree.iter()
+        .filter_map(|(path, stamp)| {
+            let dir = path.strip_suffix("/HEAD")?;
+            let own = dir == ".git" || dir.starts_with(".git/");
+            (stamp.kind == Kind::File
+                && !own
+                && is(&format!("{dir}/objects"), Kind::Dir)
+                && is(&format!("{dir}/refs"), Kind::Dir))
+            .then(|| dir.to_owned())
+        })
+        .collect()
 }
 
 /// The deleted paths whose file lives on at a created or replaced one: the

@@ -320,9 +320,11 @@ impl lonca_net::Gate for Gate {
         };
         // A request that fails here fails for the client too; nothing is
         // passed on half filled.
-        let used = interceptor.serve(request.host, tunnel).unwrap_or_default();
+        // What went in before an error went out all the same.
+        let mut used = std::collections::BTreeSet::new();
+        let _ = interceptor.serve_noting(request.host, tunnel, &mut used);
         if let Some(pending) = lock(&self.pending).get_mut(&request.peer) {
-            pending.2 = used;
+            pending.2 = used.into_iter().collect();
         }
         None
     }

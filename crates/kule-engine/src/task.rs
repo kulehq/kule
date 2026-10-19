@@ -330,14 +330,29 @@ impl Task {
         Ok(changed)
     }
 
-    /// Puts the masked values back into the settings files among `paths`
-    /// in the copy, for a commit to take them to the folder.
-    fn unmask_copy(&self, paths: &[String]) -> Result<()> {
+    /// Puts the masked values back into the settings files among `set`'s
+    /// paths in the copy, for a commit to take them to the folder. Each is
+    /// what was reviewed, masked, or nothing is put back; returns what each
+    /// file put back holds now, for [`Task::verify_committed`].
+    fn unmask_copy(&self, set: &EffectSet, merged: &[String]) -> Result<Vec<(String, String)>> {
         let mut vault = None;
-        for path in paths.iter().filter(|p| secrets::is_env_file(p)) {
+        let mut real_hashes = Vec::new();
+        // A merged file holds the real values already (see `merge`).
+        let paths = set.effects.iter().map(|e| &e.path);
+        for path in paths.filter(|p| secrets::is_env_file(p) && !merged.contains(p)) {
             let full = self.copy().join(path);
             if Stamp::of(&full)?.is_none_or(|s| s.kind != Kind::File || s.size > MAX_SETTINGS) {
                 continue;
+            }
+            let now = fsops::content_hash(&self.copy(), path)?;
+            if set
+                .contents
+                .get(path)
+                .is_some_and(|reviewed| *reviewed != now)
+            {
+                return Err(Error::Invalid(format!(
+                    "{path} changed since it was reviewed; nothing was committed"
+                )));
             }
             let Ok(text) = fs::read_to_string(&full) else {
                 continue;
@@ -351,9 +366,13 @@ impl Task {
                 .unwrap_or_default();
             if real != text {
                 fsops::replace_file(&full, real.as_bytes())?;
+                real_hashes.push((
+                    path.clone(),
+                    format!("file:{}", blake3::hash(real.as_bytes()).to_hex()),
+                ));
             }
         }
-        Ok(())
+        Ok(real_hashes)
     }
 
     pub fn open(home: &Path, id: &str) -> Result<Task> {
@@ -514,14 +533,12 @@ impl Task {
     }
 
     /// After a commit's copy: the folder holds what the set's contents say
-    /// for every path, but for files whose secrets the commit put back in
-    /// and files merged with the folder's own changes, which hold `merged`.
-    /// Anything else came in from somewhere other than what was reviewed.
+    /// for every path (a file, a link, a directory, or nothing), but for
+    /// files whose secrets the commit put back in and files merged with the
+    /// folder's own changes, which hold `merged`. Anything else came in
+    /// from somewhere other than what was reviewed.
     fn verify_committed(&self, set: &EffectSet, merged: &[(String, String)]) -> Result<()> {
         for (path, reviewed) in &set.contents {
-            if secrets::is_env_file(path) {
-                continue;
-            }
             let wanted = merged
                 .iter()
                 .find(|(p, _)| p == path)
@@ -573,7 +590,7 @@ impl Task {
             }
             // Changed in the folder too: merged, when Kule knows what both
             // started from and the two changes keep apart.
-            match self.merge(effect, &baseline)? {
+            match self.merge(effect, &baseline, set.contents.get(&effect.path))? {
                 Some(Ok(merge)) => merges.push(merge),
                 Some(Err(both)) => conflicts.push(format!(
                     "{} (both changed {})",
@@ -609,8 +626,8 @@ impl Task {
         checkpoint.merged = merges.iter().map(|m| m.path.clone()).collect();
         let paths = set.paths();
         // The folder gets the real values; the copy is masked again below.
-        self.unmask_copy(&paths)?;
-        let merged: Vec<(String, String)> = merges
+        let unmasked = self.unmask_copy(&set, &checkpoint.merged)?;
+        let mut merged: Vec<(String, String)> = merges
             .iter()
             .map(|m| {
                 (
@@ -619,6 +636,7 @@ impl Task {
                 )
             })
             .collect();
+        merged.extend(unmasked);
         let placed = fsops::mirror(&self.copy(), self.workspace(), &paths, true)
             .and_then(|()| self.verify_committed(&set, &merged));
         if let Err(failed) = placed {
@@ -694,6 +712,7 @@ impl Task {
         &self,
         effect: &Effect,
         baseline: &Baseline,
+        reviewed: Option<&String>,
     ) -> Result<Option<std::result::Result<Merge, Vec<String>>>> {
         if effect.change != Change::Modified || effect.kind != Kind::File || effect.in_git() {
             return Ok(None);
@@ -718,6 +737,13 @@ impl Task {
         let (Some(theirs), Some(mut ours)) = (read(self.workspace())?, read(&self.copy())?) else {
             return Ok(None);
         };
+        // The copy's side as it was reviewed, or no merge.
+        if reviewed.is_some_and(|r| *r != format!("file:{}", blake3::hash(&ours).to_hex())) {
+            return Err(Error::Invalid(format!(
+                "{} changed since it was reviewed; nothing was committed",
+                effect.path
+            )));
+        }
         // Merged with the real values: masked ones would read as changes to
         // every secret line.
         if secrets::is_env_file(&effect.path)

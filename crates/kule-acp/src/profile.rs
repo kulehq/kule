@@ -57,6 +57,44 @@ const TOO_WIDE: &[&str] = &[
     "Public",
 ];
 
+/// What runs as the person starts a shell, a session or a tool, or is found
+/// on the PATH: never an agent's state.
+const RUNS_AS_YOU_START: &[&str] = &[
+    ".zshrc",
+    ".zshenv",
+    ".zprofile",
+    ".zlogin",
+    ".zlogout",
+    ".bashrc",
+    ".bash_profile",
+    ".bash_login",
+    ".bash_logout",
+    ".profile",
+    ".kshrc",
+    ".cshrc",
+    ".tcshrc",
+    ".xprofile",
+    ".xinitrc",
+    ".xsession",
+    ".gitconfig",
+    ".vimrc",
+    ".config/git",
+    ".config/fish",
+    ".config/nvim",
+    ".config/autostart",
+    ".config/systemd",
+    ".config/environment.d",
+    "Library/LaunchAgents",
+    "Library/LaunchDaemons",
+    "Library/StartupItems",
+    ".local/bin",
+    ".cargo/bin",
+    "bin",
+    ".bin",
+    "go/bin",
+    ".npm-global",
+];
+
 /// The only hidden path a profile may reveal: the macOS keychain, whose
 /// items each keep their own access list.
 const KEYCHAIN: &str = "Library/Keychains";
@@ -102,6 +140,28 @@ const RUNS_LATER: &[&str] = &[
 /// Variables an agent's own home may not be put in: they are the
 /// sandbox's.
 const NOT_A_HOME: &[&str] = &["PATH", "TMPDIR", "TMP", "TEMP", "PWD", "SHELL"];
+
+/// Credentials Kule knows, by variable or keychain service, with the hosts
+/// they are for: a profile sends them nowhere else.
+const KNOWN_CREDENTIALS: &[(&str, &[&str])] = &[
+    ("ANTHROPIC_API_KEY", &["api.anthropic.com"]),
+    ("ANTHROPIC_AUTH_TOKEN", &["api.anthropic.com"]),
+    ("CLAUDE_CODE_OAUTH_TOKEN", &["api.anthropic.com"]),
+    ("Claude Code-credentials", &["api.anthropic.com"]),
+    ("OPENAI_API_KEY", &["api.openai.com"]),
+    ("GEMINI_API_KEY", &["generativelanguage.googleapis.com"]),
+    ("GOOGLE_API_KEY", &["generativelanguage.googleapis.com"]),
+    (
+        "GITHUB_TOKEN",
+        &["api.github.com", "github.com", "uploads.github.com"],
+    ),
+    (
+        "GH_TOKEN",
+        &["api.github.com", "github.com", "uploads.github.com"],
+    ),
+    ("NPM_TOKEN", &["registry.npmjs.org"]),
+    ("CARGO_REGISTRY_TOKEN", &["crates.io"]),
+];
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -808,6 +868,25 @@ impl Profile {
                 self.name
             ));
         }
+        // Which of the person's credentials it gets, and where they go.
+        for (name, hosts) in &self.keys {
+            warnings.push(format!(
+                "Kule puts your {name} into what {} sends to {}.",
+                self.name,
+                hosts.join(", ")
+            ));
+        }
+        for key in self.keychain.values() {
+            warnings.push(format!(
+                "Kule reads the keychain item \"{}\" and puts it into what {} sends to {}.",
+                key.service,
+                self.name,
+                key.hosts.join(", ")
+            ));
+        }
+        for name in &self.pass_env {
+            warnings.push(format!("{} sees your {name} as it is.", self.name));
+        }
         warnings
     }
 
@@ -878,6 +957,14 @@ impl Profile {
             if TOO_WIDE.iter().any(|wide| path == wide) {
                 return Err(format!(
                     "state {path:?} holds far more than one agent's own; name the agent's directory in it"
+                ));
+            }
+            // State is the agent's to write, past the home layer: never
+            // what starts, or is found on the PATH, outside Kule.
+            let overlaps = |starts: &str| within(path, starts) || within(starts, path);
+            if let Some(starts) = RUNS_AS_YOU_START.iter().find(|s| overlaps(s)) {
+                return Err(format!(
+                    "state {path:?}: {starts} runs as you start your shell, your session or a tool; an agent's state is a directory of its own"
                 ));
             }
         }
@@ -983,6 +1070,35 @@ impl Profile {
         for (name, hosts) in &self.keys {
             if hosts.is_empty() {
                 return Err(format!("{name}: name the hosts the key is for"));
+            }
+        }
+        // A credential Kule knows goes to its own service's hosts alone:
+        // no profile sends the person's Anthropic key, or Claude Code's
+        // sign-in, anywhere else.
+        let bound = self
+            .keys
+            .iter()
+            .map(|(name, hosts)| (name.as_str(), hosts))
+            .chain(
+                self.keychain
+                    .values()
+                    .map(|k| (k.service.as_str(), &k.hosts)),
+            );
+        for (name, hosts) in bound {
+            if let Some((_, own)) = KNOWN_CREDENTIALS.iter().find(|(n, _)| *n == name)
+                && let Some(other) = hosts.iter().find(|h| !own.contains(&h.as_str()))
+            {
+                return Err(format!(
+                    "{name} goes to {} alone, not {other}",
+                    own.join(", ")
+                ));
+            }
+        }
+        for name in &self.pass_env {
+            if KNOWN_CREDENTIALS.iter().any(|(n, _)| n == name) {
+                return Err(format!(
+                    "{name}: a key, which the agent gets through `keys`, as a placeholder"
+                ));
             }
         }
         for host in self
@@ -1154,7 +1270,7 @@ impl Profile {
         layer: bool,
     ) -> Result<Launch> {
         let home = person.as_ref().map(|p| p.home.clone());
-        let (program, args) = self.started_as(home.as_deref());
+        let (program, args) = self.started_as(home.as_deref())?;
         let mut sandbox = Sandbox::for_task_with(task, person)?;
         let mut own_home = None;
         if let Some(home) = home {
@@ -1213,11 +1329,11 @@ impl Profile {
     /// installed it once under the person's `home` (see [`crate::packages`]),
     /// installed now when it is not there yet; `npx` itself when that
     /// fails, or with no home to install under.
-    fn started_as(&self, home: Option<&Path>) -> (String, Vec<String>) {
+    fn started_as(&self, home: Option<&Path>) -> Result<(String, Vec<String>)> {
         let as_written = (self.program().to_string_lossy().into_owned(), self.args());
         let (Some(home), Some((spec, name, rest))) = (home, packages::npx_package(&self.command))
         else {
-            return as_written;
+            return Ok(as_written);
         };
         let announce = || {
             eprintln!(
@@ -1229,11 +1345,17 @@ impl Profile {
             Ok(script) => {
                 let mut args = vec![script.to_string_lossy().into_owned()];
                 args.extend(rest);
-                ("node".to_owned(), args)
+                Ok(("node".to_owned(), args))
             }
+            // A package Kule ships a lockfile for starts as locked or not at
+            // all: through npx its dependencies would float.
+            Err(e) if packages::locked(&spec) => Err(Error::Invalid(format!(
+                "{spec} could not be installed as locked ({e}); {} does not start without it",
+                self.name
+            ))),
             Err(e) => {
                 eprintln!("kule: {e}; {} starts through npx instead", self.name);
-                as_written
+                Ok(as_written)
             }
         }
     }
@@ -1246,9 +1368,35 @@ pub(crate) fn check_pinned(program: &str, args: &[String]) -> std::result::Resul
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or(program);
-    // The package is the first argument that is not a flag (after `run`,
-    // for pipx).
-    let mut words = args.iter().filter(|a| !a.starts_with('-'));
+    // Launchers that fetch a package by other names: one way, checked.
+    let sub = args.first().map(String::as_str);
+    if matches!(
+        (launcher, sub),
+        ("npm", Some("exec" | "x")) | ("pnpm" | "yarn", Some("dlx")) | ("bun", Some("x"))
+    ) {
+        return Err(format!(
+            "{launcher} {}: start a package with npx and one exact version, like npx -y name@1.2.3",
+            sub.unwrap_or_default()
+        ));
+    }
+    // The package comes first (after npx's -y, pipx's run): an option
+    // before it could say where it comes from, or name another.
+    let mut words = args.iter().skip_while(|a| match launcher {
+        "npx" | "bunx" | "pnpx" => *a == "-y" || *a == "--yes",
+        "pipx" => *a == "run",
+        _ => false,
+    });
+    if matches!(launcher, "npx" | "bunx" | "pnpx" | "uvx" | "pipx")
+        && let Some(option) = args.iter().find(|a| a.starts_with('-'))
+        && words
+            .clone()
+            .next()
+            .is_none_or(|first| first.starts_with('-'))
+    {
+        return Err(format!(
+            "{launcher} {option}: name the package first, with one exact version"
+        ));
+    }
     let pinned = match launcher {
         "npx" | "bunx" | "pnpx" => words.next().map(|p| {
             // `@scope/name@1.2.3` or `name@1.2.3`.
@@ -1581,6 +1729,42 @@ hosts = ["openrouter.ai"]
                 "unpinned uvx",
                 r#"command = ["uvx", "some-agent", "acp"]"#,
                 "exact version",
+            ),
+            (
+                "another package before",
+                r#"command = ["npx", "--package=opencode-ai@latest", "other@1.2.3", "acp"]"#,
+                "name the package first",
+            ),
+            (
+                "another index",
+                r#"command = ["uvx", "--index-url=https://evil.example", "some-agent==1.2.3"]"#,
+                "name the package first",
+            ),
+            (
+                "npm exec",
+                r#"command = ["npm", "exec", "opencode-ai@latest"]"#,
+                "start a package with npx",
+            ),
+            (
+                "pnpm dlx",
+                r#"command = ["pnpm", "dlx", "opencode-ai"]"#,
+                "start a package with npx",
+            ),
+            ("shell start", r#"state = [".zshrc"]"#, "runs as you start"),
+            (
+                "launch agents",
+                r#"state = ["Library/LaunchAgents"]"#,
+                "runs as you start",
+            ),
+            (
+                "inside a start folder",
+                r#"state = [".config/autostart/opencode"]"#,
+                "runs as you start",
+            ),
+            (
+                "on the PATH",
+                r#"state = [".local/bin"]"#,
+                "runs as you start",
             ),
             ("absolute path", r#"state = ["/etc"]"#, "relative"),
             ("parent", r#"state = [".config/../.ssh"]"#, "relative"),
@@ -1935,6 +2119,78 @@ hosts = ["openrouter.ai"]
                 "{name}"
             );
         }
+    }
+
+    /// A profile sends a credential Kule knows to its own service alone,
+    /// and the person sees every credential a profile takes, and where it
+    /// goes, before approving it.
+    #[test]
+    fn a_profile_s_credentials_go_where_they_belong_and_are_told() {
+        let base = || Profile::bare("tool", vec!["tool".into()], BTreeMap::new());
+        let mut wrong = base();
+        wrong
+            .keys
+            .insert("ANTHROPIC_API_KEY".into(), vec!["evil.example".into()]);
+        assert!(
+            wrong
+                .check(&[], None)
+                .unwrap_err()
+                .contains("api.anthropic.com alone")
+        );
+        let mut wrong = base();
+        wrong.keychain.insert(
+            "TOKEN".into(),
+            KeychainKey {
+                service: "Claude Code-credentials".into(),
+                json: Some("claudeAiOauth.accessToken".into()),
+                hosts: vec!["evil.example".into()],
+            },
+        );
+        assert!(wrong.check(&[], None).is_err());
+        let mut wrong = base();
+        wrong.pass_env.push("GITHUB_TOKEN".into());
+        assert!(wrong.check(&[], None).is_err());
+
+        let home = TempDir::new().unwrap();
+        let mut told = base();
+        told.keys
+            .insert("OPENROUTER_API_KEY".into(), vec!["openrouter.ai".into()]);
+        told.pass_env.push("TOOL_CONFIG".into());
+        assert!(told.check(&[], None).is_ok());
+        let warnings = told.warnings(home.path());
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("OPENROUTER_API_KEY") && w.contains("openrouter.ai")),
+            "{warnings:?}"
+        );
+        assert!(
+            warnings.iter().any(|w| w.contains("TOOL_CONFIG")),
+            "{warnings:?}"
+        );
+    }
+
+    /// A package Kule ships a lockfile for starts as locked or not at all;
+    /// any other falls back to npx when it cannot be installed.
+    #[test]
+    fn a_locked_package_that_cannot_install_does_not_start() {
+        let home = TempDir::new().unwrap();
+        // Nothing can be installed under this home.
+        let first = Path::new(packages::PACKAGES).components().next().unwrap();
+        std::fs::write(home.path().join(first), "").unwrap();
+        let npx = |spec: &str| {
+            Profile::bare(
+                "tool",
+                vec!["npx".into(), "-y".into(), spec.into(), "acp".into()],
+                BTreeMap::new(),
+            )
+        };
+        let locked = npx("@agentclientprotocol/claude-agent-acp@0.92.0");
+        let refused = locked.started_as(Some(home.path())).unwrap_err();
+        assert!(refused.to_string().contains("as locked"), "{refused}");
+        let floating = npx("some-agent@1.2.3");
+        let (program, _) = floating.started_as(Some(home.path())).unwrap();
+        assert_eq!(program, "npx");
     }
 
     #[test]

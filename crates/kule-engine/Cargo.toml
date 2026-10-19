@@ -32,6 +32,8 @@ keyring = { version = "3.6.3", default-features = false, features = ["apple-nati
 serde.workspace = true
 serde_json.workspace = true
 similar = "2.7.0"
+# Folds names as a case-insensitive disk reads them (see policy.rs).
+unicode-normalization = "0.1.25"
 thiserror.workspace = true
 walkdir.workspace = true
 rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12"] }

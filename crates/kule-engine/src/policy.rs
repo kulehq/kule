@@ -339,7 +339,13 @@ impl Policy {
                 Change::Modified => "fs.modify",
                 Change::Deleted => "fs.delete",
             };
-            let subject = Subject::file(kind, &effect.path, effect.change, effect.kind);
+            let mut subject = Subject::file(kind, &effect.path, effect.change, effect.kind);
+            subject.in_git_dir = set.git_dirs.iter().any(|d| {
+                effect
+                    .path
+                    .strip_prefix(d.as_str())
+                    .is_some_and(|rest| rest.starts_with('/'))
+            });
             let mut judgement = self.judge_one(effect.path.clone(), &subject, &facts);
             // Asked about only by rules a person answered for good here.
             let remembered = judgement.verdict == Verdict::Ask
@@ -528,6 +534,9 @@ struct Subject {
     /// What the path is: "file", "dir" or "symlink"; "" for git and network.
     entry: &'static str,
     path: String,
+    /// The path lies in a repository's own files (see
+    /// [`EffectSet::git_dirs`]): judged as if under a `.git`.
+    in_git_dir: bool,
     change: &'static str,
     ref_name: String,
     fast_forward: bool,
@@ -587,13 +596,14 @@ impl Subject {
 
     fn attrs(&self) -> HashMap<String, RestrictedExpression> {
         let name = self.path.rsplit('/').next().unwrap_or(&self.path);
-        // Folded to lower case, as a case-insensitive disk (macOS's, by
-        // default) and the tools reading it see the names; each of the
-        // path's components, to match a folder at any depth.
-        let folded = self.path.to_lowercase();
+        // Folded as a case-insensitive disk (macOS's, by default) and the
+        // tools reading it see the names; each of the path's components,
+        // to match a folder at any depth.
+        let folded = fold(&self.path);
         let parts = folded
             .split('/')
             .filter(|p| !p.is_empty())
+            .chain(self.in_git_dir.then_some(".git"))
             .map(|p| RestrictedExpression::new_string(p.to_owned()));
         HashMap::from([
             (
@@ -602,7 +612,7 @@ impl Subject {
             ),
             (
                 "folded_name".into(),
-                RestrictedExpression::new_string(name.to_lowercase()),
+                RestrictedExpression::new_string(fold(name)),
             ),
             ("parts".into(), RestrictedExpression::new_set(parts)),
             (
@@ -641,6 +651,19 @@ impl Subject {
             ("port".into(), RestrictedExpression::new_long(self.port)),
         ])
     }
+}
+
+/// `text` as a disk that ignores case and Unicode forms may read it, and
+/// further: compatibility forms taken apart (`ſ` is `s`, `ﬆ` is `st`, the
+/// Kelvin sign is `k`), accents dropped, lower case. A name that folds to
+/// a listed one is judged as that one; folding too far only asks more.
+fn fold(text: &str) -> String {
+    use unicode_normalization::UnicodeNormalization;
+    use unicode_normalization::char::is_combining_mark;
+    text.nfkd()
+        .filter(|c| !is_combining_mark(*c))
+        .flat_map(char::to_lowercase)
+        .collect()
 }
 
 fn change_name(change: Change) -> &'static str {

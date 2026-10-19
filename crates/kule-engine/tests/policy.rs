@@ -185,6 +185,35 @@ fn what_runs_on_its_own_waits_wherever_and_however_it_is_named() {
         "tools/CARGO.TOML",
         "sub/.git/config",
         "lib/.git",
+        ".devcontainer.json",
+        "rust-toolchain",
+        "crates/x/rust-toolchain.toml",
+        ".yarn/releases/yarn-4.cjs",
+        "mvnw",
+        "mvnw.cmd",
+        "bunfig.toml",
+        ".config/dotnet-tools.json",
+        "azure-pipelines.yml",
+        ".travis.yml",
+        "Jenkinsfile",
+        "bitbucket-pipelines.yml",
+        ".buildkite/pipeline.yml",
+        ".gitea/workflows/ci.yml",
+        ".forgejo/workflows/ci.yml",
+        ".woodpecker/ci.yml",
+        ".windsurf/rules/x.md",
+        ".continue/config.yaml",
+        ".roo/rules/x.md",
+        ".clinerules",
+        "opencode.json",
+        ".aider.conf.yml",
+        // Names a case-insensitive disk reads as listed ones: a long s, the
+        // Kelvin sign, a ligature, an accent.
+        "x/agent\u{17F}.md",
+        "y/.hu\u{17F}ky/pre-commit",
+        "w/lefthoo\u{212A}.yml",
+        "v/bun\u{FB01}g.toml",
+        "u/clau\u{0301}de.md",
     ];
     for path in waiting {
         write(&s.copy().join(path), "x\n");
@@ -201,6 +230,29 @@ fn what_runs_on_its_own_waits_wherever_and_however_it_is_named() {
     // Plain work still passes.
     write(&s.copy().join("src/lib.rs"), "pub fn f() {}\n");
     assert_eq!(on(&s.judged(), "src/lib.rs").0, Verdict::Allow);
+}
+
+/// A repository without `.git` in its path (a bare one) is judged as a
+/// `.git` is: its config waits, its hooks never pass.
+#[test]
+fn a_bare_repository_in_the_folder_is_judged_as_a_git_folder() {
+    let s = Setup::new(PROJECT, false);
+    let copy = s.copy();
+    git(&copy, &["init", "-q", "--bare", "vendor/mirror"]);
+    write(
+        &copy.join("vendor/mirror/hooks/post-checkout"),
+        "#!/bin/sh\n",
+    );
+    let ruling = s.judged();
+    assert_eq!(on(&ruling, "vendor/mirror/config").0, Verdict::Ask);
+    assert_eq!(on(&ruling, "vendor/mirror/HEAD").0, Verdict::Ask);
+    assert_eq!(
+        on(&ruling, "vendor/mirror/hooks/post-checkout").0,
+        Verdict::Deny
+    );
+    // Files that only look alike are plain work.
+    write(&copy.join("docs/HEAD"), "x\n");
+    assert_eq!(on(&s.judged(), "docs/HEAD").0, Verdict::Allow);
 }
 
 /// `n` files under `data/`, in a git repository or a plain folder.
@@ -388,6 +440,35 @@ fn only_a_new_branch_passes_among_new_references() {
         .find(|j| j.subject.starts_with("git ref refs/replace/"))
         .unwrap_or_else(|| panic!("{ruling:#?}"));
     assert_eq!(replaced.verdict, Verdict::Ask);
+}
+
+/// Moving forward passes for a branch alone: a tag, a note or a
+/// replacement that exists already and moves on waits.
+#[test]
+fn only_a_branch_moves_forward_on_its_own() {
+    let s = Setup::new(PROJECT, true);
+    let copy = s.copy();
+    git(&copy, &["tag", "v9"]);
+    git(&copy, &["notes", "add", "-m", "note"]);
+    s.task.commit().unwrap();
+    write(&copy.join("README.md"), "changed\n");
+    git(&copy, &["commit", "-qam", "one"]);
+    git(&copy, &["tag", "-f", "v9"]);
+    git(&copy, &["notes", "add", "-f", "-m", "other note"]);
+
+    let ruling = s.judged();
+    assert_eq!(
+        on(&ruling, "git ref refs/heads/main: README.md").0,
+        Verdict::Allow
+    );
+    for r in ["refs/tags/v9", "refs/notes/commits"] {
+        let j = ruling
+            .judgements
+            .iter()
+            .find(|j| j.subject.starts_with(&format!("git ref {r}")))
+            .unwrap_or_else(|| panic!("{r}: {ruling:#?}"));
+        assert_eq!(j.verdict, Verdict::Ask, "{r}");
+    }
 }
 
 #[test]
