@@ -166,6 +166,13 @@ const OUTSIDE_SERVICES: &[&str] = &[
 /// sandbox; reading files (what is hidden is taken away after); the system
 /// facts and services that toolchains need. Writes, the network and the GPU
 /// are allowed after it, each as narrowly as the task needs.
+///
+/// Shared memory goes by name, and any process of the person's may hold a
+/// segment: a command reads the system's notification table and makes the
+/// segments that Python and PostgreSQL name at random, no other. The
+/// keychain's service (`com.apple.SecurityServer`) is not here: it opens
+/// items for its caller outside the sandbox, so it comes only with the
+/// keychain's files (see [`Sandbox::reveal`]).
 #[cfg(target_os = "macos")]
 const SEATBELT_BASE: &str = r#"(allow process-exec process-fork)
 (allow signal (target same-sandbox))
@@ -174,7 +181,11 @@ const SEATBELT_BASE: &str = r#"(allow process-exec process-fork)
 (allow system-fsctl)
 (allow system-socket)
 (allow network*)
-(allow ipc-posix-sem ipc-posix-shm*)
+(allow ipc-posix-sem)
+(allow ipc-posix-shm-read* (ipc-posix-name "apple.shm.notification_center"))
+(allow ipc-posix-shm*
+  (ipc-posix-name-regex #"^/psm_[0-9a-f]+$")
+  (ipc-posix-name-regex #"^/PostgreSQL\.[0-9]+$"))
 (allow user-preference-read)
 (allow pseudo-tty)
 (allow system-mac-syscall (mac-policy-name "vnguard"))
@@ -186,7 +197,6 @@ const SEATBELT_BASE: &str = r#"(allow process-exec process-fork)
   (sysctl-name-prefix "hw.")
   (sysctl-name-prefix "machdep.cpu.")
   (sysctl-name-prefix "kern.proc.pgrp.")
-  (sysctl-name-prefix "kern.proc.pid.")
   (sysctl-name-prefix "net.routetable")
   (sysctl-name "kern.argmax")
   (sysctl-name "kern.bootargs")
@@ -217,7 +227,6 @@ const SEATBELT_BASE: &str = r#"(allow process-exec process-fork)
   (global-name "com.apple.system.opendirectoryd.membership")
   (global-name "com.apple.system.DirectoryService.libinfo_v1")
   (global-name "com.apple.bsd.dirhelper")
-  (global-name "com.apple.PowerManagement.control")
   (global-name "com.apple.system.notification_center")
   (global-name "com.apple.system.logger")
   (global-name "com.apple.logd")
@@ -225,7 +234,6 @@ const SEATBELT_BASE: &str = r#"(allow process-exec process-fork)
   (global-name "com.apple.diagnosticd")
   (global-name "com.apple.analyticsd")
   (global-name "com.apple.secinitd")
-  (global-name "com.apple.SecurityServer")
   (global-name "com.apple.trustd")
   (global-name "com.apple.trustd.agent")
   (global-name "com.apple.TrustEvaluationAgent")
@@ -269,6 +277,10 @@ pub struct Sandbox {
     layer: Option<PathBuf>,
     /// Whether commands may use the GPU.
     gpu: bool,
+    /// Whether the keychain's files were revealed, and with them its
+    /// service (macOS).
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    keychain: bool,
     /// The largest file a command may write, in bytes.
     file_size: Option<u64>,
     /// Marks this sandbox's refusals where the platform reports them (macOS).
@@ -344,6 +356,7 @@ impl Sandbox {
             kept: task.home().join("kept"),
             layer: None,
             gpu: true,
+            keychain: false,
             file_size: None,
             tag: format!("kule-{}-{nanos:x}", task.id()),
             task: task.id().to_owned(),
@@ -500,16 +513,26 @@ impl Sandbox {
     /// it stay hidden. `path` is taken as it is written, not where a link
     /// there leads: a link an agent put in place of its login reveals
     /// nothing. Kule's home and the task's folder are never revealed.
+    ///
+    /// Revealing the keychain's files (`~/Library/Keychains`) opens the
+    /// keychain's service on macOS too, which reads items for its caller:
+    /// without them it opens none, unlocked keychains included.
     pub fn reveal(&mut self, path: &Path) -> Result<()> {
         let here = here(path)?;
         if std::fs::symlink_metadata(&here).is_ok_and(|m| m.file_type().is_symlink()) {
             return Ok(());
         }
         let mut i = 0;
+        let mut revealed = false;
         self.hidden.retain(|hidden| {
             i += 1;
-            i <= ALWAYS_HIDDEN || hidden != &here
+            let keep = i <= ALWAYS_HIDDEN || hidden != &here;
+            revealed |= !keep;
+            keep
         });
+        if revealed && here.ends_with("Library/Keychains") {
+            self.keychain = true;
+        }
         Ok(())
     }
 
@@ -920,11 +943,17 @@ impl Sandbox {
         } else {
             String::new()
         };
+        let keychain = if self.keychain {
+            "(allow mach-lookup (global-name \"com.apple.SecurityServer\"))\n"
+        } else {
+            ""
+        };
         let mut text = format!(
             "(version 1)\n\
              (deny default {tag})\n\
              {SEATBELT_BASE}\
              {mark}\
+             {keychain}\
              (deny file-write* {tag})\n\
              (allow file-write*\n  \
                (literal \"/dev/null\") (literal \"/dev/zero\") (literal \"/dev/dtracehelper\")\n  \

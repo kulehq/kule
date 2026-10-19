@@ -412,6 +412,9 @@ fn everyday_tools_still_work() {
     let mut scripts = vec![
         "git init -q r && cd r && git -c user.name=k -c user.email=k@k commit -q --allow-empty -m one && git log --oneline | wc -l",
         "python3 -c 'import json, sqlite3, ssl; print(1)'",
+        "python3 -c 'from multiprocessing import shared_memory as s; m=s.SharedMemory(create=True, size=8); m.buf[0]=1; print(m.buf[0]); m.close(); m.unlink()'",
+        // PostgreSQL's dynamic shared memory, by the name it gives it.
+        "python3 -c 'import _posixshmem, os; n=\"/PostgreSQL.%d\" % os.getpid(); os.close(_posixshmem.shm_open(n, os.O_CREAT | os.O_RDWR, 0o600)); _posixshmem.shm_unlink(n); print(1)'",
     ];
     if has("node") {
         scripts.push("node -e 'require(\"crypto\").randomBytes(4); console.log(1)'");
@@ -441,4 +444,147 @@ fn a_terminal_made_inside_the_sandbox_still_works() {
     );
     assert!(out.status.success(), "{out:?}");
     assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "hi");
+}
+
+/// Deletes a keychain made for a test, whatever the test does.
+struct Keychain(PathBuf);
+
+impl Drop for Keychain {
+    fn drop(&mut self) {
+        let _ = Command::new("/usr/bin/security")
+            .arg("delete-keychain")
+            .arg(&self.0)
+            .output();
+    }
+}
+
+/// The keychain's service opens items for its caller, outside the sandbox:
+/// a keychain left unlocked outside gives a command nothing, unless the
+/// keychain's files were revealed to it (an agent's own login).
+#[test]
+fn an_unlocked_keychain_opens_only_when_revealed() {
+    let s = Setup::new();
+    let keychain = Keychain(
+        fs::canonicalize(s.outside.path())
+            .unwrap()
+            .join("probe.keychain-db"),
+    );
+    let secret = format!("kule-test-{}", rand_suffix());
+    let security = |args: &[&str]| {
+        let out = Command::new("/usr/bin/security")
+            .args(args)
+            .arg(&keychain.0)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{out:?}");
+    };
+    security(&["create-keychain", "-p", "kule-test"]);
+    security(&[
+        "add-generic-password",
+        "-s",
+        "kule-probe",
+        "-a",
+        "kule",
+        "-w",
+        &secret,
+    ]);
+    let read = format!(
+        "security find-generic-password -s kule-probe -w '{}'",
+        keychain.0.display()
+    );
+
+    let out = s.sh(&read);
+    assert!(
+        !String::from_utf8_lossy(&out.stdout).contains(&secret),
+        "an unlocked keychain was opened from the sandbox"
+    );
+
+    let home = TempDir::new().unwrap();
+    let keychains = home.path().join("Library/Keychains");
+    fs::create_dir_all(&keychains).unwrap();
+    let mut sandbox = Sandbox::new(&s.task).unwrap();
+    sandbox.hide(&keychains).unwrap();
+    sandbox.reveal(&keychains).unwrap();
+    let out = sandbox
+        .command("sh", &["-c".to_owned(), read])
+        .unwrap()
+        .output()
+        .unwrap();
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains(&secret),
+        "a revealed keychain did not open: {out:?}"
+    );
+}
+
+/// Shared memory goes by name: a segment a process outside holds cannot be
+/// opened from the sandbox (a command's own still can, see
+/// `everyday_tools_still_work`).
+#[test]
+fn shared_memory_held_outside_is_out_of_reach() {
+    let s = Setup::new();
+    let name = format!("kule_t_{}", rand_suffix() % 1_000_000_000);
+    let mut outside = Command::new("python3")
+        .args([
+            "-I",
+            "-c",
+            "import sys\n\
+             from multiprocessing import shared_memory as s\n\
+             m = s.SharedMemory(name=sys.argv[1], create=True, size=64)\n\
+             m.buf[:6] = b'kule42'\n\
+             print('ready', flush=True)\n\
+             sys.stdin.read()\n\
+             m.close(); m.unlink()",
+            &name,
+        ])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut ready = String::new();
+    std::io::BufRead::read_line(
+        &mut std::io::BufReader::new(outside.stdout.as_mut().unwrap()),
+        &mut ready,
+    )
+    .unwrap();
+    assert_eq!(ready.trim(), "ready");
+
+    let out = s.sh(&format!(
+        "python3 -I -c \"import _posixshmem, mmap, os; fd = _posixshmem.shm_open('/{name}', os.O_RDONLY); print(mmap.mmap(fd, 64, prot=mmap.PROT_READ)[:6])\""
+    ));
+    drop(outside.stdin.take());
+    let _ = outside.wait();
+    assert!(
+        !String::from_utf8_lossy(&out.stdout).contains("kule42"),
+        "shared memory held outside was read from the sandbox"
+    );
+}
+
+/// A command cannot keep the computer awake: the power service that holds
+/// such an assertion sits outside the sandbox.
+#[test]
+fn the_computer_cannot_be_kept_awake() {
+    let s = Setup::new();
+    let pid_file = fs::canonicalize(s.task.copy())
+        .unwrap()
+        .join("caffeinate.pid");
+    let held = std::thread::scope(|scope| {
+        let run = scope.spawn(|| s.sh("caffeinate -i -t 3 & echo $! > caffeinate.pid; wait"));
+        let started = Instant::now();
+        let mut held = false;
+        while !held && started.elapsed() < Duration::from_secs(3) {
+            if let Ok(pid) = fs::read_to_string(&pid_file) {
+                let assertions = Command::new("pmset")
+                    .args(["-g", "assertions"])
+                    .output()
+                    .unwrap();
+                held = String::from_utf8_lossy(&assertions.stdout)
+                    .contains(&format!("pid {}(caffeinate)", pid.trim()));
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        let _ = run.join();
+        held
+    });
+    assert!(pid_file.exists(), "the command did not run");
+    assert!(!held, "a command kept the computer awake");
 }
