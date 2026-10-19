@@ -70,6 +70,21 @@ pub(crate) fn pids_available() -> bool {
     })
 }
 
+/// Whether this system lets an unprivileged process have a devpts instance
+/// of its own; asked once, by trying.
+pub(crate) fn ptys_available() -> bool {
+    static AVAILABLE: OnceLock<bool> = OnceLock::new();
+    *AVAILABLE.get_or_init(|| {
+        Isolation::new(Net::Shared, &[]).is_ok_and(|isolation| {
+            // A new terminal there is the instance's first, and its only.
+            run_probe(
+                isolation.own_ptys(),
+                "exec 3<>/dev/ptmx && set -- /dev/pts/* && test \"$*\" = '/dev/pts/0 /dev/pts/ptmx'",
+            )
+        })
+    })
+}
+
 /// Runs `true` the way a command would run with this isolation.
 fn probe(net: Net, read_only: &[PathBuf]) -> bool {
     Isolation::new(net, read_only).is_ok_and(|isolation| run_probe(isolation, "exit 0"))
@@ -130,6 +145,8 @@ pub(crate) struct Isolation {
     tmp: Option<CString>,
     /// Processes of its own (see the module's notes).
     pids: bool,
+    /// Terminals of its own: a devpts instance over `/dev/pts`.
+    ptys: bool,
 }
 
 impl Isolation {
@@ -181,7 +198,18 @@ impl Isolation {
             covered: Vec::new(),
             tmp: None,
             pids: false,
+            ptys: false,
         })
+    }
+
+    /// Gives the command terminals of its own: a devpts instance of its
+    /// own over `/dev/pts`, whose `ptmx` stands at `/dev/ptmx` too. It can
+    /// make a terminal and open its other end, and none of the person's is
+    /// there to open.
+    pub(crate) fn own_ptys(mut self) -> Isolation {
+        self.namespaces |= libc::CLONE_NEWNS;
+        self.ptys = true;
+        self
     }
 
     /// Gives the command a PID namespace of its own, and a `/proc` that
@@ -271,6 +299,22 @@ impl Isolation {
                     c"/proc".as_ptr(),
                     c"proc".as_ptr(),
                     libc::MS_NOSUID | libc::MS_NODEV | libc::MS_NOEXEC,
+                    std::ptr::null(),
+                ))?;
+            }
+            if self.ptys {
+                check(libc::mount(
+                    c"devpts".as_ptr(),
+                    c"/dev/pts".as_ptr(),
+                    c"devpts".as_ptr(),
+                    libc::MS_NOSUID | libc::MS_NOEXEC,
+                    c"newinstance,ptmxmode=0666,mode=0620".as_ptr().cast(),
+                ))?;
+                check(libc::mount(
+                    c"/dev/pts/ptmx".as_ptr(),
+                    c"/dev/ptmx".as_ptr(),
+                    std::ptr::null(),
+                    libc::MS_BIND,
                     std::ptr::null(),
                 ))?;
             }

@@ -1970,3 +1970,44 @@ fn a_process_in_a_sandbox_that_allows_everything_is_not_a_stray() {
     assert!(other_alive, "another tool's sandboxed process was ended");
     assert!(!ours_alive, "the task's own process was left running");
 }
+
+/// A command makes terminals of its own and talks through them (as
+/// `script`, `expect` and test runners do), in an instance where none of
+/// the person's terminals is.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_command_makes_terminals_of_its_own() {
+    if !kule_engine::isolates_network() {
+        eprintln!("skipped: this computer gives a command no namespaces of its own");
+        return;
+    }
+    let s = Setup::new();
+    // One of the person's, open while the command runs.
+    let (mut leader, mut follower) = (0, 0);
+    // SAFETY: openpty fills the two descriptors; null names and modes.
+    assert_eq!(
+        unsafe {
+            libc::openpty(
+                &mut leader,
+                &mut follower,
+                std::ptr::null_mut(),
+                std::ptr::null(),
+                std::ptr::null(),
+            )
+        },
+        0
+    );
+    let script = "import os\n\
+                  leader, follower = os.openpty()\n\
+                  os.write(leader, b'hello\\n')\n\
+                  print(os.read(follower, 16).decode().strip(), os.ttyname(follower))\n\
+                  print(sorted(os.listdir('/dev/pts')))\n";
+    let out = sandbox_python(&s.sandbox(), script);
+    // SAFETY: closing the two descriptors made above.
+    unsafe {
+        libc::close(leader);
+        libc::close(follower);
+    }
+    assert!(ok(&out), "{out:?}");
+    assert_eq!(text(&out), "hello /dev/pts/0\n['0', 'ptmx']", "{out:?}");
+}

@@ -137,6 +137,9 @@
   it. Kule still sees how the command ended, its code or its signal, and
   the signals sent to it reach it. Where the computer cannot give this,
   it is one more piece of isolation you accept going without.
+- On Linux a command makes terminals of its own (a devpts instance in its
+  mount namespace), as `script`, `expect` and test runners need; none of
+  your terminals is there to open.
 - Daemon protocol 28: `Isolation` and `SetIsolation`.
 
 ### Motion

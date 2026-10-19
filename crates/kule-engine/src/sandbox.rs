@@ -1462,6 +1462,7 @@ impl Sandbox {
             || !covered.is_empty()
             || own_tmp
             || own_pids
+            || own_ptys()
         {
             let mut isolation = Isolation::new(net, &read_only)
                 .and_then(|i| i.mask_sockets(&masked))
@@ -1469,6 +1470,9 @@ impl Sandbox {
                 .at(Path::new("/proc/self/ns"))?;
             if own_pids {
                 isolation = isolation.own_pids();
+            }
+            if own_ptys() {
+                isolation = isolation.own_ptys();
             }
             if own_tmp {
                 isolation = isolation.own_tmp(&self.tmp).at(&self.tmp)?;
@@ -1479,11 +1483,39 @@ impl Sandbox {
                 command.pre_exec(move || isolation.enter());
             }
         }
-        // SAFETY: the closure runs between fork and exec. It only makes the
-        // two system calls that restrict the process (no_new_privs and
-        // landlock_restrict_self) on a ruleset prepared before the fork.
+        // The command's own terminals are mounted after the ruleset was
+        // made, and Landlock passes over what a mount covers: their rules
+        // go on what the mounts put there, in the child, on a second
+        // handle to the same ruleset.
+        let pty_rules = if own_ptys() {
+            let handle: Option<std::os::fd::OwnedFd> = ruleset
+                .as_ref()
+                .map(|r| r.try_clone())
+                .transpose()
+                .at(Path::new("/dev/pts"))?
+                .and_then(Into::into);
+            let handle = handle
+                .ok_or_else(|| Error::Invalid("Landlock: no ruleset to add terminals to".into()))?;
+            let (read, write) = (landlock::AccessFs::ReadFile, landlock::AccessFs::WriteFile);
+            Some((
+                handle,
+                (read | write | landlock::AccessFs::ReadDir).bits(),
+                (read | write).bits(),
+            ))
+        } else {
+            None
+        };
+        // SAFETY: the closure runs between fork and exec. It only makes
+        // system calls: the rules for the command's own terminals, on paths
+        // and masks prepared before the fork, then the two that restrict the
+        // process (no_new_privs and landlock_restrict_self).
         unsafe {
             command.pre_exec(move || {
+                if let Some((handle, dir, file)) = &pty_rules {
+                    use std::os::fd::AsRawFd;
+                    add_path_rule(handle.as_raw_fd(), c"/dev/pts", *dir)?;
+                    add_path_rule(handle.as_raw_fd(), c"/dev/ptmx", *file)?;
+                }
                 let ruleset = ruleset
                     .take()
                     .ok_or_else(|| std::io::Error::other("ruleset used twice"))?;
@@ -1595,9 +1627,10 @@ impl Sandbox {
         writable.extend([self.copy.clone(), self.tmp.clone()]);
         writable.extend(self.layer.clone());
         // Not `/dev/pts`: the person's other terminals are there. A command
-        // keeps the terminal it was given (already open, and `/dev/tty`);
-        // a new one, whose other end opens by its path there, it cannot
-        // make.
+        // keeps the terminal it was given (already open, and `/dev/tty`).
+        // Where it has an instance of its own, the rules for it are added
+        // once it is mounted (see `pty_rules`); elsewhere it cannot make a
+        // new one, whose other end opens by its path there.
         let mut devices: Vec<PathBuf> = [
             "/dev/null",
             "/dev/zero",
@@ -1690,6 +1723,59 @@ impl Sandbox {
         sockets.dedup();
         Ok(sockets)
     }
+}
+
+/// Allows `access` beneath `path` in the Landlock ruleset `ruleset`, as
+/// the path is now (`landlock_add_rule`).
+///
+/// # Safety
+/// Only system calls, for between fork and exec.
+#[cfg(target_os = "linux")]
+unsafe fn add_path_rule(
+    ruleset: std::os::fd::RawFd,
+    path: &std::ffi::CStr,
+    access: u64,
+) -> std::io::Result<()> {
+    #[repr(C, packed)]
+    struct PathBeneath {
+        allowed_access: u64,
+        parent_fd: i32,
+    }
+    const RULE_PATH_BENEATH: libc::c_int = 1;
+    // SAFETY: the path is NUL-terminated; the rule is plain data, passed
+    // by pointer for the call's length.
+    unsafe {
+        let fd = libc::open(path.as_ptr(), libc::O_PATH | libc::O_CLOEXEC);
+        if fd == -1 {
+            return Err(std::io::Error::last_os_error());
+        }
+        let rule = PathBeneath {
+            allowed_access: access,
+            parent_fd: fd,
+        };
+        let added = libc::syscall(
+            libc::SYS_landlock_add_rule,
+            ruleset,
+            RULE_PATH_BENEATH,
+            &raw const rule,
+            0,
+        );
+        let error = std::io::Error::last_os_error();
+        libc::close(fd);
+        if added == -1 {
+            return Err(error);
+        }
+    }
+    Ok(())
+}
+
+/// Whether commands get terminals of their own: a devpts instance in their
+/// mount namespace. The Landlock rule that opens `/dev/pts` to a command
+/// and the mount that makes it the command's own go together, so both ask
+/// this one question.
+#[cfg(target_os = "linux")]
+fn own_ptys() -> bool {
+    crate::namespace::ptys_available()
 }
 
 /// Where the person's daemons make their sockets: systemd's runtime
