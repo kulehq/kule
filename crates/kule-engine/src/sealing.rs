@@ -61,20 +61,26 @@ impl Sealer {
         })
     }
 
-    /// `value`, sealed: nonce and ciphertext, base64.
-    pub(crate) fn seal(&self, value: &str) -> Result<String> {
+    /// `value`, sealed to `bound` (what it is for, authenticated with it):
+    /// nonce and ciphertext, base64.
+    pub(crate) fn seal(&self, value: &str, bound: &[u8]) -> Result<String> {
         let nonce = random::<NONCE_LEN>()?;
         let mut data = value.as_bytes().to_vec();
         self.key
-            .seal_in_place_append_tag(Nonce::assume_unique_for_key(nonce), Aad::empty(), &mut data)
+            .seal_in_place_append_tag(
+                Nonce::assume_unique_for_key(nonce),
+                Aad::from(bound),
+                &mut data,
+            )
             .map_err(|_| Error::Invalid("could not seal a secret".into()))?;
         let mut out = nonce.to_vec();
         out.extend(data);
         Ok(base64::engine::general_purpose::STANDARD.encode(out))
     }
 
-    /// What [`Sealer::seal`] sealed; refused when it was changed.
-    pub(crate) fn unseal(&self, sealed: &str) -> Result<String> {
+    /// What [`Sealer::seal`] sealed to `bound`; refused when it was changed,
+    /// or sealed to anything else.
+    pub(crate) fn unseal(&self, sealed: &str, bound: &[u8]) -> Result<String> {
         let bad = || Error::Invalid("a sealed secret does not open with the key".into());
         let bytes = base64::engine::general_purpose::STANDARD
             .decode(sealed)
@@ -87,7 +93,7 @@ impl Sealer {
         let mut data = rest.to_vec();
         let plain = self
             .key
-            .open_in_place(nonce, Aad::empty(), &mut data)
+            .open_in_place(nonce, Aad::from(bound), &mut data)
             .map_err(|_| bad())?;
         String::from_utf8(plain.to_vec()).map_err(|_| bad())
     }
@@ -202,24 +208,27 @@ mod tests {
         let sealer = Sealer::open(home.path(), None).unwrap();
         // A home other than the person's keeps its key in a file.
         assert_eq!(sealer.home, KeyHome::File);
-        let sealed = sealer.seal("sk-real").unwrap();
+        let sealed = sealer.seal("sk-real", b"for").unwrap();
         assert!(!sealed.contains("sk-real"));
-        assert_eq!(sealer.unseal(&sealed).unwrap(), "sk-real");
+        assert_eq!(sealer.unseal(&sealed, b"for").unwrap(), "sk-real");
+        // Opened only for what it was sealed to.
+        assert!(sealer.unseal(&sealed, b"else").is_err());
+        assert!(sealer.unseal(&sealed, b"").is_err());
         // Twice sealed, twice different.
-        assert_ne!(sealer.seal("sk-real").unwrap(), sealed);
+        assert_ne!(sealer.seal("sk-real", b"for").unwrap(), sealed);
 
         let again = Sealer::open(home.path(), Some(KeyHome::File)).unwrap();
-        assert_eq!(again.unseal(&sealed).unwrap(), "sk-real");
+        assert_eq!(again.unseal(&sealed, b"for").unwrap(), "sk-real");
         let mut changed = base64::engine::general_purpose::STANDARD
             .decode(&sealed)
             .unwrap();
         *changed.last_mut().unwrap() ^= 1;
         let changed = base64::engine::general_purpose::STANDARD.encode(changed);
-        assert!(again.unseal(&changed).is_err());
+        assert!(again.unseal(&changed, b"for").is_err());
 
         let other = tempfile::TempDir::new().unwrap();
         let stranger = Sealer::open(other.path(), None).unwrap();
-        assert!(stranger.unseal(&sealed).is_err());
+        assert!(stranger.unseal(&sealed, b"for").is_err());
         use std::os::unix::fs::PermissionsExt;
         let mode = std::fs::metadata(home.path().join(KEY_FILE))
             .unwrap()

@@ -181,6 +181,66 @@ fn kept_values_are_sealed_on_disk() {
     assert!(!file.contains("sk-old-2"), "{file}");
 }
 
+/// A sealed value opens only for the entry it was sealed for: moved to
+/// another entry, or with its entry's hosts changed, or marked as from
+/// before binding, it does not open, and no value goes anywhere.
+#[test]
+fn a_sealed_value_opens_only_for_what_it_was_kept_for() {
+    let home = TempDir::new().unwrap();
+    add_secret(
+        home.path(),
+        "API_KEY",
+        "sk-real-1",
+        &["api.example.com".into()],
+        None,
+    )
+    .unwrap();
+    add_secret(
+        home.path(),
+        "OTHER",
+        "plain-2",
+        &["evil.example".into()],
+        None,
+    )
+    .unwrap();
+    let path = home.path().join(kule_engine::SECRETS_FILE);
+    let file: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    let opens = |edit: &dyn Fn(&mut serde_json::Value)| {
+        let mut changed = file.clone();
+        edit(&mut changed);
+        fs::write(&path, changed.to_string()).unwrap();
+        let ws = TempDir::new().unwrap();
+        let task = Task::create(home.path(), ws.path());
+        task.and_then(|t| t.vault()).is_ok()
+    };
+    assert!(opens(&|_| {}));
+    let entry = |f: &mut serde_json::Value, name: &str| -> usize {
+        f["secrets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .position(|s| s["name"] == name)
+            .unwrap()
+    };
+    // The key's sealed value moved into the entry for the other host.
+    assert!(!opens(&|f| {
+        let (k, o) = (entry(f, "API_KEY"), entry(f, "OTHER"));
+        let sealed = f["secrets"][k]["sealed"].clone();
+        f["secrets"][o]["sealed"] = sealed;
+    }));
+    // The key's entry given another host.
+    assert!(!opens(&|f| {
+        let k = entry(f, "API_KEY");
+        f["secrets"][k]["hosts"] = serde_json::json!(["evil.example"]);
+    }));
+    // Passed off as sealed before values were bound.
+    assert!(!opens(&|f| {
+        let k = entry(f, "API_KEY");
+        f["secrets"][k]["bound"] = serde_json::json!(false);
+    }));
+}
+
 #[test]
 fn a_secret_typed_into_the_copy_is_masked_before_an_agent_starts() {
     let s = Setup::new();

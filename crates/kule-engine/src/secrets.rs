@@ -82,9 +82,22 @@ struct DiskSecret {
     info: SecretInfo,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     sealed: Option<String>,
+    /// The value is sealed to what the entry says it is for (see
+    /// [`bound`]); `false` only in a file from before that, bound at the
+    /// next read. A value sealed bound never opens unbound.
+    #[serde(default)]
+    bound: bool,
     /// Only in a file from before sealing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     value: Option<String>,
+}
+
+/// What a secret's value is sealed to: its name, the hosts it goes to and
+/// the folder it is for. A sealed value moved to another entry, or an
+/// entry given other hosts or another folder, does not open.
+fn bound(info: &SecretInfo) -> Result<Vec<u8>> {
+    serde_json::to_vec(&("kule-secret/1", &info.name, &info.hosts, &info.workspace))
+        .map_err(|e| Error::Invalid(format!("{}: {e}", info.name)))
 }
 
 fn read_disk(home: &Path) -> Result<OnDisk> {
@@ -109,18 +122,24 @@ fn read_store(home: &Path) -> Result<Store> {
     } else {
         None
     };
-    let mut plain = false;
+    // Written again, sealed and bound, when anything was not.
+    let mut rewrite = false;
     let secrets = disk
         .secrets
         .into_iter()
         .map(|s| {
             let value = match (s.sealed, s.value) {
-                (Some(sealed), _) => sealer
-                    .as_ref()
-                    .expect("opened for what is sealed")
-                    .unseal(&sealed)?,
+                (Some(sealed), _) => {
+                    let sealer = sealer.as_ref().expect("opened for what is sealed");
+                    if s.bound {
+                        sealer.unseal(&sealed, &bound(&s.info)?)?
+                    } else {
+                        rewrite = true;
+                        sealer.unseal(&sealed, b"")?
+                    }
+                }
                 (None, Some(value)) => {
-                    plain = true;
+                    rewrite = true;
                     value
                 }
                 (None, None) => {
@@ -137,7 +156,7 @@ fn read_store(home: &Path) -> Result<Store> {
         })
         .collect::<Result<Vec<_>>>()?;
     let store = Store { secrets };
-    if plain {
+    if rewrite {
         write_store(home, &store)?;
     }
     Ok(store)
@@ -154,8 +173,9 @@ fn write_store(home: &Path, store: &Store) -> Result<()> {
             .iter()
             .map(|s| {
                 Ok(DiskSecret {
+                    sealed: Some(sealer.seal(&s.value, &bound(&s.info)?)?),
+                    bound: true,
                     info: s.info.clone(),
-                    sealed: Some(sealer.seal(&s.value)?),
                     value: None,
                 })
             })
@@ -1318,5 +1338,31 @@ mod tests {
         assert_eq!(secrets(home.path()).unwrap().len(), 1);
         assert!(remove_secret(home.path(), "A_KEY", None).unwrap());
         assert!(secrets(home.path()).unwrap().is_empty());
+    }
+
+    /// A value sealed before values were bound to their entry opens, and is
+    /// sealed bound at that read.
+    #[test]
+    fn a_value_sealed_unbound_is_bound_at_the_next_read() {
+        let home = TempDir::new().unwrap();
+        let sealer = Sealer::open(home.path(), None).unwrap();
+        let disk = serde_json::json!({
+            "key": "file",
+            "secrets": [{
+                "name": "OLD_KEY",
+                "hosts": ["api.example.com"],
+                "added_unix": 1,
+                "sealed": sealer.seal("sk-old", b"").unwrap(),
+            }],
+        });
+        let path = home.path().join(SECRETS_FILE);
+        std::fs::write(&path, disk.to_string()).unwrap();
+        let store = read_store(home.path()).unwrap();
+        assert_eq!(store.secrets[0].value, "sk-old");
+        let now: OnDisk = read_json(&path).unwrap();
+        assert!(now.secrets[0].bound);
+        let sealed = now.secrets[0].sealed.as_deref().unwrap();
+        assert!(sealer.unseal(sealed, b"").is_err());
+        assert_eq!(read_store(home.path()).unwrap().secrets[0].value, "sk-old");
     }
 }
