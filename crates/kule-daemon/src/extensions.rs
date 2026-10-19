@@ -33,27 +33,31 @@ pub fn install_folder(home: &Path, dir: &Path) -> Result<Listed> {
         .map_err(|e| e.to_string())
 }
 
-/// What every agent may write besides the task's copy and `/tmp`: its
-/// state, logins and home of its own, under `person` (the person's home).
+/// What every agent may change besides the task's copy and `/tmp`: its
+/// state, logins and home of its own, under `person` (the person's home);
+/// and the folders tasks work on, which an agent's work reaches once a
+/// commit takes it there.
 pub fn agent_dirs(home: &Path, person: Option<&Path>) -> Result<Vec<std::path::PathBuf>> {
+    let mut dirs: Vec<std::path::PathBuf> = kule_engine::Task::list(home)
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .map(|t| t.workspace)
+        .collect();
     let Some(person) = person else {
-        return Ok(Vec::new());
+        return Ok(dirs);
     };
     let agents = kule_acp::Agents::load(home).map_err(|e| e.to_string())?;
-    Ok(agents
-        .listed()
-        .iter()
-        .flat_map(|l| {
-            let p = &l.profile;
-            p.state
-                .iter()
-                .chain(&p.login)
-                .cloned()
-                .chain(p.own_home.as_ref().map(|_| p.own_home_path()))
-                .map(|rel| person.join(rel))
-                .collect::<Vec<_>>()
-        })
-        .collect())
+    dirs.extend(agents.listed().iter().flat_map(|l| {
+        let p = &l.profile;
+        p.state
+            .iter()
+            .chain(&p.login)
+            .cloned()
+            .chain(p.own_home.as_ref().map(|_| p.own_home_path()))
+            .map(|rel| person.join(rel))
+            .collect::<Vec<_>>()
+    }));
+    Ok(dirs)
 }
 
 /// What an extension adds, checked as Kule checks its own.
@@ -243,5 +247,23 @@ mod tests {
         // An extension turned off offers nothing, approved or not.
         set_enabled(home.path(), "acme.tools", false).unwrap();
         assert!(mcp_for_runs(home.path(), None).is_empty());
+    }
+
+    /// A folder under development inside a folder a task works on: an
+    /// agent's work, once committed, would change what runs.
+    #[test]
+    fn an_extension_in_a_tasks_folder_is_refused() {
+        let home = TempDir::new().unwrap();
+        let ws = TempDir::new_in(concat!(env!("CARGO_MANIFEST_DIR"), "/../../target")).unwrap();
+        let src = ws.path().join("tools");
+        fs::create_dir(&src).unwrap();
+        fs::write(
+            src.join("kule-extension.json"),
+            r#"{ "kule_extension": 1, "id": "acme.tools", "name": "Tools", "version": "1.0.0", "publisher": "acme" }"#,
+        )
+        .unwrap();
+        kule_engine::Task::create(home.path(), ws.path()).unwrap();
+        let refused = install_folder(home.path(), &src).unwrap_err();
+        assert!(refused.contains("agents can write"), "{refused}");
     }
 }

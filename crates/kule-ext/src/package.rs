@@ -305,15 +305,8 @@ fn read_in(dir: &Path, path: &str) -> Result<Vec<u8>> {
             "{path:?} is not a plain path to a carried kind of file"
         )));
     }
-    let mut at = dir.to_path_buf();
-    for segment in path.split('/') {
-        at.push(segment);
-        let meta = fs::symlink_metadata(&at).at(&at)?;
-        if meta.file_type().is_symlink() {
-            return Err(invalid(format!("{} is a link", at.display())));
-        }
-    }
-    let file = fs::File::open(&at).at(&at)?;
+    let at = dir.join(path);
+    let file = open_without_links(dir, path).at(&at)?;
     if !file.metadata().at(&at)?.is_file() {
         return Err(invalid(format!("{} is not a file", at.display())));
     }
@@ -323,6 +316,42 @@ fn read_in(dir: &Path, path: &str) -> Result<Vec<u8>> {
         return Err(invalid(format!("{} is over 5 MiB", at.display())));
     }
     Ok(out)
+}
+
+/// Opens `path` under `dir` one step at a time, refusing a link at any
+/// step: a link swapped in between a look and the open leads nowhere.
+fn open_without_links(dir: &Path, path: &str) -> std::io::Result<fs::File> {
+    use std::ffi::CString;
+    use std::os::fd::{AsRawFd, FromRawFd};
+    use std::os::unix::ffi::OsStrExt;
+    let mut at = fs::File::open(dir)?;
+    let segments: Vec<&str> = path.split('/').collect();
+    for (i, segment) in segments.iter().enumerate() {
+        let last = i + 1 == segments.len();
+        let name = CString::new(std::ffi::OsStr::new(segment).as_bytes())?;
+        let flags = libc::O_RDONLY
+            | libc::O_NOFOLLOW
+            | libc::O_CLOEXEC
+            | if last {
+                libc::O_NONBLOCK
+            } else {
+                libc::O_DIRECTORY
+            };
+        // SAFETY: openat reads the name and returns a new descriptor or -1.
+        let fd = unsafe { libc::openat(at.as_raw_fd(), name.as_ptr(), flags) };
+        if fd == -1 {
+            let e = std::io::Error::last_os_error();
+            return Err(match e.raw_os_error() {
+                Some(libc::ELOOP | libc::ENOTDIR) => {
+                    std::io::Error::other(format!("{segment} is a link, or not a folder"))
+                }
+                _ => e,
+            });
+        }
+        // SAFETY: fd was just opened and is owned by nothing else.
+        at = unsafe { fs::File::from_raw_fd(fd) };
+    }
+    Ok(at)
 }
 
 /// Packs a folder into a `.kulext`. The same folder always gives the same
