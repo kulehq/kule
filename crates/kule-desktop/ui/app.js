@@ -5655,8 +5655,38 @@ async function importProfile() {
   profileView.picked = picked;
   const f = picked.file;
   profileView.importParts = new Set(PROFILE_PARTS.map(([p]) => p).filter((p) => f[p] !== undefined && f[p] !== null));
+  profileView.weaker = await weakerBy(f);
+  profileView.weakerAccepted = false;
   if (state.view !== "profile") await openProfile();
   else renderProfile();
+}
+
+/** What applying profile file `f` would make less strict than it is now,
+ * part by part: [part, what changes]. */
+async function weakerBy(f) {
+  const [policy, limits, daily] = await Promise.all([
+    call("policy").catch(() => null),
+    call("limits").catch(() => null),
+    call("daily_budget").catch(() => null),
+  ]);
+  const out = [];
+  if (f.policy === "balanced" && policy === "careful") out.push(["policy", "the policy goes from Careful to Balanced"]);
+  if (f.limits && limits) {
+    for (const field of LIMIT_FIELDS) {
+      const now = limits[field.key];
+      const then = f.limits[field.key];
+      if (now != null && (then == null || then > now)) {
+        out.push(["limits", `${field.label.toLowerCase()}: ${limitText(field, now)} → ${then == null ? "no limit" : limitText(field, then)}`]);
+      }
+    }
+    if (limits.gpu === false && f.limits.gpu === true) out.push(["limits", "the GPU becomes usable"]);
+  }
+  const was = daily && daily.budget;
+  const comes = f.budget && f.budget.daily;
+  if (was && (!comes || comes.currency !== was.currency || comes.amount > was.amount)) {
+    out.push(["budget", `the daily budget: ${was.amount} ${was.currency} → ${comes ? `${comes.amount} ${comes.currency}` : "none"}`]);
+  }
+  return out;
 }
 
 async function applyProfile() {
@@ -5664,6 +5694,12 @@ async function applyProfile() {
   const parts = PROFILE_PARTS.map(([p]) => p).filter((p) => profileView.importParts.has(p));
   if (!parts.length) {
     toast("Tick at least one part to apply");
+    return;
+  }
+  // Less strict than now only when the person said so.
+  const weaker = (profileView.weaker || []).filter(([part]) => parts.includes(part));
+  if (weaker.length && !profileView.weakerAccepted) {
+    toast("Tick that you want Kule less strict, or leave those parts out", "error");
     return;
   }
   try {
@@ -5718,6 +5754,26 @@ function renderProfile() {
             partBox("import", part, label, partSummary(part, { ...picked.file, agents: picked.file.agents && picked.file.agents.map((a) => a.name) }), profileView.importParts, false, null)
           )
         ),
+        (profileView.weaker || []).length
+          ? h(
+              "section",
+              { class: "isolation", "aria-label": "Less strict" },
+              h("h3", {}, "This profile makes Kule less strict"),
+              h("ul", {}, profileView.weaker.map(([, what]) => h("li", {}, what))),
+              h(
+                "label",
+                { class: "isolation-accept", for: "profile-weaker" },
+                h("input", {
+                  type: "checkbox",
+                  id: "profile-weaker",
+                  "data-key": "profile-weaker",
+                  checked: profileView.weakerAccepted,
+                  onchange: (e) => (profileView.weakerAccepted = e.currentTarget.checked),
+                }),
+                " I want these, as the profile says"
+              )
+            )
+          : null,
         h(
           "div",
           { class: "agent-actions" },
