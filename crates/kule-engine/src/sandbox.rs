@@ -104,6 +104,23 @@ pub const HIDDEN_IN_HOME: &[&str] = &[
     ".gemini/oauth_creds.json",
 ];
 
+/// macOS services that act for a caller outside its sandbox: opening apps
+/// and documents, Apple events, settings, the pasteboard, privacy grants,
+/// background items and the window server. A command never reaches them.
+#[cfg(target_os = "macos")]
+const OUTSIDE_SERVICES: &[&str] = &[
+    "com.apple.coreservices.launchservicesd",
+    "com.apple.CoreServices.coreservicesd",
+    "com.apple.coreservices.appleevents",
+    "com.apple.cfprefsd.daemon",
+    "com.apple.pasteboard.1",
+    "com.apple.tccd",
+    "com.apple.tccd.system",
+    "com.apple.backgroundtaskmanagementagent",
+    "com.apple.backgroundtaskmanagement.agent",
+    "com.apple.windowserver.active",
+];
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Network {
     Allow,
@@ -588,7 +605,7 @@ impl Sandbox {
              (deny file-write* {tag})\n\
              (allow file-write*\n  \
                (literal \"/dev/null\") (literal \"/dev/zero\") (literal \"/dev/dtracehelper\")\n  \
-               (regex #\"^/dev/tty\") (regex #\"^/dev/fd/\")",
+               (literal \"/dev/tty\") (regex #\"^/dev/fd/\")",
         );
         for (i, path) in self.writable().into_iter().enumerate() {
             text.push_str(&format!("\n  (subpath (param \"W{i}\"))"));
@@ -606,6 +623,27 @@ impl Sandbox {
         ));
         params.push(("C".to_owned(), self.copy.as_path()));
         params.push(("T".to_owned(), self.tmp.as_path()));
+        // Terminals: its own controlling one, and those it makes; never the
+        // person's other terminals, to read their keys or write into them.
+        text.push_str(&format!(
+            "(deny file-read* file-write* file-ioctl (regex #\"^/dev/ttys[0-9]+$\") {tag})\n\
+             (allow pseudo-tty)\n\
+             (allow file-read* file-write* file-ioctl (literal \"/dev/ptmx\"))\n\
+             (allow file-read* file-write* file-ioctl\n  \
+               (require-all (regex #\"^/dev/ttys[0-9]+$\") (extension \"com.apple.sandbox.pty\")))\n"
+        ));
+        // What the system's services would do for it outside the sandbox:
+        // open apps and documents, drive other apps, write other programs'
+        // settings, read or fill the pasteboard, ask for privacy grants,
+        // reach the window server.
+        text.push_str(&format!(
+            "(deny lsopen {tag})\n(deny appleevent-send {tag})\n(deny user-preference-write {tag})\n"
+        ));
+        for service in OUTSIDE_SERVICES {
+            text.push_str(&format!(
+                "(deny mach-lookup (global-name \"{service}\") {tag})\n"
+            ));
+        }
         match self.network {
             Network::Allow => {}
             Network::Deny => {
