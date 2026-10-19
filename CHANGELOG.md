@@ -146,6 +146,10 @@
   where it was given to be driven. An agent's profile names more under
   `devices`; disks, memory, keyboard and mouse, consoles and terminals are
   refused.
+- Releases come with a CycloneDX SBOM of the CLI and of the app, are built
+  with the toolchain `rust-toolchain.toml` names, and are signed in a job
+  of their own that waits for a maintainer's approval: the builds never
+  see the signing certificate.
 - Daemon protocol 28: `Isolation` and `SetIsolation`.
 
 ### Motion

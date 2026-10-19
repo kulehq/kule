@@ -1,0 +1,6 @@
+# The toolchain every build uses, here, in CI and for a release: a new
+# compiler comes in by a change to this file, reviewed like any other.
+[toolchain]
+channel = "1.99.1"
+profile = "minimal"
+components = ["clippy", "rustfmt"]

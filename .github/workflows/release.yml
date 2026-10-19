@@ -2,9 +2,15 @@ name: release
 
 # A tag vX.Y.Z builds the macOS app (universal) and the Linux .deb and .rpm,
 # each with the kule CLI inside, and opens a draft release with them, their
-# checksums and build provenance attestations. With the APPLE_* secrets set the
-# app is signed and notarized (and a Homebrew cask comes with it); without
-# them it is signed ad hoc, a preview the notes say how to open. Run by hand,
+# checksums, an SBOM of each and build provenance attestations.
+#
+# The builds see no secret: building runs code from every dependency (build
+# scripts, proc macros). Signing is a job of its own in the `release`
+# environment, which waits for a maintainer's approval and holds the APPLE_*
+# secrets; it runs Apple's tools on what the build made and nothing else.
+# With the secrets set the app is signed and notarized (and a Homebrew cask
+# comes with it); without them it stays signed ad hoc, a preview the notes
+# say how to open. Nothing is published before that approval. Run by hand,
 # it builds and publishes nothing.
 
 on:
@@ -17,6 +23,7 @@ permissions:
 
 env:
   TAURI_CLI_VERSION: 2.11.5
+  CYCLONEDX_VERSION: 0.5.9
   CARGO_TERM_COLOR: never
 
 jobs:
@@ -24,7 +31,7 @@ jobs:
     runs-on: macos-latest
     timeout-minutes: 90
     outputs:
-      signed: ${{ steps.build.outputs.signed }}
+      version: ${{ steps.version.outputs.version }}
     env:
       MACOSX_DEPLOYMENT_TARGET: "13.0"
     steps:
@@ -32,14 +39,20 @@ jobs:
         with:
           persist-credentials: false
       - name: The tag names the version being built
-        if: startsWith(github.ref, 'refs/tags/v')
+        id: version
         env:
           TAG: ${{ github.ref_name }}
-        run: grep -qx "version = \"${TAG#v}\"" Cargo.toml || { echo "Cargo.toml is not at ${TAG#v}"; exit 1; }
-      - name: Rust toolchain
+          IS_TAG: ${{ startsWith(github.ref, 'refs/tags/v') }}
         run: |
-          rustup toolchain install stable --profile minimal -t aarch64-apple-darwin,x86_64-apple-darwin
-          rustup default stable
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)
+          if [ "$IS_TAG" = "true" ] && [ "${TAG#v}" != "$version" ]; then
+            echo "Cargo.toml is not at ${TAG#v}"; exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Rust toolchain (rust-toolchain.toml), for both architectures
+        run: |
+          rustup toolchain install
+          rustup target add aarch64-apple-darwin x86_64-apple-darwin
       - name: Tauri CLI
         run: cargo install tauri-cli --version "$TAURI_CLI_VERSION" --locked
       - name: The kule CLI for both architectures, as one binary
@@ -52,33 +65,16 @@ jobs:
           mkdir -p "$bin"
           for t in aarch64-apple-darwin x86_64-apple-darwin; do cp "target/$t/release/kule" "$bin/kule-$t"; done
           lipo -create -output "$bin/kule-universal-apple-darwin" "$bin/kule-aarch64-apple-darwin" "$bin/kule-x86_64-apple-darwin"
-      - name: Build, and sign (notarized with a certificate, ad hoc without)
-        id: build
+      - name: Build, signed ad hoc (the `sign` job signs it for real)
         working-directory: crates/kule-desktop
         env:
-          CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          NOTARY_ID: ${{ secrets.APPLE_ID }}
-          NOTARY_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_SIGNING_IDENTITY: "-"
         run: |
-          if [ -n "$CERTIFICATE" ]; then
-            export APPLE_CERTIFICATE="$CERTIFICATE" APPLE_CERTIFICATE_PASSWORD="$CERTIFICATE_PASSWORD"
-            export APPLE_SIGNING_IDENTITY="$SIGNING_IDENTITY"
-            export APPLE_ID="$NOTARY_ID" APPLE_PASSWORD="$NOTARY_PASSWORD" APPLE_TEAM_ID="$TEAM_ID"
-            echo "signed=true" >> "$GITHUB_OUTPUT"
-          else
-            # Ad hoc: what Apple silicon needs to run it, with no identity
-            # behind it. Gatekeeper asks once; the release notes say how.
-            export APPLE_SIGNING_IDENTITY="-"
-            echo "signed=false" >> "$GITHUB_OUTPUT"
-          fi
           cargo tauri build --target universal-apple-darwin --bundles app,dmg \
             --config tauri.release.conf.json
       - name: Check what was built
         env:
-          SIGNED: ${{ steps.build.outputs.signed }}
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
           bundle=target/universal-apple-darwin/release/bundle
           app="$bundle/macos/Kule.app"
@@ -86,19 +82,13 @@ jobs:
           lipo -archs "$app/Contents/MacOS/kule-desktop" | grep -q arm64
           lipo -archs "$app/Contents/MacOS/kule-desktop" | grep -q x86_64
           codesign --verify --deep --strict --verbose=2 "$app"
-          if [ "$SIGNED" = "true" ]; then
-            spctl --assess --type execute --verbose=2 "$app"
-            xcrun stapler validate "$app"
-          else
-            codesign -dv "$app" 2>&1 | grep -q "Signature=adhoc"
-          fi
-          mkdir dist
-          cp "$bundle"/dmg/*.dmg dist/
-          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)
-          tar -C "$app/Contents/MacOS" -czf "dist/kule-$version-macos-universal.tar.gz" kule
+          codesign -dv "$app" 2>&1 | grep -q "Signature=adhoc"
+          mkdir -p dist/adhoc
+          cp "$bundle"/dmg/*.dmg dist/adhoc/
+          ditto -c -k --keepParent "$app" dist/Kule.app.zip
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: macos
+          name: macos-build
           path: dist/
           if-no-files-found: error
 
@@ -110,10 +100,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Rust toolchain
-        run: |
-          rustup toolchain install stable --profile minimal
-          rustup default stable
+      - name: Rust toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
       - name: Desktop app dependencies (WebKitGTK)
         run: |
           sudo apt-get update
@@ -148,9 +136,119 @@ jobs:
           path: dist/
           if-no-files-found: error
 
+  # What the CLI and the app are made of, every platform's crates included,
+  # as CycloneDX: read from Cargo.lock, nothing built.
+  sbom:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Rust toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+      - name: cargo-cyclonedx, at a pinned version
+        run: cargo install --locked cargo-cyclonedx --version "$CYCLONEDX_VERSION"
+      - name: An SBOM for the CLI and one for the app
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)
+          mkdir dist
+          for crate in kule-cli kule-desktop; do
+            cargo cyclonedx --manifest-path "crates/$crate/Cargo.toml" --format json \
+              --spec-version 1.5 --target all --override-filename sbom -q
+            test -s "crates/$crate/sbom.json"
+          done
+          mv crates/kule-cli/sbom.json "dist/kule-$version.cdx.json"
+          mv crates/kule-desktop/sbom.json "dist/kule-desktop-$version.cdx.json"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sbom
+          path: dist/
+          if-no-files-found: error
+
+  # Signs and notarizes what `macos` built, in the `release` environment:
+  # it waits for a maintainer's approval, and only it sees the APPLE_*
+  # secrets. It checks out nothing and builds nothing.
+  sign:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: macos
+    runs-on: macos-latest
+    timeout-minutes: 60
+    environment: release
+    outputs:
+      signed: ${{ steps.sign.outputs.signed }}
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: macos-build
+          path: build
+      - name: Sign, notarize and staple (ad hoc as built without a certificate)
+        id: sign
+        env:
+          VERSION: ${{ needs.macos.outputs.version }}
+          CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          NOTARY_ID: ${{ secrets.APPLE_ID }}
+          NOTARY_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -eu
+          mkdir dist
+          dmg="dist/Kule_${VERSION}_universal.dmg"
+          ditto -x -k build/Kule.app.zip work
+          app=work/Kule.app
+          if [ -z "$CERTIFICATE" ]; then
+            cp build/adhoc/*.dmg "$dmg"
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+          else
+            keychain="$RUNNER_TEMP/sign.keychain-db"
+            keychain_password=$(openssl rand -hex 24)
+            security create-keychain -p "$keychain_password" "$keychain"
+            security set-keychain-settings -lut 3600 "$keychain"
+            security unlock-keychain -p "$keychain_password" "$keychain"
+            printf '%s' "$CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
+            security import "$RUNNER_TEMP/certificate.p12" -k "$keychain" \
+              -P "$CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+            rm -f "$RUNNER_TEMP/certificate.p12"
+            security set-key-partition-list -S apple-tool:,apple: -s -k "$keychain_password" "$keychain"
+            security list-keychains -d user -s "$keychain"
+            sign() {
+              codesign --force --timestamp --options runtime --keychain "$keychain" \
+                --sign "$SIGNING_IDENTITY" "$@"
+            }
+            # Inside out: the CLI, then the app (which signs its main binary).
+            sign "$app/Contents/MacOS/kule"
+            sign "$app"
+            codesign --verify --deep --strict --verbose=2 "$app"
+            # The disk image: the app and a way to Applications.
+            mkdir stage
+            ditto "$app" stage/Kule.app
+            ln -s /Applications stage/Applications
+            hdiutil create -volname Kule -srcfolder stage -format UDZO -ov "$dmg"
+            sign "$dmg"
+            xcrun notarytool submit "$dmg" --apple-id "$NOTARY_ID" \
+              --password "$NOTARY_PASSWORD" --team-id "$TEAM_ID" --wait
+            xcrun stapler staple "$dmg"
+            spctl --assess --type open --context context:primary-signature --verbose=2 "$dmg"
+            # The app here is the image's, byte for byte: notarized with it,
+            # and so is the CLI below.
+            spctl --assess --type execute --verbose=2 "$app"
+            echo "signed=true" >> "$GITHUB_OUTPUT"
+          fi
+          tar -C "$app/Contents/MacOS" -czf "dist/kule-$VERSION-macos-universal.tar.gz" kule
+      - name: Forget the signing keychain
+        if: always()
+        run: security delete-keychain "$RUNNER_TEMP/sign.keychain-db" 2>/dev/null || true
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: macos
+          path: dist/
+          if-no-files-found: error
+
   publish:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [macos, linux]
+    needs: [sign, linux, sbom]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     # Only this job may mint an OIDC token (for the attestations): it builds
@@ -165,16 +263,19 @@ jobs:
           persist-credentials: false
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
+          pattern: "{macos,linux,sbom}"
           path: dist
           merge-multiple: true
       - name: Checksums, the Homebrew cask and the notes
         env:
           TAG: ${{ github.ref_name }}
-          SIGNED: ${{ needs.macos.outputs.signed }}
+          SIGNED: ${{ needs.sign.outputs.signed }}
         run: |
           version="${TAG#v}"
           dmg="dist/Kule_${version}_universal.dmg"
           test -f "$dmg"
+          test -s "dist/kule-$version.cdx.json"
+          test -s "dist/kule-desktop-$version.cdx.json"
           # The cask only for a notarized app: Homebrew installs it without
           # asking, which an app Gatekeeper refuses should not be.
           if [ "$SIGNED" = "true" ]; then
