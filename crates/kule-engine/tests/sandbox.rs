@@ -1937,3 +1937,36 @@ fn the_command_ends_as_it_ended_and_gets_its_signals() {
         "the signal did not reach the command"
     );
 }
+
+/// A process of the person's own under another tool's sandbox, one that
+/// allows everything (the task's mark included), is no stray of the task's:
+/// ending the task's strays leaves it, and still ends a stray of its own.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_process_in_a_sandbox_that_allows_everything_is_not_a_stray() {
+    let s = Setup::new();
+    let mut other = Command::new("/usr/bin/sandbox-exec")
+        .args(["-p", "(version 1)(allow default)", "sleep", "30"])
+        .current_dir(s.task.copy())
+        .spawn()
+        .unwrap();
+    let mut ours = s
+        .sandbox()
+        .command("sleep", &["30".to_owned()])
+        .unwrap()
+        .spawn()
+        .unwrap();
+    // Each is in its sandbox once sandbox-exec has run sleep.
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    let ended = s.sandbox().end_strays();
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    let other_alive = other.try_wait().unwrap().is_none();
+    let ours_alive = ours.try_wait().unwrap().is_none();
+    for child in [&mut other, &mut ours] {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+    assert!(ended.is_ok(), "{ended:?}");
+    assert!(other_alive, "another tool's sandboxed process was ended");
+    assert!(!ours_alive, "the task's own process was left running");
+}

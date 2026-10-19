@@ -829,7 +829,10 @@ impl Sandbox {
     }
 
     /// macOS knows which processes a task's sandboxes hold: those whose
-    /// sandbox lets them look up the task's mark, which only its own do.
+    /// sandbox lets them look up the task's mark, which only its own do,
+    /// and refuses them a name beside it that only Kule's profile refuses.
+    /// A sandbox that allows everything (another tool's) allows the mark
+    /// too, but not that refusal.
     #[cfg(target_os = "macos")]
     fn strays(&self) -> Vec<i32> {
         unsafe extern "C" {
@@ -843,7 +846,10 @@ impl Sandbox {
         const FILTER_NONE: libc::c_int = 0;
         const FILTER_GLOBAL_NAME: libc::c_int = 2;
         const NO_REPORT: libc::c_int = 0x4000_0000;
-        let Ok(mark) = std::ffi::CString::new(task_mark(&self.task)) else {
+        let (Ok(mark), Ok(decoy)) = (
+            std::ffi::CString::new(task_mark(&self.task)),
+            std::ffi::CString::new(format!("{}.decoy", task_mark(&self.task))),
+        ) else {
             return Vec::new();
         };
         let me = std::process::id() as i32;
@@ -851,16 +857,21 @@ impl Sandbox {
             .into_iter()
             .filter(|&pid| pid > 1 && pid != me)
             .filter(|&pid| {
-                // SAFETY: sandbox_check only reads its arguments.
-                unsafe {
-                    sandbox_check(pid, std::ptr::null(), FILTER_NONE | NO_REPORT) == 1
-                        && sandbox_check(
+                let lookup = |name: &std::ffi::CStr| {
+                    // SAFETY: sandbox_check only reads its arguments.
+                    unsafe {
+                        sandbox_check(
                             pid,
                             c"mach-lookup".as_ptr(),
                             FILTER_GLOBAL_NAME | NO_REPORT,
-                            mark.as_ptr(),
-                        ) == 0
-                }
+                            name.as_ptr(),
+                        )
+                    }
+                };
+                // SAFETY: as above.
+                let sandboxed =
+                    unsafe { sandbox_check(pid, std::ptr::null(), FILTER_NONE | NO_REPORT) == 1 };
+                sandboxed && lookup(&mark) == 0 && lookup(&decoy) == 1
             })
             .collect()
     }
