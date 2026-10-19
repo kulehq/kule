@@ -940,3 +940,26 @@ fn commit_and_undo_refuse_when_the_workspace_is_gone() {
     assert!(s.copy().join("new.txt").exists());
     fs::rename(&moved, s.work()).unwrap();
 }
+
+/// A task opens only by an id Kule could have made, and only where its
+/// folder holds that task: a folder named otherwise, or holding another
+/// task's file, is no task.
+#[test]
+fn a_task_opens_only_by_the_id_it_was_made_with() {
+    let home = TempDir::new().unwrap();
+    let ws = TempDir::new().unwrap();
+    let task = Task::create(home.path(), ws.path()).unwrap();
+    assert!(Task::open(home.path(), task.id()).is_ok());
+    let tasks = home.path().join("tasks");
+    let file = tasks.join(task.id()).join("task.json");
+    for id in ["x\")(allow default", "..", "a.b", "a-b"] {
+        let dir = tasks.join(id);
+        fs::create_dir_all(&dir).unwrap();
+        fs::copy(&file, dir.join("task.json")).unwrap();
+        assert!(Task::open(home.path(), id).is_err(), "{id}");
+    }
+    let other = tasks.join("abc123");
+    fs::create_dir_all(&other).unwrap();
+    fs::copy(&file, other.join("task.json")).unwrap();
+    assert!(Task::open(home.path(), "abc123").is_err());
+}

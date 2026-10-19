@@ -373,12 +373,19 @@ impl Task {
     }
 
     pub fn open(home: &Path, id: &str) -> Result<Task> {
+        // A task's id is what Kule made it, letters and digits: it names
+        // the task's folder and goes into its sandbox's profile.
+        let made =
+            !id.is_empty() && id.len() <= 64 && id.bytes().all(|b| b.is_ascii_alphanumeric());
         let dir = home.join("tasks").join(id);
-        if id.is_empty() || id.contains('/') || !dir.join("task.json").is_file() {
+        if !made || !dir.join("task.json").is_file() {
             // Without the home's path: the message reaches extensions too.
             return Err(Error::Invalid(format!("no task {id}")));
         }
-        let info = read_json(&dir.join("task.json"))?;
+        let info: TaskInfo = read_json(&dir.join("task.json"))?;
+        if info.id != id {
+            return Err(Error::Invalid(format!("task {id} says it is another")));
+        }
         Ok(Task { info, dir })
     }
 
