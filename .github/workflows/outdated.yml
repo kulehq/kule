@@ -1,0 +1,51 @@
+name: outdated
+
+# Versions pinned outside Cargo.lock that Dependabot does not follow: the
+# agents' packages in agents.toml, the Tauri CLI the release builds with,
+# and the vendored xterm. Once a week; a newer version fails the run, so
+# the pin gets looked at. Nothing is changed here.
+
+on:
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # Advisories published since the last push.
+  advisories:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: cargo install --locked cargo-deny --version 0.20.2
+      - run: cargo deny --locked check advisories
+
+  pins:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Compare each pin with its registry
+        run: |
+          set -u
+          stale=0
+          check() { # name pinned latest
+            if [ -z "$3" ]; then echo "?  $1: no answer from the registry"; stale=1
+            elif [ "$2" != "$3" ]; then echo "↑  $1: $2 pinned, $3 out"; stale=1
+            else echo "=  $1 $2"; fi
+          }
+          # npm packages pinned as name@x.y.z in agents.toml.
+          for spec in $(grep -oE '"@?[a-z0-9._/-]+@[0-9]+\.[0-9]+\.[0-9]+[^"]*"' crates/kule-acp/src/agents.toml | tr -d '"'); do
+            name=${spec%@*}; pinned=${spec##*@}
+            check "$name" "$pinned" "$(npm view "$name" version 2>/dev/null)"
+          done
+          pinned=$(sed -n 's/^  TAURI_CLI_VERSION: //p' .github/workflows/release.yml)
+          check tauri-cli "$pinned" "$(curl -fsS https://crates.io/api/v1/crates/tauri-cli -H 'User-Agent: kule-outdated' | jq -r .crate.max_stable_version)"
+          pinned=$(grep -oE '`@xterm/xterm` [0-9.]+' crates/kule-desktop/ui/vendor/xterm/README.md | head -1 | awk '{print $2}')
+          check xterm "$pinned" "$(npm view @xterm/xterm version 2>/dev/null)"
+          exit $stale

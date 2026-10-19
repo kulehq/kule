@@ -1,0 +1,57 @@
+# cargo deny: what Kule depends on, checked in CI (see .github/workflows/ci.yml).
+# Advisories fail the build; each exception below says why it is one.
+
+[graph]
+all-features = true
+
+[advisories]
+# Unmaintained crates Kule does not use itself, but its desktop stack does on
+# Linux: none has a known vulnerability. Revisit when Tauri moves on.
+ignore = [
+  # proc-macro-error: glib's macros (GTK 3, through Tauri on Linux).
+  { id = "RUSTSEC-2024-0370", reason = "build-time macro of glib 0.18, pulled in by Tauri's GTK 3 stack" },
+  # zbus_names, zvariant, zvariant_derive: notify-rust's D-Bus on Linux.
+  { id = "RUSTSEC-2026-0370", reason = "zbus_names, through tauri-plugin-notification's notify-rust on Linux" },
+  { id = "RUSTSEC-2026-0371", reason = "zvariant, through tauri-plugin-notification's notify-rust on Linux" },
+  { id = "RUSTSEC-2026-0372", reason = "zvariant_derive, through tauri-plugin-notification's notify-rust on Linux" },
+]
+
+[licenses]
+# Permissive licences, and MPL-2.0 (file-level copyleft), all of which
+# Kule's Apache-2.0 can ship with.
+allow = [
+  "0BSD",
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-1-Clause",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "CC0-1.0",
+  "CDLA-Permissive-2.0",
+  "ISC",
+  "MIT",
+  "MIT-0",
+  "MPL-2.0",
+  "Unicode-3.0",
+  "Unlicense",
+  "Zlib",
+]
+confidence-threshold = 0.9
+
+# Lonca's object store: Apache-2.0 as the whole Lonca repository is (its
+# LICENSE), though this crate's manifest does not say so yet.
+[[licenses.clarify]]
+crate = "lonca-core"
+expression = "Apache-2.0"
+license-files = []
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[sources]
+# crates.io, and Lonca's network crate pinned to a commit.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-git = ["https://github.com/selcukgural/lonca"]
