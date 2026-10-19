@@ -1315,7 +1315,11 @@ impl Sandbox {
             ));
         }
         match self.network {
-            Network::Allow => {}
+            // Names resolve through mDNSResponder's socket, which the rule
+            // for the person's daemons above would take away with the rest.
+            Network::Allow => text.push_str(
+                "(allow network-outbound (remote unix-socket (literal \"/private/var/run/mDNSResponder\")))\n",
+            ),
             Network::Deny => {
                 text.push_str(&format!(
                     "(deny network-outbound (remote ip) {tag})\n(deny network-bind (local ip) {tag})\n"

@@ -145,6 +145,11 @@
   where it was given to be driven. An agent's profile names more under
   `devices`; disks, memory, keyboard and mouse, consoles and terminals are
   refused.
+- A command `kule exec` runs sees nothing any agent holds: its state
+  (what you said to it, in every project) and its home of its own, not
+  only its login.
+- macOS: with the network open (`--open-network`), commands resolve host
+  names again.
 - The proxy judges every address a host resolves to with Kule's own check
   before it connects, and the address a tunnel reached before a byte goes
   through: this computer, its network and the reserved ranges stay out of

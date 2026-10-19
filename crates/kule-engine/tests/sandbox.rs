@@ -2134,3 +2134,29 @@ fn devices_that_reach_what_is_the_persons_are_never_given() {
         assert!(refused.is_err(), "{path} was given");
     }
 }
+
+/// With the network open a command resolves names, through the system's
+/// resolver socket; with it shut or behind the proxy (which resolves names
+/// itself) that socket stays out of reach, as every daemon's does.
+#[cfg(target_os = "macos")]
+#[test]
+fn names_resolve_only_with_the_network_open() {
+    let s = Setup::new();
+    let script = "import socket\n\
+                  s = socket.socket(socket.AF_UNIX)\n\
+                  try:\n\
+                  \x20   s.connect('/private/var/run/mDNSResponder')\n\
+                  \x20   print('resolver')\n\
+                  except OSError:\n\
+                  \x20   print('none')\n";
+    for (network, expected) in [
+        (Network::Allow, "resolver"),
+        (Network::Proxy(9), "none"),
+        (Network::Deny, "none"),
+    ] {
+        let mut sandbox = s.sandbox();
+        sandbox.set_network(network);
+        let out = sandbox_python(&sandbox, script);
+        assert_eq!(text(&out), expected, "{network:?}: {out:?}");
+    }
+}

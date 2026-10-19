@@ -553,7 +553,7 @@ fn run() -> Result<ExitCode> {
                 let mut sandbox = Sandbox::for_task(&task)?;
                 if let Some(person) = std::env::var_os("HOME") {
                     let person = Path::new(&person);
-                    kule_acp::Agents::load(&home)?.hide_logins(&mut sandbox, person)?;
+                    kule_acp::Agents::load(&home)?.hide_agents(&mut sandbox, person)?;
                     // What the command writes in the home is caught for
                     // review (`kule home`), not refused.
                     let layer = task.prepare_home(person, &[], sandbox.hidden(), &[])?;

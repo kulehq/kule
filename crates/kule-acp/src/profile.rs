@@ -626,13 +626,15 @@ impl Agents {
             .collect()
     }
 
-    /// Hides every agent's login in `sandbox`, for a command that is none of
-    /// them; `home` is the person's home directory.
-    pub fn hide_logins(&self, sandbox: &mut Sandbox, home: &Path) -> Result<()> {
+    /// Hides what every agent holds in `sandbox`, for a command that is
+    /// none of them: its login, its state (what the person said to it, in
+    /// every project) and its home of its own; `home` is the person's home
+    /// directory.
+    pub fn hide_agents(&self, sandbox: &mut Sandbox, home: &Path) -> Result<()> {
         sandbox.hide(&home.join(OWN_HOMES))?;
         for listed in &self.listed {
-            for login in &listed.profile.login {
-                sandbox.hide(&home.join(login))?;
+            for held in listed.profile.holds() {
+                sandbox.hide(&home.join(held))?;
             }
         }
         Ok(())
@@ -1717,14 +1719,23 @@ hosts = ["openrouter.ai"]
             }),
         )
         .unwrap();
-        agents.hide_logins(&mut sandbox, &person).unwrap();
-        let login = person.join(".local/share/opencode/auth.json");
-        let cat = sandbox
-            .command("cat", &[login.display().to_string()])
-            .unwrap()
-            .output()
-            .unwrap();
-        assert!(!cat.status.success());
+        agents.hide_agents(&mut sandbox, &person).unwrap();
+        // Neither an agent's login nor its state: what the person said to
+        // it, in every project.
+        std::fs::write(person.join(".claude/history.jsonl"), "a prompt\n").unwrap();
+        std::fs::write(person.join(".claude.json"), "{}\n").unwrap();
+        for held in [
+            ".local/share/opencode/auth.json",
+            ".claude/history.jsonl",
+            ".claude.json",
+        ] {
+            let cat = sandbox
+                .command("cat", &[person.join(held).display().to_string()])
+                .unwrap()
+                .output()
+                .unwrap();
+            assert!(!cat.status.success(), "{held} was read");
+        }
     }
 
     /// The checks a person's profile must pass, each with the profile line
@@ -2351,7 +2362,7 @@ own_home = "TOOL_HOME"
         let path = format!("{}/login", tool.own_home_path());
         assert!(!reads(&task, &person, claude, &path));
         let mut sandbox = Sandbox::for_task_with(&task, sources()).unwrap();
-        agents.hide_logins(&mut sandbox, &person).unwrap();
+        agents.hide_agents(&mut sandbox, &person).unwrap();
         let cat = sandbox
             .command("cat", &[own.join("login").display().to_string()])
             .unwrap()
