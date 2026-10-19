@@ -46,6 +46,7 @@ pub fn isolation_gaps(network: Network) -> Vec<String> {
             crate::namespace::available(),
             crate::namespace::mounts_available(),
             crate::sandbox::landlock_abi(),
+            crate::bind_filter::available(),
         )
     }
     #[cfg(not(target_os = "linux"))]
@@ -56,10 +57,26 @@ pub fn isolation_gaps(network: Network) -> Vec<String> {
 }
 
 /// [`isolation_gaps`] from what the system offers: a network namespace,
-/// a mount namespace, and Landlock's ABI.
+/// a mount namespace, Landlock's ABI, and Kule doing a command's binds
+/// (`bind_filter`).
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
-pub(crate) fn gaps(network: Network, own_network: bool, own_mounts: bool, abi: i64) -> Vec<String> {
+pub(crate) fn gaps(
+    network: Network,
+    own_network: bool,
+    own_mounts: bool,
+    abi: i64,
+    bind_filter: bool,
+) -> Vec<String> {
     let mut gaps = Vec::new();
+    // On the person's network (asked for, or for want of one of its own),
+    // its servers are held to loopback by Kule doing their binds.
+    let shared = network == Network::Allow || !own_network;
+    if shared && !bind_filter {
+        gaps.push(
+            "its servers held to this computer: one it starts could listen on your network"
+                .to_owned(),
+        );
+    }
     if network != Network::Allow && !own_network {
         gaps.push(
             "a network of its own: only the proxy's port is checked, on any address, and datagrams pass"
@@ -77,6 +94,9 @@ pub(crate) fn gaps(network: Network, own_network: bool, own_mounts: bool, abi: i
             "agents' settings kept read-only while it runs: they are put back after it instead"
                 .to_owned(),
         );
+        gaps.push(
+            "a /tmp of its own: it shares /tmp with your other programs and tasks".to_owned(),
+        );
     }
     gaps
 }
@@ -88,12 +108,16 @@ mod tests {
     #[test]
     fn every_missing_piece_is_a_gap_and_nothing_else_is() {
         let proxy = Network::Proxy(1);
-        assert!(gaps(proxy, true, true, 9).is_empty());
-        assert!(gaps(proxy, true, true, 6).is_empty());
-        assert!(gaps(Network::Allow, false, true, 9).is_empty());
-        assert_eq!(gaps(proxy, false, true, 9).len(), 1);
-        assert_eq!(gaps(proxy, false, false, 6).len(), 3);
-        assert_eq!(gaps(proxy, false, false, 9).len(), 2);
+        assert!(gaps(proxy, true, true, 9, true).is_empty());
+        assert!(gaps(proxy, true, true, 6, true).is_empty());
+        assert!(gaps(Network::Allow, false, true, 9, true).is_empty());
+        assert_eq!(gaps(proxy, false, true, 9, true).len(), 1);
+        assert_eq!(gaps(proxy, false, false, 6, true).len(), 4);
+        assert_eq!(gaps(proxy, false, false, 9, true).len(), 3);
+        // Servers on the person's network, with nobody doing their binds.
+        assert!(gaps(proxy, true, true, 9, false).is_empty());
+        assert_eq!(gaps(Network::Allow, true, true, 9, false).len(), 1);
+        assert_eq!(gaps(proxy, false, true, 9, false).len(), 2);
     }
 
     #[test]
