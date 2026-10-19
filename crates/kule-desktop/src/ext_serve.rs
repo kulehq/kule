@@ -386,6 +386,11 @@ mod tests {
             "default-src 'self'; frame-src http://127.0.0.1:4000"
         );
         assert_eq!(frame_policy(csp, None), csp, "no server, no frames");
+        // Nor plugins, a base URL that moves where relative links go, or a
+        // form that posts anywhere.
+        for directive in ["object-src 'none'", "base-uri 'none'", "form-action 'none'"] {
+            assert!(config.contains(directive), "{directive}");
+        }
     }
 
     /// A byte now and then does not hold a connection past its time.

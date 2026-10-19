@@ -190,6 +190,11 @@ fn the_agent_runs_inside_the_sandbox() {
         [(format!("write {}", evil.display()).as_str(), true, vec![])]
     );
     assert!(!evil.exists());
+    // What the agent printed is its owner's alone to read.
+    use std::os::unix::fs::PermissionsExt;
+    let log = s.task.copy().with_file_name("agent.log");
+    let mode = std::fs::metadata(&log).unwrap().permissions().mode();
+    assert_eq!(mode & 0o077, 0, "{mode:o}");
 }
 
 #[test]
