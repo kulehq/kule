@@ -277,6 +277,31 @@ fn mcp_servers_may_not_set_the_loader_or_the_proxy() {
         zip_of(&[("kule-extension.json", m.as_bytes())]),
         "npx or uvx",
     );
+    // One release of a registry package, never a range, a tag, an alias, a
+    // URL or a repository.
+    for (command, package, ok) in [
+        ("npx", "@acme/db@1.2.3", true),
+        ("uvx", "acme-db==1.2.3", true),
+        ("uvx", "acme-db@1.2.3", true),
+        ("npx", "@acme/db@latest", false),
+        ("npx", "@acme/db@^1.2.0", false),
+        ("npx", "db@npm:other@1.2.3", false),
+        ("npx", "git+ssh://git@github.com/acme/db.git", false),
+        ("npx", "https://evil.example/db-1.2.3.tgz", false),
+        ("uvx", "acme-db", false),
+        ("uvx", "acme-db>=1.2", false),
+        ("uvx", "git+https://github.com/acme/db@1.2.3", false),
+    ] {
+        let m = manifest(json!({ "contributes": {
+            "mcpServers": [{ "name": "db", "command": command, "args": ["-y", package] }]
+        }, "main": null }));
+        let all = [("kule-extension.json", m.as_bytes())];
+        assert_eq!(
+            Package::open(zip_of(&all)).is_ok(),
+            ok,
+            "{command} {package}"
+        );
+    }
 }
 
 #[test]

@@ -493,6 +493,24 @@ impl McpServer {
         for a in &self.args {
             words("MCP server argument", a, 200)?;
         }
+        // One release of a registry package, which Kule may install outside
+        // the sandbox: never a range, a tag, an alias, a URL or a repository.
+        let package = self.args.iter().find(|a| !a.starts_with('-'));
+        let pinned = package.is_some_and(|p| match self.command.as_str() {
+            "npx" => p
+                .rsplit_once('@')
+                .is_some_and(|(name, version)| npm_name(name) && exact(version)),
+            _ => p
+                .split_once("==")
+                .or_else(|| p.split_once('@'))
+                .is_some_and(|(name, version)| python_name(name) && exact(version)),
+        });
+        if !pinned {
+            return Err(invalid(format!(
+                "MCP server {} must name one exact version of its package, like name@1.2.3 (npx) or name==1.2.3 (uvx)",
+                self.name
+            )));
+        }
         if self.env.len() > 16 {
             return Err(invalid(format!(
                 "MCP server {} sets over 16 variables",
@@ -525,6 +543,48 @@ impl McpServer {
         }
         Ok(())
     }
+}
+
+/// `1.2.3`, with an optional pre-release or build: one release.
+fn exact(version: &str) -> bool {
+    let (core, rest) = match version.find(['-', '+']) {
+        Some(at) => version.split_at(at),
+        None => (version, ""),
+    };
+    let numbers: Vec<&str> = core.split('.').collect();
+    numbers.len() == 3
+        && numbers
+            .iter()
+            .all(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+        && rest
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"-+.".contains(&b))
+}
+
+/// An npm package's name: `name` or `@scope/name`, lower case.
+fn npm_name(name: &str) -> bool {
+    let part = |p: &str| {
+        !p.is_empty()
+            && !p.starts_with('.')
+            && !p.starts_with('_')
+            && p.bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b"-._~".contains(&b))
+    };
+    match name.strip_prefix('@') {
+        Some(scoped) => scoped
+            .split_once('/')
+            .is_some_and(|(scope, rest)| part(scope) && part(rest)),
+        None => part(name),
+    }
+}
+
+/// A Python package's name, as PyPI has them.
+fn python_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.starts_with(|c: char| c.is_ascii_alphanumeric())
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"-._".contains(&b))
 }
 
 fn file(what: &str, path: &str, endings: &[&str]) -> Result<()> {

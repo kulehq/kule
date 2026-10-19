@@ -39,10 +39,30 @@ pub fn npx_package(command: &[String]) -> Option<(String, String, Vec<String>)> 
     }
     let spec = &args[at];
     let (name, version) = spec.rsplit_once('@').filter(|(n, _)| !n.is_empty())?;
-    if version.is_empty() {
+    // One release of a registry package: what npm installs outside the
+    // sandbox is never a range, a tag, an alias, a URL or a repository.
+    if !package_name(name) || !crate::profile::exact_version(version) {
         return None;
     }
     Some((spec.clone(), name.to_owned(), args[at + 1..].to_vec()))
+}
+
+/// An npm package's name as the registry has them: `name` or
+/// `@scope/name`, lower case.
+fn package_name(name: &str) -> bool {
+    let part = |p: &str| {
+        !p.is_empty()
+            && !p.starts_with('.')
+            && !p.starts_with('_')
+            && p.bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b"-._~".contains(&b))
+    };
+    match name.strip_prefix('@') {
+        Some(scoped) => scoped
+            .split_once('/')
+            .is_some_and(|(scope, rest)| part(scope) && part(rest)),
+        None => part(name),
+    }
 }
 
 /// Whether `spec` is installed whole under `packages`.
@@ -275,5 +295,23 @@ mod tests {
         assert_eq!(npx_package(&words("bunx tool@1.0.0")), None);
         assert_eq!(npx_package(&words("gemini --acp")), None);
         assert_eq!(npx_package(&words("npx -y @scope/tool")), None);
+        // Installed outside the sandbox only as one release of a registry
+        // package: never a range, a tag, an alias, a URL or a repository.
+        for spec in [
+            "tool@latest",
+            "tool@^1.0.0",
+            "tool@1",
+            "tool@npm:other@1.0.0",
+            "git+ssh://git@github.com/x/y.git",
+            "https://example.com/x@1.0.0",
+            "Tool@1.0.0",
+        ] {
+            assert_eq!(
+                npx_package(&words(&format!("npx -y {spec}"))),
+                None,
+                "{spec}"
+            );
+        }
+        assert!(npx_package(&words("npx -y tool@1.0.0-beta.2")).is_some());
     }
 }
