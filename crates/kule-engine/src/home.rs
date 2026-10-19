@@ -28,6 +28,7 @@ use crate::effects::Change;
 use crate::error::{Error, IoContext, Result};
 use crate::fsops::{self, read_json, write_json};
 use crate::manifest::{Entry, Kind, Stamp, scan};
+use crate::secrets::{self, TaskSecrets};
 use crate::task::Task;
 use crate::textdiff::{self, TextDiff};
 
@@ -95,6 +96,14 @@ fn startup(rel: &str) -> bool {
         Some(dir) => rel.starts_with(s) || rel == dir,
         None => rel == *s,
     })
+}
+
+/// Whether the layer's file at `rel` is one whose settings that look like
+/// secrets Kule masks, as in the copy's `.env` files: what shells and tools
+/// read as they start (`export GITHUB_TOKEN=…` in `.zshrc`) and env files
+/// (`~/.env`), where people keep tokens.
+fn masks_home(rel: &str) -> bool {
+    startup(rel) || secrets::is_env_file(rel)
 }
 
 /// What the layer started from.
@@ -379,6 +388,7 @@ impl Task {
                 }
             }
         }
+        self.mask_layer(&mut layer, None)?;
         // A write within the same tick of the clock as the clone would
         // leave the stamp as it was.
         let latest = layer
@@ -583,6 +593,7 @@ impl Task {
                         let mode = file.metadata().at(&from)?.permissions();
                         let mut bytes = Vec::new();
                         std::io::Read::read_to_end(&mut file, &mut bytes).at(&from)?;
+                        let bytes = self.unmasked(&layer.real, &c.path, bytes)?;
                         put(&to, &bytes, mode)?;
                     }
                 },
@@ -622,6 +633,69 @@ impl Task {
 
     /// Throws the changes at `paths` away: the layer gets back what the
     /// real home holds there.
+    /// Masks, in the layer, the settings that look like secrets in the files
+    /// [`masks_home`] names (all, or those in `only`), as the copy's `.env`
+    /// files are masked: each placeholder is kept with the path the value
+    /// has in the real home, and goes back only there, as that setting
+    /// (see [`Task::apply_home`]). The values are kept before any file is
+    /// written; the entries take the masked files' stamps, so masking is no
+    /// change.
+    fn mask_layer(&self, layer: &mut Layer, only: Option<&[String]>) -> Result<()> {
+        let dir = self.home_layer();
+        let candidates: Vec<String> = layer
+            .entries
+            .iter()
+            .filter(|(rel, e)| e.copy.kind == Kind::File && masks_home(rel))
+            .filter(|(rel, _)| only.is_none_or(|only| only.contains(rel)))
+            .map(|(rel, _)| rel.clone())
+            .collect();
+        if candidates.is_empty() {
+            return Ok(());
+        }
+        let vault = self.vault()?;
+        let mut kept = TaskSecrets::load(self.dir(), &self.home())?;
+        let mut writes = Vec::new();
+        for rel in candidates {
+            let file = dir.join(&rel);
+            let Ok(text) = fs::read_to_string(&file) else {
+                continue;
+            };
+            let real = layer.real.join(&rel).display().to_string();
+            let masked = secrets::mask_with(&real, &text, &mut kept, &vault)?;
+            if masked != text {
+                writes.push((rel, file, masked));
+            }
+        }
+        if writes.is_empty() {
+            return Ok(());
+        }
+        // The values first: a masked file whose values were lost could only
+        // ever be applied as placeholders.
+        kept.save(self.dir(), &self.home())?;
+        for (rel, file, masked) in writes {
+            fsops::replace_file(&file, masked.as_bytes())?;
+            if let (Some(entry), Some(now)) = (layer.entries.get_mut(&rel), Stamp::of(&file)?) {
+                entry.copy = now;
+            }
+        }
+        Ok(())
+    }
+
+    /// `bytes`, the layer's file at `rel`, with the values Kule masked there
+    /// put back, as the real home is to hold them; a placeholder anywhere
+    /// else stays one.
+    fn unmasked(&self, real: &Path, rel: &str, bytes: Vec<u8>) -> Result<Vec<u8>> {
+        if !masks_home(rel) {
+            return Ok(bytes);
+        }
+        let text = match String::from_utf8(bytes) {
+            Ok(text) => text,
+            Err(e) => return Ok(e.into_bytes()),
+        };
+        let path = real.join(rel).display().to_string();
+        Ok(self.vault()?.unmask(&path, &text).into_bytes())
+    }
+
     pub fn discard_home(&self, paths: &[String]) -> Result<Vec<String>> {
         let Some(mut layer) = self.load_layer()? else {
             return Ok(Vec::new());
@@ -647,6 +721,13 @@ impl Task {
                 layer.entries.insert(c.path.clone(), Entry { work, copy });
             }
         }
+        // What came back from the real home is masked again.
+        let back: Vec<String> = wanted
+            .iter()
+            .filter(|c| c.change != Change::Created)
+            .map(|c| c.path.clone())
+            .collect();
+        self.mask_layer(&mut layer, Some(&back))?;
         write_json(&self.layer_path(), &layer)?;
         Ok(wanted.into_iter().map(|c| c.path).collect())
     }
@@ -758,7 +839,11 @@ impl Task {
         }
         let (real, copy) = (layer.real.join(path), self.home_layer().join(path));
         let before = textdiff::side(&real).at(&real)?;
-        let after = textdiff::side(&copy).at(&copy)?;
+        // As it would land: what Kule masked is no change.
+        let after = match textdiff::side(&copy).at(&copy)? {
+            Some(bytes) => Some(self.unmasked(&layer.real, path, bytes)?),
+            None => None,
+        };
         Ok(textdiff::diff(before.as_deref(), after.as_deref()))
     }
 

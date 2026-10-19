@@ -523,7 +523,12 @@ and settings are found where they always are, and a write through a link
 meets the sandbox as before. The agent's own state is linked and never
 offered; hidden paths (`~/.ssh`, `~/.aws`, …) are not in the layer at all;
 a directory you cannot read whole is linked. Shell histories and
-completion dumps are not offered either.
+completion dumps are not offered either. In the clones of what shells and
+tools read as they start (`.zshrc`, `.profile`, `.gitconfig`, …) and of
+env files (`~/.env`), a setting that looks like a secret (`export
+GITHUB_TOKEN=…`) is masked as in the copy's `.env` files: commands see a
+placeholder, which the proxy fills in only where a secret you keep with
+the same value may go, and an apply puts your value back.
 
 `kule status` and the app's Review tab list what waits (`in your home,
 caught for review`). `kule home TASK diff ~/.zshrc` (or *Show*) shows

@@ -452,3 +452,47 @@ fn nothing_is_applied_through_a_link_in_the_real_home() {
     assert!(refused.to_string().contains("is a link"), "{refused}");
     assert!(!elsewhere.path().join("new.toml").exists());
 }
+
+/// A token in a file shells read as they start is masked in the layer, as
+/// in the copy's `.env`: the command sees a placeholder, and that is no
+/// change. What the command adds there is applied with the token as it was,
+/// the diff shows only what it added, and a discarded change comes back
+/// masked.
+#[test]
+fn a_token_in_a_shell_startup_file_is_masked_in_the_layer() {
+    let s = Setup::new();
+    let p = s.person.path();
+    let token = "ghp_k3yL1ke0nlyF0rTest1ng9Abc";
+    let zshrc =
+        format!("export A=1\nexport GITHUB_TOKEN={token}\nexport PATH=\"$HOME/bin:$PATH\"\n");
+    fs::write(p.join(".zshrc"), &zshrc).unwrap();
+    fs::write(p.join(".env"), format!("API_KEY={token}\nPORT=3000\n")).unwrap();
+
+    let seen = s.run("cat \"$HOME/.zshrc\" \"$HOME/.env\"");
+    assert!(!seen.contains(token), "{seen}");
+    assert!(seen.contains("export GITHUB_TOKEN=kule_secret_"), "{seen}");
+    assert!(
+        seen.contains("export A=1") && seen.contains("PORT=3000"),
+        "{seen}"
+    );
+    assert!(s.task.home_changes().unwrap().is_empty());
+
+    s.run("echo \"alias ll='ls -l'\" >> \"$HOME/.zshrc\"");
+    let diff = s.task.home_diff(".zshrc").unwrap();
+    // The token's line is the same on both sides: masking is no change.
+    let shown = format!("{diff:?}");
+    assert!(shown.contains("kind: Added, text: \"alias ll"), "{shown}");
+    assert!(!shown.contains("kule_secret_"), "{shown}");
+    assert!(!shown.contains("Removed"), "{shown}");
+    s.task.apply_home(&[".zshrc".to_owned()]).unwrap();
+    assert_eq!(
+        fs::read_to_string(p.join(".zshrc")).unwrap(),
+        format!("{zshrc}alias ll='ls -l'\n")
+    );
+
+    s.run("echo 'export B=2' >> \"$HOME/.zshrc\"");
+    s.task.discard_home(&[".zshrc".to_owned()]).unwrap();
+    let layer = fs::read_to_string(s.task.home_layer().join(".zshrc")).unwrap();
+    assert!(!layer.contains(token), "{layer}");
+    assert!(!layer.contains("export B=2"), "{layer}");
+}
