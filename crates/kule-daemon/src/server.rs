@@ -21,6 +21,11 @@ use crate::service::Service;
 
 /// The longest request line the daemon reads.
 pub const MAX_REQUEST: usize = 1 << 20;
+/// Connections served at once: the app, its subscribers and the CLI need a
+/// handful.
+const MAX_CLIENTS: usize = 64;
+/// How long a connection that has not shown the token may take for a line.
+const UNPROVEN_FOR: std::time::Duration = std::time::Duration::from_secs(5);
 /// Unix socket paths are limited to about this many bytes.
 const MAX_SOCKET_PATH: usize = 100;
 
@@ -123,6 +128,10 @@ pub fn serve(
         let Ok(stream) = conn else { continue };
         if peer_uid(&stream) != Some(me) {
             continue; // dropped: closes the connection
+        }
+        // A crowd of connections holds no more than so many threads.
+        if clients.load(Ordering::SeqCst) >= MAX_CLIENTS {
+            continue;
         }
         let (service, clients, control) = (service.clone(), clients.clone(), control.clone());
         clients.fetch_add(1, Ordering::SeqCst);
@@ -235,8 +244,12 @@ pub fn peer_uid(stream: &UnixStream) -> Option<u32> {
 }
 
 fn handle(stream: UnixStream, service: &Arc<Service>, control: &Control) -> io::Result<()> {
+    // Until it shows the token, a connection has a few seconds for each
+    // line; one that says nothing is let go.
+    stream.set_read_timeout(Some(UNPROVEN_FOR))?;
     let mut writer = stream.try_clone()?;
     let mut reader = BufReader::new(stream);
+    let mut proven = false;
     while let Some(line) = read_line(&mut reader, MAX_REQUEST)? {
         if line.trim().is_empty() {
             continue;
@@ -256,6 +269,10 @@ fn handle(stream: UnixStream, service: &Arc<Service>, control: &Control) -> io::
             let refused = "not authorized: requests carry the token in Kule's home";
             write_line(&mut writer, &failed(request.id, refused.to_owned()))?;
             return Ok(());
+        }
+        if !proven {
+            proven = true;
+            reader.get_ref().set_read_timeout(None)?;
         }
         if request.call == Call::Subscribe {
             let notices = service.subscribe();

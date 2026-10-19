@@ -303,6 +303,33 @@ fn an_overlong_request_is_cut_off() {
     assert!(tasks.is_empty());
 }
 
+/// A connection that never says who it is goes after a while, and a crowd
+/// of them leaves the daemon answering the app.
+#[test]
+fn connections_that_say_nothing_are_let_go() {
+    let home = TempDir::new().unwrap();
+    daemon(home.path());
+    let silent: Vec<UnixStream> = (0..100)
+        .map(|_| UnixStream::connect(socket_path(home.path())).unwrap())
+        .collect();
+    let mut first = silent.into_iter().next().unwrap();
+    first
+        .set_read_timeout(Some(Duration::from_secs(30)))
+        .unwrap();
+    let started = std::time::Instant::now();
+    let mut reply = Vec::new();
+    let _ = first.read_to_end(&mut reply);
+    assert!(
+        started.elapsed() < Duration::from_secs(20),
+        "a silent connection was kept {:?}",
+        started.elapsed()
+    );
+    // Once they are gone the daemon answers whoever carries the token.
+    std::thread::sleep(Duration::from_secs(1));
+    let tasks: Vec<TaskView> = Client::new(home.path()).call(Call::Tasks).unwrap();
+    assert!(tasks.is_empty());
+}
+
 #[test]
 fn the_socket_is_for_its_owner_only() {
     let home = TempDir::new().unwrap();
