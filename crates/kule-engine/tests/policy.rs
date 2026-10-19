@@ -323,6 +323,39 @@ fn git_moves_are_judged_by_what_they_mean() {
     assert_eq!(ruling.verdict, Verdict::Deny);
 }
 
+/// A new branch passes; a tag, a note or a replacement (which makes git
+/// show other content in place of a commit or a file) waits.
+#[test]
+fn only_a_new_branch_passes_among_new_references() {
+    let s = Setup::new(PROJECT, true);
+    let copy = s.copy();
+    git(&copy, &["branch", "feature"]);
+    git(&copy, &["tag", "v9"]);
+    git(&copy, &["notes", "add", "-m", "note"]);
+    let head = String::from_utf8(
+        Command::new("git")
+            .args(["rev-parse", "HEAD"])
+            .current_dir(&copy)
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap();
+    git(&copy, &["replace", "-f", head.trim(), head.trim()]);
+
+    let ruling = s.judged();
+    assert_eq!(on(&ruling, "git ref refs/heads/feature").0, Verdict::Allow);
+    for r in ["refs/tags/v9", "refs/notes/commits"] {
+        assert_eq!(on(&ruling, &format!("git ref {r}")).0, Verdict::Ask, "{r}");
+    }
+    let replaced = ruling
+        .judgements
+        .iter()
+        .find(|j| j.subject.starts_with("git ref refs/replace/"))
+        .unwrap_or_else(|| panic!("{ruling:#?}"));
+    assert_eq!(replaced.verdict, Verdict::Ask);
+}
+
 #[test]
 fn rewriting_history_and_switching_head_wait_for_a_person() {
     let s = Setup::new(PROJECT, true);

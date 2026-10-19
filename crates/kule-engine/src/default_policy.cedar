@@ -105,9 +105,11 @@ when { !context.repository && context.deletes > 20 };
 permit (principal, action == Kule::Action::"auto", resource)
 when { resource.kind == "git.ref" && resource.change == "modified" && resource.fast_forward && resource.ref != "HEAD" };
 
+// A new branch alone: a tag, a note or a replacement (which makes git show
+// other content in place of a commit or a file) waits.
 @id("branch-created")
 permit (principal, action == Kule::Action::"auto", resource)
-when { resource.kind == "git.ref" && resource.change == "created" };
+when { resource.kind == "git.ref" && resource.change == "created" && resource.ref like "refs/heads/*" };
 
 // Network: package registries and model APIs over HTTPS. Anything else, git
 // hosts included (a push cannot be told apart from a fetch inside TLS),
