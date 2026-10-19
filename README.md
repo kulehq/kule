@@ -601,6 +601,9 @@ permissions, the SDK and the package format;
   run to hundreds of megabytes) is hidden from the agent instead; Landlock
   then opens the directory around it by what is in it, so the agent can
   write in its subdirectories and files but not add new files beside them.
+- `/tmp`, where shells and tools write by hard-coded path, is each task's
+  own on Linux (its tmp, mounted there for its commands); macOS's
+  sandbox cannot move a path, so there tasks share the system's `/tmp`.
 - Package registries are read-only to commands (a publish is refused) for
   npm, yarn, pnpm and bun, cargo, pip, uv and poetry, and gem, whose
   tools trust the task's authority. Go's, NuGet's and Maven's tools on

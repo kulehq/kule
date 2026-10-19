@@ -113,7 +113,8 @@ fn kule_state_next_to_the_copy_cannot_be_touched() {
 #[test]
 fn histories_browsers_and_credentials_in_the_home_are_hidden() {
     let s = Setup::new();
-    let home = TempDir::new().unwrap();
+    // Outside /tmp, as a person's home is.
+    let home = TempDir::new_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
     let hidden = [
         ".zsh_history",
         ".bash_history",
@@ -166,6 +167,31 @@ fn histories_browsers_and_credentials_in_the_home_are_hidden() {
         &format!("cat '{}'", sources.home.join("notes/plain.txt").display()),
     );
     assert!(ok(&out), "{out:?}");
+}
+
+/// Linux: a task's commands have a /tmp of their own, so tasks cannot leave
+/// files there for each other, or for the person's tools.
+#[cfg(target_os = "linux")]
+#[test]
+fn each_task_has_a_tmp_of_its_own() {
+    let (a, b) = (Setup::new(), Setup::new());
+    let name = format!("kule-own-tmp-{}", std::process::id());
+    // A home outside /tmp, as a person's is.
+    let home = TempDir::new_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
+    let sources = || kule_engine::CacheSources {
+        home: home.path().to_owned(),
+        cargo_home: home.path().join(".cargo"),
+    };
+    let one = Sandbox::for_task_with(&a.task, Some(sources())).unwrap();
+    let two = Sandbox::for_task_with(&b.task, Some(sources())).unwrap();
+    let wrote = sh(&one, &format!("echo x > /tmp/{name} && cat /tmp/{name}"));
+    assert!(ok(&wrote), "{wrote:?}");
+    assert!(
+        !Path::new("/tmp").join(&name).exists(),
+        "it reached the system's /tmp"
+    );
+    let seen = sh(&two, &format!("cat /tmp/{name}"));
+    assert!(!ok(&seen), "another task saw it");
 }
 
 /// Where this computer gives a command less isolation than Kule means to,

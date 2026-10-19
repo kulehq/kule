@@ -100,6 +100,8 @@ pub(crate) struct Isolation {
     read_only: Vec<ReadOnly>,
     /// Unix sockets to cover with an empty file for the command.
     masked: Vec<CString>,
+    /// The task's own directory, mounted over `/tmp` for the command.
+    tmp: Option<CString>,
 }
 
 impl Isolation {
@@ -148,7 +150,16 @@ impl Isolation {
             alive,
             read_only,
             masked: Vec::new(),
+            tmp: None,
         })
+    }
+
+    /// Gives the command `dir` as its `/tmp`, in a mount namespace of its
+    /// own: what tools write there by hard-coded path stays the task's.
+    pub(crate) fn own_tmp(mut self, dir: &std::path::Path) -> io::Result<Isolation> {
+        self.namespaces |= libc::CLONE_NEWNS;
+        self.tmp = Some(CString::new(dir.as_os_str().as_bytes())?);
+        Ok(self)
     }
 
     /// Covers each of `sockets` with an empty file in the command's mount
@@ -192,6 +203,15 @@ impl Isolation {
                     c"/".as_ptr(),
                     std::ptr::null(),
                     libc::MS_REC | libc::MS_PRIVATE,
+                    std::ptr::null(),
+                ))?;
+            }
+            if let Some(dir) = &self.tmp {
+                check(libc::mount(
+                    dir.as_ptr(),
+                    c"/tmp".as_ptr(),
+                    std::ptr::null(),
+                    libc::MS_BIND | libc::MS_REC,
                     std::ptr::null(),
                 ))?;
             }

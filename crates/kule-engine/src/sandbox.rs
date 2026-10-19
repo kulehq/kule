@@ -1055,10 +1055,23 @@ impl Sandbox {
         } else {
             Vec::new()
         };
-        if matches!(net, Net::Own(_)) || !read_only.is_empty() || !masked.is_empty() {
-            let isolation = Isolation::new(net, &read_only)
+        // Where /tmp is the commands' to write, it is the task's own; not
+        // when the task itself lives in /tmp (a Kule home there), which the
+        // mount would hide.
+        let in_tmp = [&self.copy, &self.tmp]
+            .into_iter()
+            .chain(self.layer.iter())
+            .any(|p| p.starts_with("/tmp"));
+        let own_tmp = self.writable.iter().any(|w| w == Path::new("/tmp"))
+            && !in_tmp
+            && crate::namespace::mounts_available();
+        if matches!(net, Net::Own(_)) || !read_only.is_empty() || !masked.is_empty() || own_tmp {
+            let mut isolation = Isolation::new(net, &read_only)
                 .and_then(|i| i.mask_sockets(&masked))
                 .at(Path::new("/proc/self/ns"))?;
+            if own_tmp {
+                isolation = isolation.own_tmp(&self.tmp).at(&self.tmp)?;
+            }
             // SAFETY: enter only makes system calls on buffers and
             // descriptors prepared before the fork.
             unsafe {
