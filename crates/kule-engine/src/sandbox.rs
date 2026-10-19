@@ -1143,7 +1143,7 @@ impl Sandbox {
         // Without Landlock's rule for Unix sockets, those outside the
         // task's folders are covered for the command instead.
         let masked = if landlock_abi() < 9 && crate::namespace::mounts_available() {
-            self.outside_sockets()
+            self.outside_sockets()?
         } else {
             Vec::new()
         };
@@ -1321,30 +1321,42 @@ impl Sandbox {
 #[cfg(target_os = "linux")]
 impl Sandbox {
     /// The Unix sockets listening now outside the task's own folders, as
-    /// the kernel lists them.
-    fn outside_sockets(&self) -> Vec<PathBuf> {
+    /// the kernel lists them; an error when the list cannot be read, as
+    /// nothing would be kept out then.
+    fn outside_sockets(&self) -> Result<Vec<PathBuf>> {
+        self.outside_sockets_in(Path::new("/proc/net/unix"))
+    }
+
+    /// [`Sandbox::outside_sockets`], from the kernel's list at `list`.
+    fn outside_sockets_in(&self, list: &Path) -> Result<Vec<PathBuf>> {
         use std::os::unix::fs::FileTypeExt;
         let own: Vec<&Path> = [&self.copy, &self.tmp]
             .into_iter()
             .chain(self.layer.iter())
             .map(PathBuf::as_path)
             .collect();
-        let Ok(listed) = std::fs::read_to_string("/proc/net/unix") else {
-            return Vec::new();
-        };
-        let mut sockets: Vec<PathBuf> = listed
-            .lines()
-            .skip(1)
-            .filter_map(|line| line.split_whitespace().nth(7))
-            .filter(|path| path.starts_with('/'))
-            .map(PathBuf::from)
+        let listed = std::fs::read_to_string(list).at(list)?;
+        let mut sockets: Vec<PathBuf> = socket_paths(&listed)
+            .into_iter()
             .filter(|path| !own.iter().any(|dir| path.starts_with(dir)))
             .filter(|path| std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_socket()))
             .collect();
         sockets.sort();
         sockets.dedup();
-        sockets
+        Ok(sockets)
     }
+}
+
+/// The paths of the sockets `/proc/net/unix` lists: each the rest of its
+/// line from the first ` /`, spaces and all (the fields before it are
+/// numbers; abstract names start with `@` and are left out).
+#[cfg(target_os = "linux")]
+fn socket_paths(listed: &str) -> Vec<PathBuf> {
+    listed
+        .lines()
+        .skip(1)
+        .filter_map(|line| line.find(" /").map(|at| PathBuf::from(&line[at + 1..])))
+        .collect()
 }
 
 /// The Landlock ABI this kernel speaks; 0 without Landlock.
@@ -1455,5 +1467,48 @@ mod tests {
             );
         }
         assert!(parse_denial("something else").is_none());
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod linux_tests {
+    use super::*;
+
+    /// Every socket path the kernel lists is read whole, spaces and all;
+    /// abstract names and unbound sockets are none of them.
+    #[test]
+    fn socket_paths_are_read_whole() {
+        let listed = "Num       RefCount Protocol Flags    Type St Inode Path\n\
+                      0000000000000000: 00000002 00000000 00010000 0001 01 21345 /run/user/1000/bus\n\
+                      0000000000000000: 00000002 00000000 00010000 0001 01  9876 /tmp/my app/agent.sock\n\
+                      0000000000000000: 00000002 00000000 00010000 0001 01 11111 @/tmp/.X11-unix/X0\n\
+                      0000000000000000: 00000003 00000000 00000000 0001 03 22222\n";
+        assert_eq!(
+            socket_paths(listed),
+            [
+                PathBuf::from("/run/user/1000/bus"),
+                PathBuf::from("/tmp/my app/agent.sock")
+            ]
+        );
+    }
+
+    /// A list of sockets that cannot be read keeps nothing out, so the
+    /// command does not start, rather than starting with every socket open.
+    #[test]
+    fn an_unreadable_socket_list_refuses() {
+        let (home, ws) = (
+            tempfile::TempDir::new().unwrap(),
+            tempfile::TempDir::new().unwrap(),
+        );
+        let task = Task::create(home.path(), ws.path()).unwrap();
+        let sandbox = Sandbox::new(&task).unwrap();
+        assert!(
+            sandbox
+                .outside_sockets_in(&home.path().join("none"))
+                .is_err()
+        );
+        let list = home.path().join("unix");
+        std::fs::write(&list, "Num RefCount\n").unwrap();
+        assert!(sandbox.outside_sockets_in(&list).unwrap().is_empty());
     }
 }
