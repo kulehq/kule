@@ -17,6 +17,37 @@ pub fn on() -> bool {
     })
 }
 
+/// Text from an agent, or from the files it wrote, as a terminal may show
+/// it: control characters, escape sequences and marks that turn the text
+/// around are written out (`\u{1b}`), so nothing it says can move the
+/// cursor, hide a line, set the title or reach the clipboard. Lines stay
+/// lines.
+pub fn plain(text: &str) -> String {
+    escape(text, |c| c == '\n' || c == '\t')
+}
+
+/// [`plain`] for one line (a path, a label, a title): a line break in it is
+/// written out too, so it cannot pass for another line.
+pub fn plain_line(text: &str) -> String {
+    escape(text, |_| false)
+}
+
+fn escape(text: &str, kept: impl Fn(char) -> bool) -> String {
+    let unsafe_char = |c: char| {
+        (c.is_control() && !kept(c))
+            || matches!(c, '\u{061C}' | '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')
+    };
+    text.chars()
+        .map(|c| {
+            if unsafe_char(c) {
+                c.escape_unicode().to_string()
+            } else {
+                c.to_string()
+            }
+        })
+        .collect()
+}
+
 fn wrap(on: bool, code: &str, text: &str) -> String {
     if on {
         format!("\x1b[{code}m{text}\x1b[0m")
@@ -185,6 +216,25 @@ mod tests {
         assert_eq!(took(Duration::from_secs(42)), "42s");
         assert_eq!(took(Duration::from_secs(326)), "5m 26s");
         assert_eq!(took(Duration::from_secs(3780)), "1h 03m");
+    }
+
+    #[test]
+    fn what_an_agent_says_cannot_drive_the_terminal() {
+        // Erase the line, set the title, write the clipboard (OSC 52).
+        let said = "done\x1b[2K\x1b]0;owned\x07\x1b]52;c;aGk=\x07\u{202E}gnp.exe\nnext";
+        let shown = plain(said);
+        assert!(
+            !shown
+                .chars()
+                .any(|c| c == '\x1b' || c == '\x07' || c == '\u{202E}'),
+            "{shown}"
+        );
+        assert!(
+            shown.contains("\\u{1b}[2K") && shown.ends_with("\nnext"),
+            "{shown}"
+        );
+        assert_eq!(plain_line("a\nb"), "a\\u{a}b");
+        assert_eq!(plain("plain text\tstays"), "plain text\tstays");
     }
 
     #[test]

@@ -808,7 +808,7 @@ fn run() -> Result<ExitCode> {
         }
         Cmd::Steps { task } => {
             for step in Task::open(&home, &task)?.steps()? {
-                println!("{:>3}. {}", step.id, step.label);
+                println!("{:>3}. {}", step.id, paint::plain_line(&step.label));
                 for change in &step.changes {
                     let mark = match change.change {
                         Some(Change::Created) => "+",
@@ -816,7 +816,7 @@ fn run() -> Result<ExitCode> {
                         Some(Change::Deleted) => "-",
                         None => "↺",
                     };
-                    println!("       {mark} {}", change.path);
+                    println!("       {mark} {}", paint::plain_line(&change.path));
                 }
             }
         }
@@ -1036,7 +1036,7 @@ async fn print_events(
     };
     while let Some(event) = rx.next().await {
         event.tally(&mut usage);
-        match event {
+        match plain_event(event) {
             // A command's output shows in the window; here the spinner says
             // what runs, and `kule steps` what it changed.
             Event::Usage { .. }
@@ -1216,7 +1216,7 @@ fn print_ruling(ruling: &Ruling) {
     for judgement in ruling.holding() {
         println!(
             "  {} · {} {}",
-            judgement.subject,
+            paint::plain_line(&judgement.subject),
             word(judgement.verdict),
             paint::dim(&format!("({})", judgement.rules.join(", ")))
         );
@@ -1225,6 +1225,33 @@ fn print_ruling(ruling: &Ruling) {
 
 /// Says, on every run you accepted it for, what the command goes without
 /// here; without your acceptance the sandbox refuses the command instead.
+/// `event` with what the agent wrote made safe to print (see
+/// [`paint::plain`]).
+fn plain_event(mut event: kule_acp::Event) -> kule_acp::Event {
+    use kule_acp::Event;
+    match &mut event {
+        Event::Message { text } | Event::Note { text } => *text = paint::plain(text),
+        Event::ToolCall { title, .. } => *title = paint::plain_line(title),
+        Event::ToolDone { title, step, .. } => {
+            *title = paint::plain_line(title);
+            for change in step.iter_mut().flat_map(|s| &mut s.changes) {
+                change.path = paint::plain_line(&change.path);
+            }
+        }
+        Event::Permission { title, chosen, .. } => {
+            *title = paint::plain_line(title);
+            *chosen = paint::plain_line(chosen);
+        }
+        Event::Plan { entries } => {
+            for entry in entries {
+                *entry = paint::plain_line(entry);
+            }
+        }
+        _ => {}
+    }
+    event
+}
+
 fn warn_if_network_not_isolated() {
     let gaps = kule_engine::isolation_gaps(Network::Proxy(0));
     if !gaps.is_empty() {
@@ -1260,7 +1287,7 @@ fn print_home(task: &Task) -> Result<()> {
         } else {
             ""
         };
-        println!("  {mark} ~/{}{slash}{runs}", c.path);
+        println!("  {mark} ~/{}{slash}{runs}", paint::plain_line(&c.path));
     }
     Ok(())
 }
@@ -1366,7 +1393,7 @@ fn print_set(task: &Task, set: &EffectSet) {
         );
         for effect in ignored.iter().take(10) {
             let slash = if effect.kind == Kind::Dir { "/" } else { "" };
-            println!("  · {}{slash}", effect.path);
+            println!("  · {}{slash}", paint::plain_line(&effect.path));
         }
         if ignored.len() > 10 {
             println!("  … {} more", ignored.len() - 10);
@@ -1415,7 +1442,12 @@ fn print_set(task: &Task, set: &EffectSet) {
                     })
                 });
                 if !with_parent {
-                    println!("  {} {from}{slash} → {}{slash}", coloured('»'), effect.path);
+                    println!(
+                        "  {} {}{slash} → {}{slash}",
+                        coloured('»'),
+                        paint::plain_line(from),
+                        paint::plain_line(&effect.path)
+                    );
                 }
                 continue;
             }
@@ -1425,11 +1457,15 @@ fn print_set(task: &Task, set: &EffectSet) {
                     println!(
                         "  {} {}{slash} ({})",
                         coloured(mark),
-                        effect.path,
+                        paint::plain_line(&effect.path),
                         why_not_outlined(*reason)
                     );
                 }
-                _ => println!("  {} {}{slash}", coloured(mark), effect.path),
+                _ => println!(
+                    "  {} {}{slash}",
+                    coloured(mark),
+                    paint::plain_line(&effect.path)
+                ),
             }
             if let Some(Outline::Changes { changes }) = outline.map(|o| &o.outline) {
                 print_entity_changes(changes);
@@ -2282,8 +2318,12 @@ fn print_meetings(home: &Path, task: &Task) -> Result<()> {
         println!("task {} changes them too:", info.id);
         for m in meetings {
             match m.entities.as_slice() {
-                [] => println!("  {}", m.path),
-                entities => println!("  {} · {}", m.path, entities.join(", ")),
+                [] => println!("  {}", paint::plain_line(&m.path)),
+                entities => println!(
+                    "  {} · {}",
+                    paint::plain_line(&m.path),
+                    paint::plain_line(&entities.join(", "))
+                ),
             }
         }
     }
