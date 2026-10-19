@@ -1623,6 +1623,8 @@ hosts = ["openrouter.ai"]
         let agents = Agents::load(home.path()).unwrap();
         for (agent, key) in [
             ("claude-code", "ANTHROPIC_API_KEY"),
+            ("claude-code", "ANTHROPIC_AUTH_TOKEN"),
+            ("claude-code", "CLAUDE_CODE_OAUTH_TOKEN"),
             ("codex", "OPENAI_API_KEY"),
             ("gemini", "GEMINI_API_KEY"),
         ] {

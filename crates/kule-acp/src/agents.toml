@@ -32,10 +32,12 @@ login = [".claude/.credentials.json"]
 protected = [
   ".claude/settings.json", ".claude/settings.local.json", ".claude/hooks", ".claude.json",
   ".claude/plugins", ".claude/skills", ".claude/commands", ".claude/agents", ".claude/CLAUDE.md",
+  ".claude/statusline.sh", ".claude/output-styles",
 ]
 reveal_on_macos = ["Library/Keychains"]
-pass_env = ["ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"]
-keys = { ANTHROPIC_API_KEY = ["api.anthropic.com"] }
+# Its sign-in tokens too: the agent works with placeholders, and the proxy
+# puts the token into what goes to Anthropic alone.
+keys = { ANTHROPIC_API_KEY = ["api.anthropic.com"], ANTHROPIC_AUTH_TOKEN = ["api.anthropic.com"], CLAUDE_CODE_OAUTH_TOKEN = ["api.anthropic.com"] }
 
 [[agent]]
 name = "gemini"
@@ -47,6 +49,7 @@ login = [".gemini/gemini-credentials.json", ".gemini/oauth_creds.json"]
 protected = [
   ".gemini/settings.json", ".gemini/extensions", ".gemini/commands",
   ".gemini/trustedFolders.json", ".gemini/GEMINI.md", ".gemini/extension_integrity.json",
+  ".gemini/.env",
 ]
 # The keychain only works for Gemini when it can write a probe item there,
 # which the sandbox refuses; its own encrypted file under ~/.gemini needs no
@@ -69,7 +72,7 @@ login = [".codex/auth.json"]
 # prompts, and the instructions it reads first.
 protected = [
   ".codex/config.toml", ".codex/rules", ".codex/plugins", ".codex/skills",
-  ".codex/prompts", ".codex/AGENTS.md",
+  ".codex/prompts", ".codex/AGENTS.md", ".codex/AGENTS.override.md",
 ]
 pass_env = ["CODEX_HOME"]
 keys = { OPENAI_API_KEY = ["api.openai.com"] }

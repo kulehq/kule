@@ -107,6 +107,67 @@ fn kule_state_next_to_the_copy_cannot_be_touched() {
     assert!(s.task.effects().is_ok());
 }
 
+/// What the person typed, their browsers' and mail's stores, and the
+/// credentials tools keep in the home directory are out of a command's
+/// sight; the rest of the home stays readable.
+#[test]
+fn histories_browsers_and_credentials_in_the_home_are_hidden() {
+    let s = Setup::new();
+    let home = TempDir::new().unwrap();
+    let hidden = [
+        ".zsh_history",
+        ".bash_history",
+        ".python_history",
+        ".node_repl_history",
+        ".psql_history",
+        ".mysql_history",
+        ".lesshst",
+        ".viminfo",
+        "Library/Cookies/Cookies.binarycookies",
+        "Library/Application Support/Google/Chrome/Default/Cookies",
+        "Library/Application Support/Firefox/Profiles/a/cookies.sqlite",
+        "Library/Safari/History.db",
+        "Library/Mail/V10/x",
+        "Library/Messages/chat.db",
+        ".config/google-chrome/Default/Cookies",
+        ".mozilla/firefox/a/cookies.sqlite",
+        ".thunderbird/a/prefs.js",
+        ".config/rclone/rclone.conf",
+        ".m2/settings.xml",
+        ".gradle/gradle.properties",
+        ".gem/credentials",
+        ".pgpass",
+        ".my.cnf",
+        ".oci/config",
+        ".databrickscfg",
+        ".cache/huggingface/token",
+        ".config/Code/User/globalStorage/state.vscdb",
+        "Library/Application Support/Code/User/globalStorage/state.vscdb",
+    ];
+    for path in hidden.iter().chain(&["notes/plain.txt"]) {
+        let full = home.path().join(path);
+        fs::create_dir_all(full.parent().unwrap()).unwrap();
+        fs::write(&full, "secret\n").unwrap();
+    }
+    let sources = CacheSources {
+        home: fs::canonicalize(home.path()).unwrap(),
+        cargo_home: home.path().join(".cargo"),
+    };
+    let sandbox = Sandbox::for_task_with(&s.task, Some(sources.clone())).unwrap();
+    for path in hidden {
+        let out = sh(
+            &sandbox,
+            &format!("cat '{}'", sources.home.join(path).display()),
+        );
+        assert!(!ok(&out), "{path} was readable");
+    }
+    let out = sh(
+        &sandbox,
+        &format!("cat '{}'", sources.home.join("notes/plain.txt").display()),
+    );
+    assert!(ok(&out), "{out:?}");
+}
+
 /// Where this computer gives a command less isolation than Kule means to,
 /// the command runs only once the person accepted that. CI runs this a
 /// second time with unprivileged user namespaces refused.
