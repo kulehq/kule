@@ -140,6 +140,12 @@
 - On Linux a command makes terminals of its own (a devpts instance in its
   mount namespace), as `script`, `expect` and test runners need; none of
   your terminals is there to open.
+- On Linux a task's commands get devices by name only (`null`, `zero`,
+  `full`, `tty`, `random` and `urandom` to read, and the GPU's), never
+  `/dev` whole; from Landlock ABI 5 a device takes requests (ioctl) only
+  where it was given to be driven. An agent's profile names more under
+  `devices`; disks, memory, keyboard and mouse, consoles and terminals are
+  refused.
 - Daemon protocol 28: `Isolation` and `SetIsolation`.
 
 ### Motion

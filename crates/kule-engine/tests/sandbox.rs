@@ -2011,3 +2011,126 @@ fn a_command_makes_terminals_of_its_own() {
     assert!(ok(&out), "{out:?}");
     assert_eq!(text(&out), "hello /dev/pts/0\n['0', 'ptmx']", "{out:?}");
 }
+
+/// A device anyone may open (by its mode) that no command is given, if
+/// this computer has one: what a camera or a microphone is to a session.
+#[cfg(target_os = "linux")]
+fn an_open_device_not_given() -> Option<PathBuf> {
+    use std::os::unix::fs::FileTypeExt;
+    let given = ["null", "zero", "full", "tty", "ptmx", "random", "urandom"];
+    let mut found: Vec<PathBuf> = fs::read_dir("/dev")
+        .ok()?
+        .flatten()
+        // By what is there, not by the folder's entry: a container mounts
+        // its devices over plain files.
+        .filter(|e| fs::metadata(e.path()).is_ok_and(|m| m.file_type().is_char_device()))
+        .filter(|e| !given.iter().any(|g| e.file_name() == *g))
+        .map(|e| e.path())
+        .filter(|p| {
+            fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(p)
+                .is_ok()
+        })
+        .collect();
+    found.sort();
+    found.into_iter().next()
+}
+
+/// Commands get devices by name: the few every program uses, never `/dev`
+/// whole, where a session's camera, microphone and USB devices are. One a
+/// profile names is given too.
+#[cfg(target_os = "linux")]
+#[test]
+fn devices_are_given_by_name_only() {
+    let s = Setup::new();
+    let out = sh(
+        &s.sandbox(),
+        "head -c 4 /dev/urandom >/dev/null && echo x >/dev/null && \
+         head -c 4 /dev/zero >/dev/null && echo random-read; \
+         echo x >/dev/urandom 2>/dev/null && echo random-written; \
+         ls /dev >/dev/null 2>&1 && echo listed; true",
+    );
+    let Some(device) = an_open_device_not_given() else {
+        assert_eq!(text(&out), "random-read", "{out:?}");
+        eprintln!("skipped the rest: no device here that anyone may open");
+        return;
+    };
+    let open = |sandbox: &Sandbox, mode: &str| {
+        sandbox_python(
+            sandbox,
+            &format!(
+                "import os; os.close(os.open({:?}, os.{mode})); print('opened')",
+                device
+            ),
+        )
+    };
+    // Reading is enough to listen to a microphone or watch a camera.
+    let refused = open(&s.sandbox(), "O_RDONLY");
+    let mut given = s.sandbox();
+    given.allow_device(&device).unwrap();
+    let opened = open(&given, "O_RDWR");
+    assert!(!ok(&refused), "{} was open: {refused:?}", device.display());
+    assert!(ok(&opened), "{} given, yet: {opened:?}", device.display());
+    assert_eq!(text(&out), "random-read", "{out:?}");
+}
+
+/// Where Landlock knows device requests (ABI 5), a device a command may
+/// only read takes none of them: here, asking the random device how much
+/// entropy it has.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_device_given_to_read_takes_no_requests() {
+    // SAFETY: with no attributes and the version flag, the call only
+    // reports Landlock's ABI.
+    let abi = unsafe {
+        libc::syscall(
+            libc::SYS_landlock_create_ruleset,
+            std::ptr::null::<libc::c_void>(),
+            0usize,
+            1u32,
+        )
+    };
+    let script = "import fcntl, os\n\
+                  fd = os.open('/dev/urandom', os.O_RDONLY)\n\
+                  try:\n\
+                  \x20   fcntl.ioctl(fd, 0x80045200, b'\\0' * 4)\n\
+                  \x20   print('asked')\n\
+                  except PermissionError:\n\
+                  \x20   print('refused')\n";
+    let outside = Command::new("python3")
+        .args(["-c", script])
+        .output()
+        .unwrap();
+    assert_eq!(text(&outside), "asked", "{outside:?}");
+    let out = sandbox_python(&Setup::new().sandbox(), script);
+    let expected = if abi >= 5 { "refused" } else { "asked" };
+    assert_eq!(text(&out), expected, "{out:?}");
+}
+
+/// A profile cannot be given a device through which a command reaches what
+/// is the person's, nor anything that is not a device under `/dev`.
+#[test]
+fn devices_that_reach_what_is_the_persons_are_never_given() {
+    let s = Setup::new();
+    for path in [
+        "/dev/mem",
+        "/dev/input",
+        "/dev/input/event0",
+        "/dev/uinput",
+        "/dev/hidraw0",
+        "/dev/tty1",
+        "/dev/console",
+        "/dev/pts",
+        "/dev/shm",
+        "/dev/stdin",
+        "/dev",
+        "/dev/../etc/passwd",
+        "/etc/passwd",
+        "dev/null",
+    ] {
+        let refused = s.sandbox().allow_device(Path::new(path));
+        assert!(refused.is_err(), "{path} was given");
+    }
+}

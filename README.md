@@ -322,6 +322,14 @@ a home of its own in Kule: `own_home = "CODEX_HOME"` (or `CLAUDE_CONFIG_DIR`,
 or `HOME`) points that variable at a folder of the agent's own, so nothing
 it writes in Kule reaches it outside; you sign it in there once.
 
+On Linux a task's commands get devices by name: `/dev/null`, `zero`,
+`full`, `tty`, their own terminals, `random` and `urandom` to read, and the
+GPU's unless it is turned off; never `/dev` whole, where a camera, a
+microphone or a USB device of your session would be. An agent that needs
+more names it under `devices` (`devices = ["/dev/snd"]`); Kule refuses
+those that reach what is yours: disks, memory, keyboard and mouse,
+consoles and terminals.
+
 `crates/kule-desktop` is a Tauri app around the same engine:
 
 - **Tasks**: pick a folder to make a task; each shows its changes and the

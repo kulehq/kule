@@ -222,6 +222,12 @@ pub struct Profile {
     /// it outside. It signs in there once, apart.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub own_home: Option<String>,
+    /// Devices under `/dev` the agent and its commands need beyond those
+    /// every command gets (Linux: `/dev/snd`, `/dev/video0`, a serial
+    /// port). Kule refuses those through which a command reaches what is
+    /// the person's: disks, memory, keyboard and mouse, consoles.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub devices: Vec<String>,
     /// The other agents' state and logins, hidden from this one; filled in
     /// when the profiles are loaded.
     #[serde(skip)]
@@ -806,6 +812,7 @@ impl Profile {
             keychain: BTreeMap::new(),
             hosts: Vec::new(),
             own_home: None,
+            devices: Vec::new(),
             others: Vec::new(),
         }
     }
@@ -1189,6 +1196,16 @@ impl Profile {
         }
         for name in &self.pass_env {
             sandbox.pass_env(name);
+        }
+        // Devices are files on Linux only; one this computer does not have
+        // is skipped.
+        if cfg!(target_os = "linux") {
+            for device in &self.devices {
+                let path = Path::new(device);
+                if path.exists() {
+                    sandbox.allow_device(path)?;
+                }
+            }
         }
         Ok(())
     }

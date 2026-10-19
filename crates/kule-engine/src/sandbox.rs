@@ -368,6 +368,10 @@ pub struct Sandbox {
     layer: Option<PathBuf>,
     /// Whether commands may use the GPU.
     gpu: bool,
+    /// Devices given beyond those every command gets (Linux; see
+    /// [`Sandbox::allow_device`]).
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    devices: Vec<PathBuf>,
     /// Whether the keychain's files were revealed, and with them its
     /// service (macOS).
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
@@ -473,6 +477,7 @@ impl Sandbox {
             kept: task.home().join("kept"),
             layer: None,
             gpu: true,
+            devices: Vec::new(),
             keychain: false,
             file_size: None,
             tag: format!("kule-{}-{nanos:x}", task.id()),
@@ -550,9 +555,68 @@ impl Sandbox {
 
     /// Commands cannot use the GPU: on macOS they cannot open its devices
     /// (Metal, and OpenCL through it); on Linux `/dev/dri` and NVIDIA's
-    /// devices stay read-only, which leaves them unusable.
+    /// devices stay out of reach, as every device not given is.
     pub fn deny_gpu(&mut self) {
         self.gpu = false;
+    }
+
+    /// Gives commands `path`, a device or a folder of them under `/dev`,
+    /// beyond those every command gets: to read, write and drive (Linux,
+    /// where devices are files; on macOS a command reaches hardware through
+    /// the system's services, and this gives nothing). Never one through
+    /// which a command could read or drive what is the person's: a disk,
+    /// memory, the keyboard and mouse, a console or another terminal.
+    pub fn allow_device(&mut self, path: &Path) -> Result<()> {
+        use std::os::unix::fs::FileTypeExt;
+        let refuse = |why: &str| {
+            Err(Error::Invalid(format!(
+                "{} cannot be given to a task's commands: {why}",
+                path.display()
+            )))
+        };
+        let Some(name) = path
+            .strip_prefix("/dev")
+            .ok()
+            .and_then(|rest| rest.components().next())
+            .and_then(|first| first.as_os_str().to_str())
+        else {
+            return refuse("only a device under /dev can");
+        };
+        if path
+            .components()
+            .any(|c| c == std::path::Component::ParentDir)
+        {
+            return refuse("its path goes back up");
+        }
+        let console = name
+            .strip_prefix("tty")
+            .is_some_and(|n| n.is_empty() || n.starts_with(|c: char| c.is_ascii_digit()));
+        if NEVER_DEVICES.contains(&name)
+            || ["hidraw", "vcs"].iter().any(|p| name.starts_with(p))
+            || console
+        {
+            return refuse("through it a command reaches what is yours");
+        }
+        let kind = std::fs::symlink_metadata(path).at(path)?.file_type();
+        if kind.is_symlink() {
+            return refuse("it is a link");
+        }
+        if kind.is_block_device() {
+            return refuse("it is a disk");
+        }
+        if kind.is_dir() {
+            let holds_disk = std::fs::read_dir(path).at(path)?.flatten().any(|e| {
+                e.file_type()
+                    .is_ok_and(|t| t.is_block_device() || t.is_symlink())
+            });
+            if holds_disk {
+                return refuse("it holds disks or links");
+            }
+        } else if !kind.is_char_device() {
+            return refuse("it is not a device");
+        }
+        self.devices.push(path.to_owned());
+        Ok(())
     }
 
     /// A command cannot write a file larger than `bytes`: the write fails
@@ -1132,6 +1196,16 @@ fn here(path: &Path) -> Result<PathBuf> {
 /// Kule's home and the task's folder (see [`Sandbox::new`]).
 const ALWAYS_HIDDEN: usize = 2;
 
+/// Devices under `/dev` never given to a task's commands (see
+/// [`Sandbox::allow_device`]): memory and the kernel's log, keyboards and
+/// mice (to read or to type), the console, terminals and Kule's own
+/// handling of them, shared memory.
+const NEVER_DEVICES: &[&str] = &[
+    "mem", "kmem", "port", "kmsg", "input", "uinput", "console", "pts", "ptmx", "shm", "mqueue",
+    "snapshot", "disk", "mapper", "block", "char", "fd", "stdin", "stdout", "stderr", "core",
+    "cpu", "mcelog", "watchdog",
+];
+
 /// How many times [`Sandbox::end_strays`] looks before it gives up.
 const STRAY_LOOKS: usize = 200;
 
@@ -1496,11 +1570,13 @@ impl Sandbox {
                 .and_then(Into::into);
             let handle = handle
                 .ok_or_else(|| Error::Invalid("Landlock: no ruleset to add terminals to".into()))?;
-            let (read, write) = (landlock::AccessFs::ReadFile, landlock::AccessFs::WriteFile);
+            // Terminals are driven by their requests (sizes, modes).
+            let file =
+                landlock::AccessFs::ReadFile | landlock::AccessFs::WriteFile | device_ioctl();
             Some((
                 handle,
-                (read | write | landlock::AccessFs::ReadDir).bits(),
-                (read | write).bits(),
+                (file | landlock::AccessFs::ReadDir).bits(),
+                file.bits(),
             ))
         } else {
             None
@@ -1585,6 +1661,13 @@ impl Sandbox {
                 .scope(landlock::Scope::AbstractUnixSocket | landlock::Scope::Signal)
                 .map_err(|e| fail(&e))?;
         }
+        // From ABI 5 a device opened in the sandbox takes only the requests
+        // (ioctl) of a device given to it.
+        if !device_ioctl().is_empty() {
+            ruleset = ruleset
+                .handle_access(device_ioctl())
+                .map_err(|e| fail(&e))?;
+        }
         let carve_all = |roots: Vec<PathBuf>| {
             self.hidden
                 .iter()
@@ -1631,6 +1714,9 @@ impl Sandbox {
         // Where it has an instance of its own, the rules for it are added
         // once it is mounted (see `pty_rules`); elsewhere it cannot make a
         // new one, whose other end opens by its path there.
+        // Devices only by name, never `/dev` whole: a camera, a microphone
+        // or a USB device the person's session may open, and other
+        // programs' shared memory, are there.
         let mut devices: Vec<PathBuf> = [
             "/dev/null",
             "/dev/zero",
@@ -1643,13 +1729,24 @@ impl Sandbox {
         if self.gpu {
             devices.extend(gpu_devices());
         }
+        devices.extend(self.devices.iter().cloned());
+        let read_only_devices = ["/dev/random", "/dev/urandom"].map(PathBuf::from);
+        let readable = carve(readable, Path::new("/dev"));
         let mut created = ruleset
             .create()
             .map_err(|e| fail(&e))?
             .set_compatibility(CompatLevel::BestEffort)
             .add_rules(path_beneath_rules(&readable, AccessFs::from_read(abi)))
             .map_err(|e| fail(&e))?
-            .add_rules(path_beneath_rules(devices, AccessFs::from_all(abi)))
+            .add_rules(path_beneath_rules(
+                read_only_devices,
+                AccessFs::from_read(abi),
+            ))
+            .map_err(|e| fail(&e))?
+            .add_rules(path_beneath_rules(
+                devices,
+                AccessFs::from_all(abi) | device_ioctl(),
+            ))
             .map_err(|e| fail(&e))?
             .add_rules(path_beneath_rules(&writable, AccessFs::from_all(abi)))
             .map_err(|e| fail(&e))?;
@@ -1722,6 +1819,18 @@ impl Sandbox {
         sockets.sort();
         sockets.dedup();
         Ok(sockets)
+    }
+}
+
+/// Landlock's right to drive a device (ioctl), where this kernel's Landlock
+/// knows it (ABI 5): handled by every sandbox there, and given with each
+/// device a command gets.
+#[cfg(target_os = "linux")]
+fn device_ioctl() -> landlock::BitFlags<landlock::AccessFs> {
+    if landlock_abi() >= 5 {
+        landlock::AccessFs::IoctlDev.into()
+    } else {
+        landlock::BitFlags::empty()
     }
 }
 
