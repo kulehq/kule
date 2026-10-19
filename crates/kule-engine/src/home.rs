@@ -436,6 +436,11 @@ impl Task {
         let Some(mut layer) = self.load_layer()? else {
             return Ok(HomeApplied::default());
         };
+        // Nothing left running in the task's sandbox changes the layer
+        // while it is applied.
+        if let Ok(sandbox) = crate::Sandbox::new(self) {
+            sandbox.end_strays();
+        }
         let wanted: Vec<HomeChange> = self
             .home_changes()?
             .into_iter()
@@ -507,14 +512,26 @@ impl Task {
                             fs::create_dir(&to).at(&to)?;
                         }
                     }
+                    // Read from the layer without following a link at any
+                    // step: what reaches the home is what the layer holds.
                     Kind::Symlink => {
+                        let fsops::Beneath::Link(target) =
+                            fsops::beneath(&dir, &c.path).at(&from)?
+                        else {
+                            return Err(changed(&c.path));
+                        };
                         fsops::remove(&to)?;
-                        let target = fs::read_link(&from).at(&from)?;
                         std::os::unix::fs::symlink(target, &to).at(&to)?;
                     }
                     Kind::File => {
-                        let bytes = fs::read(&from).at(&from)?;
-                        let mode = fs::metadata(&from).at(&from)?.permissions();
+                        let fsops::Beneath::File(mut file) =
+                            fsops::beneath(&dir, &c.path).at(&from)?
+                        else {
+                            return Err(changed(&c.path));
+                        };
+                        let mode = file.metadata().at(&from)?.permissions();
+                        let mut bytes = Vec::new();
+                        std::io::Read::read_to_end(&mut file, &mut bytes).at(&from)?;
                         put(&to, &bytes, mode)?;
                     }
                 },
@@ -607,6 +624,10 @@ struct AppliedPath {
 }
 
 /// Saves the file or link at `from` as `to`.
+fn changed(path: &str) -> Error {
+    Error::Invalid(format!("~/{path} changed while it was being applied"))
+}
+
 fn keep(from: &Path, to: &Path) -> Result<()> {
     if let Some(parent) = to.parent() {
         fs::create_dir_all(parent).at(parent)?;
