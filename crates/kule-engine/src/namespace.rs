@@ -98,6 +98,8 @@ pub(crate) struct Isolation {
     /// one is gone, the relay stops.
     alive: OwnedFd,
     read_only: Vec<ReadOnly>,
+    /// Unix sockets to cover with an empty file for the command.
+    masked: Vec<CString>,
 }
 
 impl Isolation {
@@ -145,7 +147,23 @@ impl Isolation {
             to_kule,
             alive,
             read_only,
+            masked: Vec::new(),
         })
+    }
+
+    /// Covers each of `sockets` with an empty file in the command's mount
+    /// namespace, so connecting to it reaches nothing; for kernels whose
+    /// Landlock has no rule for Unix sockets.
+    pub(crate) fn mask_sockets(mut self, sockets: &[PathBuf]) -> io::Result<Isolation> {
+        if sockets.is_empty() {
+            return Ok(self);
+        }
+        self.namespaces |= libc::CLONE_NEWNS;
+        self.masked = sockets
+            .iter()
+            .map(|p| CString::new(p.as_os_str().as_bytes()))
+            .collect::<Result<_, _>>()?;
+        Ok(self)
     }
 
     /// Runs in the child, between fork and exec: only system calls.
@@ -167,7 +185,7 @@ impl Isolation {
                 libc::close(listener);
                 sent?;
             }
-            if !self.read_only.is_empty() {
+            if self.namespaces & libc::CLONE_NEWNS != 0 {
                 // Nothing mounted here reaches Kule's namespace, or any other.
                 check(libc::mount(
                     std::ptr::null(),
@@ -176,6 +194,23 @@ impl Isolation {
                     libc::MS_REC | libc::MS_PRIVATE,
                     std::ptr::null(),
                 ))?;
+            }
+            for socket in &self.masked {
+                let covered = libc::mount(
+                    c"/dev/null".as_ptr(),
+                    socket.as_ptr(),
+                    std::ptr::null(),
+                    libc::MS_BIND,
+                    std::ptr::null(),
+                );
+                // A socket gone since it was listed needs no cover; any
+                // other failure leaves it reachable, so the command fails.
+                if covered == -1 {
+                    let e = io::Error::last_os_error();
+                    if e.raw_os_error() != Some(libc::ENOENT) {
+                        return Err(e);
+                    }
+                }
             }
             for read_only in &self.read_only {
                 let path = read_only.path.as_ptr();

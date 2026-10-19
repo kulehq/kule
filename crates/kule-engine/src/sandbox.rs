@@ -993,8 +993,17 @@ impl Sandbox {
         };
         let read_only = self.mounted_read_only();
         let network_shared = matches!(net, Net::Shared);
-        if matches!(net, Net::Own(_)) || !read_only.is_empty() {
-            let isolation = Isolation::new(net, &read_only).at(Path::new("/proc/self/ns"))?;
+        // Without Landlock's rule for Unix sockets, those outside the
+        // task's folders are covered for the command instead.
+        let masked = if landlock_abi() < 9 && crate::namespace::mounts_available() {
+            self.outside_sockets()
+        } else {
+            Vec::new()
+        };
+        if matches!(net, Net::Own(_)) || !read_only.is_empty() || !masked.is_empty() {
+            let isolation = Isolation::new(net, &read_only)
+                .and_then(|i| i.mask_sockets(&masked))
+                .at(Path::new("/proc/self/ns"))?;
             // SAFETY: enter only makes system calls on buffers and
             // descriptors prepared before the fork.
             unsafe {
@@ -1059,6 +1068,22 @@ impl Sandbox {
         if let Some(net) = net {
             ruleset = ruleset.handle_access(net).map_err(|e| fail(&e))?;
         }
+        // Unix sockets lead to daemons running as the person (Docker, the
+        // session bus, ssh-agent, X): from ABI 9 a command reaches only
+        // those in its own folders. Older kernels hide the others with a
+        // mount instead (`outside_sockets`). From ABI 6, abstract sockets
+        // and signals stay within the sandbox too.
+        let abi_now = landlock_abi();
+        if abi_now >= 9 {
+            ruleset = ruleset
+                .handle_access(AccessFs::ResolveUnix)
+                .map_err(|e| fail(&e))?;
+        }
+        if abi_now >= 6 {
+            ruleset = ruleset
+                .scope(landlock::Scope::AbstractUnixSocket | landlock::Scope::Signal)
+                .map_err(|e| fail(&e))?;
+        }
         let carve_all = |roots: Vec<PathBuf>| {
             self.hidden
                 .iter()
@@ -1113,8 +1138,65 @@ impl Sandbox {
                 .add_rule(landlock::NetPort::new(port, AccessNet::ConnectTcp))
                 .map_err(|e| fail(&e))?;
         }
+        if abi_now >= 9 {
+            let own = [self.copy.clone(), self.tmp.clone()]
+                .into_iter()
+                .chain(self.layer.clone());
+            created = created
+                .add_rules(path_beneath_rules(own, AccessFs::ResolveUnix))
+                .map_err(|e| fail(&e))?;
+        }
         Ok(created)
     }
+}
+
+#[cfg(target_os = "linux")]
+impl Sandbox {
+    /// The Unix sockets listening now outside the task's own folders, as
+    /// the kernel lists them.
+    fn outside_sockets(&self) -> Vec<PathBuf> {
+        use std::os::unix::fs::FileTypeExt;
+        let own: Vec<&Path> = [&self.copy, &self.tmp]
+            .into_iter()
+            .chain(self.layer.iter())
+            .map(PathBuf::as_path)
+            .collect();
+        let Ok(listed) = std::fs::read_to_string("/proc/net/unix") else {
+            return Vec::new();
+        };
+        let mut sockets: Vec<PathBuf> = listed
+            .lines()
+            .skip(1)
+            .filter_map(|line| line.split_whitespace().nth(7))
+            .filter(|path| path.starts_with('/'))
+            .map(PathBuf::from)
+            .filter(|path| !own.iter().any(|dir| path.starts_with(dir)))
+            .filter(|path| std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_socket()))
+            .collect();
+        sockets.sort();
+        sockets.dedup();
+        sockets
+    }
+}
+
+/// The Landlock ABI this kernel speaks; 0 without Landlock.
+#[cfg(target_os = "linux")]
+pub(crate) fn landlock_abi() -> i64 {
+    static ABI: std::sync::OnceLock<i64> = std::sync::OnceLock::new();
+    *ABI.get_or_init(|| {
+        const VERSION: libc::c_uint = 1;
+        // SAFETY: with no attributes and the version flag, the call only
+        // reports the ABI.
+        let abi = unsafe {
+            libc::syscall(
+                libc::SYS_landlock_create_ruleset,
+                std::ptr::null::<libc::c_void>(),
+                0usize,
+                VERSION,
+            )
+        };
+        abi.max(0)
+    })
 }
 
 /// The GPU's devices: DRM's (`/dev/dri`, render and card nodes) and

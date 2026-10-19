@@ -181,10 +181,8 @@ fn kules_home_cannot_be_read_but_the_copy_can() {
     assert!(text(&out).starts_with("hello"));
 }
 
-/// Unix sockets lead to the user's daemons (Kule's own, Docker, ssh-agent);
-/// only sockets in the copy and tmp are reachable. Linux has no Landlock
-/// rule for it; there the daemon also wants a token the sandbox cannot read.
-#[cfg(target_os = "macos")]
+/// Unix sockets lead to the user's daemons (Kule's own, Docker, ssh-agent,
+/// the session bus); only sockets in the copy and tmp are reachable.
 #[test]
 fn unix_sockets_outside_the_copy_are_out_of_reach() {
     use std::os::unix::net::UnixListener;
