@@ -615,8 +615,12 @@ permissions, the SDK and the package format;
   no agent until you accept weaker isolation (Settings → Policy, or `kule
   isolation --accept-weaker on`), and says what is missing while you do.
   Unix sockets outside the task's folders are out of reach through
-  Landlock's rule for them (ABI 9), or covered for the command on older
-  kernels. An agent's settings inside its
+  Landlock's rule for them (ABI 9). On older kernels your runtime
+  directory (`/run/user/<uid>`, where the session bus, Docker's and
+  Podman's rootless sockets and agents' sockets live) is covered with an
+  empty one for the command, and each other socket that exists when it
+  starts is covered too; one a program of yours makes elsewhere while it
+  runs stays reachable. An agent's settings inside its
   state directory are mounted read-only for the agent alone, so changes the
   person makes meanwhile stay. Without user namespaces, and for settings
   that are links or do not exist yet, they are put back after the run

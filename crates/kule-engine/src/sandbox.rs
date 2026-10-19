@@ -1431,11 +1431,19 @@ impl Sandbox {
         let read_only = self.mounted_read_only();
         let network_shared = matches!(net, Net::Shared);
         // Without Landlock's rule for Unix sockets, those outside the
-        // task's folders are covered for the command instead.
-        let masked = if landlock_abi() < 9 && crate::namespace::mounts_available() {
-            self.outside_sockets()?
+        // task's folders are covered for the command instead: the person's
+        // runtime directory whole, where their daemons make theirs, also
+        // after the command started; elsewhere each one listed now.
+        let (covered, masked) = if landlock_abi() < 9 && crate::namespace::mounts_available() {
+            let covered = self.runtime_dirs(&runtime_dir_candidates());
+            let masked = self
+                .outside_sockets()?
+                .into_iter()
+                .filter(|s| !covered.iter().any(|dir| s.starts_with(dir)))
+                .collect();
+            (covered, masked)
         } else {
-            Vec::new()
+            (Vec::new(), Vec::new())
         };
         // Where /tmp is the commands' to write, it is the task's own; not
         // when the task itself lives in /tmp (a Kule home there), which the
@@ -1451,11 +1459,13 @@ impl Sandbox {
         if matches!(net, Net::Own(_))
             || !read_only.is_empty()
             || !masked.is_empty()
+            || !covered.is_empty()
             || own_tmp
             || own_pids
         {
             let mut isolation = Isolation::new(net, &read_only)
                 .and_then(|i| i.mask_sockets(&masked))
+                .and_then(|i| i.cover(&covered))
                 .at(Path::new("/proc/self/ns"))?;
             if own_pids {
                 isolation = isolation.own_pids();
@@ -1632,6 +1642,32 @@ impl Sandbox {
     /// The Unix sockets listening now outside the task's own folders, as
     /// the kernel lists them; an error when the list cannot be read, as
     /// nothing would be kept out then.
+    /// Of `candidates`, the person's runtime directories to cover for the
+    /// command: each a directory of theirs (by its owner, not the variable
+    /// that names it), never `/`, holding none of the task's folders or
+    /// any the command may write to, which the cover would hide.
+    fn runtime_dirs(&self, candidates: &[PathBuf]) -> Vec<PathBuf> {
+        use std::os::unix::fs::MetadataExt;
+        // SAFETY: getuid cannot fail.
+        let uid = unsafe { libc::getuid() };
+        let ours: Vec<&Path> = [&self.copy, &self.tmp]
+            .into_iter()
+            .chain(self.layer.iter())
+            .chain(&self.writable)
+            .map(PathBuf::as_path)
+            .collect();
+        let mut dirs: Vec<PathBuf> = candidates
+            .iter()
+            .filter_map(|c| std::fs::canonicalize(c).ok())
+            .filter(|d| d.parent().is_some())
+            .filter(|d| std::fs::metadata(d).is_ok_and(|m| m.is_dir() && m.uid() == uid))
+            .filter(|d| !ours.iter().any(|o| o.starts_with(d)))
+            .collect();
+        dirs.sort();
+        dirs.dedup();
+        dirs
+    }
+
     fn outside_sockets(&self) -> Result<Vec<PathBuf>> {
         self.outside_sockets_in(Path::new("/proc/net/unix"))
     }
@@ -1654,6 +1690,18 @@ impl Sandbox {
         sockets.dedup();
         Ok(sockets)
     }
+}
+
+/// Where the person's daemons make their sockets: systemd's runtime
+/// directory for this user, and the one `XDG_RUNTIME_DIR` names.
+#[cfg(target_os = "linux")]
+fn runtime_dir_candidates() -> Vec<PathBuf> {
+    // SAFETY: getuid cannot fail.
+    let uid = unsafe { libc::getuid() };
+    std::iter::once(PathBuf::from(format!("/run/user/{uid}")))
+        .chain(std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from))
+        .filter(|p| p.is_absolute())
+        .collect()
 }
 
 /// The paths of the sockets `/proc/net/unix` lists: each the rest of its
@@ -1832,5 +1880,30 @@ mod linux_tests {
         let list = home.path().join("unix");
         std::fs::write(&list, "Num RefCount\n").unwrap();
         assert!(sandbox.outside_sockets_in(&list).unwrap().is_empty());
+    }
+
+    /// Only a directory of the person's own is covered, never `/`, nor one
+    /// that holds the task's folders, which the cover would hide.
+    #[test]
+    fn only_the_persons_own_runtime_directory_is_covered() {
+        let (home, ws, runtime) = (
+            tempfile::TempDir::new().unwrap(),
+            tempfile::TempDir::new().unwrap(),
+            tempfile::TempDir::new().unwrap(),
+        );
+        let task = Task::create(home.path(), ws.path()).unwrap();
+        let sandbox = Sandbox::new(&task).unwrap();
+        let runtime = std::fs::canonicalize(runtime.path()).unwrap();
+        let candidates = [
+            runtime.clone(),
+            runtime.join("."),
+            PathBuf::from("/"),
+            // Holds the task's folders.
+            std::fs::canonicalize(home.path()).unwrap(),
+            // Not the person's.
+            PathBuf::from("/proc"),
+            PathBuf::from("/nonexistent-runtime"),
+        ];
+        assert_eq!(sandbox.runtime_dirs(&candidates), [runtime]);
     }
 }

@@ -123,6 +123,9 @@ pub(crate) struct Isolation {
     read_only: Vec<ReadOnly>,
     /// Unix sockets to cover with an empty file for the command.
     masked: Vec<CString>,
+    /// Directories to cover with an empty one of the command's own, so no
+    /// socket made there, before or after it started, is in its reach.
+    covered: Vec<CString>,
     /// The task's own directory, mounted over `/tmp` for the command.
     tmp: Option<CString>,
     /// Processes of its own (see the module's notes).
@@ -175,6 +178,7 @@ impl Isolation {
             alive,
             read_only,
             masked: Vec::new(),
+            covered: Vec::new(),
             tmp: None,
             pids: false,
         })
@@ -205,6 +209,22 @@ impl Isolation {
         }
         self.namespaces |= libc::CLONE_NEWNS;
         self.masked = sockets
+            .iter()
+            .map(|p| CString::new(p.as_os_str().as_bytes()))
+            .collect::<Result<_, _>>()?;
+        Ok(self)
+    }
+
+    /// Covers each of `dirs` with an empty directory in the command's mount
+    /// namespace (a small tmpfs of its own): for where the person's daemons
+    /// make their sockets, on kernels whose Landlock has no rule for them,
+    /// since a socket made after the command started is in no list.
+    pub(crate) fn cover(mut self, dirs: &[PathBuf]) -> io::Result<Isolation> {
+        if dirs.is_empty() {
+            return Ok(self);
+        }
+        self.namespaces |= libc::CLONE_NEWNS;
+        self.covered = dirs
             .iter()
             .map(|p| CString::new(p.as_os_str().as_bytes()))
             .collect::<Result<_, _>>()?;
@@ -252,6 +272,15 @@ impl Isolation {
                     c"proc".as_ptr(),
                     libc::MS_NOSUID | libc::MS_NODEV | libc::MS_NOEXEC,
                     std::ptr::null(),
+                ))?;
+            }
+            for dir in &self.covered {
+                check(libc::mount(
+                    c"tmpfs".as_ptr(),
+                    dir.as_ptr(),
+                    c"tmpfs".as_ptr(),
+                    libc::MS_NOSUID | libc::MS_NODEV | libc::MS_NOEXEC,
+                    c"mode=0700,size=1m".as_ptr().cast(),
                 ))?;
             }
             if let Some(dir) = &self.tmp {
@@ -741,4 +770,58 @@ fn pass(inside: TcpStream, port: u16) {
     let _ = io::copy(&mut proxy_read, &mut inside_write);
     let _ = inside_write.shutdown(Shutdown::Write);
     let _ = up.join();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A covered directory is empty for the command: what was there, and a
+    /// socket the person's daemon makes there after the command started.
+    #[test]
+    fn a_covered_directory_hides_sockets_made_after_the_start() {
+        use std::os::unix::net::UnixListener;
+        use std::os::unix::process::CommandExt;
+        if !mounts_available() {
+            eprintln!("skipped: no mount namespace here");
+            return;
+        }
+        let (covered, elsewhere) = (
+            tempfile::TempDir::new().unwrap(),
+            tempfile::TempDir::new().unwrap(),
+        );
+        let dir = std::fs::canonicalize(covered.path()).unwrap();
+        let started = elsewhere.path().join("started");
+        let _early = UnixListener::bind(dir.join("early.sock")).unwrap();
+        let isolation = Isolation::new(Net::Shared, &[])
+            .and_then(|i| i.cover(std::slice::from_ref(&dir)))
+            .unwrap();
+        // It looks once the late socket is there.
+        let script = format!(
+            "while [ ! -e '{}' ]; do sleep 0.01; done; ls -A '{}'",
+            started.display(),
+            dir.display()
+        );
+        let mut command = std::process::Command::new("/bin/sh");
+        command
+            .args(["-c", &script])
+            .stdout(std::process::Stdio::piped());
+        // SAFETY: enter only makes system calls on what was prepared before.
+        unsafe {
+            command.pre_exec(move || isolation.enter());
+        }
+        let child = command.spawn().unwrap();
+        // The daemon's socket comes after the command started.
+        let _late = UnixListener::bind(dir.join("late.sock")).unwrap();
+        std::fs::write(&started, "").unwrap();
+        let out = child.wait_with_output().unwrap();
+        assert!(out.status.success(), "{out:?}");
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout),
+            "",
+            "seen in the cover"
+        );
+        // Outside the command, both are there as they were.
+        assert!(dir.join("early.sock").exists() && dir.join("late.sock").exists());
+    }
 }
