@@ -34,10 +34,12 @@ protected = [
   ".claude/plugins", ".claude/skills", ".claude/commands", ".claude/agents", ".claude/CLAUDE.md",
   ".claude/statusline.sh", ".claude/output-styles",
 ]
-reveal_on_macos = ["Library/Keychains"]
 # Its sign-in tokens too: the agent works with placeholders, and the proxy
 # puts the token into what goes to Anthropic alone.
 keys = { ANTHROPIC_API_KEY = ["api.anthropic.com"], ANTHROPIC_AUTH_TOKEN = ["api.anthropic.com"], CLAUDE_CODE_OAUTH_TOKEN = ["api.anthropic.com"] }
+# On macOS its sign-in lives in the keychain, which stays hidden: Kule reads
+# the token there and hands the agent a placeholder for it instead.
+keychain = { CLAUDE_CODE_OAUTH_TOKEN = { service = "Claude Code-credentials", json = "claudeAiOauth.accessToken", hosts = ["api.anthropic.com"] } }
 
 [[agent]]
 name = "gemini"

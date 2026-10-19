@@ -143,6 +143,13 @@ pub struct Profile {
     /// those hosts alone, over HTTPS.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub keys: BTreeMap<String, Vec<String>>,
+    /// Keys the agent keeps in the macOS keychain, by the variable it reads
+    /// them from: Kule reads each there itself, and the agent gets a
+    /// placeholder as for [`Profile::keys`], so neither it nor what it runs
+    /// needs the keychain. A key of the same name set in the person's
+    /// environment wins.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub keychain: BTreeMap<String, KeychainKey>,
     /// HTTPS hosts the agent needs for its login and model, beyond what the
     /// policy already lets through. Open only while this agent runs.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -158,6 +165,50 @@ pub struct Profile {
     /// when the profiles are loaded.
     #[serde(skip)]
     others: Vec<String>,
+}
+
+/// A key in the macOS keychain (see [`Profile::keychain`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct KeychainKey {
+    /// The service of the generic password that holds it.
+    pub service: String,
+    /// Where in the item's JSON the key is, as `outer.inner`; the item
+    /// itself without.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub json: Option<String>,
+    /// The hosts it is for.
+    pub hosts: Vec<String>,
+}
+
+impl KeychainKey {
+    /// The key out of `item`, the keychain item's text.
+    pub fn pick(&self, item: &str) -> Option<String> {
+        let item = item.trim();
+        let Some(path) = &self.json else {
+            return Some(item.to_owned()).filter(|v| !v.is_empty());
+        };
+        let mut at: serde_json::Value = serde_json::from_str(item).ok()?;
+        for step in path.split('.') {
+            at = at.get_mut(step)?.take();
+        }
+        at.as_str().filter(|v| !v.is_empty()).map(str::to_owned)
+    }
+
+    /// The key, read from the person's login keychain; macOS only.
+    fn read(&self) -> Option<String> {
+        if !cfg!(target_os = "macos") {
+            return None;
+        }
+        let out = std::process::Command::new("/usr/bin/security")
+            .args(["find-generic-password", "-s", &self.service, "-w"])
+            .stdin(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .output()
+            .ok()
+            .filter(|o| o.status.success())?;
+        self.pick(&String::from_utf8_lossy(&out.stdout))
+    }
 }
 
 #[derive(Deserialize)]
@@ -689,6 +740,7 @@ impl Profile {
             env,
             pass_env: Vec::new(),
             keys: BTreeMap::new(),
+            keychain: BTreeMap::new(),
             hosts: Vec::new(),
             own_home: None,
             others: Vec::new(),
@@ -895,10 +947,17 @@ impl Profile {
                 ));
             }
         }
-        for name in self.keys.keys() {
+        for name in self.keys.keys().chain(self.keychain.keys()) {
             if self.env.contains_key(name) || self.pass_env.contains(name) {
                 return Err(format!(
                     "{name}: a key the agent never sees cannot also be in env or pass_env"
+                ));
+            }
+        }
+        for (name, key) in &self.keychain {
+            if key.hosts.is_empty() || key.service.trim().is_empty() {
+                return Err(format!(
+                    "{name}: name the keychain service and the hosts the key is for"
                 ));
             }
         }
@@ -907,6 +966,7 @@ impl Profile {
             .keys()
             .chain(&self.pass_env)
             .chain(self.keys.keys())
+            .chain(self.keychain.keys())
         {
             let ok = !name.is_empty()
                 && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
@@ -925,7 +985,12 @@ impl Profile {
                 return Err(format!("{name}: name the hosts the key is for"));
             }
         }
-        for host in self.hosts.iter().chain(self.keys.values().flatten()) {
+        for host in self
+            .hosts
+            .iter()
+            .chain(self.keys.values().flatten())
+            .chain(self.keychain.values().flat_map(|k| &k.hosts))
+        {
             let labels: Vec<&str> = host.split('.').collect();
             let ok = labels.len() >= 2
                 && labels.iter().all(|l| {
@@ -1006,7 +1071,8 @@ impl Profile {
     /// The agent's keys the person has set, with their values, for the
     /// task's proxy to put in for it (see [`Profile::keys`]).
     pub fn agent_keys(&self) -> Vec<AgentKey> {
-        self.keys
+        let mut keys: Vec<AgentKey> = self
+            .keys
             .iter()
             .filter_map(|(name, hosts)| {
                 let value = std::env::var(name).ok().filter(|v| !v.is_empty())?;
@@ -1016,7 +1082,20 @@ impl Profile {
                     hosts: hosts.clone(),
                 })
             })
-            .collect()
+            .collect();
+        for (name, key) in &self.keychain {
+            if keys.iter().any(|k| &k.name == name) {
+                continue;
+            }
+            if let Some(value) = key.read() {
+                keys.push(AgentKey {
+                    name: name.clone(),
+                    value,
+                    hosts: key.hosts.clone(),
+                });
+            }
+        }
+        keys
     }
 
     /// `policy` with this agent's hosts let through, under `profile-<name>`.
@@ -1634,6 +1713,27 @@ hosts = ["openrouter.ai"]
                 "{agent}"
             );
         }
+    }
+
+    /// Claude Code keeps its sign-in in the keychain: Kule reads it there
+    /// for the proxy, and the agent, with all it runs, sees no keychain.
+    #[test]
+    fn claude_codes_keychain_sign_in_is_kules_to_read_not_the_agents() {
+        let home = tempfile::TempDir::new().unwrap();
+        let agents = Agents::load(home.path()).unwrap();
+        let claude = agents.get("claude-code").unwrap();
+        assert!(
+            claude.reveal_on_macos.is_empty(),
+            "{:?}",
+            claude.reveal_on_macos
+        );
+        let key = &claude.keychain["CLAUDE_CODE_OAUTH_TOKEN"];
+        assert_eq!(key.service, "Claude Code-credentials");
+        assert_eq!(key.hosts, ["api.anthropic.com"]);
+        // The token inside the item as Claude Code writes it.
+        let item = r#"{"claudeAiOauth":{"accessToken":"sk-ant-oat01-x","refreshToken":"r"}}"#;
+        assert_eq!(key.pick(item).as_deref(), Some("sk-ant-oat01-x"));
+        assert_eq!(key.pick("not json"), None);
     }
 
     #[test]
