@@ -13,7 +13,9 @@
 >
 > ```sh
 > shasum -a 256 -c SHA256SUMS --ignore-missing
-> gh attestation verify Kule_@VERSION@_universal.dmg --repo kulehq/kule
+> gh attestation verify Kule_@VERSION@_universal.dmg --repo kulehq/kule \
+>   --signer-workflow kulehq/kule/.github/workflows/release.yml \
+>   --source-ref refs/tags/v@VERSION@
 > ```
 >
 > Or build it yourself: `cargo build --release -p kule -p kule-desktop`.

@@ -44,7 +44,9 @@ the release workflow. Check them before opening anything:
 
 ```sh
 shasum -a 256 -c SHA256SUMS --ignore-missing
-gh attestation verify Kule_<version>_universal.dmg --repo kulehq/kule
+gh attestation verify Kule_<version>_universal.dmg --repo kulehq/kule \
+  --signer-workflow kulehq/kule/.github/workflows/release.yml \
+  --source-ref refs/tags/v<version>
 ```
 
 The agents are installed and signed in the way they are without Kule:
