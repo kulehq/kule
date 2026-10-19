@@ -225,7 +225,7 @@ impl Interceptor {
             // Someone else's credentials to the person's host, or anything
             // but a read from a registry: ways the work could be carried
             // off. Answered here, never passed on.
-            let refused = if self.read_only.contains(host) && !reads(&request) {
+            let mut refused = if self.read_only.contains(host) && !reads(&request) {
                 Some(format!(
                     "Kule refused this request: commands read from {host}, never send to it ({} {}).\n",
                     request.method,
@@ -236,6 +236,24 @@ impl Interceptor {
                     format!("Kule refused this request: its {header} is not a credential Kule holds for {host}.\n")
                 })
             };
+            // A form to a host Kule keeps credentials for is read whole
+            // first, and its fields checked as the head's are.
+            let mut form = None;
+            if refused.is_none() && self.vault.holds_for(host) && is_form(&head) {
+                match read_form(&mut client, request.framing).map_err(io)? {
+                    Some(body) => {
+                        refused = self.vault.foreign_in_form(host, &body).map(|field| {
+                            format!("Kule refused this request: its {field} is not a credential Kule holds for {host}.\n")
+                        });
+                        form = Some(body);
+                    }
+                    None => {
+                        refused = Some(format!(
+                            "Kule refused this request: a form to {host} is checked whole, and this one is chunked or over {MAX_FORM} bytes.\n"
+                        ));
+                    }
+                }
+            }
             if let Some(said) = refused {
                 write!(
                     client.stream,
@@ -251,7 +269,12 @@ impl Interceptor {
             // Noted once written: a host that fails the handshake got none.
             upstream.stream.write_all(head.as_bytes()).map_err(io)?;
             used.extend(names);
-            relay(request.framing, &mut client, &mut upstream.stream, false).map_err(io)?;
+            match &form {
+                Some(body) => upstream.stream.write_all(body).map_err(io)?,
+                None => {
+                    relay(request.framing, &mut client, &mut upstream.stream, false).map_err(io)?
+                }
+            }
             upstream.stream.flush().map_err(io)?;
             // The response, as it comes, with any secret it repeats blanked
             // out (an echo, an error quoting the key).
@@ -532,6 +555,34 @@ fn connection_has(head: &str, token: &str) -> bool {
     headers(head, "connection")
         .flat_map(|v| v.split(','))
         .any(|t| t.trim().eq_ignore_ascii_case(token))
+}
+
+/// The largest form Kule reads whole to check it.
+const MAX_FORM: u64 = 1 << 20;
+
+/// Whether the request's body is a form (`application/x-www-form-urlencoded`).
+fn is_form(head: &str) -> bool {
+    headers(head, "content-type").any(|v| {
+        v.split(';')
+            .next()
+            .unwrap_or_default()
+            .trim()
+            .eq_ignore_ascii_case("application/x-www-form-urlencoded")
+    })
+}
+
+/// A request's body read whole, when its framing says how long it is and
+/// that is at most [`MAX_FORM`]; `None` otherwise.
+fn read_form<S: Read>(from: &mut Conn<S>, framing: Framing) -> io::Result<Option<Vec<u8>>> {
+    match framing {
+        Framing::Empty => Ok(Some(Vec::new())),
+        Framing::Length(n) if n <= MAX_FORM => {
+            let mut body = vec![0u8; n as usize];
+            from.read_exact(&mut body)?;
+            Ok(Some(body))
+        }
+        _ => Ok(None),
+    }
 }
 
 /// How a message's body ends.
@@ -1169,6 +1220,41 @@ mod tests {
             let (reply, _) = ask(&interceptor, host.port, HOST, &sent);
             assert!(reply.unwrap().starts_with("HTTP/1.1 200"), "{credential}");
         }
+    }
+
+    /// A form to a host Kule holds a secret for is checked whole: one with
+    /// credentials of its own goes nowhere, nor one too long or chunked to
+    /// check; a plain form goes through as it came.
+    #[test]
+    fn a_form_with_credentials_kule_does_not_hold_is_refused() {
+        let host = echo_host();
+        let home = TempDir::new().unwrap();
+        let (interceptor, _) = interceptor(&home, host.roots);
+        let form = |body: &str| {
+            format!(
+                "POST /oauth/token HTTP/1.1\r\nHost: {HOST}\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            )
+        };
+        for body in [
+            "grant_type=client_credentials&client_secret=someone-elses",
+            "a=1&api%5Fkey=someone-elses",
+            "token=someone+elses",
+        ] {
+            let (reply, _) = ask(&interceptor, host.port, HOST, &form(body));
+            let reply = reply.unwrap_or_default();
+            assert!(reply.starts_with("HTTP/1.1 403"), "{body}: {reply}");
+            assert!(!reply.contains("someone"), "{reply}");
+        }
+        let chunked = format!(
+            "POST /oauth/token HTTP/1.1\r\nHost: {HOST}\r\nContent-Type: application/x-www-form-urlencoded\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n6\r\ntoken=\r\n0\r\n\r\n"
+        );
+        let (reply, _) = ask(&interceptor, host.port, HOST, &chunked);
+        assert!(reply.unwrap_or_default().starts_with("HTTP/1.1 403"));
+        let (reply, _) = ask(&interceptor, host.port, HOST, &form("q=kule&page=2"));
+        let reply = reply.unwrap();
+        assert!(reply.starts_with("HTTP/1.1 200"), "{reply}");
+        assert!(reply.contains("q=kule&page=2"), "{reply}");
     }
 
     /// A head the host could read apart from Kule, or one for another host

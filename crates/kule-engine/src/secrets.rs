@@ -658,6 +658,35 @@ impl Vault {
         })
     }
 
+    /// Whether Kule keeps credentials for `host`, which only Kule's then
+    /// reach.
+    pub(crate) fn holds_for(&self, host: &str) -> bool {
+        !self.going_to(host).is_empty()
+    }
+
+    /// The credential field of a form `body` (`application/x-www-form-
+    /// urlencoded`) bound for `host` that is none of Kule's placeholders:
+    /// as [`Vault::foreign_credential`] for a form's fields. `None` when it
+    /// has none, or Kule holds nothing for `host`.
+    pub(crate) fn foreign_in_form(&self, host: &str, body: &[u8]) -> Option<String> {
+        let going = self.going_to(host);
+        if going.is_empty() {
+            return None;
+        }
+        let text = String::from_utf8_lossy(body);
+        text.split('&').find_map(|pair| {
+            let (name, value) = pair.split_once('=').unwrap_or((pair, ""));
+            let decoded = |s: &str| percent_decoded(&s.replace('+', " "));
+            let (name, value) = (decoded(name), decoded(value));
+            let credential = CREDENTIAL_PARAMS
+                .iter()
+                .chain(FORM_CREDENTIALS)
+                .any(|c| name.trim().eq_ignore_ascii_case(c));
+            let ours = going.iter().any(|h| value == h.placeholder);
+            (credential && !ours).then(|| format!("form field {}", name.trim()))
+        })
+    }
+
     /// Every real value the vault holds, as it is and as it reads in JSON
     /// and in a URL: the forms a response that repeats it may hold.
     pub(crate) fn values(&self) -> Vec<String> {
@@ -730,6 +759,9 @@ fn percent_decoded(text: &str) -> String {
 /// Query parameters that carry credentials, on a host Kule holds a secret
 /// for.
 const CREDENTIAL_PARAMS: &[&str] = &["key", "api_key", "apikey", "access_token", "token"];
+
+/// What else a form carries credentials in: OAuth's token requests.
+const FORM_CREDENTIALS: &[&str] = &["client_secret", "refresh_token"];
 
 fn is_credential(line: &str) -> bool {
     line.split_once(':').is_some_and(|(name, _)| {
