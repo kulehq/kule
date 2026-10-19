@@ -490,3 +490,28 @@ fn git_notes_naming_commits_stay_the_folders_own() {
     );
     assert!(r.task.effects().unwrap().is_empty());
 }
+
+/// An index entry that hides its file from `git status` and `git diff`
+/// (assume-unchanged, skip-worktree), or a submodule's commit staged in the
+/// index, goes to a person.
+#[test]
+fn index_entries_that_hide_a_file_or_name_a_submodule_go_to_a_person() {
+    let r = Repo::new();
+    let copy = r.copy();
+    git(&copy, &["update-index", "--assume-unchanged", "README.md"]);
+    git(&copy, &["update-index", "--skip-worktree", "notes.txt"]);
+    // The flags alone change no entry's content.
+    assert_eq!(staged(&r), ["README.md", "notes.txt"]);
+    let commit = head(&copy);
+    git(
+        &copy,
+        &[
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            &format!("160000,{commit},vendor/lib"),
+        ],
+    );
+    assert_eq!(staged(&r), ["README.md", "notes.txt", "vendor/lib"]);
+    assert_eq!(ruling(&r).0, Verdict::Ask);
+}

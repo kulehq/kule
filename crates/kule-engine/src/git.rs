@@ -158,8 +158,17 @@ fn digest(index: &gix::index::File) -> String {
         hasher.update(&entry.mode.bits().to_le_bytes());
         hasher.update(entry.id.as_bytes());
         hasher.update(&entry.stage_raw().to_le_bytes());
+        hasher.update(&hiding(entry).to_le_bytes());
     }
     hasher.finalize().to_hex().to_string()
+}
+
+/// The flags of an index entry that keep `git status` and `git diff` from
+/// showing what happens to its file: assume-unchanged, skip-worktree, and
+/// intent-to-add.
+fn hiding(entry: &gix::index::Entry) -> u32 {
+    use gix::index::entry::Flags;
+    (entry.flags & (Flags::ASSUME_VALID | Flags::SKIP_WORKTREE | Flags::INTENT_TO_ADD)).bits()
 }
 
 /// Whether the references a change at `path` depends on still hold their
@@ -336,7 +345,8 @@ pub(crate) fn summarize(
 
 /// The index entries of the copy's repository that differ from the
 /// workspace's (so the task staged them) and that the copy's files do not
-/// hold, plus the entries the task took out while their file stays.
+/// hold, or that hide their file from `git status` as the workspace's did
+/// not; plus the entries the task took out while their file stays.
 fn staged_unlike_files(repo: &gix::Repository, copy: &Path, work: &Path) -> Result<Vec<String>> {
     let fail = |e: &dyn std::fmt::Display| Error::Git {
         path: copy.to_path_buf(),
@@ -345,26 +355,28 @@ fn staged_unlike_files(repo: &gix::Repository, copy: &Path, work: &Path) -> Resu
     let Some(index) = repo.try_index().map_err(|e| fail(&e))? else {
         return Ok(Vec::new());
     };
-    let entries =
-        |index: &gix::index::File| -> BTreeMap<String, (gix::ObjectId, gix::index::entry::Mode)> {
-            index
-                .entries()
-                .iter()
-                .filter(|e| e.stage_raw() == 0)
-                .map(|e| (e.path(index).to_string(), (e.id, e.mode)))
-                .collect()
-        };
+    type Entries = BTreeMap<String, (gix::ObjectId, gix::index::entry::Mode, u32)>;
+    let entries = |index: &gix::index::File| -> Entries {
+        index
+            .entries()
+            .iter()
+            .filter(|e| e.stage_raw() == 0)
+            .map(|e| (e.path(index).to_string(), (e.id, e.mode, hiding(e))))
+            .collect()
+    };
     let ours = entries(&index);
     let theirs = match open(work).ok().and_then(|w| w.try_index().ok().flatten()) {
         Some(index) => entries(&index),
         None => BTreeMap::new(),
     };
     let mut staged = Vec::new();
-    for (path, (id, mode)) in &ours {
-        if theirs.get(path) == Some(&(*id, *mode)) {
+    for (path, (id, mode, hides)) in &ours {
+        let theirs = theirs.get(path);
+        if theirs == Some(&(*id, *mode, *hides)) {
             continue;
         }
-        if !holds(copy, path, *id, *mode) {
+        let hides_anew = *hides != 0 && theirs.is_none_or(|t| t.2 != *hides);
+        if hides_anew || !holds(copy, path, *id, *mode) {
             staged.push(path.clone());
         }
     }
@@ -385,8 +397,9 @@ fn holds(copy: &Path, path: &str, id: gix::ObjectId, mode: gix::index::entry::Mo
     use std::io::Read;
 
     if mode == Mode::COMMIT {
-        // A submodule's commit: not a file to compare.
-        return true;
+        // Another repository's commit, which no file of the copy holds:
+        // what a clone would check out there is a person's to judge.
+        return false;
     }
     let data = if mode == Mode::SYMLINK {
         // The link itself is read; its parent must be reached without one.
