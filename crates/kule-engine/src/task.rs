@@ -345,7 +345,10 @@ impl Task {
             if vault.is_none() {
                 vault = Some(self.vault()?);
             }
-            let real = vault.as_ref().map(|v| v.unmask(&text)).unwrap_or_default();
+            let real = vault
+                .as_ref()
+                .map(|v| v.unmask(path, &text))
+                .unwrap_or_default();
             if real != text {
                 fsops::replace_file(&full, real.as_bytes())?;
             }
@@ -720,7 +723,7 @@ impl Task {
         if secrets::is_env_file(&effect.path)
             && let Ok(text) = std::str::from_utf8(&ours)
         {
-            ours = self.vault()?.unmask(text).into_bytes();
+            ours = self.vault()?.unmask(&effect.path, text).into_bytes();
         }
         Ok(Some(
             match crate::entities::merge(&effect.path, &base, &theirs, &ours) {

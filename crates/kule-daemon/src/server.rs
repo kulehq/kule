@@ -24,7 +24,7 @@ pub const MAX_REQUEST: usize = 1 << 20;
 /// Connections served at once: the app, its subscribers and the CLI need a
 /// handful.
 const MAX_CLIENTS: usize = 64;
-/// How long a connection that has not shown the token may take for a line.
+/// How long a connection may take, in all, to show the token.
 const UNPROVEN_FOR: std::time::Duration = std::time::Duration::from_secs(5);
 /// Unix socket paths are limited to about this many bytes.
 const MAX_SOCKET_PATH: usize = 100;
@@ -243,12 +243,34 @@ pub fn peer_uid(stream: &UnixStream) -> Option<u32> {
     }
 }
 
+/// The connection, read with one deadline for all that comes before the
+/// token: a line given a byte at a time does not stretch it.
+struct Unproven {
+    stream: UnixStream,
+    until: Option<Instant>,
+}
+
+impl Read for Unproven {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        if let Some(until) = self.until {
+            let left = until.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                return Err(io::ErrorKind::TimedOut.into());
+            }
+            self.stream.set_read_timeout(Some(left))?;
+        }
+        self.stream.read(buf)
+    }
+}
+
 fn handle(stream: UnixStream, service: &Arc<Service>, control: &Control) -> io::Result<()> {
-    // Until it shows the token, a connection has a few seconds for each
-    // line; one that says nothing is let go.
-    stream.set_read_timeout(Some(UNPROVEN_FOR))?;
+    // Until it shows the token, a connection has a few seconds in all, and
+    // one line that is not a request ends it.
     let mut writer = stream.try_clone()?;
-    let mut reader = BufReader::new(stream);
+    let mut reader = BufReader::new(Unproven {
+        stream,
+        until: Some(Instant::now() + UNPROVEN_FOR),
+    });
     let mut proven = false;
     while let Some(line) = read_line(&mut reader, MAX_REQUEST)? {
         if line.trim().is_empty() {
@@ -258,6 +280,9 @@ fn handle(stream: UnixStream, service: &Arc<Service>, control: &Control) -> io::
             Ok(request) => request,
             Err(e) => {
                 write_line(&mut writer, &failed(0, format!("bad request: {e}")))?;
+                if !proven {
+                    return Ok(());
+                }
                 continue;
             }
         };
@@ -272,7 +297,8 @@ fn handle(stream: UnixStream, service: &Arc<Service>, control: &Control) -> io::
         }
         if !proven {
             proven = true;
-            reader.get_ref().set_read_timeout(None)?;
+            reader.get_mut().until = None;
+            reader.get_ref().stream.set_read_timeout(None)?;
         }
         if request.call == Call::Subscribe {
             let notices = service.subscribe();

@@ -82,7 +82,8 @@ pub fn existing(root: &Path, rel: &str) -> Result<()> {
 fn open(root: &Path, rel: &str) -> Result<std::fs::File> {
     inside(root, rel)?;
     if rel.is_empty() {
-        return std::fs::File::open(root).map_err(|e| format!("{}: {e}", root.display()));
+        // Named as the copy's top, not where the copy is on disk.
+        return std::fs::File::open(root).map_err(|e| format!("the task's top folder: {e}"));
     }
     let rel_slash = rel.trim_end_matches('/');
     kule_engine::open_beneath(root, rel_slash)

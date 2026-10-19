@@ -21,6 +21,33 @@ const MAX_LEN: usize = 64;
 /// command's default away.
 pub type Shortcuts = BTreeMap<String, String>;
 
+/// Commands that answer for the person: approve or deny a question, commit
+/// or roll back, change the policy. Their keys are set only in the app; a
+/// profile from elsewhere could otherwise put them on keys pressed every
+/// day, so an approval fires where a prompt was meant to be sent.
+pub const DECIDING: &[&str] = &[
+    "question.approve",
+    "question.remember",
+    "question.deny",
+    "review.commit",
+    "review.rollback",
+    "timeline.undo",
+    "policy.balanced",
+    "policy.careful",
+];
+
+/// `theirs` (from a profile) in place of `mine`, but for the keys of
+/// [`DECIDING`] commands, which stay as they are in `mine`.
+pub fn from_profile(theirs: &Shortcuts, mine: &Shortcuts) -> Shortcuts {
+    let deciding = |id: &str| DECIDING.contains(&id);
+    theirs
+        .iter()
+        .filter(|(id, _)| !deciding(id))
+        .chain(mine.iter().filter(|(id, _)| deciding(id)))
+        .map(|(id, keys)| (id.clone(), keys.clone()))
+        .collect()
+}
+
 /// What is kept; nothing when nothing was ever changed. A file that cannot
 /// be read is reported rather than taken as empty, so a save never writes
 /// over choices that are still there.

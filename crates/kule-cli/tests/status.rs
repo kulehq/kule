@@ -247,3 +247,18 @@ fn a_group_puts_its_policy_over_its_tasks_commits() {
         "# Plan\nMore.\n"
     );
 }
+
+#[test]
+fn an_error_cannot_drive_the_terminal() {
+    let home = TempDir::new().unwrap();
+    // A task id is whatever was passed, and the error names it.
+    let out = Command::new(env!("CARGO_BIN_EXE_kule"))
+        .args(["status", "abc\x1b]0;owned\x07\u{E0072}"])
+        .env("KULE_HOME", home.path())
+        .output()
+        .unwrap();
+    let said = String::from_utf8(out.stderr).unwrap();
+    assert!(!out.status.success());
+    assert!(said.contains("abc\\u{1b}]0;owned\\u{7}"), "{said}");
+    assert!(!said.contains(['\x1b', '\x07', '\u{E0072}']), "{said}");
+}

@@ -8,6 +8,7 @@
 
 use std::collections::HashMap;
 use std::io::Write;
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 use std::sync::Mutex;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -51,8 +52,12 @@ pub struct Granted {
 /// (see [`Grants`]) until the extensions change.
 pub fn granted(home: &Path, ext: &str, person: Option<&Path>) -> Result<Granted> {
     let listed = Store::new(home).get(ext).map_err(|e| e.to_string())?;
-    if let Some(why) = &listed.held {
-        return Err(format!("extension {ext} is held: {why}"));
+    // The reason, which can name folders, is the person's to read in
+    // Settings; the extension hears only that it is held.
+    if listed.held.is_some() {
+        return Err(format!(
+            "extension {ext} is held; Settings → Extensions says why"
+        ));
     }
     // A folder an agent could have rewritten since it was installed.
     if let Some(dir) = &listed.dev
@@ -374,6 +379,7 @@ fn log_fetch(home: &Path, ext: &str, method: &str, host: &str, outcome: Option<(
     if let Ok(mut file) = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
+        .mode(0o600)
         .open(dir.join("network.jsonl"))
     {
         let _ = writeln!(file, "{line}");
@@ -443,8 +449,17 @@ mod tests {
         let home = TempDir::new().unwrap();
         installed(home.path(), r#""tasks.read""#, false);
         let e = allowed(home.path(), "acme.notes", "tasks.list").unwrap_err();
-        assert!(e.contains("held: not approved yet"), "{e}");
+        assert!(e.contains("is held"), "{e}");
         assert!(allowed(home.path(), "other.ext", "tasks.list").is_err());
+
+        // Held because its package cannot be read: the extension is not
+        // told where Kule keeps it.
+        let home = TempDir::new().unwrap();
+        installed(home.path(), r#""tasks.read""#, true);
+        fs::remove_dir_all(home.path().join("extensions").join("packages")).unwrap();
+        let e = allowed(home.path(), "acme.notes", "tasks.list").unwrap_err();
+        assert!(e.contains("is held"), "{e}");
+        assert!(!e.contains(home.path().to_str().unwrap()), "{e}");
 
         let home = TempDir::new().unwrap();
         installed(home.path(), r#""tasks.read""#, true);

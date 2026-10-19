@@ -101,6 +101,10 @@
   (Linux without unprivileged user namespaces), Kule runs no agent until
   you accept weaker isolation in Settings → Policy or with `kule isolation
   --accept-weaker on`; the title bar says so while it holds.
+- A model's API is reached only during the runs of the agent whose profile
+  names it (its keys' hosts count), no longer by every command; a profile
+  of your own lists its model's host in `hosts` or `keys`. Go's module
+  proxy now asks, as other hosts do.
 - Daemon protocol 28: `Isolation` and `SetIsolation`.
 
 ### Motion

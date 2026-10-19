@@ -2,6 +2,7 @@
 //! open for notices.
 
 use std::io::{self, BufReader};
+use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::net::UnixStream;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
@@ -137,6 +138,7 @@ pub fn spawn_daemon(kule: &Path, home: &Path) -> io::Result<()> {
     let log = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
+        .mode(0o600)
         .open(home.join("kuled.log"))?;
     let mut command = Command::new(kule);
     command

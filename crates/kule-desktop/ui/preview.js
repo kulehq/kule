@@ -255,7 +255,7 @@ function previewTable(v) {
   const sheet = v.sheets[at];
   const cols = sheet.rows.reduce((n, r) => Math.max(n, r.length), 1);
   const step = Math.max(50, Math.min(1000, Math.floor(PREVIEW_CELLS / cols)));
-  const shown = Math.min(sheet.rows.length, preview.rows || step);
+  const upTo = Math.min(sheet.rows.length, preview.rows || step);
   const formulas = new Map((sheet.formulas || []).map((f) => [`${f.row}:${f.col}`, f.text]));
   const where = h("span", { class: "preview-fx-cell" }, "");
   const what = h("span", { class: "preview-fx-text" }, "Pick a cell to see what it holds.");
@@ -266,7 +266,7 @@ function previewTable(v) {
     h("th", { class: "preview-corner", "aria-hidden": "true" }),
     ...Array.from({ length: cols }, (_, c) => h("th", { scope: "col" }, columnName(c)))
   );
-  const rows = sheet.rows.slice(0, shown).map((row, r) =>
+  const rows = sheet.rows.slice(0, upTo).map((row, r) =>
     h(
       "tr",
       {},
@@ -326,7 +326,7 @@ function previewTable(v) {
         at[2].classList.add("active");
         const f = formulas.get(`${at[0]}:${at[1]}`);
         where.textContent = `${columnName(at[1])}${at[0] + 1}`;
-        what.textContent = f !== undefined ? `=${f}` : sheet.rows[at[0]]?.[at[1]] ?? "";
+        what.textContent = shown(f !== undefined ? `=${f}` : sheet.rows[at[0]]?.[at[1]] ?? "");
         mark(at);
       },
       onpointerover: (e) => {
@@ -345,7 +345,7 @@ function previewTable(v) {
     h("thead", {}, head),
     h("tbody", {}, ...rows)
   );
-  const more = sheet.rows.length - shown;
+  const more = sheet.rows.length - upTo;
   const grid = h(
     "div",
     { class: "preview-body preview-table", tabindex: "0", "aria-label": `${sheet.name}, ${sheet.rows.length} rows` },
@@ -357,7 +357,7 @@ function previewTable(v) {
             class: "button ghost preview-more",
             type: "button",
             onclick: () => {
-              preview.rows = shown + step;
+              preview.rows = upTo + step;
               renderPreview(true);
             },
           },

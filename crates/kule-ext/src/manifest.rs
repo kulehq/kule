@@ -495,7 +495,13 @@ impl McpServer {
         }
         // One release of a registry package, which Kule may install outside
         // the sandbox: never a range, a tag, an alias, a URL or a repository.
-        let package = self.args.iter().find(|a| !a.starts_with('-'));
+        // The package comes first (after npx's -y), so no option before it
+        // can say where it comes from.
+        let package = match self.command.as_str() {
+            "npx" => self.args.iter().find(|a| *a != "-y" && *a != "--yes"),
+            _ => self.args.first(),
+        }
+        .filter(|a| !a.starts_with('-'));
         let pinned = package.is_some_and(|p| match self.command.as_str() {
             "npx" => p
                 .rsplit_once('@')

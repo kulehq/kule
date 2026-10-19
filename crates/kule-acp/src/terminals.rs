@@ -169,7 +169,7 @@ impl Terminals {
         });
         self.terms
             .lock()
-            .unwrap()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .insert(id.clone(), Arc::clone(&term));
         let readers: Vec<_> = [
             child
@@ -239,7 +239,7 @@ impl Terminals {
     fn term(&self, id: &str) -> Result<Arc<Term>, String> {
         self.terms
             .lock()
-            .unwrap()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .get(id)
             .cloned()
             .ok_or_else(|| format!("no terminal {id}"))

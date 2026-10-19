@@ -13,6 +13,7 @@ use std::ffi::OsString;
 use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, ErrorKind, Write};
 use std::net::SocketAddr;
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -105,6 +106,7 @@ impl Proxy {
         let log = OpenOptions::new()
             .create(true)
             .append(true)
+            .mode(0o600)
             .open(&path)
             .at(&path)?;
         let mut vault = task.vault()?;

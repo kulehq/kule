@@ -96,6 +96,25 @@ fn the_real_workspace_cannot_be_touched() {
     assert_eq!(fs::read_to_string(&readme).unwrap(), "hello\n");
 }
 
+/// The folder cannot be read either: the copy is what a command works on,
+/// and what it masks (the secrets in `.env` files) is not in the folder's
+/// files masked.
+#[test]
+fn the_real_workspace_cannot_be_read() {
+    let s = Setup::new();
+    fs::write(s.task.workspace().join(".env"), "API_TOKEN=real-value\n").unwrap();
+    let ws = fs::canonicalize(s.task.workspace()).unwrap();
+    let out = sh(
+        &s.sandbox(),
+        &format!(
+            "cat '{0}/README.md'; cat '{0}/.env'; ls '{0}'; cat README.md",
+            ws.display()
+        ),
+    );
+    let said = text(&out);
+    assert_eq!(said, "hello", "{out:?}");
+}
+
 #[test]
 fn kule_state_next_to_the_copy_cannot_be_touched() {
     let s = Setup::new();

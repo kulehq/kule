@@ -1098,9 +1098,18 @@ impl Profile {
         keys
     }
 
-    /// `policy` with this agent's hosts let through, under `profile-<name>`.
+    /// `policy` with this agent's hosts let through, under `profile-<name>`:
+    /// the ones it names, and the ones its keys are for (its model's API).
     pub fn open_hosts(&self, policy: Policy) -> Result<Policy> {
-        let hosts: Vec<&str> = self.hosts.iter().map(String::as_str).collect();
+        let mut hosts: Vec<&str> = self
+            .hosts
+            .iter()
+            .chain(self.keys.values().flatten())
+            .chain(self.keychain.values().flat_map(|k| &k.hosts))
+            .map(String::as_str)
+            .collect();
+        hosts.sort_unstable();
+        hosts.dedup();
         policy.permit_hosts(&format!("profile-{}", self.name), &hosts)
     }
 
@@ -1734,6 +1743,40 @@ hosts = ["openrouter.ai"]
         let item = r#"{"claudeAiOauth":{"accessToken":"sk-ant-oat01-x","refreshToken":"r"}}"#;
         assert_eq!(key.pick(item).as_deref(), Some("sk-ant-oat01-x"));
         assert_eq!(key.pick("not json"), None);
+    }
+
+    /// Each built-in agent reaches its own model's API while it runs, and
+    /// no other's: an agent's command cannot carry data to someone else's
+    /// account at another provider.
+    #[test]
+    fn an_agent_opens_its_own_models_api_alone() {
+        let home = tempfile::TempDir::new().unwrap();
+        let agents = Agents::load(home.path()).unwrap();
+        let apis = [
+            "api.anthropic.com",
+            "api.openai.com",
+            "generativelanguage.googleapis.com",
+        ];
+        for (agent, own) in [
+            ("claude-code", "api.anthropic.com"),
+            ("codex", "api.openai.com"),
+            ("gemini", "generativelanguage.googleapis.com"),
+        ] {
+            let policy = agents
+                .get(agent)
+                .unwrap()
+                .open_hosts(Policy::builtin())
+                .unwrap();
+            for api in apis {
+                let verdict = policy.judge_connection(api, 443).verdict;
+                let want = if api == own {
+                    kule_engine::Verdict::Allow
+                } else {
+                    kule_engine::Verdict::Ask
+                };
+                assert_eq!(verdict, want, "{agent} → {api}");
+            }
+        }
     }
 
     #[test]

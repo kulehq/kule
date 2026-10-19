@@ -324,6 +324,19 @@ pub(crate) struct TaskSecrets {
     /// The values masked in the copy, by placeholder.
     #[serde(default)]
     pub masked: BTreeMap<String, Masked>,
+    /// Every other setting a placeholder took the place of: a kept
+    /// secret's in a second file, say. A placeholder goes back to a value
+    /// only where it was put (see [`Vault::unmask`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub also: Vec<Place>,
+}
+
+/// One setting a placeholder took the place of.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct Place {
+    pub placeholder: String,
+    #[serde(flatten)]
+    pub masked: Masked,
 }
 
 /// A value Kule took out of a file in the copy.
@@ -393,6 +406,9 @@ impl std::fmt::Debug for AgentKey {
 #[derive(Debug, Clone, Default)]
 pub struct Vault {
     held: Vec<Held>,
+    /// Where each placeholder took a setting's place, with the value as
+    /// the file had it.
+    places: Vec<Place>,
 }
 
 impl Vault {
@@ -469,7 +485,16 @@ impl Vault {
                 env: false,
             });
         }
-        Ok(Vault { held })
+        let places = task
+            .masked
+            .into_iter()
+            .map(|(placeholder, masked)| Place {
+                placeholder,
+                masked,
+            })
+            .chain(task.also)
+            .collect();
+        Ok(Vault { held, places })
     }
 
     /// The environment a task's commands get: each kept secret's name with
@@ -562,6 +587,20 @@ impl Vault {
         if going.is_empty() {
             return None;
         }
+        // A key in the address (Google's `?key=`) is as much a credential.
+        let target = head.lines().next()?.split(' ').nth(1).unwrap_or_default();
+        let query = target.split_once('?').map_or("", |(_, q)| q);
+        let in_query = query.split('&').find_map(|pair| {
+            let (name, value) = pair.split_once('=').unwrap_or((pair, ""));
+            let credential = CREDENTIAL_PARAMS
+                .iter()
+                .any(|c| name.eq_ignore_ascii_case(c));
+            let ours = going.iter().any(|h| value.contains(&h.placeholder));
+            (credential && !ours).then(|| format!("?{name}="))
+        });
+        if in_query.is_some() {
+            return in_query;
+        }
         head.split_inclusive('\n')
             .skip(1)
             .filter(|line| is_credential(line))
@@ -597,11 +636,19 @@ impl Vault {
         forms.into_iter().collect()
     }
 
-    /// `text` with every placeholder of the task put back to its value,
-    /// wherever it is bound: for a file going to the folder.
-    pub(crate) fn unmask(&self, text: &str) -> String {
-        let all: Vec<&Held> = self.held.iter().collect();
-        replace_all(&all, text).0
+    /// `text`, the settings file at `path`, with each placeholder put back
+    /// to its value where Kule put it: in this file, as the value of the
+    /// same setting. A placeholder anywhere else stays one, so what the
+    /// agent writes cannot have a commit put a secret where it chose.
+    pub(crate) fn unmask(&self, path: &str, text: &str) -> String {
+        mask_env(text, |key, value| {
+            Ok(self
+                .places
+                .iter()
+                .find(|p| p.placeholder == value && p.masked.path == path && p.masked.key == key)
+                .map(|p| p.masked.value.clone()))
+        })
+        .unwrap_or_else(|_| text.to_owned())
     }
 }
 
@@ -615,6 +662,10 @@ pub const CREDENTIAL_HEADERS: &[&str] = &[
     "x-auth-token",
     "private-token",
 ];
+
+/// Query parameters that carry credentials, on a host Kule holds a secret
+/// for.
+const CREDENTIAL_PARAMS: &[&str] = &["key", "api_key", "apikey", "access_token", "token"];
 
 fn is_credential(line: &str) -> bool {
     line.split_once(':').is_some_and(|(name, _)| {
@@ -897,12 +948,28 @@ pub(crate) fn mask_with(
             return Ok(None);
         }
         if let Some(p) = kept {
-            // Kept so commit can put it back like any other.
-            task.masked.entry(p.to_owned()).or_insert_with(|| Masked {
+            // Kept so commit can put it back like any other, wherever it
+            // was found.
+            let here = Masked {
                 path: path.to_owned(),
                 key: key.to_owned(),
                 value: value.to_owned(),
-            });
+            };
+            match task.masked.get(p) {
+                None => {
+                    task.masked.insert(p.to_owned(), here);
+                }
+                Some(first) if *first == here => {}
+                Some(_) => {
+                    let place = Place {
+                        placeholder: p.to_owned(),
+                        masked: here,
+                    };
+                    if !task.also.contains(&place) {
+                        task.also.push(place);
+                    }
+                }
+            }
             return Ok(Some(p.to_owned()));
         }
         let known = task
@@ -1078,6 +1145,21 @@ mod tests {
             Some("x-api-key")
         );
         assert_eq!(vault.foreign_credential("other.example", theirs), None);
+        // In the address too, by any spelling of the parameter.
+        for target in [
+            "/v1/x?key=AIza-other",
+            "/v1/x?alt=sse&API_KEY=other",
+            "/x?access_token=t",
+        ] {
+            let theirs = format!("POST {target} HTTP/1.1\r\nHost: {host}\r\n\r\n");
+            assert!(
+                vault.foreign_credential(host, &theirs).is_some(),
+                "{target}"
+            );
+        }
+        let plain =
+            format!("GET /v1/x?alt=sse&monkey=1 HTTP/1.1\r\nAuthorization: Bearer {p}\r\n\r\n");
+        assert_eq!(vault.foreign_credential(host, &plain), None);
         let basic = base64::engine::general_purpose::STANDARD.encode(format!("x:{p}"));
         let ours = format!("GET / HTTP/1.1\r\nAuthorization: Basic {basic}\r\n\r\n");
         assert_eq!(vault.foreign_credential(host, &ours), None);
@@ -1115,8 +1197,36 @@ mod tests {
         assert_eq!(mask_with(".env", text, &mut task, &vault).unwrap(), out);
         task.save(dir.path()).unwrap();
 
+        // The kept secret masked in a second file too.
+        let local = "STRIPE_KEY=sk_test_real\n";
+        let local_out = mask_with(".env.local", local, &mut task, &vault).unwrap();
+        assert_eq!(local_out, format!("STRIPE_KEY={p}\n"));
+        task.save(dir.path()).unwrap();
+
         let vault = Vault::load(home.path(), ws.path(), dir.path()).unwrap();
-        assert_eq!(vault.unmask(&out), text);
+        assert_eq!(vault.unmask(".env", &out), text);
+        assert_eq!(vault.unmask(".env.local", &local_out), local);
+        // A placeholder goes back only where it was put: not in another
+        // file, under another setting, or inside another value.
+        for (path, moved, back) in [
+            (
+                ".env.production",
+                format!("STRIPE_KEY={p}\n"),
+                format!("STRIPE_KEY={p}\n"),
+            ),
+            (
+                ".env",
+                format!("LEAK={p}\nSTRIPE_KEY={p}\n"),
+                format!("LEAK={p}\nSTRIPE_KEY=sk_test_real\n"),
+            ),
+            (
+                ".env",
+                format!("URL=https://x.example/?t={p}\n"),
+                format!("URL=https://x.example/?t={p}\n"),
+            ),
+        ] {
+            assert_eq!(vault.unmask(path, &moved), back, "{path}");
+        }
         // The other one has no hosts: it never leaves.
         let (filled, _) = vault.fill("api.stripe.com", &format!("X: {other}\r\n"));
         assert_eq!(filled, format!("X: {other}\r\n"));

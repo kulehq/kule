@@ -80,10 +80,14 @@ impl Alerts {
                 }
                 alerts.push(Alert {
                     title: format!("Tasks {} and {} meet", view.id, overlap.task),
+                    // Paths and names the agents chose.
                     body: match what.as_str() {
-                        "" => format!("Both change {}.", overlap.path),
-                        what => format!("Both change {what} in {}.", overlap.path),
-                    },
+                        "" => format!("Both change {}.", plain(&overlap.path)),
+                        what => format!("Both change {} in {}.", plain(what), plain(&overlap.path)),
+                    }
+                    .chars()
+                    .take(200)
+                    .collect(),
                 });
             }
         }
@@ -136,8 +140,18 @@ impl Alerts {
 fn plain(text: &str) -> String {
     text.chars()
         .filter(|&c| {
+            // Marks that turn text around, and characters that show nothing.
             !c.is_control()
-                && !matches!(c, '\u{061C}' | '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')
+                && !matches!(
+                    c,
+                    '\u{00AD}'
+                        | '\u{061C}'
+                        | '\u{200B}'..='\u{200F}'
+                        | '\u{2028}'..='\u{202E}'
+                        | '\u{2060}'..='\u{2069}'
+                        | '\u{FEFF}'
+                        | '\u{E0000}'..='\u{E007F}'
+                )
         })
         .collect()
 }
@@ -215,6 +229,19 @@ mod tests {
         assert_eq!(
             alerts.tasks(&more)[0].body,
             "Both change function f, function g in x.rs."
+        );
+        // A path and a name the agent chose, with hidden characters in them.
+        let hidden = [view(
+            "a",
+            &[(
+                "d",
+                "a\u{202E}gnp.exe\u{200B}",
+                &["fn \u{1b}]0;x\u{7}\u{E0041}f"],
+            )],
+        )];
+        assert_eq!(
+            alerts.tasks(&hidden)[0].body,
+            "Both change fn ]0;xf in agnp.exe."
         );
     }
 

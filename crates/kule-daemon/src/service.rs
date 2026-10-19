@@ -443,7 +443,7 @@ impl Service {
     pub fn stream(&self, id: &str) -> Vec<Sequenced> {
         self.streams
             .lock()
-            .unwrap()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .get(id)
             .map(|events| events.iter().cloned().collect())
             .unwrap_or_default()
@@ -859,14 +859,14 @@ impl Service {
                 let before = service
                     .scans
                     .lock()
-                    .unwrap()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .get(&id)
                     .map(|c| (c.scan.clone(), c.failed));
                 let _ = service.rescan(&id);
                 let after = service
                     .scans
                     .lock()
-                    .unwrap()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .get(&id)
                     .map(|c| (c.scan.clone(), c.failed));
                 if after != before {
@@ -1244,7 +1244,7 @@ impl Service {
         let control = kule_acp::RunControl::new();
         self.controls
             .lock()
-            .unwrap()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .insert(id.to_owned(), control.clone());
         // Marked in the task too, so the CLI and any other process see it.
         let at_work = match task.agent_at_work() {
@@ -1572,7 +1572,7 @@ impl Service {
         let mut known = self
             .outlined
             .lock()
-            .unwrap()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove(task.id())
             .unwrap_or_default();
         let files: Vec<&Effect> = set.files().filter(|e| e.kind != Kind::Dir).collect();
@@ -1615,7 +1615,7 @@ impl Service {
             .collect();
         self.outlined
             .lock()
-            .unwrap()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .insert(task.id().to_owned(), known);
         touched
     }
@@ -1697,7 +1697,7 @@ fn unix_now() -> u64 {
 fn notify(subscribers: &Subscribers, notice: Notice) {
     subscribers
         .lock()
-        .unwrap()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
         .retain(|tx| tx.send(notice.clone()).is_ok());
 }
 
@@ -1723,6 +1723,18 @@ mod tests {
         .join();
         assert!(s.app.controls.is_poisoned());
         assert!(s.app.stop_run("nope").is_err());
+
+        // The notices go on too.
+        let heard = s.app.subscribe();
+        let subscribers = Arc::clone(&s.app.subscribers);
+        let _ = std::thread::spawn(move || {
+            let _held = subscribers.lock().unwrap();
+            panic!("a notice's thread failed");
+        })
+        .join();
+        assert!(s.app.subscribers.is_poisoned());
+        notify(&s.app.subscribers, Notice::Tasks);
+        assert_eq!(heard.try_recv(), Ok(Notice::Tasks));
     }
 
     struct Setup {
@@ -2567,7 +2579,7 @@ mod tests {
         s.app
             .controls
             .lock()
-            .unwrap()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .insert(id.clone(), control.clone());
         s.app.stop_run(&id).unwrap();
         assert_eq!(

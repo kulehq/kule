@@ -86,7 +86,7 @@ impl StoreFiles {
             Source::Packed(_) => {
                 self.packed
                     .lock()
-                    .unwrap()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .insert(ext.to_owned(), source.clone());
             }
             // A folder an agent could rewrite since it was installed (an

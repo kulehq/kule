@@ -111,9 +111,12 @@ when { resource.kind == "git.ref" && resource.change == "modified" && resource.f
 permit (principal, action == Kule::Action::"auto", resource)
 when { resource.kind == "git.ref" && resource.change == "created" && resource.ref like "refs/heads/*" };
 
-// Network: package registries and model APIs over HTTPS. Anything else, git
-// hosts included (a push cannot be told apart from a fetch inside TLS),
-// waits for a person.
+// Network: package registries over HTTPS. A model's API is opened by the
+// agent's profile, for its own runs alone: open to every command, it would
+// carry data to anyone's account there. Anything else, git hosts included
+// (a push cannot be told apart from a fetch inside TLS), waits for a
+// person. Go's module proxy is not here: it fetches from whatever address
+// a request names.
 @id("package-registries")
 permit (principal, action == Kule::Action::"auto", resource)
 when {
@@ -123,16 +126,8 @@ when {
     "crates.io", "index.crates.io", "static.crates.io", "static.rust-lang.org",
     "api.nuget.org", "globalcdn.nuget.org",
     "pypi.org", "files.pythonhosted.org",
-    "proxy.golang.org", "sum.golang.org",
     "rubygems.org", "repo.maven.apache.org", "repo1.maven.org"
   ].contains(resource.host)
-};
-
-@id("model-apis")
-permit (principal, action == Kule::Action::"auto", resource)
-when {
-  resource.kind == "net.connect" && resource.port == 443 &&
-  ["api.anthropic.com", "api.openai.com", "generativelanguage.googleapis.com"].contains(resource.host)
 };
 
 // Hooks run on the next git command, as the person who runs it.

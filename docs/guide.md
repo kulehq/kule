@@ -57,8 +57,8 @@ With no task yet, the window opens on a first-run screen with three steps:
      what gets installed, built or run (manifests, lockfiles, CI files,
      editor settings), git history rewrites and mass deletes wait for you.
    - **Careful**: every change to a file or to git waits for you. Only
-     package registries and the agents' own APIs are reached without
-     asking.
+     package registries, and each agent's own API while it runs, are
+     reached without asking.
 
    You can change this later in *Settings → Policy*.
 3. **A folder.** Pick the folder the first task works on.

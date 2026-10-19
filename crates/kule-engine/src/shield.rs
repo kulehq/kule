@@ -238,7 +238,7 @@ fn drain(shadows: Shadows, done: Arc<AtomicBool>) {
     while !done.load(Ordering::SeqCst) {
         let fds: Vec<libc::pollfd> = shadows
             .lock()
-            .unwrap()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .values()
             .flatten()
             .map(|(_, l)| libc::pollfd {

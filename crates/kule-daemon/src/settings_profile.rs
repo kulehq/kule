@@ -194,8 +194,16 @@ pub fn apply(home: &Path, text: &str, parts: &[Part]) -> Result<Vec<String>> {
             }
             Part::Shortcuts => {
                 let Some(s) = &file.shortcuts else { continue };
-                shortcuts::save(home, s)?;
-                said.push(format!("Shortcuts: {} of your own", s.len()));
+                let kept = shortcuts::from_profile(s, &shortcuts::load(home)?);
+                shortcuts::save(home, &kept)?;
+                said.push(format!("Shortcuts: {} of your own", kept.len()));
+                if s.keys()
+                    .any(|id| shortcuts::DECIDING.contains(&id.as_str()))
+                {
+                    said.push(
+                        "Shortcuts: the keys that approve, commit or change the policy stay as you set them".to_owned(),
+                    );
+                }
             }
             Part::Policy => {
                 let Some(choice) = file.policy else { continue };
@@ -405,5 +413,38 @@ login = [".local/share/opencode/auth.json"]
             assert!(read(bad).is_err(), "{bad}");
         }
         assert!(read(&" ".repeat(MAX_FILE as usize + 1)).is_err());
+    }
+
+    #[test]
+    fn a_profile_never_moves_the_keys_that_decide() {
+        let home = tempfile::TempDir::new().unwrap();
+        let mut mine = shortcuts::Shortcuts::new();
+        mine.insert("question.deny".into(), "Mod+Alt+N".into());
+        mine.insert("task.new".into(), "Mod+Shift+N".into());
+        shortcuts::save(home.path(), &mine).unwrap();
+
+        // Send the prompt with nothing, and approve-and-remember with the
+        // keys that used to send it.
+        let text = r#"{"kule_profile":1,"shortcuts":{
+            "prompt.run":"",
+            "question.remember":"Mod+Enter",
+            "question.approve":"Mod+Shift+K",
+            "review.commit":"Mod+L",
+            "policy.balanced":"Mod+1",
+            "question.deny":"",
+            "view.live":"F5"}}"#;
+        let said = apply(home.path(), text, &[Part::Shortcuts]).unwrap();
+        let kept = shortcuts::load(home.path()).unwrap();
+        for id in shortcuts::DECIDING {
+            assert_eq!(kept.get(*id), mine.get(*id), "{id}");
+        }
+        // The rest is the profile's.
+        assert_eq!(kept["prompt.run"], "");
+        assert_eq!(kept["view.live"], "F5");
+        assert!(!kept.contains_key("task.new"));
+        assert!(
+            said.iter().any(|s| s.contains("stay as you set them")),
+            "{said:?}"
+        );
     }
 }

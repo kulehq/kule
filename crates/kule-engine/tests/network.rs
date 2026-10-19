@@ -243,14 +243,9 @@ fn commands_find_the_proxy_in_the_usual_variables() {
 }
 
 #[test]
-fn the_default_policy_lets_registries_and_model_apis_through_only() {
+fn the_default_policy_lets_registries_through_only() {
     let policy = Policy::builtin();
-    for host in [
-        "registry.npmjs.org",
-        "index.crates.io",
-        "api.nuget.org",
-        "api.anthropic.com",
-    ] {
+    for host in ["registry.npmjs.org", "index.crates.io", "api.nuget.org"] {
         assert_eq!(
             policy.judge_connection(host, 443).verdict,
             Verdict::Allow,
@@ -261,7 +256,18 @@ fn the_default_policy_lets_registries_and_model_apis_through_only() {
         policy.judge_connection("registry.npmjs.org", 80).verdict,
         Verdict::Ask
     );
-    for host in ["github.com", "pastebin.com", "127.0.0.1"] {
+    // Model APIs only for the agent whose profile opens them; Go's module
+    // proxy fetches from any address a request names.
+    for host in [
+        "github.com",
+        "pastebin.com",
+        "127.0.0.1",
+        "api.anthropic.com",
+        "api.openai.com",
+        "generativelanguage.googleapis.com",
+        "proxy.golang.org",
+        "sum.golang.org",
+    ] {
         assert_eq!(
             policy.judge_connection(host, 443).verdict,
             Verdict::Ask,

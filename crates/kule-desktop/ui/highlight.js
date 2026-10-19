@@ -6,9 +6,10 @@
 "use strict";
 
 /** Characters that show nothing yet change what text means or how it
- * reads: control characters (but tab, line feed and carriage return) and
- * the marks that turn text around. */
-const UNSEEN = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F؜‎‏‪-‮⁦-⁩]/g;
+ * reads: control characters (but tab, line feed and carriage return), the
+ * marks that turn text around, zero-width ones, the soft hyphen, line and
+ * paragraph separators, and the tag characters text can hide words in. */
+const UNSEEN = /[\u{0}-\u{8}\u{B}\u{C}\u{E}-\u{1F}\u{7F}-\u{9F}\u{AD}\u{61C}\u{200B}-\u{200F}\u{2028}-\u{202E}\u{2060}-\u{2069}\u{FEFF}\u{E0000}-\u{E007F}]/gu;
 
 /** `text` as a person should read it: each unseen character written out,
  * as ⟨U+202E⟩, so a file name, a line of code or anything an agent wrote

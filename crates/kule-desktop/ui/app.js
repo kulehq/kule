@@ -387,7 +387,7 @@ function taskMenu(task, list, e) {
   remove.addEventListener("click", async () => {
     if (!remove.classList.contains("armed")) {
       remove.classList.add("armed");
-      remove.textContent = `Click again to delete ${name}`;
+      remove.textContent = shown(`Click again to delete ${name}`);
       setTimeout(() => {
         remove.classList.remove("armed");
         remove.textContent = "Delete task";
@@ -1163,13 +1163,13 @@ function renderTask() {
   renderLayout();
   if (!task) return;
 
-  $("task-name").textContent = taskName(task);
-  $("titlebar-title").textContent = `${taskName(task)} — Kule`;
+  $("task-name").textContent = shown(taskName(task));
+  $("titlebar-title").textContent = shown(`${taskName(task)} — Kule`);
   const mark = $("task-name").closest(".task-header");
   // A line runs along the header's foot while the agent is at work.
   mark.className = `task-header${colorOf(task) ? ` color-${colorOf(task)}` : ""}${task.running ? " running" : ""}`;
   const group = groupOf(task);
-  $("task-path").textContent = `${task.workspace} · task ${task.id} · ${when(task.created_unix)}${group ? ` · in ${group.name}` : ""} · ${judgedBy(task)}`;
+  $("task-path").textContent = shown(`${task.workspace} · task ${task.id} · ${when(task.created_unix)}${group ? ` · in ${group.name}` : ""} · ${judgedBy(task)}`);
   const chip = $("task-state");
   chip.className = "chip";
   if (task.running) {
@@ -1522,7 +1522,7 @@ async function openOwnPolicy(group, editor) {
       await renderPolicy();
     } catch (err) {
       // Cedar's message, by the text it is about.
-      error.textContent = String(err);
+      error.textContent = shown(String(err));
       error.hidden = false;
     }
   });
@@ -3063,7 +3063,7 @@ function homeDiff(id, path) {
       box.replaceChildren(...rows);
     })
     .catch((err) => {
-      box.textContent = String(err);
+      box.textContent = shown(String(err));
     });
   return box;
 }
@@ -4984,13 +4984,25 @@ const activeTerminal = (taskId = state.current) => {
   return t && t.list.find((e) => e.key === t.active);
 };
 
+/** A link a program named (OSC 8) waiting for its second click. */
+let namedLink = { uri: null, until: 0 };
+
 /** Opens a link from the terminal: with ⌘ (Ctrl elsewhere) held, as
- * editors do, so a plain click still selects. */
-function terminalLink(event, uri) {
+ * editors do, so a plain click still selects. A link a program named
+ * (`named`) can read as one address and go to another, so it opens on a
+ * second click, once its real address has been shown. */
+function terminalLink(event, uri, named = false) {
+  const mod = PLATFORM === "mac" ? "⌘" : "Ctrl";
   if (!(PLATFORM === "mac" ? event.metaKey : event.ctrlKey)) {
-    toast(`${PLATFORM === "mac" ? "⌘" : "Ctrl"}+click opens ${uri}`);
+    toast(`${mod}+click opens ${uri}`);
     return;
   }
+  if (named && !(namedLink.uri === uri && Date.now() < namedLink.until)) {
+    namedLink = { uri, until: Date.now() + 8000 };
+    toast(`This link goes to ${uri}. ${mod}+click it again to open it.`);
+    return;
+  }
+  namedLink = { uri: null, until: 0 };
   call("open_url", { url: uri }).catch(fail);
 }
 
@@ -5010,8 +5022,9 @@ async function newTerminal(taskId = state.current) {
     allowProposedApi: true,
     theme: terminalTheme(),
     // Links a program writes (OSC 8) go the way plain URLs do: by
-    // Kule's opener, http(s) alone, on Cmd or Ctrl+click.
-    linkHandler: { activate: (event, uri) => terminalLink(event, uri), allowNonHttpProtocols: false },
+    // Kule's opener, http(s) alone, on Cmd or Ctrl+click, and only once
+    // the address they really go to has been shown.
+    linkHandler: { activate: (event, uri) => terminalLink(event, uri, true), allowNonHttpProtocols: false },
   });
   const fit = new FitAddon.FitAddon();
   const search = new SearchAddon.SearchAddon();
@@ -5670,7 +5683,13 @@ async function weakerBy(f) {
     call("daily_budget").catch(() => null),
   ]);
   const out = [];
+  // What cannot be read now cannot be compared; it counts as less strict.
+  const unread = "what Kule has now could not be read to compare";
+  if (f.policy && !policy) out.push(["policy", `the policy: ${unread}`]);
+  if (f.limits && !limits) out.push(["limits", `the limits: ${unread}`]);
+  if (f.budget && !daily) out.push(["budget", `the daily budget: ${unread}`]);
   if (f.policy === "balanced" && policy === "careful") out.push(["policy", "the policy goes from Careful to Balanced"]);
+  if (f.policy && policy === "own") out.push(["policy", `the policy you wrote is replaced by Kule's ${f.policy} one`]);
   if (f.limits && limits) {
     for (const field of LIMIT_FIELDS) {
       const now = limits[field.key];

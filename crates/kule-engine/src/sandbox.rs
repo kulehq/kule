@@ -330,8 +330,13 @@ impl Sandbox {
             writable: Vec::new(),
             // Kule's home, but for the task's own copy and tmp: other tasks'
             // copies, the policy, the key that signs every task's history and
-            // the daemon's token are none of a task's business.
-            hidden: vec![real_or_planned(&task.home())?],
+            // the daemon's token are none of a task's business. And the
+            // folder itself: the copy is what a command works on, with the
+            // secrets in it masked, which the folder's are not.
+            hidden: vec![
+                real_or_planned(&task.home())?,
+                real_or_planned(task.workspace())?,
+            ],
             protected: Vec::new(),
             network: Network::Allow,
             passed_env: Vec::new(),

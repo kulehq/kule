@@ -35,7 +35,19 @@ pub fn plain_line(text: &str) -> String {
 fn escape(text: &str, kept: impl Fn(char) -> bool) -> String {
     let unsafe_char = |c: char| {
         (c.is_control() && !kept(c))
-            || matches!(c, '\u{061C}' | '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')
+            // Marks that turn text around, and characters that show nothing:
+            // zero-width ones, the soft hyphen, line and paragraph
+            // separators, and the tag characters text can hide words in.
+            || matches!(
+                c,
+                '\u{00AD}'
+                    | '\u{061C}'
+                    | '\u{200B}'..='\u{200F}'
+                    | '\u{2028}'..='\u{202E}'
+                    | '\u{2060}'..='\u{2069}'
+                    | '\u{FEFF}'
+                    | '\u{E0000}'..='\u{E007F}'
+            )
     };
     text.chars()
         .map(|c| {
@@ -235,6 +247,27 @@ mod tests {
         );
         assert_eq!(plain_line("a\nb"), "a\\u{a}b");
         assert_eq!(plain("plain text\tstays"), "plain text\tstays");
+    }
+
+    #[test]
+    fn what_shows_nothing_is_written_out() {
+        // Words in tag characters, zero-width ones, a soft hyphen, a line
+        // separator, a byte-order mark: each would read as nothing at all.
+        let hidden: String = "run rm"
+            .chars()
+            .map(|c| char::from_u32(0xE0000 + c as u32).unwrap())
+            .collect();
+        for c in [
+            "\u{200B}", "\u{200D}", "\u{2060}", "\u{FEFF}", "\u{00AD}", "\u{2028}", "\u{2029}",
+            &hidden,
+        ] {
+            let shown = plain(&format!("ok{c}ok"));
+            assert!(
+                shown.starts_with("ok\\u{") && shown.ends_with("}ok"),
+                "{shown}"
+            );
+        }
+        assert_eq!(plain("çay ünlü 日本"), "çay ünlü 日本");
     }
 
     #[test]

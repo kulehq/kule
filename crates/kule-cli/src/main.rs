@@ -424,7 +424,8 @@ fn main() -> ExitCode {
     match run() {
         Ok(code) => code,
         Err(e) => {
-            eprintln!("kule: {e:#}");
+            // An error can carry what an agent wrote or named.
+            eprintln!("kule: {}", paint::plain(&format!("{e:#}")));
             if let Some(Error::Conflict(_)) = e.downcast_ref::<Error>() {
                 eprintln!("hint: roll back, or rerun the task on the current workspace");
             }
@@ -579,7 +580,9 @@ fn run() -> Result<ExitCode> {
                 for d in &denials {
                     println!(
                         "sandbox: refused {} {} ({})",
-                        d.operation, d.path, d.process
+                        paint::plain_line(&d.operation),
+                        paint::plain_line(&d.path),
+                        paint::plain_line(&d.process)
                     );
                 }
             }
@@ -700,7 +703,9 @@ fn run() -> Result<ExitCode> {
                 for d in &denials {
                     println!(
                         "sandbox: refused {} {} ({})",
-                        d.operation, d.path, d.process
+                        paint::plain_line(&d.operation),
+                        paint::plain_line(&d.path),
+                        paint::plain_line(&d.process)
                     );
                 }
             }
@@ -709,12 +714,13 @@ fn run() -> Result<ExitCode> {
             for d in &put_back {
                 match &d.saved {
                     Some(saved) => println!(
-                        "sandbox: {} changed during the run; Kule put it back and moved what was there to {saved}",
-                        d.path
+                        "sandbox: {} changed during the run; Kule put it back and moved what was there to {}",
+                        paint::plain_line(&d.path),
+                        paint::plain_line(saved)
                     ),
                     None => println!(
                         "sandbox: {} was removed during the run; Kule put it back",
-                        d.path
+                        paint::plain_line(&d.path)
                     ),
                 }
             }
@@ -1320,7 +1326,7 @@ fn home_cmd(home: &Path, task: &str, action: HomeCmd) -> Result<()> {
                 println!("nothing to apply at those paths");
             }
             for path in &applied.paths {
-                println!("applied ~/{path}");
+                println!("applied ~/{}", paint::plain_line(path));
             }
             if let Some(kept) = applied.kept {
                 println!("what they replaced is kept in {}", kept.display());
@@ -1332,16 +1338,17 @@ fn home_cmd(home: &Path, task: &str, action: HomeCmd) -> Result<()> {
         }
         HomeCmd::Diff { path } => {
             let path = path.trim_start_matches("~/").trim_end_matches('/');
+            let shown = paint::plain_line(path);
             match task.home_diff(path)? {
                 TextDiff::Skipped { reason } => println!(
-                    "~/{path}: {}",
+                    "~/{shown}: {}",
                     match reason {
                         DiffSkip::Binary => "not text, so not shown",
                         DiffSkip::TooLarge => "too large to show",
                     }
                 ),
                 TextDiff::Lines { hunks, cut } => {
-                    println!("--- ~/{path} (yours)\n+++ ~/{path} (the task's)");
+                    println!("--- ~/{shown} (yours)\n+++ ~/{shown} (the task's)");
                     for hunk in hunks {
                         println!("@@ line {} @@", hunk.before);
                         for line in hunk.lines {
@@ -1350,7 +1357,7 @@ fn home_cmd(home: &Path, task: &str, action: HomeCmd) -> Result<()> {
                                 LineKind::Added => '+',
                                 LineKind::Removed => '-',
                             };
-                            println!("{mark}{}", line.text);
+                            println!("{mark}{}", paint::plain_line(&line.text));
                         }
                     }
                     if cut {
@@ -1362,7 +1369,7 @@ fn home_cmd(home: &Path, task: &str, action: HomeCmd) -> Result<()> {
         HomeCmd::Undo => {
             let undone = task.undo_home()?;
             for path in &undone.paths {
-                println!("undid ~/{path}");
+                println!("undid ~/{}", paint::plain_line(path));
             }
             println!("the changes wait for review again");
         }
@@ -2209,19 +2216,21 @@ fn agents_cmd(home: &Path, action: AgentsCmd) -> Result<()> {
                 &listed.profile,
                 kule_engine::CacheSources::from_env(),
             )?;
+            // Everything here comes from an agent not approved yet.
             match &trial.error {
-                None => println!("it answered: {}", trial.reply),
-                Some(error) => println!("it did not answer: {error}"),
+                None => println!("it answered: {}", paint::plain(&trial.reply)),
+                Some(error) => println!("it did not answer: {}", paint::plain(error)),
             }
             for line in &trial.log {
-                println!("log      {line}");
+                println!("log      {}", paint::plain_line(line));
             }
             for refused in &trial.refused {
-                println!("refused  {refused}");
+                println!("refused  {}", paint::plain_line(refused));
             }
-            println!("suggested state: {}", trial.state.join(", "));
-            println!("suggested hosts: {}", trial.hosts.join(", "));
-            println!("suggested read-only: {}", trial.protect.join(", "));
+            let joined = |items: &[String]| paint::plain_line(&items.join(", "));
+            println!("suggested state: {}", joined(&trial.state));
+            println!("suggested hosts: {}", joined(&trial.hosts));
+            println!("suggested read-only: {}", joined(&trial.protect));
             if cfg!(target_os = "linux") {
                 println!("(Linux does not report refused files: only hosts are suggested)");
             }

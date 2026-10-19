@@ -332,6 +332,41 @@ fn connections_that_say_nothing_are_let_go() {
     assert!(tasks.is_empty());
 }
 
+/// Neither a line given a byte at a time nor lines that are not requests
+/// keep a connection that has not shown the token.
+#[test]
+fn connections_that_never_show_the_token_are_let_go() {
+    let home = TempDir::new().unwrap();
+    daemon(home.path());
+    let slow = |what: &'static str| {
+        let mut stream = UnixStream::connect(socket_path(home.path())).unwrap();
+        let mut reader = stream.try_clone().unwrap();
+        let started = std::time::Instant::now();
+        let writer = std::thread::spawn(move || {
+            // Each well within the old per-read timeout, for 15 s.
+            for _ in 0..15 {
+                if stream.write_all(what.as_bytes()).is_err() {
+                    return;
+                }
+                std::thread::sleep(Duration::from_secs(1));
+            }
+        });
+        reader
+            .set_read_timeout(Some(Duration::from_secs(30)))
+            .unwrap();
+        let mut reply = Vec::new();
+        let _ = reader.read_to_end(&mut reply);
+        let kept = started.elapsed();
+        writer.join().unwrap();
+        assert!(kept < Duration::from_secs(12), "{what:?} was kept {kept:?}");
+    };
+    slow("{");
+    slow("not json\n");
+    // The daemon answers whoever carries the token.
+    let tasks: Vec<TaskView> = Client::new(home.path()).call(Call::Tasks).unwrap();
+    assert!(tasks.is_empty());
+}
+
 #[test]
 fn the_socket_is_for_its_owner_only() {
     let home = TempDir::new().unwrap();

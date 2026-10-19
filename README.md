@@ -220,8 +220,9 @@ never remembered.
 
 Commands can connect only to the task's proxy; the proxy variables point at
 it. Each connection is judged by the same policy (`net.connect`): package
-registries and model APIs pass, anything else is refused until the approval
-inbox exists. Every connection lands in the task's `network.jsonl`.
+registries pass, and an agent's own model API while that agent runs;
+anything else is refused until the approval inbox exists. Every connection
+lands in the task's `network.jsonl`.
 
 ```
 net: registry.npmjs.org:443 · tunneled (package-registries)
