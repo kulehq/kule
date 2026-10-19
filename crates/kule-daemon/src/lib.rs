@@ -21,6 +21,7 @@ pub use client::{Client, spawn_daemon};
 pub use kule_acp::Profile as AgentProfile;
 pub use kule_engine::{
     Group, GroupPolicy, Limits, Money, PolicyChoice, Question, Spent, TaskColor, TaskLimits,
+    public_ip,
 };
 pub use kule_view::refs::Reference;
 pub use protocol::{Call, Hello, PROTOCOL, Redacted, Request, Response};

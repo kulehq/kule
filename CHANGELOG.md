@@ -146,6 +146,11 @@
   where it was given to be driven. An agent's profile names more under
   `devices`; disks, memory, keyboard and mouse, consoles and terminals are
   refused.
+- The proxy judges every address a host resolves to with Kule's own check
+  before it connects, and the address a tunnel reached before a byte goes
+  through: this computer, its network and the reserved ranges stay out of
+  reach, inside an IPv6 address too. Extensions' `net.fetch` uses the same
+  check.
 - Releases come with a CycloneDX SBOM of the CLI and of the app, are built
   with the toolchain `rust-toolchain.toml` names, and are signed in a job
   of their own that waits for a maintainer's approval: the builds never

@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use std::ffi::OsString;
 use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, ErrorKind, Write};
-use std::net::SocketAddr;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -286,8 +286,8 @@ impl lonca_net::Gate for Gate {
             )),
             _ => None,
         };
-        let allow = judgement.verdict == Verdict::Allow || answer == Some(Answer::Approved);
-        let reason = match (judgement.verdict, answer) {
+        let mut allow = judgement.verdict == Verdict::Allow || answer == Some(Answer::Approved);
+        let mut reason = match (judgement.verdict, answer) {
             (Verdict::Allow, _) | (_, Some(Answer::Approved)) => String::new(),
             (Verdict::Ask, None) => format!("waits for approval ({rules})"),
             (Verdict::Ask, Some(Answer::Denied)) => format!("denied by a person ({rules})"),
@@ -296,12 +296,19 @@ impl lonca_net::Gate for Gate {
             }
             (Verdict::Deny, _) => format!("denied ({rules})"),
         };
+        // Loopback by name only, and only when the policy let it pass; the
+        // rest of the LAN stays out of reach. Before anything connects, the
+        // name is resolved here too and judged by Kule's own stricter
+        // check (see `relay` for the address actually reached).
+        let allow_private = allow && loopback_by_name(request.host);
+        if allow && !allow_private && !resolves_public(request.host, request.port) {
+            allow = false;
+            reason = "addresses on this computer or its network are not reachable".to_owned();
+        }
         lock(&self.pending).insert(request.peer, (judgement, answer, Vec::new()));
         lonca_net::Verdict {
             allow,
-            // Loopback by name only, and only when the policy let it pass;
-            // the rest of the LAN stays out of reach.
-            allow_private: allow && matches!(request.host, "localhost" | "127.0.0.1" | "::1"),
+            allow_private,
             reason,
         }
     }
@@ -311,6 +318,13 @@ impl lonca_net::Gate for Gate {
         request: &lonca_net::Request<'_>,
         tunnel: lonca_net::Tunnel,
     ) -> Option<lonca_net::Tunnel> {
+        // The address the proxy connected to, judged before a byte goes
+        // either way: a name may answer differently the second time.
+        if !may_reach(request.host, &tunnel.upstream) {
+            let _ = tunnel.upstream.shutdown(std::net::Shutdown::Both);
+            let _ = tunnel.client.shutdown(std::net::Shutdown::Both);
+            return None;
+        }
         let Some(interceptor) = self
             .interceptor
             .as_ref()
@@ -356,4 +370,132 @@ impl lonca_net::Gate for Gate {
 /// data behind it is still usable for logging.
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Whether `ip` is on the public internet: not this computer, its network,
+/// a link, a documentation or benchmarking range, multicast or reserved,
+/// nor any of those inside an IPv6 address (mapped, NAT64, or the old
+/// IPv4-compatible form). Stricter than the proxy library's own check,
+/// which Kule's comes before and after.
+pub fn public_ip(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => public_v4(v4),
+        IpAddr::V6(v6) => {
+            if let Some(v4) = v6.to_ipv4_mapped() {
+                return public_v4(v4);
+            }
+            let s = v6.segments();
+            // NAT64 (64:ff9b::/96) carries an IPv4 address at its end.
+            if s[..6] == [0x64, 0xff9b, 0, 0, 0, 0] {
+                let [a, b] = s[6].to_be_bytes();
+                let [c, d] = s[7].to_be_bytes();
+                return public_v4(Ipv4Addr::new(a, b, c, d));
+            }
+            !(v6.is_unspecified()
+                || v6.is_loopback()
+                || v6.is_multicast()
+                || (s[0] & 0xfe00) == 0xfc00 // unique local
+                || (s[0] & 0xffc0) == 0xfe80 // link local
+                || (s[0] & 0xffc0) == 0xfec0 // site local
+                || (s[0] == 0x2001 && s[1] == 0x0db8) // documentation
+                || s[..6] == [0, 0, 0, 0, 0, 0]) // IPv4-compatible, deprecated
+        }
+    }
+}
+
+fn public_v4(ip: Ipv4Addr) -> bool {
+    let [a, b, c, _] = ip.octets();
+    !(ip.is_unspecified()
+        || ip.is_loopback()
+        || ip.is_private()
+        || ip.is_link_local()
+        || ip.is_broadcast()
+        || ip.is_documentation()
+        || ip.is_multicast()
+        || a == 0
+        || (a == 100 && (64..128).contains(&b)) // shared address space
+        || (a == 192 && b == 0 && c == 0) // IETF protocol assignments
+        || (a == 198 && (18..20).contains(&b)) // benchmarking
+        || a >= 240) // reserved
+}
+
+/// Whether every address `host` resolves to is public. A name that does not
+/// resolve is left to the proxy, which says so.
+fn resolves_public(host: &str, port: u16) -> bool {
+    use std::net::ToSocketAddrs;
+    (host, port)
+        .to_socket_addrs()
+        .map_or(true, |mut addrs| addrs.all(|a| public_ip(a.ip())))
+}
+
+/// Whether a tunnel asked for by `host` may go on to where `upstream` is
+/// connected: a public address, or this computer named as such. An address
+/// that cannot be read may not.
+fn may_reach(host: &str, upstream: &std::net::TcpStream) -> bool {
+    loopback_by_name(host) || upstream.peer_addr().is_ok_and(|a| public_ip(a.ip()))
+}
+
+/// This computer, named as such: the one private destination a policy can
+/// let a command reach.
+fn loopback_by_name(host: &str) -> bool {
+    matches!(host, "localhost" | "127.0.0.1" | "::1")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A tunnel that ended up on this computer goes nowhere unless this
+    /// computer is what it asked for by name.
+    #[test]
+    fn a_tunnel_reaches_a_private_address_only_when_asked_by_name() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let upstream = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        assert!(!may_reach("example.com", &upstream));
+        assert!(!may_reach("127.0.0.2", &upstream));
+        assert!(may_reach("localhost", &upstream));
+        assert!(may_reach("127.0.0.1", &upstream));
+    }
+
+    #[test]
+    fn addresses_on_this_computer_or_its_network_are_not_public() {
+        for ip in [
+            "127.0.0.1",
+            "10.1.2.3",
+            "172.16.0.1",
+            "192.168.1.1",
+            "169.254.169.254",
+            "0.0.0.0",
+            "100.64.0.1",
+            "192.0.0.1",
+            "198.18.0.1",
+            "224.0.0.1",
+            "255.255.255.255",
+            "240.0.0.1",
+            "::1",
+            "::",
+            "fc00::1",
+            "fd12::1",
+            "fe80::1",
+            "fec0::1",
+            "ff02::1",
+            "2001:db8::1",
+            "::ffff:127.0.0.1",
+            "::ffff:10.0.0.1",
+            "64:ff9b::a00:1",
+            "64:ff9b::7f00:1",
+            "::127.0.0.1",
+        ] {
+            assert!(!public_ip(ip.parse().unwrap()), "{ip}");
+        }
+        for ip in [
+            "1.1.1.1",
+            "93.184.216.34",
+            "2606:4700:4700::1111",
+            "::ffff:8.8.8.8",
+            "64:ff9b::808:808",
+        ] {
+            assert!(public_ip(ip.parse().unwrap()), "{ip}");
+        }
+    }
 }

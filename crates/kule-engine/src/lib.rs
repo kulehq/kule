@@ -82,7 +82,7 @@ pub use labels::{MAX_LABEL, ORDER_FILE, TaskColor, arranged, set_task_order, tas
 pub use limits::{Limits, TaskLimits, limits, set_limits};
 pub use manifest::Kind;
 pub use meet::{Meeting, Touched, changed_entities, meet, touched};
-pub use network::{Connection, Proxy, connections};
+pub use network::{Connection, Proxy, connections, public_ip};
 pub use outline::{FileOutline, open_beneath};
 pub use policy::{
     CAREFUL_POLICY, DEFAULT_POLICY, Judgement, Policy, PolicyChoice, REPO_POLICY, Ruling,

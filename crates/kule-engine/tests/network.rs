@@ -22,6 +22,9 @@ when { resource.kind == "net.connect" && resource.host == "127.0.0.1" };
 @id("test-lan")
 permit (principal, action == Kule::Action::"auto", resource)
 when { resource.kind == "net.connect" && resource.host == "192.168.1.1" };
+@id("test-not-public")
+permit (principal, action == Kule::Action::"auto", resource)
+when { resource.kind == "net.connect" && ["198.18.0.1", "240.0.0.1", "64:ff9b::7f00:1", "::127.0.0.1"].contains(resource.host) };
 "#;
     Policy::from_texts(&format!("{DEFAULT_POLICY}\n{local}"), None).unwrap()
 }
@@ -143,9 +146,32 @@ fn the_lan_stays_out_of_reach_even_when_the_policy_allows_it() {
     let s = Setup::new();
     let reply = s.connect_via_proxy("192.168.1.1:443");
     assert!(reply.contains("403"), "{reply}");
+    assert!(reply.contains("not reachable"), "{reply}");
     let log = s.logged("192.168.1.1", 1);
     assert_eq!(log[0].verdict, Verdict::Allow);
-    assert_eq!(log[0].outcome, "private");
+    // Refused by Kule's own check, before the proxy's would.
+    assert_eq!(log[0].outcome, "refused");
+}
+
+/// Ranges the proxy library takes for public are judged by Kule's own
+/// check before anything connects: a benchmarking network, a reserved one,
+/// and this computer inside an IPv6 address.
+#[test]
+fn addresses_that_are_not_public_are_refused_before_connecting() {
+    let s = Setup::new();
+    for (target, host) in [
+        ("198.18.0.1:443", "198.18.0.1"),
+        ("240.0.0.1:443", "240.0.0.1"),
+        ("[64:ff9b::7f00:1]:443", "64:ff9b::7f00:1"),
+        ("[::127.0.0.1]:443", "::127.0.0.1"),
+    ] {
+        let reply = s.connect_via_proxy(target);
+        assert!(reply.contains("403"), "{target}: {reply}");
+        assert!(reply.contains("not reachable"), "{target}: {reply}");
+        let log = s.logged(host, 1);
+        assert_eq!(log[0].verdict, Verdict::Allow, "{target}");
+        assert_eq!(log[0].outcome, "refused", "{target}");
+    }
 }
 
 #[test]
