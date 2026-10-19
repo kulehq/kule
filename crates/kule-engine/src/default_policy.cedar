@@ -6,6 +6,11 @@
 //   kind          "fs.create" | "fs.modify" | "fs.delete" |
 //                 "git.ref" | "git.config" | "git.hook" | "git.staged" | "git.other"
 //   path, name    workspace path and its last component ("" for git.ref)
+//   folded_path, folded_name
+//                 the same in lower case: a case-insensitive disk (macOS's
+//                 by default) and the tools reading it see them so
+//   parts         the folded path's components, to match a folder anywhere
+//   entry         "file" | "dir" | "symlink" for fs.*, "" otherwise
 //   change        "created" | "modified" | "deleted"
 //   ref           reference name for git.ref, e.g. "refs/heads/main"
 //   fast_forward  for git.ref: the new value keeps the old one in its history
@@ -33,30 +38,56 @@ forbid (principal, action == Kule::Action::"auto", resource)
 when {
   resource.kind like "fs.*" &&
   [
-    "package.json", "package-lock.json", "npm-shrinkwrap.json", "yarn.lock", "pnpm-lock.yaml", "bun.lockb",
-    "Cargo.toml", "Cargo.lock",
-    "Directory.Packages.props", "Directory.Build.props", "Directory.Build.targets", "NuGet.Config", "nuget.config", "packages.lock.json", "global.json",
+    "package.json", "package-lock.json", "npm-shrinkwrap.json", "yarn.lock", "pnpm-lock.yaml", "bun.lockb", "bun.lock",
+    "cargo.toml", "cargo.lock",
+    "directory.packages.props", "directory.build.props", "directory.build.targets", "nuget.config", "packages.lock.json", "global.json",
     "go.mod", "go.sum",
-    "pyproject.toml", "setup.py", "setup.cfg", "poetry.lock", "uv.lock", "Pipfile", "Pipfile.lock",
-    "Gemfile", "Gemfile.lock", "build.gradle", "build.gradle.kts", "settings.gradle", "pom.xml"
-  ].contains(resource.name)
+    "pyproject.toml", "setup.py", "setup.cfg", "poetry.lock", "uv.lock", "pipfile", "pipfile.lock",
+    "gemfile", "gemfile.lock", "build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts", "pom.xml"
+  ].contains(resource.folded_name)
 };
 
 @id("project-files")
 forbid (principal, action == Kule::Action::"auto", resource)
-when { resource.kind like "fs.*" && (resource.name like "*.csproj" || resource.name like "*.fsproj" || resource.name like "requirements*.txt") };
+when { resource.kind like "fs.*" && (resource.folded_name like "*.csproj" || resource.folded_name like "*.fsproj" || resource.folded_name like "requirements*.txt") };
 
-// CI, editor tasks, dev containers, direnv and Kule's own rules run code or
-// change what is checked.
+// What runs code, or steers an agent, without anyone running the project:
+// CI, editor tasks, dev containers, git hooks managers, toolchain and
+// package manager settings, build scripts an editor runs on opening, an
+// agent's settings, instructions and servers, and Kule's own rules. In any
+// folder, as the tools look for them.
 @id("automation")
 forbid (principal, action == Kule::Action::"auto", resource)
 when {
   resource.kind like "fs.*" &&
-  (resource.path like ".github/*" || resource.path like ".gitlab-ci*" || resource.path like ".circleci/*" ||
-   resource.path like ".devcontainer/*" || resource.path like ".vscode/*" || resource.path like ".idea/*" ||
-   resource.path like ".kule/*" || resource.path == ".envrc" || resource.path == ".gitattributes" ||
-   resource.path == ".gitmodules")
+  (resource.parts.containsAny([
+     ".github", ".circleci", ".devcontainer", ".vscode", ".idea", ".zed", ".kule",
+     ".husky", ".claude", ".cursor", ".gemini", ".codex", ".cargo", ".mvn"
+   ]) ||
+   resource.folded_path like "gradle/wrapper/*" || resource.folded_path like "*/gradle/wrapper/*" ||
+   resource.folded_name like ".gitlab-ci*" ||
+   [
+     ".envrc", ".gitattributes", ".gitmodules", ".npmrc", ".yarnrc", ".yarnrc.yml", ".pnpmfile.cjs",
+     "build.rs", "gradlew", "gradlew.bat", "mise.toml", ".mise.toml", ".tool-versions",
+     ".pre-commit-config.yaml", "lefthook.yml", ".lefthook.yml",
+     ".mcp.json", "claude.md", "claude.local.md", "agents.md", "gemini.md", ".cursorrules", ".windsurfrules"
+   ].contains(resource.folded_name))
 };
+
+// A repository inside the folder: its config and a `.git` file pointing
+// elsewhere decide what git runs there; its hooks run on the next command.
+@id("nested-repository")
+forbid (principal, action == Kule::Action::"auto", resource)
+when { resource.kind like "fs.*" && resource.parts.contains(".git") };
+
+@id("nested-git-hooks")
+forbid (principal, action, resource)
+when { resource.kind like "fs.*" && resource.parts.contains(".git") && resource.parts.contains("hooks") && resource.change != "deleted" };
+
+// A link leads wherever it points, and is judged by a person.
+@id("links")
+forbid (principal, action == Kule::Action::"auto", resource)
+when { resource.kind like "fs.*" && resource.entry == "symlink" };
 
 @id("mass-delete")
 forbid (principal, action == Kule::Action::"auto", resource)

@@ -1089,7 +1089,25 @@ impl Task {
     /// calls `git status`. Then this refuses, naming them, until they are
     /// committed or rolled back.
     pub fn terminal_dir(&self) -> Result<PathBuf> {
-        if let Some(git) = self.effects()?.git {
+        let effects = self.effects()?;
+        // A repository inside the copy, or a `.git` file pointing git at one
+        // elsewhere: git in that folder reads what the task put there.
+        let inner: Vec<&str> = effects
+            .files()
+            .filter(|e| e.change != Change::Deleted)
+            .filter_map(|e| {
+                let parts: Vec<&str> = e.path.split('/').collect();
+                let at = parts.iter().position(|p| p.eq_ignore_ascii_case(".git"))?;
+                Some(&e.path[..parts[..=at].join("/").len()])
+            })
+            .collect();
+        if let Some(first) = inner.first() {
+            return Err(Error::Invalid(format!(
+                "the copy's {first} changed, and git there would run what it says outside the sandbox; \
+                 review it, then commit or roll it back before opening a terminal"
+            )));
+        }
+        if let Some(git) = effects.git {
             let mut runs: Vec<String> = git.hooks.iter().map(|h| format!("hook {h}")).collect();
             if git.config {
                 runs.insert(0, "git config".to_owned());

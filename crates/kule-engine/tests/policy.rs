@@ -154,6 +154,55 @@ fn ci_editor_and_kule_files_wait_for_a_person() {
     }
 }
 
+/// What runs code, or steers an agent, without anyone running the project
+/// waits: at any depth, however its name is cased, and a link never passes
+/// on its own.
+#[test]
+fn what_runs_on_its_own_waits_wherever_and_however_it_is_named() {
+    let s = Setup::new(PROJECT, false);
+    let waiting = [
+        ".claude/settings.json",
+        ".claude/settings.local.json",
+        ".mcp.json",
+        "CLAUDE.md",
+        "docs/AGENTS.md",
+        ".husky/pre-commit",
+        ".pre-commit-config.yaml",
+        "build.rs",
+        ".cargo/config.toml",
+        ".yarnrc.yml",
+        ".pnpmfile.cjs",
+        ".npmrc",
+        "gradle/wrapper/gradle-wrapper.properties",
+        "gradlew",
+        "mise.toml",
+        ".tool-versions",
+        "lefthook.yml",
+        "packages/app/.vscode/tasks.json",
+        "packages/app/package.json",
+        ".VSCode/settings.json",
+        "web/.GitHub/workflows/x.yml",
+        "tools/CARGO.TOML",
+        "sub/.git/config",
+        "lib/.git",
+    ];
+    for path in waiting {
+        write(&s.copy().join(path), "x\n");
+    }
+    write(&s.copy().join("sub/.git/hooks/pre-commit"), "#!/bin/sh\n");
+    std::os::unix::fs::symlink("../src", s.copy().join("docs/source")).unwrap();
+    std::os::unix::fs::symlink("tools/ide", s.copy().join(".idea")).unwrap();
+
+    let ruling = s.judged();
+    for path in waiting.iter().chain(&["docs/source", ".idea"]) {
+        assert_eq!(on(&ruling, path).0, Verdict::Ask, "{path}");
+    }
+    assert_eq!(on(&ruling, "sub/.git/hooks/pre-commit").0, Verdict::Deny);
+    // Plain work still passes.
+    write(&s.copy().join("src/lib.rs"), "pub fn f() {}\n");
+    assert_eq!(on(&s.judged(), "src/lib.rs").0, Verdict::Allow);
+}
+
 /// `n` files under `data/`, in a git repository or a plain folder.
 fn data(n: usize, repo: bool) -> Setup {
     let files: Vec<(String, String)> = (0..n)

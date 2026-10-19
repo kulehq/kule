@@ -25,6 +25,7 @@ use serde::{Deserialize, Serialize};
 use crate::effects::{Change, EffectSet};
 use crate::error::{Error, Result};
 use crate::git::RefChange;
+use crate::manifest::Kind;
 use crate::remembered::{Allowance, Remembered};
 
 pub const DEFAULT_POLICY: &str = include_str!("default_policy.cedar");
@@ -338,7 +339,7 @@ impl Policy {
                 Change::Modified => "fs.modify",
                 Change::Deleted => "fs.delete",
             };
-            let subject = Subject::file(kind, &effect.path, effect.change);
+            let subject = Subject::file(kind, &effect.path, effect.change, effect.kind);
             let mut judgement = self.judge_one(effect.path.clone(), &subject, &facts);
             // Asked about only by rules a person answered for good here.
             let remembered = judgement.verdict == Verdict::Ask
@@ -501,6 +502,8 @@ struct Answer {
 #[derive(Default)]
 struct Subject {
     kind: &'static str,
+    /// What the path is: "file", "dir" or "symlink"; "" for git and network.
+    entry: &'static str,
     path: String,
     change: &'static str,
     ref_name: String,
@@ -511,9 +514,14 @@ struct Subject {
 }
 
 impl Subject {
-    fn file(kind: &'static str, path: &str, change: Change) -> Subject {
+    fn file(kind: &'static str, path: &str, change: Change, entry: Kind) -> Subject {
         Subject {
             kind,
+            entry: match entry {
+                Kind::File => "file",
+                Kind::Dir => "dir",
+                Kind::Symlink => "symlink",
+            },
             path: path.to_owned(),
             change: change_name(change),
             ..Subject::default()
@@ -556,7 +564,28 @@ impl Subject {
 
     fn attrs(&self) -> HashMap<String, RestrictedExpression> {
         let name = self.path.rsplit('/').next().unwrap_or(&self.path);
+        // Folded to lower case, as a case-insensitive disk (macOS's, by
+        // default) and the tools reading it see the names; each of the
+        // path's components, to match a folder at any depth.
+        let folded = self.path.to_lowercase();
+        let parts = folded
+            .split('/')
+            .filter(|p| !p.is_empty())
+            .map(|p| RestrictedExpression::new_string(p.to_owned()));
         HashMap::from([
+            (
+                "folded_path".into(),
+                RestrictedExpression::new_string(folded.clone()),
+            ),
+            (
+                "folded_name".into(),
+                RestrictedExpression::new_string(name.to_lowercase()),
+            ),
+            ("parts".into(), RestrictedExpression::new_set(parts)),
+            (
+                "entry".into(),
+                RestrictedExpression::new_string(self.entry.into()),
+            ),
             (
                 "kind".into(),
                 RestrictedExpression::new_string(self.kind.into()),

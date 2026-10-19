@@ -374,6 +374,25 @@ fn no_terminal_in_a_copy_whose_git_config_or_hooks_changed() {
     assert_eq!(r.task.terminal_dir().unwrap(), r.copy());
 }
 
+/// The same for a repository inside the copy, or a `.git` file that points
+/// git at one elsewhere: git in a subfolder reads them.
+#[test]
+fn no_terminal_in_a_copy_whose_inner_repository_changed() {
+    let r = Repo::new();
+    std::fs::create_dir_all(r.copy().join("sub/.git/hooks")).unwrap();
+    std::fs::write(r.copy().join("sub/.git/hooks/post-checkout"), "#!/bin/sh\n").unwrap();
+    let e = r.task.terminal_dir().unwrap_err().to_string();
+    assert!(e.contains("sub/.git"), "{e}");
+    r.task.rollback().unwrap();
+
+    std::fs::create_dir(r.copy().join("lib")).unwrap();
+    std::fs::write(r.copy().join("lib/.git"), "gitdir: /tmp/elsewhere\n").unwrap();
+    let e = r.task.terminal_dir().unwrap_err().to_string();
+    assert!(e.contains("lib/.git"), "{e}");
+    r.task.rollback().unwrap();
+    assert_eq!(r.task.terminal_dir().unwrap(), r.copy());
+}
+
 fn staged(r: &Repo) -> Vec<String> {
     r.task
         .effects()

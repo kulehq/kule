@@ -189,9 +189,13 @@ policy: waits for approval
 waits, and nothing that is denied (a new git hook, for example). `kule
 policy` prints the rules that hold. The built-in ones (*balanced*): source
 edits and fast-forward branch moves pass; manifests, lockfiles, CI and
-editor configuration, git config, history rewrites and mass deletes wait
-(more than 200, or more than 20 outside a git repository; a file renamed
-in the copy is a move, not a deletion); git hooks are denied. `kule policy
+editor configuration, what runs code on its own (build scripts an editor
+runs, package manager and toolchain settings, hook managers) or steers an
+agent (its settings, instructions and MCP servers), a repository inside the
+folder, links, git config, history rewrites and mass deletes wait — in any
+folder and however the name is cased (more than 200, or more than 20
+outside a git repository; a file renamed in the copy is a move, not a
+deletion); git hooks are denied, a nested repository's too. `kule policy
 careful` (or *Policy* in the app's Settings) makes every change to a file
 or to git wait; `kule policy balanced` goes back. Save your own as
 `~/.kule/policy.cedar` to replace them; Kule never overwrites it. A
