@@ -170,8 +170,14 @@ workspace lies in, with the projects beside it, where that folder is in
 your home (not the home itself, nor a dot folder or `~/Library`). Inside
 those, the workspace's git directory (a worktree's repository next to it)
 and the folders your `PATH` and SDK variables name stay readable. A project
-beside the workspace that it builds from (`path = "../shared"`) is opened
-read-only with `--reveal ../shared`. Package
+beside the workspace that it builds from (`path = "../shared"`,
+`file:../ui`, `..\Shared\Shared.csproj`) opens to the folder's tasks, read
+only, with `kule reveal add ../shared` or in the app (Settings → Rules,
+or the header's "builds from" chip): Kule suggests what the folder's own
+manifests name, and only you open one. The copy sits next to links to
+the projects you opened, so `../shared` leads there from the copy as from
+the folder; a project that has since become a link is not opened.
+`kule exec --reveal PATH` opens one for a single command. Package
 managers (cargo, npm, pip, uv, Go, NuGet, Yarn, pnpm) get caches of the
 task's own, so nothing a command leaves in a cache reaches a build you run
 later; your caches stay read-only. On macOS the cargo and npm caches start

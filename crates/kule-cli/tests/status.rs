@@ -1,7 +1,7 @@
 //! `kule status` as a person reads it.
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use tempfile::TempDir;
@@ -20,6 +20,19 @@ fn kule(home: &Path, args: &[&str]) -> String {
     String::from_utf8(out.stdout).unwrap()
 }
 
+/// The copy `kule new` said it made.
+fn copy_in(created: &str) -> PathBuf {
+    PathBuf::from(
+        created
+            .split(" · copy at ")
+            .nth(1)
+            .unwrap()
+            .lines()
+            .next()
+            .unwrap(),
+    )
+}
+
 #[test]
 fn status_lists_what_changed_inside_each_file() {
     let (home, ws) = (TempDir::new().unwrap(), TempDir::new().unwrap());
@@ -31,7 +44,7 @@ fn status_lists_what_changed_inside_each_file() {
     fs::write(ws.path().join("notes.md"), "# Plan\nFirst.\n").unwrap();
     let created = kule(home.path(), &["new", ws.path().to_str().unwrap()]);
     let id = created.split_whitespace().nth(1).unwrap();
-    let copy = home.path().join("tasks").join(id).join("copy");
+    let copy = copy_in(&created);
     fs::write(
         copy.join("task.rs"),
         "impl Task {\n    fn commit(&self) { 1; }\n    fn check(&self) {}\n}\n",
@@ -60,7 +73,7 @@ fn status_tells_where_another_task_changes_the_same() {
     let new_task = || {
         let created = kule(home.path(), &["new", ws.path().to_str().unwrap()]);
         let id = created.split_whitespace().nth(1).unwrap().to_owned();
-        let copy = home.path().join("tasks").join(&id).join("copy");
+        let copy = copy_in(&created);
         (id, copy)
     };
     let (a, copy_a) = new_task();
@@ -90,7 +103,7 @@ fn status_shows_moves_as_moves() {
     fs::write(ws.path().join("notes.md"), "# Notes\n").unwrap();
     let created = kule(home.path(), &["new", ws.path().to_str().unwrap()]);
     let id = created.split_whitespace().nth(1).unwrap();
-    let copy = home.path().join("tasks").join(id).join("copy");
+    let copy = copy_in(&created);
     fs::rename(copy.join("photos"), copy.join("2026")).unwrap();
     fs::create_dir(copy.join("docs")).unwrap();
     fs::rename(copy.join("notes.md"), copy.join("docs/notes.md")).unwrap();
@@ -207,7 +220,7 @@ fn a_group_puts_its_policy_over_its_tasks_commits() {
 
     // The careful group holds the edit that the policy for every task lets
     // through.
-    let copy = home.path().join("tasks").join(id).join("copy");
+    let copy = copy_in(&created);
     fs::write(copy.join("notes.md"), "# Plan\nMore.\n").unwrap();
     let commit = |home: &Path| {
         Command::new(env!("CARGO_BIN_EXE_kule"))

@@ -74,6 +74,28 @@ fn passes(name: &str) -> bool {
     PASSED_ENV.contains(&name) || name.starts_with("LC_")
 }
 
+/// The folders [`Sandbox::hide_personal`] hides for `workspace` (resolved)
+/// in `home`: [`PERSONAL_IN_HOME`], and the folder the workspace lies in
+/// where that is one of the person's own.
+pub(crate) fn personal_folders(workspace: &Path, home: &Path) -> Result<Vec<PathBuf>> {
+    let home = real_or_planned(home)?;
+    let mut folders: Vec<PathBuf> = PERSONAL_IN_HOME
+        .iter()
+        .map(|name| real_or_planned(&home.join(name)))
+        .collect::<Result<_>>()?;
+    if let Some(parent) = workspace.parent()
+        && let Ok(within) = parent.strip_prefix(&home)
+        && let Some(first) = within.components().next()
+        && first.as_os_str() != "Library"
+        && !within
+            .components()
+            .any(|c| c.as_os_str().to_string_lossy().starts_with('.'))
+    {
+        folders.push(parent.to_owned());
+    }
+    Ok(folders)
+}
+
 /// Where the person's tools are, as the variables passed to commands name
 /// them: each `PATH` entry, and the others that hold a path (`JAVA_HOME`,
 /// `GOROOT`, …).
@@ -327,6 +349,10 @@ pub struct Sandbox {
     see_through: Vec<PathBuf>,
     /// The folders hidden as the person's own, among `hidden`.
     personal: Vec<PathBuf>,
+    /// The links next to the copy to the projects opened beside it, which
+    /// commands may look at (macOS; what they lead to is in `see_through`).
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    beside_links: Vec<PathBuf>,
     /// The task's folder, resolved.
     workspace: PathBuf,
     /// Readable but never writable, even inside a writable path.
@@ -438,6 +464,7 @@ impl Sandbox {
             ],
             see_through: Vec::new(),
             personal: Vec::new(),
+            beside_links: Vec::new(),
             workspace: real_or_planned(task.workspace())?,
             protected: Vec::new(),
             network: Network::Allow,
@@ -492,6 +519,19 @@ impl Sandbox {
                 sandbox.hide(&sources.home.join(secret))?;
             }
             sandbox.hide_personal(&sources.home, &tools_from_env())?;
+            // The projects beside the workspace the person opened for its
+            // tasks; checked again here, so one that changed stays closed.
+            // A list that cannot be read stops the command.
+            // Each gets a link next to the copy where it lies next to the
+            // workspace, so `../shared` leads there from the copy too.
+            let workspace = sandbox.workspace.clone();
+            let mut opened = Vec::new();
+            for path in crate::beside::besides_of(&task.home(), &workspace)? {
+                if sandbox.open_beside(&path) {
+                    opened.push(path);
+                }
+            }
+            sandbox.beside_links = crate::beside::place_links(task, &workspace, &opened)?;
             sandbox.use_task_caches(&sources)?;
         }
         Ok(sandbox)
@@ -610,20 +650,7 @@ impl Sandbox {
     /// are taken from the person's side, never from the copy.
     pub fn hide_personal(&mut self, home: &Path, tools: &[PathBuf]) -> Result<()> {
         let home = real_or_planned(home)?;
-        let mut folders: Vec<PathBuf> = PERSONAL_IN_HOME
-            .iter()
-            .map(|name| real_or_planned(&home.join(name)))
-            .collect::<Result<_>>()?;
-        if let Some(parent) = self.workspace.parent()
-            && let Ok(within) = parent.strip_prefix(&home)
-            && let Some(first) = within.components().next()
-            && first.as_os_str() != "Library"
-            && !within
-                .components()
-                .any(|c| c.as_os_str().to_string_lossy().starts_with('.'))
-        {
-            folders.push(parent.to_owned());
-        }
+        let folders = personal_folders(&self.workspace, &home)?;
         // Not the home directory or above it: that would leave everything.
         let tools: Vec<PathBuf> = tools
             .iter()
@@ -673,12 +700,7 @@ impl Sandbox {
         if std::fs::symlink_metadata(&here).is_ok_and(|m| m.file_type().is_symlink()) {
             return Ok(());
         }
-        if self
-            .personal
-            .iter()
-            .any(|folder| here.starts_with(folder) && here != *folder)
-        {
-            self.see_through.push(here);
+        if self.open_beside(&here) {
             return Ok(());
         }
         let mut i = 0;
@@ -693,6 +715,23 @@ impl Sandbox {
             self.keychain = true;
         }
         Ok(())
+    }
+
+    /// Lets commands read `path`, a folder inside one hidden as the person's
+    /// own (a project beside the workspace that it builds from), never
+    /// write it; what is hidden inside it stays hidden. Only a path as it
+    /// is, resolved and not a link: whether it was opened.
+    pub fn open_beside(&mut self, path: &Path) -> bool {
+        let as_is = std::fs::symlink_metadata(path).is_ok_and(|m| !m.file_type().is_symlink())
+            && std::fs::canonicalize(path).is_ok_and(|real| real == path);
+        let inside = self
+            .personal
+            .iter()
+            .any(|folder| path.starts_with(folder) && path != folder);
+        if as_is && inside {
+            self.see_through.push(path.to_owned());
+        }
+        as_is && inside
     }
 
     /// Lets commands write in `path` as it is written: a link there is not
@@ -1275,6 +1314,7 @@ impl Sandbox {
             .chain(self.tmp.ancestors().skip(1))
             .chain(self.layer.iter().flat_map(|l| l.ancestors().skip(1)))
             .chain(self.see_through.iter().flat_map(|s| s.ancestors().skip(1)))
+            .chain(self.beside_links.iter().map(PathBuf::as_path))
             .collect();
         for (i, dir) in ancestors.into_iter().enumerate() {
             text.push_str(&format!(

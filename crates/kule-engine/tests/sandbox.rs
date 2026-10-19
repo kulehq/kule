@@ -118,12 +118,20 @@ fn the_real_workspace_cannot_be_read() {
 #[test]
 fn kule_state_next_to_the_copy_cannot_be_touched() {
     let s = Setup::new();
-    let baseline = s.task.copy().parent().unwrap().join("baseline.json");
+    let copy = s.task.copy();
+    let beside = copy.parent().unwrap();
+    let baseline = beside.parent().unwrap().join("baseline.json");
     let before = fs::read(&baseline).unwrap();
-    let out = sh(&s.sandbox(), "echo '{}' > ../baseline.json");
+    let out = sh(
+        &s.sandbox(),
+        &format!("echo '{{}}' > '{}'", baseline.display()),
+    );
     assert!(!ok(&out));
     assert_eq!(fs::read(&baseline).unwrap(), before);
     assert!(s.task.effects().is_ok());
+    // Nor where Kule puts its links to the projects beside the workspace.
+    let out = sh(&s.sandbox(), "ln -s / ../elsewhere");
+    assert!(!ok(&out) && fs::symlink_metadata(beside.join("elsewhere")).is_err());
 }
 
 /// What the person typed, their browsers' and mail's stores, and the
@@ -342,8 +350,10 @@ fn a_stray_that_keeps_starting_others_is_ended() {
 #[test]
 fn kules_home_cannot_be_read_but_the_copy_can() {
     let s = Setup::new();
-    let task_dir = s.task.copy().parent().unwrap().to_owned();
+    // The copy is `<home>/tasks/<id>/w/<name>`.
+    let task_dir = s.task.copy().ancestors().nth(2).unwrap().to_owned();
     let home = task_dir.parent().unwrap().parent().unwrap().to_owned();
+    assert!(home.join("tasks").is_dir());
     fs::write(home.join("policy.cedar"), "// the person's policy\n").unwrap();
     let other = home.join("tasks/other/copy");
     fs::create_dir_all(&other).unwrap();
@@ -1544,4 +1554,136 @@ fn folders_where_toolchains_live_stay_readable() {
         let out = sh(&sandbox, &format!("cat '{}'", home.join(beside).display()));
         assert!(ok(&out), "{beside} beside {workspace}: {out:?}");
     }
+}
+
+/// A project beside the workspace opens only once the person opens it, for
+/// reading, and only while it is still the folder they opened.
+#[test]
+fn a_project_beside_the_workspace_opens_once_the_person_opens_it() {
+    let home = home_with(&[
+        "code/proj/README.md",
+        "code/shared/lib.rs",
+        "code/elsewhere/secret.txt",
+        "notes/plain.txt",
+        ".ssh/id_ed25519",
+    ]);
+    let home = fs::canonicalize(home.path()).unwrap();
+    let (kule, task) = task_on(&home.join("code/proj"));
+    let sources = CacheSources {
+        home: home.clone(),
+        cargo_home: home.join(".cargo"),
+    };
+    let shared = home.join("code/shared");
+    let read =
+        |sandbox: &Sandbox, path: &Path| ok(&sh(sandbox, &format!("cat '{}'", path.display())));
+
+    let sandbox = Sandbox::for_task_with(&task, Some(sources.clone())).unwrap();
+    assert!(!read(&sandbox, &shared.join("lib.rs")));
+
+    // What may be opened: a folder hidden as the person's own, as it is.
+    let workspace = task.workspace().to_owned();
+    std::os::unix::fs::symlink(home.join("code/elsewhere"), home.join("code/link")).unwrap();
+    for refused in [
+        home.join("code/link"),
+        home.join(".ssh"),
+        home.join("notes"),
+        home.join("code"),
+        workspace.clone(),
+        home.join("code/missing"),
+    ] {
+        assert!(
+            kule_engine::add_beside(kule.path(), &workspace, &refused, &home).is_err(),
+            "{} was opened",
+            refused.display()
+        );
+    }
+    let kept = kule_engine::add_beside(kule.path(), &workspace, &shared, &home).unwrap();
+    assert_eq!(
+        kule_engine::besides(kule.path()).unwrap(),
+        std::slice::from_ref(&kept)
+    );
+
+    let sandbox = Sandbox::for_task_with(&task, Some(sources.clone())).unwrap();
+    assert!(read(&sandbox, &shared.join("lib.rs")));
+    assert!(!read(&sandbox, &home.join("code/elsewhere/secret.txt")));
+    // From the copy, as from the workspace: `../shared`, and no further.
+    let out = sh(&sandbox, "cat ../shared/lib.rs && realpath ../shared");
+    assert!(ok(&out), "{out:?}");
+    assert!(!ok(&sh(&sandbox, "cat ../elsewhere/secret.txt")));
+    assert!(!ok(&sh(&sandbox, "cat ../shared/../elsewhere/secret.txt")));
+    let link = task.copy().parent().unwrap().join("shared");
+    assert!(!ok(&sh(&sandbox, &format!("rm '{}'", link.display()))));
+    let out = sh(
+        &sandbox,
+        &format!("echo x > '{}'", shared.join("new.rs").display()),
+    );
+    assert!(!ok(&out) && !shared.join("new.rs").exists(), "{out:?}");
+
+    // Swapped for a link to another project, it stays closed.
+    fs::rename(&shared, home.join("code/shared-old")).unwrap();
+    std::os::unix::fs::symlink(home.join("code/elsewhere"), &shared).unwrap();
+    let sandbox = Sandbox::for_task_with(&task, Some(sources.clone())).unwrap();
+    assert!(!read(&sandbox, &shared.join("secret.txt")));
+    assert!(!ok(&sh(&sandbox, "cat ../shared/secret.txt")));
+    assert!(kule_engine::beside_unopened(&workspace, &shared, &home).is_some());
+
+    // Closed again by the person.
+    fs::remove_file(&shared).unwrap();
+    fs::rename(home.join("code/shared-old"), &shared).unwrap();
+    assert!(kule_engine::remove_beside(kule.path(), kept.id).unwrap());
+    let sandbox = Sandbox::for_task_with(&task, Some(sources)).unwrap();
+    assert!(!read(&sandbox, &shared.join("lib.rs")));
+    assert!(fs::symlink_metadata(&link).is_err(), "the link stayed");
+}
+
+/// Kule suggests the projects the workspace's own manifests build from,
+/// never what a copy's say.
+#[test]
+fn the_projects_a_workspace_builds_from_are_suggested_from_its_own_manifests() {
+    let home = home_with(&[
+        "code/shared/core/Cargo.toml",
+        "code/ui/package.json",
+        "code/Lib/Lib.csproj",
+        "code/tools/x",
+        "code/elsewhere/x",
+    ]);
+    let home = fs::canonicalize(home.path()).unwrap();
+    let ws = home.join("code/proj");
+    let write = |rel: &str, text: &str| {
+        let path = ws.join(rel);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, text).unwrap();
+    };
+    write(
+        "Cargo.toml",
+        "[dependencies]\ncore = { path = \"../shared/core\" }\n",
+    );
+    write(
+        "web/package.json",
+        r#"{"dependencies": {"ui": "file:../../ui"}}"#,
+    );
+    write(
+        "app/App.csproj",
+        r#"<ProjectReference Include="..\..\Lib\Lib.csproj" />"#,
+    );
+    write(
+        "node_modules/x/package.json",
+        r#"{"dependencies": {"t": "file:../../../tools"}}"#,
+    );
+    let (kule, task) = task_on(&ws);
+    // The copy is the agent's to write.
+    fs::write(
+        task.copy().join("Cargo.toml"),
+        "[dependencies]\nx = { path = \"../elsewhere\" }\n",
+    )
+    .unwrap();
+
+    let suggested = kule_engine::suggest_beside(kule.path(), &ws, &home).unwrap();
+    assert_eq!(
+        suggested,
+        ["code/Lib", "code/shared", "code/ui"].map(|p| home.join(p))
+    );
+    kule_engine::add_beside(kule.path(), &ws, &home.join("code/shared"), &home).unwrap();
+    let suggested = kule_engine::suggest_beside(kule.path(), &ws, &home).unwrap();
+    assert_eq!(suggested, ["code/Lib", "code/ui"].map(|p| home.join(p)));
 }

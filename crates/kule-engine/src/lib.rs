@@ -16,6 +16,7 @@
 compile_error!("Kule M0 supports macOS and Linux only");
 
 mod approvals;
+mod beside;
 #[cfg(target_os = "linux")]
 mod bind_filter;
 mod caches;
@@ -60,6 +61,9 @@ mod usage;
 
 pub use approvals::{
     Answer, Approvals, DEFAULT_TIMEOUT, MAX_TIMEOUT, MAX_WAITING, MIN_TIMEOUT, Question,
+};
+pub use beside::{
+    BESIDE_FILE, Beside, add_beside, beside_unopened, besides, remove_beside, suggest_beside,
 };
 pub use caches::Sources as CacheSources;
 pub use checkpoint::{Checkpoint, State as CheckpointState};

@@ -4492,6 +4492,19 @@ body.dragging-panel * {
   color: var(--deny);
 }
 
+/* The task header's chip for the projects beside its folder. */
+.beside-chip {
+  border: 0;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.beside-chip.ask {
+  background: var(--ask-soft);
+  color: var(--ask);
+}
+
 /* Settings → Policy: what this computer cannot give. */
 .isolation {
   display: flex;

@@ -74,6 +74,36 @@ fn calls_reach_the_service_and_errors_come_back() {
     assert!(!error.contains(home.path().to_str().unwrap()), "{error}");
 }
 
+/// Projects beside a folder go through the daemon as through the CLI: a
+/// folder Kule does not hide as the person's own is refused, and nothing
+/// is kept.
+#[test]
+fn a_folder_kule_does_not_hide_is_not_opened_through_the_daemon() {
+    let home = TempDir::new().unwrap();
+    daemon(home.path());
+    let client = Client::new(home.path());
+    let (ws, beside) = (workspace(), TempDir::new().unwrap());
+    let error = client
+        .call::<kule_engine::Beside>(Call::AddBeside {
+            workspace: ws.path().to_owned(),
+            path: beside.path().to_owned(),
+        })
+        .unwrap_err();
+    assert!(
+        error.contains("not in a folder Kule hides as yours"),
+        "{error}"
+    );
+    let kept: Vec<serde_json::Value> = client.call(Call::Besides).unwrap();
+    assert!(kept.is_empty());
+    let suggested: Vec<std::path::PathBuf> = client
+        .call(Call::SuggestBeside {
+            workspace: ws.path().to_owned(),
+        })
+        .unwrap();
+    assert!(suggested.is_empty());
+    assert!(!client.call::<bool>(Call::RemoveBeside { id: 1 }).unwrap());
+}
+
 /// The most a prompt may carry (every place it may name, at its longest,
 /// and every picture of a region it may take) fits in one request.
 #[test]

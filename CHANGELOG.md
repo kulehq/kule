@@ -110,8 +110,16 @@
   commands, and so is the folder the workspace lies in, with the projects
   beside it, where it is a folder of yours in your home. The workspace's
   git directory and the folders your `PATH` and SDK variables name stay
-  readable there; `kule exec --reveal ../shared` opens a project the
-  workspace builds from, read-only.
+  readable there.
+- A project beside a folder that the folder builds from opens to its
+  tasks, read only, once you open it: `kule reveal add ../shared`, or
+  Settings → Rules in the app, where Kule suggests what the folder's own
+  manifests name (Cargo, npm, Go, Python, .NET and Gradle), and the task
+  header says what its folder builds from and cannot read. A new task's
+  copy sits next to links to those projects, so `../shared` works from the
+  copy as from the folder. `kule new` names what the folder builds from.
+- Daemon protocol 29: `Besides`, `SuggestBeside`, `AddBeside`,
+  `RemoveBeside`.
 - Go programs in a task check certificates against the roots the proxy
   names (`GODEBUG=x509sslcertoverrideplatform=1`, after your own
   settings), so their HTTPS works through the proxy on macOS. A refusal

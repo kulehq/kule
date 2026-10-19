@@ -54,6 +54,26 @@ enum RulesCmd {
 }
 
 #[derive(Subcommand)]
+enum RevealCmd {
+    /// List them, and what the folder builds from that its tasks cannot
+    /// read (the default).
+    List {
+        /// The folder (default: the current one).
+        #[arg(long)]
+        folder: Option<PathBuf>,
+    },
+    /// Let the folder's tasks read PATH, a project beside it.
+    Add {
+        path: PathBuf,
+        /// The folder (default: the current one).
+        #[arg(long)]
+        folder: Option<PathBuf>,
+    },
+    /// Close ID again.
+    Remove { id: u64 },
+}
+
+#[derive(Subcommand)]
 enum GroupCmd {
     /// List the groups, their policies and tasks (the default).
     List,
@@ -368,6 +388,14 @@ enum Cmd {
         #[command(subcommand)]
         action: Option<RulesCmd>,
     },
+    /// Projects beside a folder that its tasks may read, never write: Kule
+    /// hides the folder a workspace lies in, with the other projects there,
+    /// until you open one it builds from. Kule suggests those the folder's
+    /// own manifests name.
+    Reveal {
+        #[command(subcommand)]
+        action: Option<RevealCmd>,
+    },
     /// What the task's commands wrote in your home directory (~/.zshrc,
     /// ~/.config, new files at the top): caught in the task's home layer
     /// for you to apply or discard, never written there on their own.
@@ -449,6 +477,7 @@ fn run() -> Result<ExitCode> {
         Cmd::New { workspace } => {
             let task = Task::create(&home, &workspace)?;
             println!("task {} · copy at {}", task.id(), task.copy().display());
+            print_suggested(&home, task.workspace())?;
         }
         Cmd::List => {
             for info in kule_engine::arranged(&home)? {
@@ -683,12 +712,7 @@ fn run() -> Result<ExitCode> {
             }
             // The agent's process group is gone by now.
             let put_back = kept.restore()?;
-            outcome.map_err(|e| {
-                anyhow!(
-                    "{e} (see {})",
-                    task.copy().with_file_name("agent.log").display()
-                )
-            })?;
+            outcome.map_err(|e| anyhow!("{e} (see {})", task.agent_log().display()))?;
             println!();
             proxy.stop();
             print_set(&task, &task.effects()?);
@@ -921,6 +945,9 @@ fn run() -> Result<ExitCode> {
         Cmd::Ext { action } => ext_cmd(&home, action.unwrap_or(ExtCmd::List))?,
         Cmd::Group { action } => group_cmd(&home, action.unwrap_or(GroupCmd::List))?,
         Cmd::Rules { action } => rules_cmd(&home, action.unwrap_or(RulesCmd::List))?,
+        Cmd::Reveal { action } => {
+            reveal_cmd(&home, action.unwrap_or(RevealCmd::List { folder: None }))?
+        }
         Cmd::Secrets { action } => secrets_cmd(&home, action.unwrap_or(SecretsCmd::List))?,
         Cmd::Home { task, action } => home_cmd(&home, &task, action.unwrap_or(HomeCmd::List))?,
         Cmd::Policy { choice } => {
@@ -1676,6 +1703,71 @@ fn rules_cmd(home: &Path, action: RulesCmd) -> Result<()> {
                 println!("not kept: rerun with --yes to keep it");
             }
         }
+    }
+    Ok(())
+}
+
+/// The person's home directory, where Kule hides their own folders.
+fn person_home() -> Result<PathBuf> {
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .ok_or_else(|| anyhow!("HOME is not set"))
+}
+
+fn reveal_cmd(home: &Path, action: RevealCmd) -> Result<()> {
+    let person = person_home()?;
+    match action {
+        RevealCmd::List { folder } => {
+            let besides = kule_engine::besides(home)?;
+            if besides.is_empty() {
+                println!("no project beside a folder is open to its tasks");
+            }
+            for b in besides {
+                let state = kule_engine::beside_unopened(&b.workspace, &b.path, &person)
+                    .map_or(String::new(), |why| format!("  (not opened: {why})"));
+                println!(
+                    "{:>3}  {}  · for {}{state}",
+                    b.id,
+                    paint::plain_line(&b.path.display().to_string()),
+                    paint::plain_line(&b.workspace.display().to_string())
+                );
+            }
+            let folder = match folder {
+                Some(f) => f,
+                None => std::env::current_dir()?,
+            };
+            print_suggested(home, &folder)?;
+        }
+        RevealCmd::Add { path, folder } => {
+            let folder = match folder {
+                Some(f) => f,
+                None => std::env::current_dir()?,
+            };
+            let kept = kule_engine::add_beside(home, &folder, &path, &person)?;
+            println!(
+                "kept as {}: tasks in {} read {}, never write it",
+                kept.id,
+                kept.workspace.display(),
+                kept.path.display()
+            );
+        }
+        RevealCmd::Remove { id } => {
+            if kule_engine::remove_beside(home, id)? {
+                println!("closed {id}: hidden again from the next command on");
+            } else {
+                println!("nothing open as {id}");
+            }
+        }
+    }
+    Ok(())
+}
+
+/// What `folder`'s manifests build from that its tasks cannot read.
+fn print_suggested(home: &Path, folder: &Path) -> Result<()> {
+    let person = person_home()?;
+    for path in kule_engine::suggest_beside(home, folder, &person)? {
+        let path = paint::plain_line(&path.display().to_string());
+        println!("builds from {path}, which its tasks cannot read: kule reveal add '{path}'");
     }
     Ok(())
 }

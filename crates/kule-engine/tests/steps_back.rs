@@ -196,6 +196,7 @@ fn a_commit_starts_the_steps_over() {
     s.task.commit().unwrap();
     assert!(s.task.steps().unwrap().is_empty());
     assert!(s.task.back_to_step(1).is_err());
-    let store = s.copy().parent().unwrap().join("steps-store");
+    // The copy is `<task>/w/<name>`.
+    let store = s.copy().ancestors().nth(2).unwrap().join("steps-store");
     assert!(!store.exists());
 }

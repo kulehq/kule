@@ -1218,6 +1218,124 @@ function renderComposer(task) {
   renderSpent(task);
   renderMeasure(task);
   renderPromptRefs(task);
+  showBeside(task);
+}
+
+// --- Projects beside a folder ------------------------------------------------
+
+// A folder's tasks cannot read the projects beside it until the person
+// opens one, in Settings → Rules; Kule suggests those the folder's own
+// manifests build from. Nothing a task runs can open one.
+
+/** Per folder: what its tasks read beside it, and what its manifests
+ * build from that they cannot. */
+const besideOf = new Map();
+let besideLoadedFor = null;
+
+async function loadBeside(workspace) {
+  const [all, suggested] = await Promise.all([call("besides"), call("suggest_beside", { workspace })]);
+  const entry = { opened: all.filter((b) => b.workspace === workspace), suggested };
+  besideOf.set(workspace, entry);
+  return entry;
+}
+
+/** The header's chip for the task's folder: from what was loaded, loaded
+ * again when another task is shown. */
+function showBeside(task) {
+  paintBeside(task, besideOf.get(task.workspace));
+  if (besideLoadedFor === task.id) return;
+  besideLoadedFor = task.id;
+  loadBeside(task.workspace)
+    .then((entry) => {
+      if (currentTask()?.id === task.id) paintBeside(task, entry);
+    })
+    .catch(() => {});
+}
+
+function paintBeside(task, entry) {
+  const chip = $("task-beside");
+  chip.hidden = !entry || (!entry.opened.length && !entry.suggested.length);
+  if (chip.hidden) return;
+  const names = (paths) => paths.map((p) => baseName(p)).join(", ");
+  chip.classList.toggle("ask", entry.suggested.length > 0);
+  if (entry.suggested.length) {
+    chip.textContent = `builds from ${names(entry.suggested)} · hidden`;
+    chip.title = `This folder's manifests name ${entry.suggested.join(", ")}, which its tasks cannot read. Settings → Rules lets them read it, never write it.`;
+  } else {
+    const paths = entry.opened.map((b) => b.path);
+    chip.textContent = `reads ${names(paths)}`;
+    chip.title = `This folder's tasks read ${paths.join(", ")}, never write it. Settings → Rules closes it again.`;
+  }
+}
+
+/** Settings → Rules: the projects beside folders that their tasks read,
+ * and what the shown task's folder builds from that they cannot. */
+async function besideSection() {
+  const task = currentTask();
+  let opened = [];
+  let suggested = [];
+  try {
+    opened = await call("besides");
+    if (task) suggested = (await loadBeside(task.workspace)).suggested;
+  } catch (err) {
+    fail(err);
+  }
+  const reload = async () => {
+    besideLoadedFor = null;
+    await renderRules();
+    const shown = currentTask();
+    if (shown) showBeside(shown);
+  };
+  const open = (path) =>
+    armed("Let its tasks read it", () => `Click again: tasks in ${baseName(task.workspace)} read ${baseName(path)}`, false, async () => {
+      await call("add_beside", { workspace: task.workspace, path }).catch(fail);
+      await reload();
+    });
+  const choose = h("button", { class: "button ghost", type: "button", hidden: !task }, "Choose a folder…");
+  choose.addEventListener("click", async () => {
+    const path = await call("pick_workspace").catch(fail);
+    if (!path) return;
+    await call("add_beside", { workspace: task.workspace, path }).catch(fail);
+    await reload();
+  });
+  return [
+    h("h3", { class: "group-title" }, "Projects beside a folder"),
+    h(
+      "p",
+      { class: "muted" },
+      "A task cannot read the folder its workspace lies in, nor the other projects there. A project the workspace builds from (../shared) can be opened here for its tasks to read, never to write."
+    ),
+    ...suggested.map((path) =>
+      h(
+        "div",
+        { class: "agent-card" },
+        h("div", {}, h("strong", {}, path)),
+        h("div", { class: "muted" }, `${task.workspace} builds from it, and its tasks cannot read it`),
+        open(path)
+      )
+    ),
+    opened.length === 0
+      ? h("p", { class: "muted" }, "No project beside a folder is open to its tasks.")
+      : h(
+          "ul",
+          { class: "rule-list" },
+          ...opened.map((b) => {
+            const close = armed("Close", "Click again to hide it again", false, async () => {
+              await call("remove_beside", { id: b.id }).catch(fail);
+              await reload();
+            });
+            return h(
+              "li",
+              { class: "agent-card" },
+              h("div", {}, h("strong", {}, b.path)),
+              h("div", { class: "muted" }, `Read by the tasks in ${b.workspace} · since ${when(b.added_unix)}`),
+              b.unopened ? h("div", { class: "muted" }, `Not opened now: ${b.unopened}`) : null,
+              close
+            );
+          })
+        ),
+    task ? h("div", {}, choose, h("span", { class: "muted" }, ` for ${task.workspace}`)) : null,
+  ];
 }
 
 function money(m) {
@@ -3337,6 +3455,8 @@ async function renderRules() {
     fail(err);
   }
   const describe = (r) => (r.kind === "connect" ? `Connections to ${r.host}:${r.port}` : `Changes to ${r.path} (${r.rule})`);
+  const beside = await besideSection();
+  if (state.view !== "rules") return;
   replace(
     $("agents-view"),
     h(
@@ -3368,7 +3488,8 @@ async function renderRules() {
               forget
             );
           })
-        )
+        ),
+    ...beside
   );
 }
 
@@ -6512,6 +6633,7 @@ async function start() {
   await loadAgentChoices();
   $("open-settings").addEventListener("click", () => openSettings());
   $("isolation-warning").addEventListener("click", () => openPolicy());
+  $("task-beside").addEventListener("click", () => openSettings("rules"));
   loadIsolation();
   const sections = [...document.querySelectorAll("#settings-tabs .tab")];
   for (const tab of sections) {

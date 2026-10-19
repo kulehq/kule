@@ -31,7 +31,15 @@ fn the_second_commit_merges_and_says_so_or_names_what_both_changed() {
     let new_task = || {
         let out = kule(home.path(), &["new", ws.path().to_str().unwrap()]);
         let id = text(&out).split_whitespace().nth(1).unwrap().to_owned();
-        let copy = home.path().join("tasks").join(&id).join("copy");
+        let copy = std::path::PathBuf::from(
+            text(&out)
+                .split(" · copy at ")
+                .nth(1)
+                .unwrap()
+                .lines()
+                .next()
+                .unwrap(),
+        );
         (id, copy)
     };
     let (a, copy_a) = new_task();

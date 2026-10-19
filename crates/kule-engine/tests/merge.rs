@@ -134,7 +134,8 @@ fn a_task_without_a_base_still_merges_from_the_others_commit() {
     // from the first task's checkpoint instead.
     let s = Setup::new();
     let (a, b) = (s.task(), s.task());
-    fs::remove_dir_all(b.copy().with_file_name("base")).unwrap();
+    // The base sits in the task's directory, next to `w/`, the copy's.
+    fs::remove_dir_all(b.copy().ancestors().nth(2).unwrap().join("base")).unwrap();
     write(&a, "task.rs", &CODE.replace("1;", "10;"));
     write(&b, "task.rs", &CODE.replace("2;", "20;"));
     a.commit().unwrap().unwrap();

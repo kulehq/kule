@@ -158,7 +158,7 @@ fn try_in(
         Ok::<_, Error>((reply, error, denials))
     })();
     let refused_connections = connections(&task).unwrap_or_default();
-    let log = std::fs::read_to_string(task.copy().with_file_name("agent.log")).unwrap_or_default();
+    let log = std::fs::read_to_string(task.agent_log()).unwrap_or_default();
     let log: Vec<String> = log
         .lines()
         .rev()

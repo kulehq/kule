@@ -30,7 +30,15 @@ fn an_approval_remembered_is_not_asked_again() {
     fs::write(ws.join("Cargo.toml"), "[package]\n").unwrap();
     let out = kule(home, ws, &["new", ws.to_str().unwrap()]);
     let id = text(&out).split_whitespace().nth(1).unwrap().to_owned();
-    let copy = home.join("tasks").join(&id).join("copy");
+    let copy = std::path::PathBuf::from(
+        text(&out)
+            .split(" · copy at ")
+            .nth(1)
+            .unwrap()
+            .lines()
+            .next()
+            .unwrap(),
+    );
 
     fs::write(copy.join("Cargo.toml"), "[package]\nv = 1\n").unwrap();
     assert!(!kule(home, ws, &["commit", &id]).status.success());

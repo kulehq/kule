@@ -329,6 +329,29 @@ fn forget_rule(kule: K<'_>, id: u64) -> Result<bool> {
     kule.call(Call::ForgetRule { id })
 }
 
+// Projects beside a folder that its tasks may read: opened only from here,
+// by the person, never by what runs in a task.
+
+#[tauri::command(async)]
+fn besides(kule: K<'_>) -> Result<serde_json::Value> {
+    kule.call(Call::Besides)
+}
+
+#[tauri::command(async)]
+fn suggest_beside(kule: K<'_>, workspace: PathBuf) -> Result<serde_json::Value> {
+    kule.call(Call::SuggestBeside { workspace })
+}
+
+#[tauri::command(async)]
+fn add_beside(kule: K<'_>, workspace: PathBuf, path: PathBuf) -> Result<serde_json::Value> {
+    kule.call(Call::AddBeside { workspace, path })
+}
+
+#[tauri::command(async)]
+fn remove_beside(kule: K<'_>, id: u64) -> Result<bool> {
+    kule.call(Call::RemoveBeside { id })
+}
+
 // Secrets: the window sends a value once, to keep; it never gets one back.
 
 #[tauri::command(async)]
@@ -928,6 +951,10 @@ fn main() {
             answer,
             rules,
             forget_rule,
+            besides,
+            suggest_beside,
+            add_beside,
+            remove_beside,
             secrets,
             secrets_key,
             add_secret,

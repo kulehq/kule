@@ -651,21 +651,26 @@ fn a_same_size_write_during_creation_is_not_overwritten() {
         }
         // Saves a.txt again as soon as its clone appears, while the rest of
         // the workspace is still being copied.
+        // The copy is `<task>/w/<the workspace's name>`. Gives up after a
+        // while, so a copy made elsewhere fails the test instead of hanging.
         let writer = {
             let (tasks, a) = (home.path().join("tasks"), a.clone());
+            let name = ws.path().file_name().unwrap().to_owned();
             std::thread::spawn(move || {
-                loop {
+                let started = std::time::Instant::now();
+                while started.elapsed() < std::time::Duration::from_secs(30) {
                     let cloned = fs::read_dir(&tasks)
                         .into_iter()
                         .flatten()
                         .flatten()
-                        .any(|t| t.path().join("copy/a.txt").exists());
+                        .any(|t| t.path().join("w").join(&name).join("a.txt").exists());
                     if cloned {
                         fs::write(&a, "2\n").unwrap();
                         return;
                     }
                     std::thread::yield_now();
                 }
+                panic!("the copy never appeared");
             })
         };
         let task = Task::create(home.path(), ws.path()).unwrap();
@@ -745,7 +750,8 @@ fn a_same_size_write_to_the_copy_right_after_a_rollback_is_seen() {
 fn a_held_lock_turns_writers_away() {
     let s = Setup::new();
     write(&s.copy().join("a.txt"), "one\n");
-    let lock = s.task.copy().parent().unwrap().join("lock");
+    // The copy is `<task>/w/<name>`.
+    let lock = s.task.copy().ancestors().nth(2).unwrap().join("lock");
     write(&lock, "12345\n");
     assert!(matches!(s.task.commit(), Err(Error::Busy(_))));
     assert!(!s.work().join("a.txt").exists());
@@ -892,7 +898,7 @@ fn an_agent_at_work_holds_off_commit_rollback_undo_and_remove() {
     drop(at_work);
     assert!(s.task.commit().unwrap().is_some());
 
-    let mark = s.task.copy().parent().unwrap().join("agent");
+    let mark = s.task.copy().ancestors().nth(2).unwrap().join("agent");
     fs::write(&mark, "999999\n").unwrap();
     assert_eq!(s.task.agent_pid(), None);
     write(&s.copy().join("b.txt"), "two\n");

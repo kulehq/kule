@@ -398,6 +398,10 @@ pub fn dispatch(service: &Arc<Service>, call: Call) -> Result<Value, String> {
             allowance,
             workspace,
         } => json(service.rule_impact(&allowance, workspace.as_deref())?),
+        Call::Besides => json(service.besides()?),
+        Call::SuggestBeside { workspace } => json(service.suggest_beside(&workspace)?),
+        Call::AddBeside { workspace, path } => json(service.add_beside(&workspace, &path)?),
+        Call::RemoveBeside { id } => json(service.remove_beside(id)?),
         Call::SetApprovalTimeout { task, minutes } => {
             json(service.set_approval_timeout(&task, minutes)?)
         }

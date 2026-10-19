@@ -78,6 +78,23 @@ pub struct IsolationView {
     pub accept_weaker: bool,
 }
 
+/// A project beside a folder that its tasks may read, and why it is not
+/// opened now, if it is not (it became a link, or moved).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BesideView {
+    #[serde(flatten)]
+    pub beside: kule_engine::Beside,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unopened: Option<String>,
+}
+
+/// The person's home directory, where Kule hides their own folders.
+fn person_home() -> Result<PathBuf> {
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .ok_or_else(|| "HOME is not set".to_owned())
+}
+
 /// A task as the task list shows it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskView {
@@ -578,6 +595,33 @@ impl Service {
 
     pub fn forget_rule(&self, id: u64) -> Result<bool> {
         kule_engine::forget(&self.home, id).map_err(text)
+    }
+
+    /// The projects beside folders that their tasks may read.
+    pub fn besides(&self) -> Result<Vec<BesideView>> {
+        let person = person_home()?;
+        Ok(kule_engine::besides(&self.home)
+            .map_err(text)?
+            .into_iter()
+            .map(|beside| BesideView {
+                unopened: kule_engine::beside_unopened(&beside.workspace, &beside.path, &person),
+                beside,
+            })
+            .collect())
+    }
+
+    /// What `workspace`'s own manifests build from that its tasks cannot
+    /// read.
+    pub fn suggest_beside(&self, workspace: &Path) -> Result<Vec<PathBuf>> {
+        kule_engine::suggest_beside(&self.home, workspace, &person_home()?).map_err(text)
+    }
+
+    pub fn add_beside(&self, workspace: &Path, path: &Path) -> Result<kule_engine::Beside> {
+        kule_engine::add_beside(&self.home, workspace, path, &person_home()?).map_err(text)
+    }
+
+    pub fn remove_beside(&self, id: u64) -> Result<bool> {
+        kule_engine::remove_beside(&self.home, id).map_err(text)
     }
 
     /// The person's secrets, without their values.
@@ -1464,12 +1508,7 @@ impl Service {
         }
         // The agent's process group is gone by now.
         let put_back = launch.kept.restore().map_err(text)?;
-        outcome.map_err(|e| {
-            format!(
-                "{e} (see {})",
-                task.copy().with_file_name("agent.log").display()
-            )
-        })?;
+        outcome.map_err(|e| format!("{e} (see {})", task.agent_log().display()))?;
         let mut refused = launch
             .sandbox
             .denials(started.elapsed())

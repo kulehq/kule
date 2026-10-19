@@ -200,18 +200,8 @@ fn a_task_waits_fifteen_minutes_unless_a_person_sets_it_within_bounds() {
     s.task
         .set_approval_timeout(Duration::from_secs(5 * 60))
         .unwrap();
-    let again = Task::open(
-        s.task
-            .copy()
-            .parent()
-            .unwrap()
-            .parent()
-            .unwrap()
-            .parent()
-            .unwrap(),
-        s.task.id(),
-    )
-    .unwrap();
+    // The copy is `<home>/tasks/<id>/w/<name>`.
+    let again = Task::open(s.task.copy().ancestors().nth(4).unwrap(), s.task.id()).unwrap();
     assert_eq!(again.approval_timeout().unwrap(), Duration::from_secs(300));
     for wrong in [
         Duration::ZERO,

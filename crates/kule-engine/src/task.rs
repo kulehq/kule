@@ -34,6 +34,27 @@ pub struct TaskInfo {
     pub id: String,
     pub workspace: PathBuf,
     pub created_unix: u64,
+    /// The copy's name under the task's `w/`: the workspace's own, so a
+    /// path out of the copy (`../shared`) leads where Kule puts a link to
+    /// a project beside the workspace the person opened (see
+    /// [`crate::add_beside`]). `None` for a task made before, whose copy is
+    /// `copy`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub copy_name: Option<String>,
+}
+
+/// The folder in a task's directory that holds its copy and the links Kule
+/// puts beside it.
+pub(crate) const BESIDE_DIR: &str = "w";
+
+/// The name a copy of `workspace` takes under `w/`: its own, where that is
+/// a plain name.
+fn copy_name(workspace: &Path) -> Option<String> {
+    let name = workspace.file_name()?.to_str()?;
+    let plain = Path::new(name).components().count() == 1
+        && !matches!(name, "." | "..")
+        && !name.contains(['/', '\\', '\0']);
+    plain.then(|| name.to_owned())
 }
 
 /// A file merged before a commit: what goes into the copy, and the folder's
@@ -112,6 +133,7 @@ impl Task {
         let task = Task {
             info: TaskInfo {
                 id,
+                copy_name: copy_name(&workspace),
                 workspace,
                 created_unix,
             },
@@ -147,6 +169,7 @@ impl Task {
                     id,
                     workspace: self.info.workspace.clone(),
                     created_unix,
+                    copy_name: copy_name(&self.info.workspace),
                 },
                 dir,
             };
@@ -173,6 +196,7 @@ impl Task {
         staging: &Path,
     ) -> Result<()> {
         let _lock = source.lock()?;
+        self.make_copy_parent()?;
         fsops::clone_tree(&source.copy(), &self.copy(), &self.clock(&source.copy())?)?;
         if source.base_dir().is_dir() {
             let clock = self.clock(&source.base_dir())?;
@@ -219,7 +243,16 @@ impl Task {
 
     /// Writes `task.json` last: until then the task is not listed, so a
     /// half-made one never shows.
+    /// The folder the copy is made in, for a copy under `w/`.
+    fn make_copy_parent(&self) -> Result<()> {
+        if let Some(parent) = self.copy().parent() {
+            fs::create_dir_all(parent).at(parent)?;
+        }
+        Ok(())
+    }
+
     fn populate(&self) -> Result<()> {
+        self.make_copy_parent()?;
         let clock = self.clock(&self.info.workspace)?;
         let taken = fsops::clone_tree(&self.info.workspace, &self.copy(), &clock)?;
         // The copy's stamps need no settling: its files carry the workspace's
@@ -424,9 +457,17 @@ impl Task {
         &self.info.workspace
     }
 
+    /// What the task's agent runs printed to their standard error.
+    pub fn agent_log(&self) -> PathBuf {
+        self.dir.join("agent.log")
+    }
+
     /// Where commands run: the task's copy of the workspace.
     pub fn copy(&self) -> PathBuf {
-        self.dir.join("copy")
+        match &self.info.copy_name {
+            Some(name) => self.dir.join(BESIDE_DIR).join(name),
+            None => self.dir.join("copy"),
+        }
     }
 
     /// The task's own temporary directory, created on first use. Commands

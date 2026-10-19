@@ -10,7 +10,7 @@ use serde_json::Value;
 
 /// Changes whenever a call, a result or a notice changes shape; a client
 /// and a daemon that disagree on it cannot talk.
-pub const PROTOCOL: u32 = 28;
+pub const PROTOCOL: u32 = 29;
 
 /// What a daemon says about itself.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -304,6 +304,22 @@ pub enum Call {
         allowance: kule_engine::Allowance,
         #[serde(default)]
         workspace: Option<PathBuf>,
+    },
+    /// The projects beside folders that their tasks may read, each with why
+    /// it is not opened now, if it is not.
+    Besides,
+    /// What `workspace`'s own manifests build from that its tasks cannot
+    /// read.
+    SuggestBeside {
+        workspace: PathBuf,
+    },
+    /// Lets the tasks of `workspace` read `path`, never write it.
+    AddBeside {
+        workspace: PathBuf,
+        path: PathBuf,
+    },
+    RemoveBeside {
+        id: u64,
     },
     /// Takes the task's home changes at `paths` to the person's home.
     ApplyHome {
