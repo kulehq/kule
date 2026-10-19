@@ -95,8 +95,7 @@
 ### Security
 
 - Hardened containment of agents on macOS and Linux, and the integrity of
-  what a commit takes. Upgrading is strongly recommended; details follow
-  in a security advisory once this release is out.
+  what a commit takes.
 - Where a computer cannot give an agent's commands all of their isolation
   (Linux without unprivileged user namespaces), Kule runs no agent until
   you accept weaker isolation in Settings → Policy or with `kule isolation
