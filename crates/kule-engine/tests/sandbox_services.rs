@@ -271,6 +271,40 @@ fn what_is_typed_in_another_terminal_cannot_be_read() {
     );
 }
 
+/// The person's processes: neither signalled nor looked into, their
+/// environment least of all (where API keys live).
+#[test]
+fn processes_outside_the_sandbox_cannot_be_signalled_or_read() {
+    let s = Setup::new();
+    let secret = format!("kule-test-{}", rand_suffix());
+    let mut outside = Command::new("sleep")
+        .arg("30")
+        .env("KULE_TEST_SECRET", &secret)
+        .spawn()
+        .unwrap();
+    let pid = outside.id();
+    let signalled = s.sh(&format!("kill -STOP {pid}"));
+    let looked = s.sh(&format!("ps eww -p {pid}"));
+    let stopped = Command::new("ps")
+        .args(["-o", "stat=", "-p", &pid.to_string()])
+        .output()
+        .unwrap();
+    let _ = outside.kill();
+    let _ = outside.wait();
+    assert!(
+        !signalled.status.success(),
+        "a process outside was signalled"
+    );
+    assert!(
+        !String::from_utf8_lossy(&stopped.stdout).contains('T'),
+        "a process outside was stopped"
+    );
+    assert!(
+        !String::from_utf8_lossy(&looked.stdout).contains(&secret),
+        "a process outside had its environment read"
+    );
+}
+
 /// The tools agents use every day keep working under all of the above.
 #[test]
 fn everyday_tools_still_work() {

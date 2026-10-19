@@ -121,6 +121,84 @@ const OUTSIDE_SERVICES: &[&str] = &[
     "com.apple.windowserver.active",
 ];
 
+/// What every sandboxed command may do on macOS, on top of nothing: the
+/// profile starts from `(deny default)`. Processes and signals within the
+/// sandbox; reading files (what is hidden is taken away after); the system
+/// facts and services that toolchains need. Writes, the network and the GPU
+/// are allowed after it, each as narrowly as the task needs.
+#[cfg(target_os = "macos")]
+const SEATBELT_BASE: &str = r#"(allow process-exec process-fork)
+(allow signal (target same-sandbox))
+(allow process-info* (target same-sandbox))
+(allow file-read* file-map-executable file-ioctl)
+(allow system-fsctl)
+(allow system-socket)
+(allow network*)
+(allow ipc-posix-sem ipc-posix-shm*)
+(allow user-preference-read)
+(allow pseudo-tty)
+(allow system-mac-syscall (mac-policy-name "vnguard"))
+(allow system-mac-syscall (require-all (mac-policy-name "Sandbox") (mac-syscall-number 67)))
+(allow iokit-open (iokit-registry-entry-class "RootDomainUserClient"))
+(allow iokit-open (iokit-user-client-class "IOSurfaceRootUserClient"))
+(allow sysctl-write (sysctl-name "kern.grade_cputype"))
+(allow sysctl-read
+  (sysctl-name-prefix "hw.")
+  (sysctl-name-prefix "machdep.cpu.")
+  (sysctl-name-prefix "kern.proc.pgrp.")
+  (sysctl-name-prefix "kern.proc.pid.")
+  (sysctl-name-prefix "net.routetable")
+  (sysctl-name "kern.argmax")
+  (sysctl-name "kern.bootargs")
+  (sysctl-name "kern.boottime")
+  (sysctl-name "kern.iossupportversion")
+  (sysctl-name "security.mac.lockdown_mode_state")
+  (sysctl-name "kern.hostname")
+  (sysctl-name "kern.maxfiles")
+  (sysctl-name "kern.maxfilesperproc")
+  (sysctl-name "kern.maxproc")
+  (sysctl-name "kern.ngroups")
+  (sysctl-name "kern.osproductversion")
+  (sysctl-name "kern.osrelease")
+  (sysctl-name "kern.ostype")
+  (sysctl-name "kern.osvariant_status")
+  (sysctl-name "kern.osversion")
+  (sysctl-name "kern.safeboot")
+  (sysctl-name "kern.secure_kernel")
+  (sysctl-name "kern.sysv.semmns")
+  (sysctl-name "kern.usrstack64")
+  (sysctl-name "kern.version")
+  (sysctl-name "sysctl.proc_cputype")
+  (sysctl-name "sysctl.proc_translated")
+  (sysctl-name "vm.loadavg")
+  (sysctl-name "vm.pagesize"))
+(allow mach-lookup
+  (global-name "com.apple.system.opendirectoryd.libinfo")
+  (global-name "com.apple.system.opendirectoryd.membership")
+  (global-name "com.apple.system.DirectoryService.libinfo_v1")
+  (global-name "com.apple.bsd.dirhelper")
+  (global-name "com.apple.PowerManagement.control")
+  (global-name "com.apple.system.notification_center")
+  (global-name "com.apple.system.logger")
+  (global-name "com.apple.logd")
+  (global-name "com.apple.logd.events")
+  (global-name "com.apple.diagnosticd")
+  (global-name "com.apple.analyticsd")
+  (global-name "com.apple.secinitd")
+  (global-name "com.apple.SecurityServer")
+  (global-name "com.apple.trustd")
+  (global-name "com.apple.trustd.agent")
+  (global-name "com.apple.TrustEvaluationAgent")
+  (global-name "com.apple.ocspd")
+  (global-name "com.apple.networkd")
+  (global-name "com.apple.SystemConfiguration.configd")
+  (global-name "com.apple.SystemConfiguration.DNSConfiguration")
+  (global-name "com.apple.dnssd.service")
+  (global-name "com.apple.cfprefsd.agent")
+  (local-name "com.apple.cfprefsd.agent")
+  (global-name "com.apple.FSEvents"))
+"#;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Network {
     Allow,
@@ -601,7 +679,8 @@ impl Sandbox {
         let mut params = Vec::new();
         let mut text = format!(
             "(version 1)\n\
-             (allow default)\n\
+             (deny default {tag})\n\
+             {SEATBELT_BASE}\
              (deny file-write* {tag})\n\
              (allow file-write*\n  \
                (literal \"/dev/null\") (literal \"/dev/zero\") (literal \"/dev/dtracehelper\")\n  \
@@ -657,13 +736,18 @@ impl Sandbox {
                 ));
             }
         }
-        if !self.gpu {
-            // The GPU's user clients: Apple silicon's (`AGXDeviceUserClient`
-            // is one) and the IOAccelerator family's of Intel Macs. A class
-            // matches its subclasses too.
+        // The GPU's user clients: Apple silicon's (`AGXDeviceUserClient` is
+        // one) and the IOAccelerator family's of Intel Macs. A class matches
+        // its subclasses too.
+        // Metal also compiles its shaders in a service of its own.
+        let gpu = "(iokit-user-client-class \"IOGPUDeviceUserClient\" \"IOAccelDevice2\" \"IOAccelSharedUserClient2\" \"IOAccelContext2\" \"IOAccelCommandQueue2\")";
+        if self.gpu {
             text.push_str(&format!(
-                "(deny iokit-open (iokit-user-client-class \"IOGPUDeviceUserClient\" \"IOAccelDevice2\" \"IOAccelSharedUserClient2\" \"IOAccelContext2\" \"IOAccelCommandQueue2\") {tag})\n"
+                "(allow iokit-open {gpu})\n\
+                 (allow mach-lookup (xpc-service-name \"com.apple.MTLCompilerService\"))\n"
             ));
+        } else {
+            text.push_str(&format!("(deny iokit-open {gpu} {tag})\n"));
         }
         if self.network != Network::Allow {
             // Name lookups would carry data out past the proxy, which
