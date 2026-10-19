@@ -1317,8 +1317,8 @@ impl Profile {
                     .filter_map(|s| s.split('/').next())
                     .map(str::to_owned)
                     .collect();
-                let dir = task.prepare_home(&home, &linked, sandbox.hidden(), &ignored)?;
-                sandbox.use_home(&dir, &home)?;
+                task.prepare_home(&home, &linked, sandbox.hidden(), &ignored)?;
+                sandbox.use_home(task, &home)?;
             }
         }
         sandbox.use_proxy(proxy);

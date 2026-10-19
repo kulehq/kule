@@ -57,8 +57,7 @@ impl Setup {
             }),
         )
         .unwrap();
-        let layer = self
-            .task
+        self.task
             .prepare_home(
                 p,
                 &[p.join(".claude")],
@@ -66,7 +65,7 @@ impl Setup {
                 &[".claude".to_owned()],
             )
             .unwrap();
-        sandbox.use_home(&layer, p).unwrap();
+        sandbox.use_home(&self.task, p).unwrap();
         let out = sandbox
             .command("sh", &["-c".to_owned(), script.to_owned()])
             .unwrap()
@@ -470,6 +469,13 @@ fn a_token_in_a_shell_startup_file_is_masked_in_the_layer() {
 
     let seen = s.run("cat \"$HOME/.zshrc\" \"$HOME/.env\"");
     assert!(!seen.contains(token), "{seen}");
+    // Nor where they are in the real home, by its path.
+    let real = s.run(&format!(
+        "cat '{}' '{}' 2>/dev/null; true",
+        p.join(".zshrc").display(),
+        p.join(".env").display()
+    ));
+    assert!(!real.contains(token), "{real}");
     assert!(seen.contains("export GITHUB_TOKEN=kule_secret_"), "{seen}");
     assert!(
         seen.contains("export A=1") && seen.contains("PORT=3000"),

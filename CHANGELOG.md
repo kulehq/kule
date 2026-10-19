@@ -148,8 +148,8 @@
 - Settings that look like secrets in the home layer's clones of shell
   startup files (`.zshrc`, `.profile`, `.gitconfig`, …) and env files
   (`~/.env`) are masked as in the copy's `.env` files: commands see
-  placeholders; an apply puts the values back, and the diff shows no
-  change where only masking was.
+  placeholders, and the real files are hidden from them; an apply puts
+  the values back, and the diff shows no change where only masking was.
 - A command `kule exec` runs sees nothing any agent holds: its state
   (what you said to it, in every project) and its home of its own, not
   only its login.

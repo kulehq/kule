@@ -810,11 +810,15 @@ impl Sandbox {
         self.network = network;
     }
 
-    /// Points the commands' `HOME` at the task's home layer over `real`
+    /// Points the commands' `HOME` at `task`'s home layer over `real_home`
     /// (and `XDG_CONFIG_HOME`, where it is the real home's `.config`), and
-    /// lets them write there.
-    pub fn use_home(&mut self, layer: &Path, real_home: &Path) -> Result<()> {
-        let layer = real(layer)?;
+    /// lets them write there. The real files whose secrets the layer holds
+    /// masked are hidden: commands read the masked clones.
+    pub fn use_home(&mut self, task: &Task, real_home: &Path) -> Result<()> {
+        for masked in task.home_masked()? {
+            self.hide(&masked)?;
+        }
+        let layer = real(&task.home_layer())?;
         if let Some(xdg) = std::env::var_os("XDG_CONFIG_HOME")
             && Path::new(&xdg) == real_home.join(".config")
         {
@@ -1561,40 +1565,48 @@ impl Sandbox {
                 command.pre_exec(move || isolation.enter());
             }
         }
-        // The command's own terminals are mounted after the ruleset was
-        // made, and Landlock passes over what a mount covers: their rules
-        // go on what the mounts put there, in the child, on a second
-        // handle to the same ruleset.
-        let pty_rules = if own_ptys() {
+        // The command's own terminals and its own /proc are mounted after
+        // the ruleset was made, and Landlock passes over what a mount
+        // covers: their rules go on what the mounts put there, in the child,
+        // on a second handle to the same ruleset.
+        let mut late: Vec<(&'static std::ffi::CStr, u64)> = Vec::new();
+        if own_ptys() {
+            // Terminals are driven by their requests (sizes, modes).
+            let file =
+                landlock::AccessFs::ReadFile | landlock::AccessFs::WriteFile | device_ioctl();
+            late.push((c"/dev/pts", (file | landlock::AccessFs::ReadDir).bits()));
+            late.push((c"/dev/ptmx", file.bits()));
+        }
+        if own_pids {
+            // Only the command's own processes are there; read as /proc
+            // always was.
+            let read = landlock::AccessFs::ReadFile | landlock::AccessFs::ReadDir;
+            late.push((c"/proc", read.bits()));
+        }
+        let late_handle = if late.is_empty() {
+            None
+        } else {
             let handle: Option<std::os::fd::OwnedFd> = ruleset
                 .as_ref()
                 .map(|r| r.try_clone())
                 .transpose()
-                .at(Path::new("/dev/pts"))?
+                .at(Path::new("/proc/self"))?
                 .and_then(Into::into);
-            let handle = handle
-                .ok_or_else(|| Error::Invalid("Landlock: no ruleset to add terminals to".into()))?;
-            // Terminals are driven by their requests (sizes, modes).
-            let file =
-                landlock::AccessFs::ReadFile | landlock::AccessFs::WriteFile | device_ioctl();
-            Some((
-                handle,
-                (file | landlock::AccessFs::ReadDir).bits(),
-                file.bits(),
-            ))
-        } else {
-            None
+            Some(handle.ok_or_else(|| {
+                Error::Invalid("Landlock: no ruleset to add mounted paths to".into())
+            })?)
         };
         // SAFETY: the closure runs between fork and exec. It only makes
-        // system calls: the rules for the command's own terminals, on paths
+        // system calls: the rules for what the namespaces mounted, on paths
         // and masks prepared before the fork, then the two that restrict the
         // process (no_new_privs and landlock_restrict_self).
         unsafe {
             command.pre_exec(move || {
-                if let Some((handle, dir, file)) = &pty_rules {
+                if let Some(handle) = &late_handle {
                     use std::os::fd::AsRawFd;
-                    add_path_rule(handle.as_raw_fd(), c"/dev/pts", *dir)?;
-                    add_path_rule(handle.as_raw_fd(), c"/dev/ptmx", *file)?;
+                    for (path, access) in &late {
+                        add_path_rule(handle.as_raw_fd(), path, *access)?;
+                    }
                 }
                 let ruleset = ruleset
                     .take()

@@ -1879,7 +1879,10 @@ fn a_command_sees_and_signals_only_its_own_processes() {
     let out = sh(
         &s.sandbox(),
         &format!(
-            "test -r /proc/self/status || exit 3; \
+            // Read, not asked about: Landlock does not answer access(2).
+            // Runtimes read these as they start (Node, Python, the JVM).
+            "cat /proc/self/status /proc/self/stat /proc/cpuinfo /proc/meminfo >/dev/null || exit 3; \
+             ls /proc >/dev/null || exit 5; \
              test -e /proc/{pid} && exit 4; \
              kill -TERM {pid} 2>/dev/null; exit 0"
         ),

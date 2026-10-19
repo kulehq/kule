@@ -556,8 +556,8 @@ fn run() -> Result<ExitCode> {
                     kule_acp::Agents::load(&home)?.hide_agents(&mut sandbox, person)?;
                     // What the command writes in the home is caught for
                     // review (`kule home`), not refused.
-                    let layer = task.prepare_home(person, &[], sandbox.hidden(), &[])?;
-                    sandbox.use_home(&layer, person)?;
+                    task.prepare_home(person, &[], sandbox.hidden(), &[])?;
+                    sandbox.use_home(&task, person)?;
                 }
                 for path in &allow_write {
                     sandbox.allow_write(path)?;

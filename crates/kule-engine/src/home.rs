@@ -124,6 +124,10 @@ struct Layer {
     /// wrote in it (its state, perhaps its login).
     #[serde(default)]
     made_for: String,
+    /// Files Kule masked secrets in: the real ones are hidden from the
+    /// commands, which read the masked clones through `HOME`.
+    #[serde(default)]
+    masked: BTreeSet<String>,
 }
 
 /// One change a task's commands made in the home layer.
@@ -677,8 +681,26 @@ impl Task {
             if let (Some(entry), Some(now)) = (layer.entries.get_mut(&rel), Stamp::of(&file)?) {
                 entry.copy = now;
             }
+            layer.masked.insert(rel);
         }
         Ok(())
+    }
+
+    /// The files in the person's home whose secrets the layer holds masked
+    /// (see [`Task::mask_layer`]): a sandbox that gives commands the layer
+    /// hides them, so the values are read nowhere but where they were
+    /// masked.
+    pub fn home_masked(&self) -> Result<Vec<PathBuf>> {
+        Ok(self
+            .load_layer()?
+            .map(|layer| {
+                layer
+                    .masked
+                    .iter()
+                    .map(|rel| layer.real.join(rel))
+                    .collect()
+            })
+            .unwrap_or_default())
     }
 
     /// `bytes`, the layer's file at `rel`, with the values Kule masked there
