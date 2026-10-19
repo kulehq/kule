@@ -19,6 +19,12 @@
 #                    key into requests to those hosts alone
 #   hosts            HTTPS hosts it needs beyond what the policy lets through,
 #                    open only while it runs
+#
+# An npx package pinned here installs from its lockfile in src/locks (with
+# npm ci, every dependency at its integrity hash). A new pin needs a new
+# lockfile: in an empty folder, a package.json named "kule-agent" with the
+# package as its one dependency, then `npm install --package-lock-only
+# --ignore-scripts --omit=dev`; a test fails until it is there.
 
 [[agent]]
 name = "claude-code"

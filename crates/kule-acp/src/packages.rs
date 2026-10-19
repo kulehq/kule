@@ -65,6 +65,28 @@ fn package_name(name: &str) -> bool {
     }
 }
 
+/// Lockfiles for the packages Kule's own agents run, made with
+/// `npm install --package-lock-only` when the version was pinned: `npm ci`
+/// installs each dependency at the version and integrity hash in them.
+/// A new pin in agents.toml needs its lockfile here (a test says so).
+const LOCKS: &[(&str, &str)] = &[
+    (
+        "@agentclientprotocol/claude-agent-acp@0.92.0",
+        include_str!("locks/claude-agent-acp@0.92.0.json"),
+    ),
+    (
+        "@agentclientprotocol/codex-acp@2.2.2",
+        include_str!("locks/codex-acp@2.2.2.json"),
+    ),
+];
+
+fn shipped_lock(spec: &str) -> Option<&'static str> {
+    LOCKS
+        .iter()
+        .find(|(s, _)| *s == spec)
+        .map(|(_, lock)| *lock)
+}
+
 /// Whether `spec` is installed whole under `packages`.
 pub fn is_installed(packages: &Path, spec: &str) -> bool {
     dir_of(packages, spec).join(COMPLETE).is_file()
@@ -105,23 +127,44 @@ fn install(dir: &Path, spec: &str) -> Result<()> {
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_nanos());
     let staging = parent.join(format!(".part-{}-{nanos:x}", std::process::id()));
-    let out = Command::new("npm")
-        .arg("install")
-        .arg("--prefix")
-        .arg(&staging)
+    let mut npm = Command::new("npm");
+    match shipped_lock(spec) {
+        // Every dependency at the version and the integrity hash recorded
+        // when the release was made, not what the registry says today; in
+        // the staging folder Kule just made, which holds no .npmrc.
+        Some(lock) => {
+            let (name, version) = spec
+                .rsplit_once('@')
+                .expect("a shipped spec names its version");
+            std::fs::create_dir_all(&staging).map_err(|e| io(&staging, e))?;
+            let manifest = serde_json::json!({
+                "name": "kule-agent", "private": true, "dependencies": { name: version }
+            });
+            std::fs::write(staging.join("package.json"), manifest.to_string())
+                .map_err(|e| io(&staging, e))?;
+            std::fs::write(staging.join("package-lock.json"), lock).map_err(|e| io(&staging, e))?;
+            npm.arg("ci").current_dir(&staging);
+        }
+        // Not from wherever the daemon was started, which could hold an
+        // .npmrc of a repository's.
+        None => {
+            npm.arg("install")
+                .arg("--prefix")
+                .arg(&staging)
+                .arg("--no-save")
+                .arg(spec)
+                .current_dir(parent);
+        }
+    }
+    let out = npm
         // Nothing of the package runs outside the sandbox.
         .args([
             "--ignore-scripts",
             "--no-audit",
             "--no-fund",
-            "--no-save",
             "--omit=dev",
             "--loglevel=error",
-            spec,
         ])
-        // Not from wherever the daemon was started, which could hold an
-        // .npmrc of a repository's.
-        .current_dir(parent)
         .stdin(Stdio::null())
         .output()
         .map_err(|e| Error::Invalid(format!("npm to install {spec}: {e}")))?;
@@ -263,6 +306,43 @@ mod tests {
         // One that cannot be had says why.
         let err = installed(&packages, "/nowhere/missing-1.0.0.tgz", "missing", || {}).unwrap_err();
         assert!(err.to_string().contains("could not install"), "{err}");
+    }
+
+    /// Every package Kule's own agents run comes with a lockfile for its
+    /// pinned version, and every dependency in it with its registry and
+    /// integrity hash.
+    #[test]
+    fn kules_agents_install_from_their_lockfiles() {
+        let home = tempfile::TempDir::new().unwrap();
+        let agents = crate::Agents::load(home.path()).unwrap();
+        for listed in agents.listed() {
+            let Some((spec, name, _)) = npx_package(&listed.profile.command) else {
+                continue;
+            };
+            let lock = shipped_lock(&spec).unwrap_or_else(|| panic!("no lockfile for {spec}"));
+            let lock: serde_json::Value = serde_json::from_str(lock).unwrap();
+            let version = spec.rsplit_once('@').unwrap().1;
+            assert_eq!(
+                lock["packages"][""]["dependencies"][&name], version,
+                "{spec}"
+            );
+            for (path, package) in lock["packages"].as_object().unwrap() {
+                if path.is_empty() || package.get("link").is_some() {
+                    continue;
+                }
+                let resolved = package["resolved"].as_str().unwrap_or_default();
+                assert!(
+                    resolved.starts_with("https://registry.npmjs.org/"),
+                    "{spec}: {path} {resolved}"
+                );
+                assert!(
+                    package["integrity"]
+                        .as_str()
+                        .is_some_and(|i| i.starts_with("sha512-")),
+                    "{spec}: {path}"
+                );
+            }
+        }
     }
 
     #[test]
