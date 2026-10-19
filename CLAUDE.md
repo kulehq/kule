@@ -10,3 +10,26 @@
 - Tests run on the real filesystem (tempdirs), never on mocks. Every fix gets
   a test that fails without it.
 - Chat with the user in Turkish; code, comments and repo docs in English.
+
+## Security principle (standing, applies to every change)
+
+Kule is built on Zero Trust and follows OWASP (Top 10, ASVS, and the Top 10
+for LLM and agentic applications). Every change and feature must follow it:
+
+- **Nothing is trusted by default**: the agent, everything it writes or
+  prints, its processes, the files Kule opens, imported profiles and themes,
+  extensions, MCP servers, other local processes and the network.
+- **Deny by default.** Allow-lists over deny-lists; a check that cannot
+  decide refuses.
+- **Nothing weakens silently.** A weaker mode is refused, or the person opts
+  into it knowingly and sees it while it holds.
+- **Least privilege** for every process, token, permission and CI job.
+- **Every boundary has a test that fails without it**, on real processes and
+  the real filesystem.
+- **Before a change is done**, walk the OWASP categories it touches: access
+  control, injection and XSS, secrets, SSRF, integrity of what is committed
+  or installed, supply chain, logging.
+- **This repository is public.** No vulnerability details in commits,
+  CHANGELOG, issues or docs until the fix has shipped; commit messages say
+  what Kule now does, not how it could be abused. Report problems as
+  [SECURITY.md](SECURITY.md) says.

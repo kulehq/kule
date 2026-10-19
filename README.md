@@ -595,6 +595,13 @@ permissions, the SDK and the package format;
   then `/auth`. Codex works with a ChatGPT sign-in (`codex login`).
 - Windows (v1).
 
+## Security
+
+Kule is built on Zero Trust and follows OWASP: the agent and everything it
+produces are untrusted, and every boundary is denied by default. Report a
+vulnerability privately as [SECURITY.md](SECURITY.md) says, never in a
+public issue.
+
 ## License
 
 Apache-2.0
