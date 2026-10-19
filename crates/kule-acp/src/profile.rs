@@ -594,17 +594,7 @@ impl Agents {
     /// [`Agents::approve`], but only if the profile still has `digest`: what
     /// the person looked at is what gets approved.
     pub fn approve_seen(kule_home: &Path, name: &str, digest: &str) -> Result<Profile> {
-        let agents = Agents::load(kule_home)?;
-        let seen = agents
-            .listed
-            .iter()
-            .any(|l| l.profile.name == name && l.origin != Origin::BuiltIn && l.digest == digest);
-        if !seen {
-            return Err(Error::Invalid(format!(
-                "agent {name} changed since you looked at it; look again"
-            )));
-        }
-        Agents::approve(kule_home, name)
+        Agents::approve_as(kule_home, name, Some(digest))
     }
 
     /// Every profile, the ones that cannot run included.
@@ -655,6 +645,13 @@ impl Agents {
     /// brings), as it stands now, as approved. Refused for one that fails
     /// its checks.
     pub fn approve(kule_home: &Path, name: &str) -> Result<Profile> {
+        Agents::approve_as(kule_home, name, None)
+    }
+
+    /// [`Agents::approve`] of the profile as read once: when `seen` names
+    /// a digest, the profile read is the one with it, and that profile is
+    /// what is checked and approved, whatever the file says meanwhile.
+    fn approve_as(kule_home: &Path, name: &str, seen: Option<&str>) -> Result<Profile> {
         let agents = Agents::load(kule_home)?;
         let listed = agents
             .listed
@@ -666,6 +663,11 @@ impl Agents {
                     kule_home.join(AGENTS_FILE).display()
                 ))
             })?;
+        if seen.is_some_and(|d| d != listed.digest) {
+            return Err(Error::Invalid(format!(
+                "agent {name} changed since you looked at it; look again"
+            )));
+        }
         let others: Vec<Listed> = agents
             .listed
             .iter()
@@ -2054,6 +2056,53 @@ hosts = ["openrouter.ai"]
             .clone();
         Agents::approve_seen(home.path(), "opencode", &seen).unwrap();
         assert!(Agents::load(home.path()).unwrap().get("opencode").is_some());
+    }
+
+    /// The profile approved is the one whose digest the person saw, even
+    /// while the file changes between reads.
+    #[test]
+    fn an_approval_never_takes_a_profile_the_person_did_not_see() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let home = kule_home(OPENCODE);
+        let seen = Agents::load(home.path()).unwrap().listed()[3]
+            .digest
+            .clone();
+        let other = OPENCODE.replace(r#"hosts = ["openrouter.ai"]"#, r#"hosts = ["example.com"]"#);
+        let file = home.path().join(AGENTS_FILE);
+        let stop = AtomicBool::new(false);
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                let tmp = home.path().join("agents.toml.next");
+                let mut n = 0u64;
+                while !stop.load(Ordering::Relaxed) {
+                    let text = if n.is_multiple_of(2) {
+                        &other
+                    } else {
+                        OPENCODE
+                    };
+                    std::fs::write(&tmp, text).unwrap();
+                    std::fs::rename(&tmp, &file).unwrap();
+                    n += 1;
+                }
+            });
+            // The writer stops however this ends, a failed assertion too.
+            struct Stop<'a>(&'a AtomicBool);
+            impl Drop for Stop<'_> {
+                fn drop(&mut self) {
+                    self.0.store(true, Ordering::Relaxed);
+                }
+            }
+            let _stop = Stop(&stop);
+            for _ in 0..400 {
+                if Agents::approve_seen(home.path(), "opencode", &seen).is_ok() {
+                    let approved = approved(home.path()).unwrap();
+                    assert!(
+                        approved.values().all(|d| *d == seen),
+                        "approved a profile nobody saw: {approved:?}"
+                    );
+                }
+            }
+        });
     }
 
     /// What each of Kule's own agents reads when it starts that can make it
