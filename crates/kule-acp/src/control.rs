@@ -46,7 +46,11 @@ impl RunControl {
     /// fails with `reason`; the first reason given stands.
     pub fn stop(&self, reason: impl Into<String>) {
         {
-            let mut kept = self.0.reason.lock().unwrap();
+            let mut kept = self
+                .0
+                .reason
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             if kept.is_some() {
                 return;
             }
@@ -57,7 +61,11 @@ impl RunControl {
 
     /// Why the run was stopped, once it was.
     pub fn reason(&self) -> Option<String> {
-        self.0.reason.lock().unwrap().clone()
+        self.0
+            .reason
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
     }
 
     /// Resolves once [`RunControl::stop`] is called, also when it was
@@ -79,7 +87,14 @@ impl RunControl {
     pub fn roots(&self) -> Vec<i32> {
         let agent = self.0.agent.load(Ordering::SeqCst);
         let mut roots: Vec<i32> = (agent > 0).then_some(agent).into_iter().collect();
-        roots.extend(self.0.commands.lock().unwrap().iter().copied());
+        roots.extend(
+            self.0
+                .commands
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .iter()
+                .copied(),
+        );
         roots
     }
 
@@ -89,7 +104,11 @@ impl RunControl {
     }
 
     pub(crate) fn started_command(&self, pid: i32) {
-        self.0.commands.lock().unwrap().push(pid);
+        self.0
+            .commands
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(pid);
         self.touch();
     }
 

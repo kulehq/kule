@@ -109,7 +109,13 @@ impl Terminals {
         rows: u16,
         tell: impl Fn(Event) + Send + 'static,
     ) -> Result<u64, String> {
-        if self.open.lock().unwrap().len() >= MAX_OPEN {
+        if self
+            .open
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .len()
+            >= MAX_OPEN
+        {
             return Err(format!(
                 "at most {MAX_OPEN} terminals at once; close one first"
             ));
@@ -134,14 +140,17 @@ impl Terminals {
         let mut reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
         let writer = pair.master.take_writer().map_err(|e| e.to_string())?;
         let id = self.next.fetch_add(1, Ordering::Relaxed) + 1;
-        self.open.lock().unwrap().insert(
-            id,
-            Term {
-                writer,
-                master: pair.master,
-                child,
-            },
-        );
+        self.open
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(
+                id,
+                Term {
+                    writer,
+                    master: pair.master,
+                    child,
+                },
+            );
         std::thread::spawn(move || {
             let b64 = base64::engine::general_purpose::STANDARD;
             let mut buf = [0u8; 16 * 1024];
@@ -161,7 +170,10 @@ impl Terminals {
 
     /// Passes what the person typed or pasted to terminal `id`.
     pub fn write(&self, id: u64, data: &str) -> Result<(), String> {
-        let mut open = self.open.lock().unwrap();
+        let mut open = self
+            .open
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let term = open.get_mut(&id).ok_or("that terminal has ended")?;
         term.writer
             .write_all(data.as_bytes())
@@ -170,7 +182,10 @@ impl Terminals {
     }
 
     pub fn resize(&self, id: u64, cols: u16, rows: u16) -> Result<(), String> {
-        let open = self.open.lock().unwrap();
+        let open = self
+            .open
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let term = open.get(&id).ok_or("that terminal has ended")?;
         term.master
             .resize(size(cols, rows))
@@ -179,7 +194,12 @@ impl Terminals {
 
     /// Ends terminal `id`'s shell.
     pub fn close(&self, id: u64) {
-        if let Some(mut term) = self.open.lock().unwrap().remove(&id) {
+        if let Some(mut term) = self
+            .open
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&id)
+        {
             let _ = term.child.kill();
             let _ = term.child.wait();
         }
@@ -220,7 +240,10 @@ mod tests {
         cmd.args(["-c", "printf 'in:%s task:%s colour:%s\\n' \"$(pwd -P)\" \"$KULE_TASK\" \"$CLICOLOR\"; read line; printf 'got:%s\\n' \"$line\"; stty size"]);
         let id = terms
             .start(cmd, dir.path(), "t1", 80, 24, move |e| {
-                let _ = tx.lock().unwrap().send(e);
+                let _ = tx
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .send(e);
             })
             .unwrap();
         let real = std::fs::canonicalize(dir.path()).unwrap();
@@ -253,7 +276,10 @@ mod tests {
         cmd.args(["-c", "printf up; sleep 60"]);
         let id = terms
             .start(cmd, dir.path(), "t2", 80, 24, move |e| {
-                let _ = tx.lock().unwrap().send(e);
+                let _ = tx
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .send(e);
             })
             .unwrap();
         until(&rx, "up");

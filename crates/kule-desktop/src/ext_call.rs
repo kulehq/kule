@@ -105,17 +105,28 @@ pub struct Grants(Mutex<HashMap<String, Granted>>);
 
 impl Grants {
     pub fn get(&self, home: &Path, ext: &str) -> Result<Granted> {
-        if let Some(g) = self.0.lock().unwrap().get(ext) {
+        if let Some(g) = self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(ext)
+        {
             return Ok(g.clone());
         }
         let person = std::env::var_os("HOME").map(std::path::PathBuf::from);
         let g = granted(home, ext, person.as_deref())?;
-        self.0.lock().unwrap().insert(ext.to_owned(), g.clone());
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(ext.to_owned(), g.clone());
         Ok(g)
     }
 
     pub fn forget(&self) {
-        self.0.lock().unwrap().clear();
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clear();
     }
 }
 
@@ -133,7 +144,10 @@ impl Limits {
         let Some((name, most, within)) = LIMITS.iter().find(|(m, _, _)| *m == method) else {
             return Ok(());
         };
-        let mut all = self.0.lock().unwrap();
+        let mut all = self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let times = all.entry((ext.to_owned(), *name)).or_default();
         let now = Instant::now();
         times.retain(|t| now.duration_since(*t) < *within);

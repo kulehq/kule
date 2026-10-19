@@ -193,7 +193,10 @@ impl Terminals {
                         break;
                     }
                     control.touch();
-                    let mut out = term.output.lock().unwrap();
+                    let mut out = term
+                        .output
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
                     out.bytes.extend_from_slice(&buf[..n]);
                     if out.bytes.len() > out.limit {
                         let cut = out.bytes.len() - out.limit;
@@ -217,8 +220,17 @@ impl Terminals {
             while !readers.iter().all(|r| r.is_finished()) && Instant::now() < until {
                 std::thread::sleep(Duration::from_millis(10));
             }
-            send(&events, &mut term.output.lock().unwrap());
-            *term.exit.lock().unwrap() = Some(exit_of(status));
+            send(
+                &events,
+                &mut term
+                    .output
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner),
+            );
+            *term
+                .exit
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(exit_of(status));
             term.ended.notify_waiters();
         });
         Ok(id)
@@ -237,8 +249,18 @@ impl Terminals {
     /// start, and how it ended if it has.
     pub(crate) fn output(&self, id: &str) -> Result<(String, bool, Option<Exit>), String> {
         let term = self.term(id)?;
-        let out = term.output.lock().unwrap();
-        Ok((out.text(), out.truncated, term.exit.lock().unwrap().clone()))
+        let out = term
+            .output
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        Ok((
+            out.text(),
+            out.truncated,
+            term.exit
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone(),
+        ))
     }
 
     /// Waits for the command to end.
@@ -250,7 +272,12 @@ impl Terminals {
             let ended = term.ended.notified();
             tokio::pin!(ended);
             ended.as_mut().enable();
-            if let Some(exit) = term.exit.lock().unwrap().clone() {
+            if let Some(exit) = term
+                .exit
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone()
+            {
                 return Ok(exit);
             }
             ended.await;
@@ -267,12 +294,24 @@ impl Terminals {
     /// Stops the command if it still runs and forgets it. What it left in
     /// the background keeps running until the run ends.
     pub(crate) fn release(&self, id: &str) -> Result<(), String> {
-        let term = self.terms.lock().unwrap().remove(id);
+        let term = self
+            .terms
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(id);
         let term = term.ok_or_else(|| format!("no terminal {id}"))?;
-        if term.exit.lock().unwrap().is_none() {
+        if term
+            .exit
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .is_none()
+        {
             stop(term.group);
         }
-        self.released.lock().unwrap().push(term.group);
+        self.released
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(term.group);
         Ok(())
     }
 
@@ -280,7 +319,10 @@ impl Terminals {
     /// goes there, from now on and so far.
     pub(crate) fn attach(&self, id: &str, call: &str) {
         let Ok(term) = self.term(id) else { return };
-        let mut out = term.output.lock().unwrap();
+        let mut out = term
+            .output
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if out.call.as_deref() != Some(call) {
             out.call = Some(call.to_owned());
             send(&self.events, &mut out);
@@ -293,10 +335,20 @@ impl Drop for Terminals {
     fn drop(&mut self) {
         // Every command's session, ended or not: what it left in the
         // background (a server) is still in it.
-        for term in self.terms.lock().unwrap().values() {
+        for term in self
+            .terms
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .values()
+        {
             stop(term.group);
         }
-        for group in self.released.lock().unwrap().iter() {
+        for group in self
+            .released
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+        {
             stop(*group);
         }
     }

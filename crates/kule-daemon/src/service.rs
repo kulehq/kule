@@ -349,7 +349,10 @@ pub struct Service {
 impl Service {
     /// Ports a run's servers listen on every address, kept off the network.
     pub fn shielded(&self) -> std::collections::BTreeSet<u16> {
-        self.shielded.lock().unwrap().clone()
+        self.shielded
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
     }
 
     /// macOS: while runs go on, keeps what they listen on off the network,
@@ -361,18 +364,30 @@ impl Service {
         // Each stopped process is told once.
         let mut told: HashSet<(u32, u16)> = HashSet::new();
         loop {
-            let runs: Vec<String> = self.running.lock().unwrap().iter().cloned().collect();
+            let runs: Vec<String> = self
+                .running
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .iter()
+                .cloned()
+                .collect();
             if runs.is_empty() {
                 if !shield.held().is_empty() {
                     shield.release();
-                    self.shielded.lock().unwrap().clear();
+                    self.shielded
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .clear();
                 }
                 told.clear();
                 std::thread::sleep(Duration::from_millis(500));
                 continue;
             }
             let guarded = shield.guard(&kule_engine::shield::descendants());
-            *self.shielded.lock().unwrap() = guarded.shielded;
+            *self
+                .shielded
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = guarded.shielded;
             for stopped in guarded.stopped {
                 if !told.insert((stopped.pid, stopped.port)) {
                     continue;
@@ -417,7 +432,10 @@ impl Service {
     /// Notices from now on, until the receiver is dropped.
     pub fn subscribe(&self) -> Receiver<Notice> {
         let (tx, rx) = std::sync::mpsc::channel();
-        self.subscribers.lock().unwrap().push(tx);
+        self.subscribers
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(tx);
         rx
     }
 
@@ -433,12 +451,20 @@ impl Service {
 
     /// Whether anything is going on: an agent at work or a question waiting.
     pub fn busy(&self) -> bool {
-        !self.running.lock().unwrap().is_empty() || !self.approvals.waiting().is_empty()
+        !self
+            .running
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .is_empty()
+            || !self.approvals.waiting().is_empty()
     }
 
     fn emit(&self, task: &str, event: RunEvent) {
         // Under the lock: the order of `seq` is the order subscribers hear.
-        let mut streams = self.streams.lock().unwrap();
+        let mut streams = self
+            .streams
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let seq = self
             .next_seq
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -708,7 +734,11 @@ impl Service {
         Ok(GroupImpact {
             same,
             changes,
-            running: self.running.lock().unwrap().contains(id),
+            running: self
+                .running
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .contains(id),
         })
     }
 
@@ -811,7 +841,10 @@ impl Service {
     /// The task's last scan, starting a new one in the background when it
     /// is old or there is none; an error when the last one failed.
     fn last_scan(self: &Arc<Self>, id: &str) -> std::result::Result<Option<Scan>, ()> {
-        let mut scans = self.scans.lock().unwrap();
+        let mut scans = self
+            .scans
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let cached = scans.entry(id.to_owned()).or_insert(Cached {
             scan: None,
             at: Instant::now(),
@@ -851,7 +884,10 @@ impl Service {
     fn rescan(&self, id: &str) -> Result<Scan> {
         let started = Instant::now();
         let outcome = self.open(id).and_then(|task| self.scan(&task));
-        let mut scans = self.scans.lock().unwrap();
+        let mut scans = self
+            .scans
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         // A scan that started later (after a commit, say) and finished
         // first knows better.
         if let Some(newer) = scans
@@ -957,7 +993,12 @@ impl Service {
     }
 
     fn not_at_work(&self, id: &str) -> Result<()> {
-        if self.running.lock().unwrap().contains(id) {
+        if self
+            .running
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .contains(id)
+        {
             return Err(format!("an agent is at work in task {id}"));
         }
         Ok(())
@@ -1127,9 +1168,18 @@ impl Service {
     /// Deletes the task and its copy; the workspace is not touched.
     pub fn remove(&self, id: &str) -> Result<()> {
         self.idle(id)?.remove().map_err(text)?;
-        self.streams.lock().unwrap().remove(id);
-        self.scans.lock().unwrap().remove(id);
-        self.outlined.lock().unwrap().remove(id);
+        self.streams
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(id);
+        self.scans
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(id);
+        self.outlined
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(id);
         self.changed(id, TaskChange::Removed);
         let home = self.home.clone();
         std::thread::spawn(move || {
@@ -1183,7 +1233,12 @@ impl Service {
             .collect();
         let limit = budget_left(&self.home, &task)?;
         let plan = plan(&task)?;
-        if !self.running.lock().unwrap().insert(id.to_owned()) {
+        if !self
+            .running
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(id.to_owned())
+        {
             return Err(format!("an agent is already at work in task {id}"));
         }
         let control = kule_acp::RunControl::new();
@@ -1195,8 +1250,14 @@ impl Service {
         let at_work = match task.agent_at_work() {
             Ok(at_work) => at_work,
             Err(e) => {
-                self.running.lock().unwrap().remove(id);
-                self.controls.lock().unwrap().remove(id);
+                self.running
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .remove(id);
+                self.controls
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .remove(id);
                 return Err(text(e));
             }
         };
@@ -1219,8 +1280,16 @@ impl Service {
                 Err(e) => (Some(e), Vec::new()),
             };
             drop(at_work);
-            service.controls.lock().unwrap().remove(task.id());
-            service.running.lock().unwrap().remove(task.id());
+            service
+                .controls
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .remove(task.id());
+            service
+                .running
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .remove(task.id());
             // Before the window hears the run is over and asks again.
             let _ = service.rescan(task.id());
             service.emit(task.id(), RunEvent::Finished { error, denials });
@@ -1231,7 +1300,12 @@ impl Service {
     /// Stops the run in task `id` at once: its turn is cancelled, and the
     /// agent killed if it does not end it.
     pub fn stop_run(&self, id: &str) -> Result<()> {
-        match self.controls.lock().unwrap().get(id) {
+        match self
+            .controls
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(id)
+        {
             Some(control) => {
                 control.stop("stopped: you stopped the run");
                 Ok(())
@@ -1425,7 +1499,11 @@ impl Service {
             changes: scan.changes,
             ignored: scan.ignored,
             verdict: scan.verdict,
-            running: self.running.lock().unwrap().contains(id),
+            running: self
+                .running
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .contains(id),
             waiting: self
                 .approvals
                 .waiting()
@@ -1451,7 +1529,10 @@ impl Service {
     /// Where the task's work meets that of the other tasks on its
     /// workspace, as their last scans have it.
     fn overlaps(&self, id: &str, scan: &Scan) -> Vec<Overlap> {
-        let scans = self.scans.lock().unwrap();
+        let scans = self
+            .scans
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut overlaps: Vec<Overlap> = scans
             .iter()
             .filter(|(other, _)| other.as_str() != id)
@@ -1546,7 +1627,12 @@ impl Service {
     /// The task, refused while an agent works in it: committing or rolling
     /// back under a running agent would split its work in two.
     fn idle(&self, id: &str) -> Result<Task> {
-        if self.running.lock().unwrap().contains(id) {
+        if self
+            .running
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .contains(id)
+        {
             return Err(format!(
                 "an agent is at work in task {id}; wait until it is done"
             ));
@@ -1624,6 +1710,21 @@ mod tests {
 
     use super::*;
 
+    /// A thread that died holding one of the service's locks leaves the
+    /// daemon answering, not panicking at every call after.
+    #[test]
+    fn a_lock_left_by_a_panic_does_not_take_the_daemon_down() {
+        let s = Setup::new();
+        let app = Arc::clone(&s.app);
+        let _ = std::thread::spawn(move || {
+            let _held = app.controls.lock().unwrap();
+            panic!("a run's thread failed");
+        })
+        .join();
+        assert!(s.app.controls.is_poisoned());
+        assert!(s.app.stop_run("nope").is_err());
+    }
+
     struct Setup {
         _home: TempDir,
         ws: TempDir,
@@ -1650,7 +1751,13 @@ mod tests {
 
         /// Ages every scan past [`FRESH`] so the list makes them again.
         fn age_scans(&self) {
-            for cached in self.app.scans.lock().unwrap().values_mut() {
+            for cached in self
+                .app
+                .scans
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .values_mut()
+            {
                 cached.at = cached.at.checked_sub(FRESH).unwrap();
             }
         }
@@ -1661,7 +1768,14 @@ mod tests {
             self.age_scans();
             self.app.tasks().unwrap();
             let deadline = Instant::now() + Duration::from_secs(10);
-            while self.app.scans.lock().unwrap().values().any(|c| c.scanning) {
+            while self
+                .app
+                .scans
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .values()
+                .any(|c| c.scanning)
+            {
                 assert!(Instant::now() < deadline, "a scan never ended");
                 std::thread::sleep(Duration::from_millis(10));
             }
@@ -1819,7 +1933,11 @@ mod tests {
     fn a_task_not_scanned_yet_is_listed_as_scanning() {
         let s = Setup::new();
         let (id, _) = s.task();
-        s.app.scans.lock().unwrap().clear();
+        s.app
+            .scans
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clear();
         let view = s.app.tasks().unwrap().remove(0);
         assert_eq!((view.id.as_str(), view.scanning), (id.as_str(), true));
         assert!(!s.settled()[0].scanning);
@@ -2077,7 +2195,11 @@ mod tests {
         let s = Setup::new();
         let (id, copy) = s.task();
         fs::write(copy.join("b.txt"), "b\n").unwrap();
-        s.app.running.lock().unwrap().insert(id.clone());
+        s.app
+            .running
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(id.clone());
 
         assert!(s.app.tasks().unwrap()[0].running);
         for refused in [
@@ -2091,7 +2213,11 @@ mod tests {
         }
         assert!(copy.join("b.txt").exists());
 
-        s.app.running.lock().unwrap().remove(&id);
+        s.app
+            .running
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&id);
         s.app.remove(&id).unwrap();
         assert!(s.app.tasks().unwrap().is_empty());
     }
@@ -2111,10 +2237,18 @@ mod tests {
         assert!(review.effects.is_empty());
         assert_eq!(s.app.view(&id).unwrap().home_changes, 1);
 
-        s.app.running.lock().unwrap().insert(id.clone());
+        s.app
+            .running
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(id.clone());
         let e = s.app.apply_home(&id, &[".zshrc".into()]).unwrap_err();
         assert!(e.contains("at work"), "{e}");
-        s.app.running.lock().unwrap().remove(&id);
+        s.app
+            .running
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&id);
 
         let applied = s.app.apply_home(&id, &[".zshrc".into()]).unwrap();
         assert_eq!(applied.paths, [".zshrc"]);
@@ -2126,10 +2260,18 @@ mod tests {
         assert!(review.home.is_empty());
         assert_eq!(review.home_applied.unwrap().paths, [".zshrc"]);
 
-        s.app.running.lock().unwrap().insert(id.clone());
+        s.app
+            .running
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(id.clone());
         let e = s.app.undo_home(&id).unwrap_err();
         assert!(e.contains("at work"), "{e}");
-        s.app.running.lock().unwrap().remove(&id);
+        s.app
+            .running
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&id);
 
         assert_eq!(s.app.undo_home(&id).unwrap().paths, [".zshrc"]);
         assert_eq!(
@@ -2182,9 +2324,15 @@ mod tests {
             }
             app.shielded().contains(&port) == want
         };
-        app.running.lock().unwrap().insert(id.clone());
+        app.running
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(id.clone());
         let held = wait_for(true);
-        app.running.lock().unwrap().remove(&id);
+        app.running
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&id);
         let released = wait_for(false);
         let _ = server.kill();
         let _ = server.wait();
@@ -2204,9 +2352,17 @@ mod tests {
         assert_eq!(timeline.blockers.get(&0), Some(&None));
         assert_eq!(timeline.blockers.get(&1), Some(&None));
 
-        s.app.running.lock().unwrap().insert(id.clone());
+        s.app
+            .running
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(id.clone());
         assert!(s.app.back_to_step(&id, 0).unwrap_err().contains("at work"));
-        s.app.running.lock().unwrap().remove(&id);
+        s.app
+            .running
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&id);
 
         let back = s.app.back_to_step(&id, 0).unwrap();
         assert_eq!(back.label, "Back to before the first step");
@@ -2224,9 +2380,17 @@ mod tests {
         fs::write(copy.join("a.txt"), "changed\n").unwrap();
         Task::open(&s.app.home, &id).unwrap().step("edit").unwrap();
 
-        s.app.running.lock().unwrap().insert(id.clone());
+        s.app
+            .running
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(id.clone());
         assert!(s.app.fork(&id, None).unwrap_err().contains("at work"));
-        s.app.running.lock().unwrap().remove(&id);
+        s.app
+            .running
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&id);
 
         let fork = s.app.fork(&id, None).unwrap();
         assert_eq!(fork.label.as_deref(), Some("Report (fork)"));
@@ -2282,7 +2446,14 @@ mod tests {
         ] {
             let e = s.app.start_run(&id, "claude-code", "hi", refs).unwrap_err();
             assert!(e.contains(why), "{e}");
-            assert!(!s.app.running.lock().unwrap().contains(&id), "{why}");
+            assert!(
+                !s.app
+                    .running
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .contains(&id),
+                "{why}"
+            );
         }
         assert!(s.app.stream(&id).is_empty());
     }
@@ -2313,7 +2484,13 @@ mod tests {
             .start_run(&id, "claude-code", "hi", Vec::new())
             .unwrap_err();
         assert!(e.contains("spent its budget"), "{e}");
-        assert!(!s.app.running.lock().unwrap().contains(&id));
+        assert!(
+            !s.app
+                .running
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .contains(&id)
+        );
         assert!(s.app.stream(&id).is_empty());
 
         assert_eq!(s.app.set_budget(&id, None).unwrap().budget, None);
@@ -2347,8 +2524,20 @@ mod tests {
             .start_run(&id, "claude-code", "hi", Vec::new())
             .unwrap_err();
         assert!(e.contains("has used its time"), "{e}");
-        assert!(!s.app.running.lock().unwrap().contains(&id));
-        assert!(s.app.controls.lock().unwrap().is_empty());
+        assert!(
+            !s.app
+                .running
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .contains(&id)
+        );
+        assert!(
+            s.app
+                .controls
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .is_empty()
+        );
 
         // The task's own limit stands in for every task's.
         let own = kule_engine::TaskLimits {
@@ -2441,7 +2630,13 @@ mod tests {
             .start_run(&second, "claude-code", "hi", Vec::new())
             .unwrap_err();
         assert!(e.contains("daily budget is spent"), "{e}");
-        assert!(!s.app.running.lock().unwrap().contains(&second));
+        assert!(
+            !s.app
+                .running
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .contains(&second)
+        );
 
         s.app.set_daily_budget(None).unwrap();
         assert_eq!(s.app.daily_budget().unwrap().budget, None);
@@ -2456,7 +2651,13 @@ mod tests {
             .start_run(&id, "nobody", "hi", Vec::new())
             .unwrap_err();
         assert_eq!(e, "no agent nobody; known: claude-code, gemini, codex");
-        assert!(!s.app.running.lock().unwrap().contains(&id));
+        assert!(
+            !s.app
+                .running
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .contains(&id)
+        );
     }
 
     #[test]
@@ -2477,7 +2678,13 @@ mod tests {
             e.starts_with("agent opencode cannot run: not approved"),
             "{e}"
         );
-        assert!(!s.app.running.lock().unwrap().contains(&id));
+        assert!(
+            !s.app
+                .running
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .contains(&id)
+        );
 
         kule_acp::Agents::approve(&s.app.home, "opencode").unwrap();
         assert_eq!(

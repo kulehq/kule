@@ -184,7 +184,10 @@ impl Shield {
     /// Holds `ports` on every network address, and lets go of the rest.
     fn cover(&mut self, ports: &BTreeSet<u16>) {
         let addresses = network_addresses();
-        let mut shadows = self.shadows.lock().unwrap();
+        let mut shadows = self
+            .shadows
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         shadows.retain(|port, _| ports.contains(port));
         for &port in ports {
             let held = shadows.entry(port).or_default();
@@ -213,12 +216,20 @@ impl Shield {
 
     /// Lets go of every port: no run is going on.
     pub fn release(&mut self) {
-        self.shadows.lock().unwrap().clear();
+        self.shadows
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clear();
     }
 
     /// The ports held now.
     pub fn held(&self) -> BTreeSet<u16> {
-        self.shadows.lock().unwrap().keys().copied().collect()
+        self.shadows
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .keys()
+            .copied()
+            .collect()
     }
 }
 
@@ -246,7 +257,9 @@ fn drain(shadows: Shadows, done: Arc<AtomicBool>) {
         if ready <= 0 {
             continue;
         }
-        let shadows = shadows.lock().unwrap();
+        let shadows = shadows
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         for (_, listener) in shadows.values().flatten() {
             while let Ok((stream, _)) = listener.accept() {
                 // A reset, not a goodbye: nothing reads as an answer.

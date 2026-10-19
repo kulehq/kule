@@ -50,12 +50,21 @@ impl StoreFiles {
 
     /// Drops what was read, after any change to the extensions.
     pub fn forget(&self) {
-        self.packed.lock().unwrap().clear();
-        *self.agent_dirs.lock().unwrap() = None;
+        self.packed
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clear();
+        *self
+            .agent_dirs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
     }
 
     fn agent_dirs(&self) -> Vec<PathBuf> {
-        let mut kept = self.agent_dirs.lock().unwrap();
+        let mut kept = self
+            .agent_dirs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         kept.get_or_insert_with(|| {
             kule_daemon::extensions::agent_dirs(&self.home, self.person.as_deref())
                 .unwrap_or_default()
@@ -64,7 +73,12 @@ impl StoreFiles {
     }
 
     fn source(&self, ext: &str) -> Option<Arc<Source>> {
-        if let Some(source) = self.packed.lock().unwrap().get(ext) {
+        if let Some(source) = self
+            .packed
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(ext)
+        {
             return Some(source.clone());
         }
         let source = Arc::new(Store::new(&self.home).runnable(ext).ok()?);
