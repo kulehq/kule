@@ -109,12 +109,21 @@ impl EffectSet {
 
     /// What a commit takes: everything, or everything but the ignored paths.
     /// Git's lock files never go: one in the copy is a crashed process's.
+    /// Nor what git writes beside its work, reflogs, `ORIG_HEAD` and
+    /// `FETCH_HEAD`: each names commits a person could check out later
+    /// (`HEAD@{1}`, `git reset ORIG_HEAD`) that no reference brought for
+    /// review. The folder keeps its own.
     pub fn to_commit(&self, include_ignored: bool) -> EffectSet {
         let effects: Vec<Effect> = self
             .effects
             .iter()
             .filter(|e| include_ignored || !e.ignored)
-            .filter(|e| git::classify(&e.path) != Some(git::Part::Lock))
+            .filter(|e| {
+                !matches!(
+                    git::classify(&e.path),
+                    Some(git::Part::Lock | git::Part::Derived)
+                )
+            })
             .cloned()
             .collect();
         let taken = |path: &str| effects.iter().any(|e| e.path == path);

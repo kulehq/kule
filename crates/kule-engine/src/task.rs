@@ -495,11 +495,23 @@ impl Task {
     /// workspace ignores, unless `include_ignored`. A person reviews this
     /// set; its [`EffectSet::digest`] tells whether it is still the same.
     pub fn pending(&self, include_ignored: bool) -> Result<EffectSet> {
-        self.commit_set(&self.load_baseline()?, include_ignored)
+        Ok(self.commit_set(&self.load_baseline()?, include_ignored)?.0)
     }
 
-    fn commit_set(&self, baseline: &Baseline, include_ignored: bool) -> Result<EffectSet> {
+    /// [`Task::pending`], and the paths git wrote beside its work in the
+    /// copy, which a commit leaves out (see [`EffectSet::to_commit`]).
+    fn commit_set(
+        &self,
+        baseline: &Baseline,
+        include_ignored: bool,
+    ) -> Result<(EffectSet, Vec<String>)> {
         let all = effects::compute(&self.copy(), self.workspace(), baseline)?;
+        let derived = all
+            .effects
+            .iter()
+            .filter(|e| git::classify(&e.path) == Some(git::Part::Derived))
+            .map(|e| e.path.clone())
+            .collect();
         let mut set = all.to_commit(include_ignored);
         // A directory the commit removes (deletes, or replaces with a file)
         // takes the ignored paths under it with it: they go through the
@@ -526,7 +538,18 @@ impl Task {
             set.effects.sort_by(|a, b| a.path.cmp(&b.path));
         }
         set.read_contents(&self.copy())?;
-        Ok(set)
+        Ok((set, derived))
+    }
+
+    /// Gives the copy the folder's own `derived` paths (see
+    /// [`Task::commit_set`]) once a commit is through, so they do not wait
+    /// as changes no commit takes.
+    fn sync_derived(&self, baseline: &mut Baseline, derived: &[String]) -> Result<()> {
+        if derived.is_empty() {
+            return Ok(());
+        }
+        fsops::mirror(self.workspace(), &self.copy(), derived, true)?;
+        self.settle(baseline, derived)
     }
 
     /// After a commit's copy: the folder holds what the set's contents say
@@ -562,8 +585,12 @@ impl Task {
         // while it is read and committed.
         crate::Sandbox::end_all(self)?;
         let mut baseline = self.load_baseline()?;
-        let set = self.commit_set(&baseline, include_ignored)?;
+        let (set, derived) = self.commit_set(&baseline, include_ignored)?;
         if set.is_empty() {
+            if !derived.is_empty() {
+                self.sync_derived(&mut baseline, &derived)?;
+                self.save_baseline(&baseline)?;
+            }
             return Ok(None);
         }
         check(&set)?;
@@ -681,6 +708,9 @@ impl Task {
             return Err(failed);
         }
         self.settle(&mut baseline, &paths)?;
+        // The folder's own reflogs and the like go back into the copy; the
+        // commit stands even when that fails, and they wait as before.
+        let _ = self.sync_derived(&mut baseline, &derived);
         self.mask_copy(&mut baseline)?;
         for path in &paths {
             if let Some(entry) = baseline.entries.get(path) {

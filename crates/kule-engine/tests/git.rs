@@ -455,3 +455,38 @@ fn what_the_person_staged_before_the_task_is_not_the_tasks() {
     let set = task.effects().unwrap();
     assert!(set.git.unwrap().staged.is_empty());
 }
+
+/// Reflogs, `ORIG_HEAD` and `FETCH_HEAD` name commits a person could check
+/// out later: the folder keeps its own, the branch moves, and nothing of
+/// them waits in the copy afterwards.
+#[test]
+fn git_notes_naming_commits_stay_the_folders_own() {
+    let r = Repo::new();
+    let reflog = fs::read_to_string(r.work().join(".git/logs/HEAD")).unwrap();
+    r.agent_commits("fn main() { agent() }\n");
+    // A commit no reference holds, named where git keeps its notes.
+    let tree = git(&r.copy(), &["write-tree"]);
+    let stray = git(&r.copy(), &["commit-tree", &tree, "-m", "unreviewed"]);
+    write(&r.copy().join(".git/ORIG_HEAD"), &format!("{stray}\n"));
+    write(
+        &r.copy().join(".git/FETCH_HEAD"),
+        &format!("{stray}\t\tbranch 'main' of /elsewhere\n"),
+    );
+    let mut log = fs::OpenOptions::new()
+        .append(true)
+        .open(r.copy().join(".git/logs/HEAD"))
+        .unwrap();
+    use std::io::Write;
+    writeln!(log, "{stray} {stray} A <a@b> 0 +0000\tcheckout: here").unwrap();
+    drop(log);
+
+    r.task.commit().unwrap().unwrap();
+    assert_eq!(head(&r.work()), head(&r.copy()));
+    assert!(!r.work().join(".git/ORIG_HEAD").exists());
+    assert!(!r.work().join(".git/FETCH_HEAD").exists());
+    assert_eq!(
+        fs::read_to_string(r.work().join(".git/logs/HEAD")).unwrap(),
+        reflog
+    );
+    assert!(r.task.effects().unwrap().is_empty());
+}
