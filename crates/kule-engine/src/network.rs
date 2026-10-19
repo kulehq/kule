@@ -114,13 +114,15 @@ impl Proxy {
             .into_iter()
             .map(|(name, placeholder)| (name, placeholder.into()))
             .collect();
-        let interceptor = if vault.hosts().is_empty() {
-            None
-        } else {
-            let interceptor = Interceptor::new(vault, crate::tls::web_roots())?;
-            env.extend(trust(task, interceptor.ca_pem())?);
-            Some(interceptor)
-        };
+        // Looked into: the hosts secrets go to, and the registries, which
+        // commands may read from but never publish to.
+        let read_only = READ_ONLY_REGISTRIES
+            .iter()
+            .map(|h| (*h).to_owned())
+            .collect();
+        let interceptor = Interceptor::new(vault, crate::tls::web_roots(), read_only)?;
+        env.extend(trust(task, interceptor.ca_pem())?);
+        let interceptor = Some(interceptor);
         let gate = Arc::new(Gate {
             policy,
             log: Mutex::new(log),
@@ -194,6 +196,22 @@ fn log_path(task: &Task) -> PathBuf {
     task.dir().join("network.jsonl")
 }
 
+/// Package registries a command reads from but never publishes to: those
+/// whose tools trust the task's authority through the variables `trust`
+/// sets (npm, yarn, pnpm and bun; cargo; pip, uv and poetry; gem). Go's,
+/// NuGet's and Maven's tools on macOS trust the system's roots alone, so
+/// their registries pass unseen.
+pub const READ_ONLY_REGISTRIES: &[&str] = &[
+    "registry.npmjs.org",
+    "registry.yarnpkg.com",
+    "crates.io",
+    "index.crates.io",
+    "static.crates.io",
+    "pypi.org",
+    "files.pythonhosted.org",
+    "rubygems.org",
+];
+
 /// Where the system keeps the certificates it trusts, by platform.
 const SYSTEM_ROOTS: &[&str] = &[
     "/etc/ssl/cert.pem",
@@ -226,6 +244,8 @@ fn trust(task: &Task, ca_pem: &str) -> Result<Vec<(String, OsString)>> {
         "REQUESTS_CA_BUNDLE",
         "GIT_SSL_CAINFO",
         "AWS_CA_BUNDLE",
+        "CARGO_HTTP_CAINFO",
+        "PIP_CERT",
     ] {
         env.push((var.to_owned(), bundle.clone().into_os_string()));
     }

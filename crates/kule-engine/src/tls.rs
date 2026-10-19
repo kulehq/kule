@@ -40,6 +40,9 @@ const MAX_HEAD: usize = 64 * 1024;
 pub(crate) struct Interceptor {
     vault: Vault,
     hosts: BTreeSet<String>,
+    /// Hosts looked into to be read alone: package registries, where a
+    /// publish would carry the work off.
+    read_only: BTreeSet<String>,
     issuer: Issuer<'static, KeyPair>,
     ca_der: CertificateDer<'static>,
     ca_pem: String,
@@ -66,10 +69,18 @@ pub(crate) fn web_roots() -> RootCertStore {
 }
 
 impl Interceptor {
-    /// An authority for the hosts `vault`'s secrets are for, checking real
-    /// hosts against `roots`.
-    pub fn new(vault: Vault, roots: RootCertStore) -> Result<Interceptor> {
-        let hosts = vault.hosts();
+    /// An authority for the hosts `vault`'s secrets are for and the
+    /// `read_only` ones, checking real hosts against `roots`.
+    pub fn new(
+        vault: Vault,
+        roots: RootCertStore,
+        read_only: BTreeSet<String>,
+    ) -> Result<Interceptor> {
+        let hosts: BTreeSet<String> = vault
+            .hosts()
+            .into_iter()
+            .chain(read_only.iter().cloned())
+            .collect();
         let now = time::OffsetDateTime::now_utc();
         let mut params = CertificateParams::default();
         params
@@ -99,6 +110,7 @@ impl Interceptor {
         Ok(Interceptor {
             vault,
             hosts,
+            read_only,
             ca_der: cert.der().clone(),
             ca_pem: cert.pem(),
             issuer: Issuer::new(params, key),
@@ -192,12 +204,21 @@ impl Interceptor {
                 )));
             };
             let request = Request::of(&head).map_err(io)?;
-            // Someone else's credentials to the person's host: an account
-            // the work could be sent to. Answered here, never passed on.
-            if let Some(header) = self.vault.foreign_credential(host, &head) {
-                let said = format!(
-                    "Kule refused this request: its {header} is not a credential Kule holds for {host}.\n"
-                );
+            // Someone else's credentials to the person's host, or anything
+            // but a read from a registry: ways the work could be carried
+            // off. Answered here, never passed on.
+            let refused = if self.read_only.contains(host) && !reads(&request) {
+                Some(format!(
+                    "Kule refused this request: commands read from {host}, never send to it ({} {}).\n",
+                    request.method,
+                    request.target.split('?').next().unwrap_or_default()
+                ))
+            } else {
+                self.vault.foreign_credential(host, &head).map(|header| {
+                    format!("Kule refused this request: its {header} is not a credential Kule holds for {host}.\n")
+                })
+            };
+            if let Some(said) = refused {
                 write!(
                     client.stream,
                     "HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{said}",
@@ -536,6 +557,8 @@ fn chunked(head: &str) -> Option<bool> {
 
 struct Request {
     method: String,
+    /// Where it goes: the path and query.
+    target: String,
     framing: Framing,
     /// The client is done after this one.
     close: bool,
@@ -547,7 +570,8 @@ impl Request {
         let line = head.split("\r\n").next().unwrap_or("");
         let mut parts = line.split(' ');
         let method = parts.next().unwrap_or("").to_owned();
-        let version = parts.nth(1).unwrap_or("");
+        let target = parts.next().unwrap_or("").to_owned();
+        let version = parts.next().unwrap_or("");
         let length = content_length(head)?;
         let framing = match (chunked(head), length) {
             (Some(_), Some(_)) => return Err(bad("both Transfer-Encoding and Content-Length")),
@@ -560,10 +584,23 @@ impl Request {
             || (version == "HTTP/1.0" && !connection_has(head, "keep-alive"));
         Ok(Request {
             method,
+            target,
             framing,
             close,
         })
     }
+}
+
+/// What may go to a registry: reading, and npm's audit of what is installed
+/// (its advisories for the packages named).
+fn reads(request: &Request) -> bool {
+    let path = request.target.split('?').next().unwrap_or_default();
+    matches!(request.method.as_str(), "GET" | "HEAD" | "OPTIONS")
+        || (request.method == "POST"
+            && matches!(
+                path,
+                "/-/npm/v1/security/advisories/bulk" | "/-/npm/v1/security/audits/quick"
+            ))
 }
 
 struct Response {
@@ -868,7 +905,7 @@ mod tests {
         let vault = Vault::load(home.path(), ws.path(), dir.path()).unwrap();
         let placeholder = vault.env()[0].1.clone();
         (
-            Arc::new(Interceptor::new(vault, roots).unwrap()),
+            Arc::new(Interceptor::new(vault, roots, BTreeSet::new()).unwrap()),
             placeholder,
         )
     }
@@ -949,6 +986,40 @@ mod tests {
         assert!(!host.saw_real.load(Ordering::SeqCst), "{reply}");
         assert!(used.is_empty(), "{used:?}");
         assert!(reply.contains(&json), "{reply}");
+    }
+
+    /// A package registry is for reading: what installs (GET, HEAD) goes
+    /// through, a publish or any other upload is answered here and goes no
+    /// further; npm's audit of what is installed still runs.
+    #[test]
+    fn a_registry_is_read_never_written() {
+        let host = echo_host();
+        let home = TempDir::new().unwrap();
+        let (ws, dir) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+        let vault = Vault::load(home.path(), ws.path(), dir.path()).unwrap();
+        let interceptor =
+            Arc::new(Interceptor::new(vault, host.roots, [HOST.to_owned()].into()).unwrap());
+        assert!(interceptor.wants(HOST, 443));
+        let send = |line: &str| {
+            let sent = format!(
+                "{line} HTTP/1.1\r\nHost: {HOST}\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{{}}"
+            );
+            ask(&interceptor, host.port, HOST, &sent)
+                .0
+                .unwrap_or_default()
+        };
+        assert!(send("GET /left-pad").starts_with("HTTP/1.1 200"));
+        assert!(send("HEAD /left-pad").starts_with("HTTP/1.1 200"));
+        assert!(send("POST /-/npm/v1/security/advisories/bulk").starts_with("HTTP/1.1 200"));
+        for line in [
+            "PUT /left-pad",
+            "POST /api/v1/gems",
+            "PUT /api/v1/crates/new",
+            "DELETE /x",
+        ] {
+            let reply = send(line);
+            assert!(reply.starts_with("HTTP/1.1 403"), "{line}: {reply}");
+        }
     }
 
     /// To a host Kule holds a secret for, a request carrying credentials of

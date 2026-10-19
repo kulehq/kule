@@ -597,6 +597,11 @@ permissions, the SDK and the package format;
   run to hundreds of megabytes) is hidden from the agent instead; Landlock
   then opens the directory around it by what is in it, so the agent can
   write in its subdirectories and files but not add new files beside them.
+- Package registries are read-only to commands (a publish is refused) for
+  npm, yarn, pnpm and bun, cargo, pip, uv and poetry, and gem, whose
+  tools trust the task's authority. Go's, NuGet's and Maven's tools on
+  macOS trust the system's roots alone, so their registries pass through
+  unseen, writes included.
 - Gemini needs an API key from AI Studio (Google no longer serves the
   Code Assist sign-in to clients like this), saved outside the keychain,
   which the sandbox keeps read-only: `GEMINI_FORCE_FILE_STORAGE=true gemini`,
