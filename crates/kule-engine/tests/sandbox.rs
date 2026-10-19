@@ -1045,6 +1045,11 @@ fn the_shield_keeps_an_unhooked_server_off_the_network() {
     assert!(own.wait().is_ok());
 
     shield.release();
+    // The firewall lets go a moment after it is told, under load later.
+    let started = std::time::Instant::now();
+    while !answers(outward, port) && started.elapsed() < std::time::Duration::from_secs(5) {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
     assert!(
         answers(outward, port),
         "released, the port is the server's again"

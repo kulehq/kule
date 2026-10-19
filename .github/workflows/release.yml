@@ -22,6 +22,7 @@ env:
 jobs:
   macos:
     runs-on: macos-latest
+    timeout-minutes: 90
     outputs:
       signed: ${{ steps.build.outputs.signed }}
     env:
@@ -104,6 +105,7 @@ jobs:
   linux:
     # The oldest supported Ubuntu, so the .deb runs on the glibc it has.
     runs-on: ubuntu-22.04
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -150,6 +152,7 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: [macos, linux]
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     # Only this job may mint an OIDC token (for the attestations): it builds
     # nothing and runs no dependency's code.
     permissions:
