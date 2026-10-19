@@ -128,6 +128,10 @@ pub struct HomeChange {
     /// (`.zshrc`, `.gitconfig`): what it says runs every time.
     #[serde(default)]
     pub startup: bool,
+    /// Where a link the layer holds points, as written: a person sees where
+    /// it leads before applying it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<String>,
 }
 
 /// What [`Task::apply_home`] did.
@@ -434,12 +438,14 @@ impl Task {
                     path: rel,
                     change: Change::Modified,
                     kind: now.kind,
+                    target: now.link,
                 }),
                 None => changes.push(HomeChange {
                     startup: startup(&rel),
                     path: rel,
                     change: Change::Created,
                     kind: now.kind,
+                    target: now.link,
                 }),
             }
         }
@@ -450,6 +456,7 @@ impl Task {
                     change: Change::Deleted,
                     kind: was.copy.kind,
                     startup: startup(rel),
+                    target: None,
                 });
             }
         }
@@ -495,6 +502,21 @@ impl Task {
                 moved.join(", ")
             )));
         }
+        // What is applied lands where the review showed it: no folder on
+        // the way there in the real home is a link, unless this apply
+        // makes it a folder first.
+        let made_dirs: BTreeSet<&str> = wanted
+            .iter()
+            .filter(|c| c.kind == Kind::Dir && c.change != Change::Deleted)
+            .map(|c| c.path.as_str())
+            .collect();
+        for c in &wanted {
+            if let Some(link) = link_on_the_way(&layer.real, &c.path)
+                && !made_dirs.contains(link.as_str())
+            {
+                return Err(through_link(&link));
+            }
+        }
         let kept_root = self.dir().join("home-kept");
         fs::create_dir_all(&kept_root).at(&kept_root)?;
         // Named so they sort by when: the last one is what an undo takes back.
@@ -516,6 +538,9 @@ impl Task {
         writes.sort_by(|a, b| a.path.cmp(&b.path));
         removals.sort_by(|a, b| b.path.cmp(&a.path));
         for c in writes.iter().chain(&removals) {
+            if let Some(link) = link_on_the_way(&layer.real, &c.path) {
+                return Err(through_link(&link));
+            }
             let (from, to) = (dir.join(&c.path), layer.real.join(&c.path));
             let held = Stamp::of(&to)?;
             let keeps =
@@ -649,11 +674,33 @@ struct AppliedPath {
     left: Option<Stamp>,
 }
 
-/// Saves the file or link at `from` as `to`.
 fn changed(path: &str) -> Error {
     Error::Invalid(format!("~/{path} changed while it was being applied"))
 }
 
+/// The first folder on the way to `rel` under `real` that is a link, as a
+/// path relative to `real`.
+fn link_on_the_way(real: &Path, rel: &str) -> Option<String> {
+    let mut at = String::new();
+    for part in Path::new(rel).parent()?.components() {
+        if !at.is_empty() {
+            at.push('/');
+        }
+        at.push_str(&part.as_os_str().to_string_lossy());
+        if fs::symlink_metadata(real.join(&at)).is_ok_and(|m| m.file_type().is_symlink()) {
+            return Some(at);
+        }
+    }
+    None
+}
+
+fn through_link(link: &str) -> Error {
+    Error::Invalid(format!(
+        "~/{link} is a link in your home, which Kule does not apply through: what goes there would land where it leads"
+    ))
+}
+
+/// Saves the file or link at `from` as `to`.
 fn keep(from: &Path, to: &Path) -> Result<()> {
     if let Some(parent) = to.parent() {
         fs::create_dir_all(parent).at(parent)?;

@@ -1293,7 +1293,15 @@ fn print_home(task: &Task) -> Result<()> {
         } else {
             ""
         };
-        println!("  {mark} ~/{}{slash}{runs}", paint::plain_line(&c.path));
+        let leads = c
+            .target
+            .as_deref()
+            .map(|t| format!(" -> {}", paint::plain_line(t)))
+            .unwrap_or_default();
+        println!(
+            "  {mark} ~/{}{slash}{leads}{runs}",
+            paint::plain_line(&c.path)
+        );
     }
     Ok(())
 }

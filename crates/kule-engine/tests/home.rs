@@ -85,6 +85,7 @@ fn change(path: &str, change: Change, kind: Kind) -> HomeChange {
         change,
         kind,
         startup: path == ".zshrc",
+        target: None,
     }
 }
 
@@ -395,4 +396,51 @@ fn a_process_left_in_the_home_layer_ends_before_it_is_applied() {
     // SAFETY: as above; one the test could not end is ended here.
     unsafe { libc::kill(pid, libc::SIGKILL) };
     assert!(!left, "a process left in the home layer outlived the apply");
+}
+
+/// A link the agent made in the home shows where it leads before it is
+/// applied.
+#[test]
+fn a_link_in_the_layer_shows_where_it_leads() {
+    let s = Setup::new();
+    s.run("ln -s \"$HOME/Documents/notes.txt\" \"$HOME/.toolrc\"");
+    let changes = s.task.home_changes().unwrap();
+    let link = changes
+        .iter()
+        .find(|c| c.path == ".toolrc")
+        .unwrap_or_else(|| panic!("{changes:?}"));
+    assert_eq!(link.kind, Kind::Symlink);
+    assert!(
+        link.target
+            .as_deref()
+            .is_some_and(|t| t.ends_with("Documents/notes.txt")),
+        "{link:?}"
+    );
+}
+
+/// What is applied lands where the review showed it: a folder on the way
+/// in the real home that is a link is not written through.
+#[test]
+fn nothing_is_applied_through_a_link_in_the_real_home() {
+    let s = Setup::new();
+    s.run("echo y = 2 > \"$HOME/.config/tool/new.toml\"");
+    assert!(
+        s.task
+            .home_changes()
+            .unwrap()
+            .iter()
+            .any(|c| c.path == ".config/tool/new.toml")
+    );
+    // The folder becomes a link to somewhere else meanwhile.
+    let elsewhere = TempDir::new().unwrap();
+    let tool = s.person.path().join(".config/tool");
+    fs::rename(&tool, s.person.path().join(".config/tool.old")).unwrap();
+    std::os::unix::fs::symlink(elsewhere.path(), &tool).unwrap();
+
+    let refused = s
+        .task
+        .apply_home(&[".config/tool/new.toml".to_owned()])
+        .unwrap_err();
+    assert!(refused.to_string().contains("is a link"), "{refused}");
+    assert!(!elsewhere.path().join("new.toml").exists());
 }

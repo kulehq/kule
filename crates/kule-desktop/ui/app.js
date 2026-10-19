@@ -3135,6 +3135,8 @@ function homeGroup(id, changes, busy, applied) {
             { class: "home-change" },
             h("span", { class: `change ${c.change}` }, mark[c.change] || "~"),
             h("span", {}, `~/${c.path}${c.kind === "dir" ? "/" : ""}`),
+            // Where a link leads, before it is applied.
+            c.target != null ? h("span", { class: "muted", title: "A link: what reads it reads what it points to" }, `→ ${c.target}`) : null,
             c.startup
               ? h("span", { class: "chip ask", title: "Shells or tools read and run this file as they start: what it says runs every time." }, "runs at every start")
               : null,
