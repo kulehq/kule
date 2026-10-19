@@ -65,7 +65,7 @@ pub use caches::Sources as CacheSources;
 pub use checkpoint::{Checkpoint, State as CheckpointState};
 pub use effects::{Change, Effect, EffectSet, Move};
 pub use error::{Error, Result};
-pub use git::{GitState, GitSummary, RefChange};
+pub use git::{Carried, CarriedEntry, GitState, GitSummary, RefChange};
 pub use groups::{
     GROUP_POLICY_DIR, GROUPS_FILE, Group, GroupPolicy, MAX_GROUP_POLICY, MAX_GROUPS, create_group,
     delete_group, group_policy_text, groups, set_group_order, set_group_policy, update_group,

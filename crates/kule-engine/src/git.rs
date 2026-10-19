@@ -200,6 +200,29 @@ pub struct RefChange {
     /// when there were too many to read.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub paths: Option<Vec<String>>,
+    /// [`RefChange::paths`] with what each commit did there, and to what:
+    /// the policy judges each as it judges the same change to a file.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub carried: Vec<Carried>,
+}
+
+/// A change one of a reference's new commits makes, against its first
+/// parent.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct Carried {
+    pub path: String,
+    pub change: Change,
+    /// What the commit has there (what its parent had, for a deletion).
+    pub entry: CarriedEntry,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CarriedEntry {
+    File,
+    Symlink,
+    /// Another repository's commit: what a clone of it would check out.
+    Submodule,
 }
 
 /// The repository-level reading of the effects under `.git`.
@@ -270,10 +293,14 @@ pub(crate) fn summarize(
         // What the new commits carry, against everything the workspace's
         // references held before.
         let known: Vec<gix::ObjectId> = old_state.refs.values().filter_map(|v| oid(v)).collect();
-        let paths = match (&repo, new.and_then(|n| oid(n))) {
+        let carried = match (&repo, new.and_then(|n| oid(n))) {
             (Some(repo), Some(new)) => carried(repo, new, &known),
             _ => Some(Vec::new()),
         };
+        let paths = carried.as_ref().map(|all| {
+            let paths: BTreeSet<&String> = all.iter().map(|c| &c.path).collect();
+            paths.into_iter().cloned().collect()
+        });
         summary.refs.push(RefChange {
             name: name.clone(),
             old: old.cloned(),
@@ -281,6 +308,7 @@ pub(crate) fn summarize(
             fast_forward,
             commits,
             paths,
+            carried: carried.unwrap_or_default(),
         });
     }
     for effect in effects {
@@ -396,13 +424,13 @@ fn oid(value: &str) -> Option<gix::ObjectId> {
     gix::ObjectId::from_hex(value.as_bytes()).ok()
 }
 
-/// The paths the commits reachable from `tip` and from none of `known`
-/// change, each against its first parent; `None` past what is read.
+/// The changes the commits reachable from `tip` and from none of `known`
+/// make, each against its first parent; `None` past what is read.
 fn carried(
     repo: &gix::Repository,
     tip: gix::ObjectId,
     known: &[gix::ObjectId],
-) -> Option<Vec<String>> {
+) -> Option<Vec<Carried>> {
     const MAX_PATHS: usize = 10_000;
     let walk = repo
         .rev_walk([tip])
@@ -440,19 +468,22 @@ fn carried(
     Some(paths.into_iter().collect())
 }
 
-/// The paths that differ between trees `a` and `b` (either may be none),
-/// under `prefix`.
+/// The changes between trees `a` and `b` (either may be none), under
+/// `prefix`: of content, and of mode alone (a file made executable, or
+/// turned into a link to the same bytes).
 fn tree_changes(
     repo: &gix::Repository,
     a: Option<gix::ObjectId>,
     b: Option<gix::ObjectId>,
     prefix: &str,
-    out: &mut BTreeSet<String>,
+    out: &mut BTreeSet<Carried>,
 ) -> Option<()> {
+    use gix::objs::tree::EntryKind;
+    type Entries = BTreeMap<String, (EntryKind, gix::ObjectId)>;
     if a == b {
         return Some(());
     }
-    let entries = |id: Option<gix::ObjectId>| -> Option<BTreeMap<String, (bool, gix::ObjectId)>> {
+    let entries = |id: Option<gix::ObjectId>| -> Option<Entries> {
         let Some(id) = id else {
             return Some(BTreeMap::new());
         };
@@ -462,14 +493,14 @@ fn tree_changes(
             decoded
                 .entries
                 .iter()
-                .map(|e| (e.filename.to_string(), (e.mode.is_tree(), e.oid.to_owned())))
+                .map(|e| (e.filename.to_string(), (e.mode.kind(), e.oid.to_owned())))
                 .collect(),
         )
     };
     let (left, right) = (entries(a)?, entries(b)?);
     let names: BTreeSet<&String> = left.keys().chain(right.keys()).collect();
     for name in names {
-        let (l, r) = (left.get(name), right.get(name));
+        let (l, r) = (left.get(name).copied(), right.get(name).copied());
         if l == r {
             continue;
         }
@@ -478,14 +509,33 @@ fn tree_changes(
         } else {
             format!("{prefix}/{name}")
         };
-        let dir =
-            |e: Option<&(bool, gix::ObjectId)>| e.filter(|(tree, _)| *tree).map(|(_, id)| *id);
+        let dir = |e: Option<(EntryKind, gix::ObjectId)>| {
+            e.filter(|(kind, _)| *kind == EntryKind::Tree)
+                .map(|(_, id)| id)
+        };
         if dir(l).is_some() || dir(r).is_some() {
             tree_changes(repo, dir(l), dir(r), &path, out)?;
         }
-        if l.is_some_and(|(tree, _)| !tree) || r.is_some_and(|(tree, _)| !tree) {
-            out.insert(path);
-        }
+        let leaf = |e: Option<(EntryKind, gix::ObjectId)>| {
+            e.map(|(kind, _)| kind)
+                .filter(|kind| *kind != EntryKind::Tree)
+                .map(|kind| match kind {
+                    EntryKind::Link => CarriedEntry::Symlink,
+                    EntryKind::Commit => CarriedEntry::Submodule,
+                    _ => CarriedEntry::File,
+                })
+        };
+        let (change, entry) = match (leaf(l), leaf(r)) {
+            (None, None) => continue,
+            (Some(was), None) => (Change::Deleted, was),
+            (None, Some(now)) => (Change::Created, now),
+            (Some(_), Some(now)) => (Change::Modified, now),
+        };
+        out.insert(Carried {
+            path,
+            change,
+            entry,
+        });
     }
     Some(())
 }

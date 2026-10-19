@@ -24,7 +24,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::effects::{Change, EffectSet};
 use crate::error::{Error, Result};
-use crate::git::RefChange;
+use crate::git::{Carried, CarriedEntry, RefChange};
 use crate::manifest::Kind;
 use crate::remembered::{Allowance, Remembered};
 
@@ -373,11 +373,38 @@ impl Policy {
                 // committed and gone from the folder still goes with it.
                 match &change.paths {
                     Some(paths) => {
-                        for path in paths {
-                            let subject =
-                                Subject::file("fs.modify", path, Change::Modified, Kind::File);
+                        // Each as what the commit did there, and to what; a
+                        // record from before they were kept, as files changed.
+                        let carried: Vec<Carried> = if change.carried.is_empty() {
+                            paths
+                                .iter()
+                                .map(|path| Carried {
+                                    path: path.clone(),
+                                    change: Change::Modified,
+                                    entry: CarriedEntry::File,
+                                })
+                                .collect()
+                        } else {
+                            change.carried.clone()
+                        };
+                        for c in &carried {
+                            let kind = match c.change {
+                                Change::Created => "fs.create",
+                                Change::Modified => "fs.modify",
+                                Change::Deleted => "fs.delete",
+                            };
+                            let subject = match c.entry {
+                                CarriedEntry::File => {
+                                    Subject::file(kind, &c.path, c.change, Kind::File)
+                                }
+                                CarriedEntry::Symlink => {
+                                    Subject::file(kind, &c.path, c.change, Kind::Symlink)
+                                }
+                                // What another repository holds: a person's.
+                                CarriedEntry::Submodule => Subject::git("git.other", &c.path),
+                            };
                             judgements.push(self.judge_one(
-                                format!("git ref {}: {path}", change.name),
+                                format!("git ref {}: {}", change.name, c.path),
                                 &subject,
                                 &facts,
                             ));

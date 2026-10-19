@@ -409,6 +409,54 @@ fn files_in_new_commits_are_judged_like_files() {
     );
 }
 
+/// What a commit does is judged as it is: a link it adds as a link, a file
+/// it only makes executable as a change, another repository's commit (a
+/// submodule) by a person.
+#[test]
+fn what_new_commits_carry_is_judged_as_what_it_is() {
+    let s = Setup::new(PROJECT, true);
+    let copy = s.copy();
+    std::os::unix::fs::symlink("/etc/passwd", copy.join("notes.txt")).unwrap();
+    git(&copy, &["update-index", "--chmod=+x", "README.md"]);
+    let head = String::from_utf8(
+        Command::new("git")
+            .args(["rev-parse", "HEAD"])
+            .current_dir(&copy)
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap();
+    git(
+        &copy,
+        &[
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            &format!("160000,{},vendor/lib", head.trim()),
+        ],
+    );
+    git(&copy, &["add", "notes.txt"]);
+    git(&copy, &["commit", "-qm", "carry"]);
+    // The folder then looks as before: only the commit carries them.
+    fs::remove_file(copy.join("notes.txt")).unwrap();
+    git(&copy, &["update-index", "--chmod=-x", "README.md"]);
+
+    let ruling = s.judged();
+    assert_eq!(
+        on(&ruling, "git ref refs/heads/main: notes.txt"),
+        (Verdict::Ask, rules(&["links"]))
+    );
+    assert_eq!(
+        on(&ruling, "git ref refs/heads/main: README.md").0,
+        Verdict::Allow
+    );
+    assert_eq!(
+        on(&ruling, "git ref refs/heads/main: vendor/lib").0,
+        Verdict::Ask
+    );
+}
+
 /// A new branch passes; a tag, a note or a replacement (which makes git
 /// show other content in place of a commit or a file) waits.
 #[test]
