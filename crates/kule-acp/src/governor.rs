@@ -120,6 +120,7 @@ pub fn govern(task: &Task, plan: Plan, control: RunControl, watch: Watch) -> Joi
             base,
             pids: Vec::new(),
             cpu: HashMap::new(),
+            reaped: HashMap::new(),
             share: 1.0,
             rate: None,
             paused: false,
@@ -177,6 +178,8 @@ struct Governor {
     pids: Vec<i32>,
     /// Each process's processor time as last read.
     cpu: HashMap<i32, Duration>,
+    /// Each process's ended children's processor time as last read.
+    reaped: HashMap<i32, Duration>,
     /// The share of each slice a slowed run runs in.
     share: f64,
     /// Processor use while running, in cores, smoothed.
@@ -289,14 +292,26 @@ impl Governor {
     fn look(&mut self) -> (u64, Duration) {
         let mut memory = 0;
         let mut used = Duration::ZERO;
+        let mut ended = false;
         let mut seen = HashMap::with_capacity(self.pids.len());
+        let mut reaped = HashMap::with_capacity(self.pids.len());
         for u in resources::usage(&self.pids) {
             memory += u.memory;
             let before = self.cpu.get(&u.pid).copied().unwrap_or_default();
             used += u.cpu.saturating_sub(before);
             seen.insert(u.pid, u.cpu);
+            // Kept apart from `used`: a child seen at work was counted
+            // there already, and the processor limit would count it twice.
+            ended |= u.reaped > self.reaped.get(&u.pid).copied().unwrap_or_default();
+            reaped.insert(u.pid, u.reaped);
         }
         self.cpu = seen;
+        self.reaped = reaped;
+        // Children that ran and ended between two looks: a build or a
+        // script at work, though none of them was seen.
+        if ended {
+            self.control.touch();
+        }
         (memory, used)
     }
 

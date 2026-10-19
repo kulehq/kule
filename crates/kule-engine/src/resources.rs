@@ -13,6 +13,10 @@ pub struct Usage {
     pub pid: i32,
     /// Processor time since it started, user and system.
     pub cpu: Duration,
+    /// Processor time of its children that ended and were waited for:
+    /// work done by processes too short-lived to be seen, such as a
+    /// build's compilers or a script's commands.
+    pub reaped: Duration,
     /// Memory it holds: its footprint on macOS, its proportional share of
     /// what is resident on Linux.
     pub memory: u64,
@@ -121,9 +125,13 @@ fn usage_of(pid: i32) -> Option<Usage> {
     }
     // In ticks of the machine's clock, not nanoseconds, on Apple silicon.
     let ticks = info.ri_user_time.saturating_add(info.ri_system_time);
+    let reaped = info
+        .ri_child_user_time
+        .saturating_add(info.ri_child_system_time);
     Some(Usage {
         pid,
         cpu: Duration::from_nanos(ticks_to_nanos(ticks)),
+        reaped: Duration::from_nanos(ticks_to_nanos(reaped)),
         memory: info.ri_phys_footprint,
     })
 }
@@ -179,12 +187,24 @@ fn usage_of(pid: i32) -> Option<Usage> {
     let fields = stat_fields(pid)?;
     // utime and stime, fields 14 and 15 of the whole line.
     let ticks: u64 = fields.get(11)?.parse::<u64>().ok()? + fields.get(12)?.parse::<u64>().ok()?;
+    // cutime and cstime, fields 16 and 17: its children's, once waited for.
+    let reaped: u64 = [13, 14]
+        .iter()
+        .map(|&i| {
+            fields
+                .get(i)
+                .and_then(|f| f.parse::<i64>().ok())
+                .unwrap_or(0)
+                .max(0) as u64
+        })
+        .sum();
     // SAFETY: sysconf only reads a value.
     let per_sec = unsafe { libc::sysconf(libc::_SC_CLK_TCK) }.max(1) as u64;
-    let cpu = Duration::from_nanos(ticks.saturating_mul(1_000_000_000) / per_sec);
+    let time = |ticks: u64| Duration::from_nanos(ticks.saturating_mul(1_000_000_000) / per_sec);
     Some(Usage {
         pid,
-        cpu,
+        cpu: time(ticks),
+        reaped: time(reaped),
         memory: memory_of(pid).unwrap_or(0),
     })
 }
@@ -269,6 +289,31 @@ mod tests {
         }
         assert!(gone(child));
         assert!(usage(&[pid]).is_empty() || gone(pid));
+    }
+
+    #[test]
+    fn the_work_of_children_too_short_to_see_is_counted_once_they_end() {
+        // A shell running one short command after another, then waiting.
+        let mut root = Command::new("sh")
+            .args([
+                "-c",
+                "i=0; while [ $i -lt 300 ]; do ls / >/dev/null; i=$((i+1)); done; sleep 30",
+            ])
+            .stdin(Stdio::null())
+            .spawn()
+            .unwrap();
+        let pid = root.id() as i32;
+        let started = Instant::now();
+        let reaped = loop {
+            let reaped = usage(&[pid])[0].reaped;
+            if reaped > Duration::from_millis(30) || started.elapsed() > Duration::from_secs(10) {
+                break reaped;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        };
+        let _ = root.kill();
+        let _ = root.wait();
+        assert!(reaped > Duration::from_millis(30), "{reaped:?}");
     }
 
     #[test]

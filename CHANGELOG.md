@@ -82,6 +82,9 @@
     on unless turned off.
   - Doing nothing is no message, tool call, output, processor use or new
     process from the agent; a question waiting on you does not count.
+    Processes too short-lived to be seen count once they end, by the
+    processor time their parent waited for (a build's compilers, a script's
+    commands).
   - Live shows what a run takes against its limits, every two seconds.
   - `kule run` is held to the same limits.
 - **Stop** in Live (⌘⇧K) stops the run at work: its turn is cancelled, and
