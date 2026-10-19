@@ -363,6 +363,29 @@ impl Policy {
                     &subject,
                     &facts,
                 ));
+                // What its new commits carry, judged as files are: a file
+                // committed and gone from the folder still goes with it.
+                match &change.paths {
+                    Some(paths) => {
+                        for path in paths {
+                            let subject =
+                                Subject::file("fs.modify", path, Change::Modified, Kind::File);
+                            judgements.push(self.judge_one(
+                                format!("git ref {}: {path}", change.name),
+                                &subject,
+                                &facts,
+                            ));
+                        }
+                    }
+                    None => {
+                        let subject = Subject::git("git.other", &change.name);
+                        judgements.push(self.judge_one(
+                            format!("git ref {}: more commits than Kule reads", change.name),
+                            &subject,
+                            &facts,
+                        ));
+                    }
+                }
             }
             if git.config {
                 let subject = Subject::git("git.config", "config");

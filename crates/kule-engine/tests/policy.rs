@@ -323,6 +323,40 @@ fn git_moves_are_judged_by_what_they_mean() {
     assert_eq!(ruling.verdict, Verdict::Deny);
 }
 
+/// What new commits carry is judged as files are, though the files are
+/// gone from the folder: a workflow committed and then deleted still waits
+/// with the branch that brings it.
+#[test]
+fn files_in_new_commits_are_judged_like_files() {
+    let s = Setup::new(PROJECT, true);
+    let copy = s.copy();
+    write(&copy.join(".github/workflows/x.yml"), "on: push\n");
+    git(&copy, &["add", "-A"]);
+    git(&copy, &["commit", "-qm", "ci"]);
+    git(&copy, &["rm", "-q", "--cached", ".github/workflows/x.yml"]);
+    fs::remove_file(copy.join(".github/workflows/x.yml")).unwrap();
+    git(&copy, &["commit", "-qm", "gone"]);
+    write(&copy.join("src/main.rs"), "fn main() { run() }\n");
+    git(&copy, &["commit", "-qam", "edit"]);
+    git(&copy, &["branch", "side"]);
+
+    let ruling = s.judged();
+    for subject in [
+        "git ref refs/heads/main: .github/workflows/x.yml",
+        "git ref refs/heads/side: .github/workflows/x.yml",
+    ] {
+        assert_eq!(
+            on(&ruling, subject),
+            (Verdict::Ask, rules(&["automation"])),
+            "{subject}"
+        );
+    }
+    assert_eq!(
+        on(&ruling, "git ref refs/heads/main: src/main.rs").0,
+        Verdict::Allow
+    );
+}
+
 /// A new branch passes; a tag, a note or a replacement (which makes git
 /// show other content in place of a commit or a file) waits.
 #[test]

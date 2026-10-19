@@ -195,6 +195,11 @@ pub struct RefChange {
     pub fast_forward: Option<bool>,
     /// Commits reachable from `new` but not from `old` (`git rev-list --count old..new`).
     pub commits: Option<usize>,
+    /// The paths the commits it brings change, each against its first
+    /// parent: commits no reference of the workspace held before. `None`
+    /// when there were too many to read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paths: Option<Vec<String>>,
 }
 
 /// The repository-level reading of the effects under `.git`.
@@ -262,12 +267,20 @@ pub(crate) fn summarize(
                 (Some(repo), Some(old), Some(new)) => ancestry(repo, old, new),
                 _ => (None, None),
             };
+        // What the new commits carry, against everything the workspace's
+        // references held before.
+        let known: Vec<gix::ObjectId> = old_state.refs.values().filter_map(|v| oid(v)).collect();
+        let paths = match (&repo, new.and_then(|n| oid(n))) {
+            (Some(repo), Some(new)) => carried(repo, new, &known),
+            _ => Some(Vec::new()),
+        };
         summary.refs.push(RefChange {
             name: name.clone(),
             old: old.cloned(),
             new: new.cloned(),
             fast_forward,
             commits,
+            paths,
         });
     }
     for effect in effects {
@@ -381,6 +394,100 @@ const MAX_HASHED: u64 = 256 << 20;
 
 fn oid(value: &str) -> Option<gix::ObjectId> {
     gix::ObjectId::from_hex(value.as_bytes()).ok()
+}
+
+/// The paths the commits reachable from `tip` and from none of `known`
+/// change, each against its first parent; `None` past what is read.
+fn carried(
+    repo: &gix::Repository,
+    tip: gix::ObjectId,
+    known: &[gix::ObjectId],
+) -> Option<Vec<String>> {
+    const MAX_PATHS: usize = 10_000;
+    let walk = repo
+        .rev_walk([tip])
+        .with_hidden(known.iter().copied())
+        .all()
+        .ok()?;
+    let mut paths = BTreeSet::new();
+    for (n, info) in walk.enumerate() {
+        if n >= WALK_LIMIT {
+            return None;
+        }
+        let commit = repo
+            .find_object(info.ok()?.id)
+            .ok()?
+            .try_into_commit()
+            .ok()?;
+        let tree = commit.tree_id().ok()?.detach();
+        let parent = match commit.parent_ids().next() {
+            Some(p) => Some(
+                repo.find_object(p.detach())
+                    .ok()?
+                    .try_into_commit()
+                    .ok()?
+                    .tree_id()
+                    .ok()?
+                    .detach(),
+            ),
+            None => None,
+        };
+        tree_changes(repo, parent, Some(tree), "", &mut paths)?;
+        if paths.len() > MAX_PATHS {
+            return None;
+        }
+    }
+    Some(paths.into_iter().collect())
+}
+
+/// The paths that differ between trees `a` and `b` (either may be none),
+/// under `prefix`.
+fn tree_changes(
+    repo: &gix::Repository,
+    a: Option<gix::ObjectId>,
+    b: Option<gix::ObjectId>,
+    prefix: &str,
+    out: &mut BTreeSet<String>,
+) -> Option<()> {
+    if a == b {
+        return Some(());
+    }
+    let entries = |id: Option<gix::ObjectId>| -> Option<BTreeMap<String, (bool, gix::ObjectId)>> {
+        let Some(id) = id else {
+            return Some(BTreeMap::new());
+        };
+        let tree = repo.find_object(id).ok()?.try_into_tree().ok()?;
+        let decoded = tree.decode().ok()?;
+        Some(
+            decoded
+                .entries
+                .iter()
+                .map(|e| (e.filename.to_string(), (e.mode.is_tree(), e.oid.to_owned())))
+                .collect(),
+        )
+    };
+    let (left, right) = (entries(a)?, entries(b)?);
+    let names: BTreeSet<&String> = left.keys().chain(right.keys()).collect();
+    for name in names {
+        let (l, r) = (left.get(name), right.get(name));
+        if l == r {
+            continue;
+        }
+        let path = if prefix.is_empty() {
+            name.clone()
+        } else {
+            format!("{prefix}/{name}")
+        };
+        let dir =
+            |e: Option<&(bool, gix::ObjectId)>| e.filter(|(tree, _)| *tree).map(|(_, id)| *id);
+        if dir(l).is_some() || dir(r).is_some() {
+            tree_changes(repo, dir(l), dir(r), &path, out)?;
+        }
+        if l.is_some_and(|(tree, _)| !tree) || r.is_some_and(|(tree, _)| !tree) {
+            out.insert(path);
+        }
+    }
+    Some(())
 }
 
 /// `(fast_forward, commits)` for a move from `old` to `new`.
