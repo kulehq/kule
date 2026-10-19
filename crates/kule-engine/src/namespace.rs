@@ -311,6 +311,9 @@ pub(crate) fn socket_pair() -> io::Result<(OwnedFd, OwnedFd)> {
     Ok(unsafe { (OwnedFd::from_raw_fd(fds[0]), OwnedFd::from_raw_fd(fds[1])) })
 }
 
+/// # Safety
+/// Only system calls, for between fork and exec: the caller must be the
+/// child of a fork and allocate nothing around it.
 unsafe fn write_file(path: &std::ffi::CStr, data: &[u8]) -> io::Result<()> {
     // SAFETY: path is NUL-terminated; data is a live buffer.
     unsafe {
@@ -324,6 +327,9 @@ unsafe fn write_file(path: &std::ffi::CStr, data: &[u8]) -> io::Result<()> {
     Ok(())
 }
 
+/// # Safety
+/// As [`write_file`]: between fork and exec, in a network namespace of the
+/// process's own.
 unsafe fn loopback_up() -> io::Result<()> {
     // SAFETY: ifreq is plain data; the ioctls read and write only it.
     unsafe {
@@ -345,6 +351,9 @@ unsafe fn loopback_up() -> io::Result<()> {
     }
 }
 
+/// # Safety
+/// As [`write_file`]: between fork and exec. The caller owns the descriptor
+/// returned and closes it.
 unsafe fn listen(port: u16) -> io::Result<RawFd> {
     // SAFETY: the address is plain data, passed with its size.
     unsafe {
@@ -379,6 +388,9 @@ unsafe fn listen(port: u16) -> io::Result<RawFd> {
 #[repr(C, align(8))]
 struct Control([u8; 64]);
 
+/// # Safety
+/// `socket` and `fd` must be open descriptors for the call's length; it
+/// only makes system calls, so it may run between fork and exec.
 pub(crate) unsafe fn send_fd(socket: RawFd, fd: RawFd) -> io::Result<()> {
     // SAFETY: the message points at live buffers sized for one descriptor.
     unsafe {

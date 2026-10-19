@@ -25,7 +25,7 @@ impl Money {
     pub(crate) fn check_budget(&self) -> Result<()> {
         let currency_ok =
             self.currency.len() == 3 && self.currency.chars().all(|c| c.is_ascii_uppercase());
-        if !(self.amount.is_finite() && self.amount > 0.0) || !currency_ok {
+        if !(self.amount.is_finite() && self.amount > 0.0 && currency_ok) {
             return Err(Error::Invalid(format!(
                 "a budget is a positive amount in a currency like USD, not {} {}",
                 self.amount, self.currency

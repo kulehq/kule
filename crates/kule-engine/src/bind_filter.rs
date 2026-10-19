@@ -398,10 +398,12 @@ fn answer(listener: RawFd, request: &libc::seccomp_notif) -> Answer {
                 &mut len,
             )
         };
+        // SAFETY: `bound` is a live sockaddr_storage; the length the kernel
+        // reports is held to its size, so the slice stays within it.
         let bytes = unsafe {
             std::slice::from_raw_parts(
                 (&bound as *const libc::sockaddr_storage).cast::<u8>(),
-                len as usize,
+                (len as usize).min(std::mem::size_of::<libc::sockaddr_storage>()),
             )
         };
         if named == 0
