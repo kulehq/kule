@@ -43,7 +43,7 @@ Nothing is trusted by default:
 | Window ↔ daemon | A socket only your user can open, a token, size limits. |
 | Window ↔ untrusted text | Built with DOM calls and `textContent` only; a strict content security policy with no inline scripts; links open only as http(s). |
 | Extensions ↔ Kule | Sandboxed frames on their own origin; every call checked against the permissions you approved; network only to approved public hosts. |
-| Release ↔ you | Signed and notarized on macOS, checksums and build provenance for every file. |
+| Release ↔ you | Checksums and build provenance for every file; on macOS signed and notarized where the release has an Apple certificate, else signed ad hoc, as its notes say. |
 
 ## For contributors
 

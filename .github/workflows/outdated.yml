@@ -17,6 +17,7 @@ jobs:
   # Advisories published since the last push.
   advisories:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -26,6 +27,7 @@ jobs:
 
   pins:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -46,6 +48,9 @@ jobs:
           done
           pinned=$(sed -n 's/^  TAURI_CLI_VERSION: //p' .github/workflows/release.yml)
           check tauri-cli "$pinned" "$(curl -fsS https://crates.io/api/v1/crates/tauri-cli -H 'User-Agent: kule-outdated' | jq -r .crate.max_stable_version)"
-          pinned=$(grep -oE '`@xterm/xterm` [0-9.]+' crates/kule-desktop/ui/vendor/xterm/README.md | head -1 | awk '{print $2}')
-          check xterm "$pinned" "$(npm view @xterm/xterm version 2>/dev/null)"
+          # The vendored xterm and its addons, as vendor/xterm/README.md lists them.
+          for name in $(grep -oE '`@xterm/[a-z-]+` [0-9.]+' crates/kule-desktop/ui/vendor/xterm/README.md | awk '{print $1}' | tr -d '`'); do
+            pinned=$(grep -oE "\`$name\` [0-9.]+" crates/kule-desktop/ui/vendor/xterm/README.md | head -1 | awk '{print $2}')
+            check "$name" "$pinned" "$(npm view "$name" version 2>/dev/null | tr -dc '0-9.')"
+          done
           exit $stale

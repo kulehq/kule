@@ -5,16 +5,17 @@
 all-features = true
 
 [advisories]
-# Unmaintained crates Kule does not use itself, but its desktop stack does on
-# Linux: none has a known vulnerability. Revisit when Tauri moves on.
+# Unmaintained crates under Kule's Linux stack, none with a known
+# vulnerability. zbus's D-Bus types sit under Secret Service (keyring, which
+# keeps the key to the secrets) and the desktop's notifications; GTK 3's
+# macros under Tauri. Revisit when keyring, notify-rust or Tauri move on.
 ignore = [
-  # proc-macro-error: glib's macros (GTK 3, through Tauri on Linux).
-  { id = "RUSTSEC-2024-0370", reason = "build-time macro of glib 0.18, pulled in by Tauri's GTK 3 stack" },
-  # zbus_names, zvariant, zvariant_derive: notify-rust's D-Bus on Linux.
-  { id = "RUSTSEC-2026-0370", reason = "zbus_names, through tauri-plugin-notification's notify-rust on Linux" },
-  { id = "RUSTSEC-2026-0371", reason = "zvariant, through tauri-plugin-notification's notify-rust on Linux" },
-  { id = "RUSTSEC-2026-0372", reason = "zvariant_derive, through tauri-plugin-notification's notify-rust on Linux" },
+  { id = "RUSTSEC-2024-0370", reason = "proc-macro-error: build-time macro of glib 0.18, pulled in by Tauri's GTK 3 stack" },
+  { id = "RUSTSEC-2026-0370", reason = "zvariant: D-Bus types of zbus, through keyring's Secret Service and notify-rust on Linux" },
+  { id = "RUSTSEC-2026-0371", reason = "zbus_names: D-Bus names of zbus, through keyring's Secret Service and notify-rust on Linux" },
+  { id = "RUSTSEC-2026-0372", reason = "zvariant_derive: macros of zvariant, through keyring's Secret Service and notify-rust on Linux" },
 ]
+yanked = "deny"
 
 [licenses]
 # Permissive licences, and MPL-2.0 (file-level copyleft), all of which

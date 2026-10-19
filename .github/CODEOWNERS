@@ -1,3 +1,4 @@
-# Every change is reviewed by the maintainer; the sandbox, the policy, the
-# secrets and the release workflow above all.
+# The maintainer owns every path: the sandbox, the policy, the secrets and
+# the release workflow above all. Review is asked for on pull requests, and
+# required once the branch is protected.
 * @selcukgural

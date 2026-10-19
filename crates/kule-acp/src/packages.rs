@@ -327,9 +327,11 @@ mod tests {
                 "{spec}"
             );
             for (path, package) in lock["packages"].as_object().unwrap() {
-                if path.is_empty() || package.get("link").is_some() {
+                if path.is_empty() {
                     continue;
                 }
+                // A link installs a folder from disk, not the registry.
+                assert!(package.get("link").is_none(), "{spec}: {path} is a link");
                 let resolved = package["resolved"].as_str().unwrap_or_default();
                 assert!(
                     resolved.starts_with("https://registry.npmjs.org/"),
