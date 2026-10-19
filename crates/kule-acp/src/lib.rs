@@ -342,11 +342,16 @@ pub async fn run_pictured(
     });
     let mcp_servers: Vec<_> = mcp.iter().map(McpCommand::to_acp).collect();
     let log = task.copy().with_file_name("agent.log");
-    let log = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&log)
-        .map_err(error)?;
+    let log = {
+        use std::os::unix::fs::OpenOptionsExt;
+        // For its owner alone: what the agent says may hold anything.
+        std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .mode(0o600)
+            .open(&log)
+            .map_err(error)?
+    };
     // Through a pipe, not the file itself: the log sits in Kule's home,
     // which the sandbox hides, and the agent must not hold it open.
     let mut child = async_process::Command::from(agent)

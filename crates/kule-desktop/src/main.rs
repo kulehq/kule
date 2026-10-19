@@ -66,11 +66,14 @@ impl Kule {
 /// Starts this program as the daemon for `home`, detached from the app so it
 /// outlives it; its output goes to `kuled.log` in `home`.
 fn spawn_self(home: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::OpenOptionsExt;
     use std::os::unix::process::CommandExt;
     std::fs::create_dir_all(home)?;
+    // For its owner alone, as everything in Kule's home.
     let log = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
+        .mode(0o600)
         .open(home.join("kuled.log"))?;
     let mut command = std::process::Command::new(std::env::current_exe()?);
     command

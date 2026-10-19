@@ -4996,6 +4996,9 @@ async function newTerminal(taskId = state.current) {
     scrollback: 10000,
     allowProposedApi: true,
     theme: terminalTheme(),
+    // Links a program writes (OSC 8) go the way plain URLs do: by
+    // Kule's opener, http(s) alone, on Cmd or Ctrl+click.
+    linkHandler: { activate: (event, uri) => terminalLink(event, uri), allowNonHttpProtocols: false },
   });
   const fit = new FitAddon.FitAddon();
   const search = new SearchAddon.SearchAddon();
