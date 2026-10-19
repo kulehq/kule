@@ -348,7 +348,10 @@ it writes in Kule reaches it outside; you sign it in there once.
   and a warning for colour pairs too faint to read. A theme goes to and
   comes from a `.kule-theme.json` file that holds colours for the
   window's named parts and nothing else (`#rrggbb`, checked on the way
-  in). The theme in use and your own are kept in `themes.json`.
+  in). The theme in use and your own are kept in `themes.json`, with
+  **Motion**: the small movements where something changes (a menu opening,
+  a question arriving, a row moving), on, off, or as the computer's
+  "reduce motion" says.
 - **Layout**: the window is four regions, left, main, right and bottom,
   each holding panels as tabs. By default the agent's chat and the
   terminals share the bottom, side by side (`Agent | zsh 1 | zsh 2 | +`),
@@ -392,7 +395,7 @@ it writes in Kule reaches it outside; you sign it in there once.
   the one you set, except shortcuts text editing owns too (⌘⌫, ⌥⇧↑), which
   stay in the window so they keep working in a text field.
 - **Profile**: your choices in one `.kule-profile.json` file, all of them
-  or the parts you tick: the theme in use and your own themes, your
+  or the parts you tick: the theme in use, your own themes and the motion, your
   shortcuts, Kule's balanced or careful policy, the daily budget, the
   limits and the agent profiles you added. On import Kule shows what the file holds
   before anything changes, and you pick the parts to apply; themes join

@@ -472,6 +472,13 @@ Open Settings with Mod+, or the gear at the bottom left.
   - Make a theme from any of them with a live preview; Kule warns about
     colour pairs too faint to read.
   - Themes go to and come from `.kule-theme.json` files.
+  - **Motion**: the window moves a little where something changes. Menus
+    grow out of what opened them, the tab line slides, a new event rises
+    into Live, a question opens and pulses twice, task rows slide to their
+    new places, a run that ends well draws its tick. *As the computer says*
+    (the default) turns it off when the computer's "reduce motion" is on;
+    *On* and *Off* decide for themselves. The command *Turn motion on or
+    off* can have a shortcut.
 - **Shortcuts**: every command and its keys. Set your own, search them, or
   *Put back every default*.
 - **Extensions**: install, approve, turn on or off and remove extensions

@@ -48,6 +48,7 @@ const VIEW: &[Entry] = &[
     Command("task.prev", "Previous Task"),
     Separator,
     Command("theme.next", "Next Theme"),
+    Command("motion.toggle", "Turn Motion On or Off"),
     Separator,
     Command("chat.toggle", "Show or Hide the Agent Chat"),
     Command("layout.main", "Show or Hide the Main Area"),

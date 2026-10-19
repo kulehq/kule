@@ -89,6 +89,32 @@
 - Daemon protocol 26: `StopRun`, `Limits`, `SetLimits`, `SetTaskLimits`,
   the `resources` run event, and the limits and time used in each task.
 
+### Motion
+
+- The window moves a little where something changes, never just to
+  decorate:
+  - Menus and the command palette grow out of what opened them.
+  - The selected tab's line slides to the next tab.
+  - Toasts come in from the right and leave the same way.
+  - Buttons, tabs and rows change colour over a moment.
+  - A new event in Live rises into place.
+  - A line runs along the task header while the agent is at work.
+  - A question opens where it is asked and its edge pulses twice; answered,
+    it folds away.
+  - Rows in the task list slide to their new places, and a new one drops in.
+  - A run that ends well draws its tick.
+  - The measure line's numbers run to each new measure.
+  - The first window marks the step done, the one to take now and those
+    after it.
+  - A row Kule takes you to, such as a task's limits or budget or a group's
+    policy, is scrolled to and lit for a moment.
+- Settings → Appearance → **Motion**: *As the computer says* (the default:
+  off when the computer's "reduce motion" is on), *On* or *Off*. With it
+  off nothing moves. The command *Turn motion on or off* takes a shortcut
+  of your choice. The choice is kept with the themes and goes with a
+  profile's appearance.
+- Daemon protocol 27: the themes carry `motion`.
+
 ### Preview
 
 - A file picked in Files opens large in the main area's new Preview tab

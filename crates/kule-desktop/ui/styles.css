@@ -747,12 +747,6 @@ select:focus-visible {
   }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .chip.running::before {
-    animation: none;
-  }
-}
-
 /* Main */
 
 .main {
@@ -4197,4 +4191,286 @@ body.dragging-panel * {
 
 .task-limits-row summary .task-budget-spent {
   text-align: right;
+}
+
+/* Motion: small movements where something changes, what opens, arrives,
+   ends or moves. The root's data-motion="off" (the person's choice, or the
+   computer's "reduce motion" when they left it to the computer) stills
+   every one of them. */
+:root {
+  --quick: 120ms;
+  --move: 180ms;
+  --settle: 290ms;
+  --ease-out: cubic-bezier(0.2, 0.7, 0.3, 1);
+}
+
+@keyframes pop {
+  from {
+    opacity: 0;
+    transform: scale(0.96) translateY(-4px);
+  }
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+
+@keyframes drop {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+}
+
+@keyframes slide-in {
+  from {
+    opacity: 0;
+    transform: translateX(16px);
+  }
+}
+
+@keyframes open-up {
+  from {
+    max-height: 0;
+    padding-block: 0;
+    border-width: 0;
+    opacity: 0;
+  }
+  to {
+    max-height: var(--open-h, 320px);
+  }
+}
+
+@keyframes fold-away {
+  to {
+    max-height: 0;
+    margin-top: -8px;
+    padding-block: 0;
+    border-width: 0;
+    opacity: 0;
+  }
+}
+
+@keyframes ring-ask {
+  from {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--ask) 45%, transparent);
+  }
+  to {
+    box-shadow: 0 0 0 9px transparent;
+  }
+}
+
+@keyframes draw {
+  from {
+    stroke-dashoffset: 1;
+  }
+}
+
+@keyframes sweep {
+  from {
+    background-position: -45% 0;
+  }
+  to {
+    background-position: 145% 0;
+  }
+}
+
+@keyframes lit {
+  from {
+    background-color: var(--accent-soft);
+  }
+}
+
+/* Menus and the palette grow out of what opened them. */
+.menu {
+  animation: pop var(--move) var(--ease-out);
+}
+
+.palette-backdrop {
+  animation: fade-in var(--move) ease-out;
+}
+
+.palette {
+  transform-origin: top center;
+  animation: pop var(--move) var(--ease-out);
+}
+
+/* Colours change over a moment rather than at once. */
+.button,
+.tab,
+.task-item,
+.task-more,
+.menu-item,
+.palette-item,
+.activity-button,
+.title-button,
+.nav-add,
+.group-toggle,
+.chip,
+.policy-option,
+.run-measure {
+  transition:
+    background-color var(--quick) ease,
+    border-color var(--quick) ease,
+    color var(--quick) ease,
+    box-shadow var(--quick) ease;
+}
+
+/* The selected tab's line slides to the tab chosen next. */
+.tabs,
+.region-tabs {
+  position: relative;
+}
+
+.tabs.lined > .tab[aria-selected="true"],
+.region-tabs.lined > .tab[aria-selected="true"] {
+  border-bottom-color: transparent;
+}
+
+.tabs.lined::after,
+.region-tabs.lined::after {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  width: var(--line-w);
+  height: 2px;
+  background: var(--accent);
+  content: "";
+  pointer-events: none;
+  transform: translateX(var(--line-x));
+  transition:
+    transform var(--settle) var(--ease-out),
+    width var(--settle) var(--ease-out);
+}
+
+.line-still::after {
+  transition: none !important;
+}
+
+/* Toasts come in from the right and go back that way. */
+.toast {
+  animation: slide-in var(--settle) var(--ease-out);
+}
+
+.toast.leaving {
+  opacity: 0;
+  transform: translateX(16px);
+  transition:
+    opacity var(--move) ease,
+    transform var(--move) ease;
+}
+
+/* What arrives. --since is how long ago it came, so a redraw carries an
+   arrival on rather than starting it again. */
+.stream > .arrived {
+  animation: rise var(--settle) var(--ease-out) var(--since, 0ms) backwards;
+}
+
+.task-row.arrived,
+.group-head.arrived {
+  animation: drop var(--settle) var(--ease-out) var(--since, 0ms) backwards;
+}
+
+/* A question opens where it is asked and its edge pulses twice; answered,
+   it folds away. */
+.question.arrived {
+  overflow: hidden;
+  animation:
+    open-up var(--settle) var(--ease-out) var(--since, 0ms) backwards,
+    ring-ask 900ms ease-out calc(var(--since, 0ms) + var(--settle)) 2;
+}
+
+.question.leaving {
+  overflow: hidden;
+  animation: fold-away var(--settle) var(--ease-out) forwards;
+}
+
+/* The run's end: a tick that draws itself. */
+.check-mark {
+  width: 12px;
+  height: 12px;
+  vertical-align: -1px;
+}
+
+.check-mark path {
+  fill: none;
+  stroke: currentColor;
+  stroke-dasharray: 1;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2;
+}
+
+.stream > .arrived .check-mark path {
+  animation: draw calc(var(--settle) * 1.6) var(--ease-out) calc(var(--since, 0ms) + var(--move)) backwards;
+}
+
+/* The agent at work: a line runs along the task header's foot. */
+.task-header {
+  position: relative;
+}
+
+.task-header.running::after {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, var(--accent), transparent) no-repeat;
+  background-size: 30% 100%;
+  content: "";
+  pointer-events: none;
+  animation: sweep 1.6s ease-in-out infinite;
+}
+
+/* The first window's steps: done ticked, the one to take now marked,
+   those after it waiting. */
+.setup-step {
+  transition: opacity var(--settle) ease;
+}
+
+.setup-step::before {
+  transition:
+    background-color var(--settle) ease,
+    color var(--settle) ease;
+}
+
+.setup-step.done::before {
+  background: var(--ok-soft);
+  color: var(--ok);
+  content: "✓";
+}
+
+.setup-step.now::before {
+  background: var(--accent);
+  color: var(--accent-text);
+}
+
+.setup-step.later {
+  opacity: 0.6;
+}
+
+/* Where Kule took the person: lit a moment. */
+.spotlit {
+  animation: lit 1.4s var(--ease-out);
+}
+
+:root[data-motion="off"] *,
+:root[data-motion="off"] *::before,
+:root[data-motion="off"] *::after {
+  animation: none !important;
+  transition: none !important;
+}
+
+:root[data-motion="off"] .task-header.running::after {
+  display: none;
 }

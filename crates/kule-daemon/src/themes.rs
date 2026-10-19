@@ -64,14 +64,27 @@ pub struct Theme {
     pub colors: BTreeMap<String, String>,
 }
 
+/// Whether the window's parts move as they change: as the computer's
+/// "reduce motion" says, or always, or never.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Motion {
+    #[default]
+    System,
+    On,
+    Off,
+}
+
 /// What is kept: the theme in use (`system`, one of Kule's, or one of
-/// `custom`) and the person's own.
+/// `custom`), the person's own, and the motion.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Themes {
     pub current: String,
     #[serde(default)]
     pub custom: Vec<Theme>,
+    #[serde(default)]
+    pub motion: Motion,
 }
 
 impl Default for Themes {
@@ -79,6 +92,7 @@ impl Default for Themes {
         Themes {
             current: "system".to_owned(),
             custom: Vec::new(),
+            motion: Motion::System,
         }
     }
 }
@@ -177,6 +191,7 @@ pub(crate) fn checked(themes: &Themes) -> Result<Themes> {
     Ok(Themes {
         current: themes.current.clone(),
         custom,
+        motion: themes.motion,
     })
 }
 
@@ -249,11 +264,31 @@ mod tests {
                 " Harbour ",
                 &[("bg", "#0B1A2A"), ("accent", "#ff5a3c")],
             )],
+            motion: Motion::Off,
         };
         let kept = save(home.path(), &mine).unwrap();
         assert_eq!(kept.custom[0].name, "Harbour");
         assert_eq!(kept.custom[0].colors["bg"], "#0b1a2a");
+        assert_eq!(kept.motion, Motion::Off);
         assert_eq!(load(home.path()).unwrap(), kept);
+    }
+
+    #[test]
+    fn a_file_from_before_the_motion_choice_follows_the_system() {
+        let home = tempfile::TempDir::new().unwrap();
+        std::fs::write(
+            home.path().join(THEMES_FILE),
+            r#"{ "current": "system", "custom": [] }"#,
+        )
+        .unwrap();
+        assert_eq!(load(home.path()).unwrap().motion, Motion::System);
+
+        let chosen = r#"{ "current": "system", "motion": "on" }"#;
+        let read: Themes = serde_json::from_str(chosen).unwrap();
+        assert_eq!(read.motion, Motion::On);
+        assert!(
+            serde_json::from_str::<Themes>(r#"{ "current": "system", "motion": "fast" }"#).is_err()
+        );
     }
 
     #[test]
@@ -272,14 +307,14 @@ mod tests {
         ];
         for bad in refused {
             let themes = Themes {
-                current: "system".into(),
                 custom: vec![bad.clone()],
+                ..Themes::default()
             };
             assert!(save(home.path(), &themes).is_err(), "{bad:?}");
         }
         let twice = Themes {
-            current: "system".into(),
             custom: vec![theme("t", "a", &[]), theme("t", "b", &[])],
+            ..Themes::default()
         };
         assert!(save(home.path(), &twice).is_err());
         assert_eq!(load(home.path()).unwrap(), Themes::default());

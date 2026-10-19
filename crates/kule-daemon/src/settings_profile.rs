@@ -184,6 +184,7 @@ pub fn apply(home: &Path, text: &str, parts: &[Part]) -> Result<Vec<String>> {
                     mine.custom.push(theme);
                 }
                 mine.current = current;
+                mine.motion = theirs.motion;
                 let kept = themes::save(home, &mine)?;
                 said.push(format!(
                     "Appearance: {} theme(s) of yours now, {} in use",
@@ -277,6 +278,7 @@ login = [".local/share/opencode/auth.json"]
                     scheme: themes::Scheme::Dark,
                     colors: [("bg".to_owned(), "#0b1a2a".to_owned())].into(),
                 }],
+                motion: themes::Motion::Off,
             },
         )
         .unwrap();
@@ -348,6 +350,10 @@ login = [".local/share/opencode/auth.json"]
         let limits = kule_engine::limits(two.path()).unwrap();
         assert_eq!((limits.memory_mb, limits.gpu), (Some(4096), false));
         assert_eq!(themes::load(two.path()).unwrap().current, "custom-a");
+        assert_eq!(
+            themes::load(two.path()).unwrap().motion,
+            themes::Motion::Off
+        );
         assert_eq!(
             kule_engine::policy_choice(two.path()).unwrap(),
             kule_engine::PolicyChoice::Careful

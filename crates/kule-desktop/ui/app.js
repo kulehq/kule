@@ -68,10 +68,150 @@ function replace(el, ...children) {
 function toast(message, kind) {
   const el = h("div", { class: `toast ${kind || ""}`, role: kind === "error" ? "alert" : "status" }, message);
   $("toasts").append(el);
-  setTimeout(() => el.remove(), kind === "error" ? 9000 : 4000);
+  setTimeout(() => leave(el), kind === "error" ? 9000 : 4000);
 }
 
 const fail = (e) => toast(String(e), "error");
+
+// --- Motion ----------------------------------------------------------------
+
+// Small movements where something changes: what opens, arrives, ends or
+// moves. They all go when the person turns motion off, or leaves it to the
+// computer and the computer asks for less (its "reduce motion").
+
+const REDUCE_MOTION = matchMedia("(prefers-reduced-motion: reduce)");
+/** How long an arrival or a move takes: the stylesheet's --settle. */
+const SETTLE_MS = 290;
+const EASE_OUT = "cubic-bezier(0.2, 0.7, 0.3, 1)";
+
+/** Whether the window moves, as the person chose: `system`, `on` or `off`. */
+function applyMotion(chosen) {
+  const on = chosen === "on" || (chosen !== "off" && !REDUCE_MOTION.matches);
+  document.documentElement.dataset.motion = on ? "on" : "off";
+}
+applyMotion("system");
+REDUCE_MOTION.addEventListener("change", () => applyMotion(appearance.kept.motion));
+
+const moving = () => document.documentElement.dataset.motion === "on";
+
+/** What is arriving on screen, by key: when it came and for how long it
+ * moves. A redraw meanwhile carries its arrival on instead of starting
+ * it again. */
+const arrivals = new Map();
+
+/** Says that what `key` names has just come, to arrive on its next draw. */
+function arrive(key, lasts = SETTLE_MS) {
+  if (!moving()) return;
+  const now = performance.now();
+  if (arrivals.size > 256) {
+    for (const [k, a] of arrivals) if (now - a.at > a.lasts) arrivals.delete(k);
+  }
+  arrivals.set(key, { at: now, lasts });
+}
+
+/** Marks `el` as arriving while what `key` names still is. */
+function arriving(el, key) {
+  const a = arrivals.get(key);
+  if (!a || !el) return el;
+  const since = performance.now() - a.at;
+  if (since > a.lasts) {
+    arrivals.delete(key);
+    return el;
+  }
+  el.classList.add("arrived");
+  el.style.setProperty("--since", `${-Math.round(since)}ms`);
+  return el;
+}
+
+/** Takes `el` away, after its leaving movement when the window moves. */
+function leave(el) {
+  if (!moving()) {
+    el.remove();
+    return;
+  }
+  el.inert = true;
+  el.classList.add("leaving");
+  setTimeout(() => el.remove(), SETTLE_MS);
+}
+
+/** Redraws with `change` and slides each element of `scope` matching
+ * `selector` from where it was to where it is now, by `keyOf`; one that
+ * was not there arrives when `arrive` says new ones do. */
+function glide(scope, selector, keyOf, change, arrive) {
+  if (!moving()) {
+    change();
+    return;
+  }
+  const was = new Map();
+  for (const el of scope.querySelectorAll(selector)) {
+    const at = el.getBoundingClientRect();
+    if (at.width) was.set(keyOf(el), at);
+  }
+  change();
+  const now = performance.now();
+  for (const el of scope.querySelectorAll(selector)) {
+    const key = keyOf(el);
+    const to = el.getBoundingClientRect();
+    if (!to.width) continue;
+    const from = was.get(key);
+    if (!from) {
+      if (arrive && !arrivals.has(key)) arrivals.set(key, { at: now, lasts: SETTLE_MS });
+      arriving(el, key);
+      continue;
+    }
+    arriving(el, key);
+    const dx = from.left - to.left;
+    const dy = from.top - to.top;
+    if (Math.abs(dx) < 1 && Math.abs(dy) < 1) continue;
+    el.animate([{ transform: `translate(${dx}px, ${dy}px)` }, { transform: "none" }], { duration: SETTLE_MS, easing: EASE_OUT });
+  }
+}
+
+/** Plays the animation `name` sets on `el` again from its start. */
+function replay(el, name) {
+  el.classList.remove(name);
+  void el.offsetWidth;
+  el.classList.add(name);
+}
+
+/** Shows the person where Kule took them: scrolled to, and lit a moment. */
+function spotlight(el) {
+  if (!el) return;
+  el.scrollIntoView({ block: "nearest", behavior: moving() ? "smooth" : "auto" });
+  if (!moving()) return;
+  replay(el, "spotlit");
+  setTimeout(() => el.classList.remove("spotlit"), 1600);
+}
+
+/** The selected tab's line, slid from the tab it was under. */
+function placeTabLines() {
+  for (const list of document.querySelectorAll(".tabs, .region-tabs")) {
+    const tab = list.querySelector(':scope > .tab[aria-selected="true"]');
+    if (!tab || !tab.offsetWidth) {
+      list.classList.remove("lined");
+      continue;
+    }
+    const first = !list.classList.contains("lined");
+    list.classList.toggle("line-still", first);
+    list.style.setProperty("--line-x", `${tab.offsetLeft}px`);
+    list.style.setProperty("--line-w", `${tab.offsetWidth}px`);
+    list.classList.add("lined");
+    if (first) {
+      void list.offsetWidth;
+      list.classList.remove("line-still");
+    }
+  }
+}
+
+let tabLineFrame = 0;
+function lineTabs() {
+  cancelAnimationFrame(tabLineFrame);
+  tabLineFrame = requestAnimationFrame(placeTabLines);
+}
+new MutationObserver((changes) => {
+  if (changes.some((c) => c.attributeName === "hidden" || c.target.closest?.(".tabs, .region-tabs"))) lineTabs();
+}).observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ["aria-selected", "hidden"] });
+addEventListener("resize", lineTabs);
 
 function baseName(path) {
   const parts = String(path).split("/").filter(Boolean);
@@ -353,6 +493,8 @@ function placeMenu(menu, e) {
   }
   menu.style.left = `${Math.max(8, Math.min(x, window.innerWidth - menu.offsetWidth - 8))}px`;
   menu.style.top = `${Math.max(8, Math.min(y, window.innerHeight - menu.offsetHeight - 8))}px`;
+  // It grows out of the corner nearest what opened it.
+  menu.style.transformOrigin = e.type === "click" ? "top right" : "top left";
 }
 
 function closeMenu(refocus) {
@@ -967,18 +1109,30 @@ function renderSidebar() {
   const waiting = state.tasks.filter(
     (t) => questionsOf(t.id).length || (!t.running && (t.verdict === "ask" || t.verdict === "deny"))
   );
-  $("inbox-section").hidden = waiting.length === 0;
-  replace($("inbox"), ...waiting.map((t) => taskItem(t, "inbox")));
-  // The groups in their order, each with its tasks; then those in none,
-  // under a head of their own once there are groups.
-  const loose = state.tasks.filter((t) => !groupOf(t));
-  replace(
-    $("tasks"),
-    ...state.groups.map((g) => groupRow(g, state.tasks.filter((t) => groupOf(t) === g))),
-    state.groups.length ? looseHead(loose.length) : null,
-    ...loose.map((t) => taskItem(t, "tasks"))
-  );
+  // Rows slide to where the redraw puts them; a new one arrives, unless
+  // the list is being filled for the first time.
+  const filled = Boolean($("tasks").querySelector(".task-row"));
+  glide($("panel-tasks"), ".task-row, .group-head, .nav-title-row", sidebarKey, () => {
+    $("inbox-section").hidden = waiting.length === 0;
+    replace($("inbox"), ...waiting.map((t) => taskItem(t, "inbox")));
+    // The groups in their order, each with its tasks; then those in none,
+    // under a head of their own once there are groups.
+    const loose = state.tasks.filter((t) => !groupOf(t));
+    replace(
+      $("tasks"),
+      ...state.groups.map((g) => groupRow(g, state.tasks.filter((t) => groupOf(t) === g))),
+      state.groups.length ? looseHead(loose.length) : null,
+      ...loose.map((t) => taskItem(t, "tasks"))
+    );
+  }, filled);
   $("tasks-empty").hidden = state.tasks.length > 0 || state.groups.length > 0;
+}
+
+/** What a sidebar row is, across redraws: a task in a list, a group, the title. */
+function sidebarKey(el) {
+  if (el.classList.contains("task-row")) return el.querySelector(".task-item")?.dataset.key;
+  if (el.classList.contains("group-head")) return `group:${el.dataset.group}`;
+  return "tasks-title";
 }
 
 // --- Task view -------------------------------------------------------------
@@ -1010,7 +1164,8 @@ function renderTask() {
   $("task-name").textContent = taskName(task);
   $("titlebar-title").textContent = `${taskName(task)} — Kule`;
   const mark = $("task-name").closest(".task-header");
-  mark.className = `task-header${colorOf(task) ? ` color-${colorOf(task)}` : ""}`;
+  // A line runs along the header's foot while the agent is at work.
+  mark.className = `task-header${colorOf(task) ? ` color-${colorOf(task)}` : ""}${task.running ? " running" : ""}`;
   const group = groupOf(task);
   $("task-path").textContent = `${task.workspace} · task ${task.id} · ${when(task.created_unix)}${group ? ` · in ${group.name}` : ""} · ${judgedBy(task)}`;
   const chip = $("task-state");
@@ -1191,7 +1346,9 @@ async function renderPolicy() {
     groupPolicies(choice)
   );
   if (focusGroup != null) {
-    document.querySelector(`#agents-view [data-key="group-policy:${focusGroup}"]`)?.focus();
+    const select = document.querySelector(`#agents-view [data-key="group-policy:${focusGroup}"]`);
+    select?.focus();
+    spotlight(select?.closest("li"));
     focusGroup = null;
   }
 }
@@ -1375,6 +1532,15 @@ async function loadWelcome() {
     })
   );
   replace($("setup-policy"), policyPicker(choice, "setup", loadWelcome));
+  // Step by step: a step done is ticked, the one to take now stands out,
+  // those after it wait. A policy is always chosen, Balanced at first.
+  const done = [ours.some((l) => !l.missing && !l.held), true, false];
+  const now = done.indexOf(false);
+  document.querySelectorAll("#empty .setup-step").forEach((step, i) => {
+    step.classList.toggle("done", done[i]);
+    step.classList.toggle("now", i === now);
+    step.classList.toggle("later", i > now && !done[i]);
+  });
 }
 
 async function openBudget() {
@@ -1419,7 +1585,9 @@ async function openBudget() {
   );
   await loadDaily();
   if (focusBudget) {
-    document.querySelector(`#agents-view [data-key="budget:${CSS.escape(focusBudget)}"]`)?.focus();
+    const input = document.querySelector(`#agents-view [data-key="budget:${CSS.escape(focusBudget)}"]`);
+    input?.focus();
+    spotlight(input?.closest("li"));
     focusBudget = null;
   }
 }
@@ -1702,6 +1870,7 @@ async function openLimits() {
     if (row) {
       row.open = true;
       row.querySelector("summary")?.focus();
+      spotlight(row);
     }
     focusLimits = null;
   }
@@ -1851,20 +2020,56 @@ const liveMeasure = new Map();
 function renderMeasure(task) {
   const el = $("run-measure");
   const m = task.running ? liveMeasure.get(task.id) : null;
+  // A redraw while the numbers run to this measure lets them run on.
+  if (m && measureFrame && measureFor === task.id && shownMeasure.get(task.id) === m) return;
+  cancelAnimationFrame(measureFrame);
+  measureFrame = 0;
   el.hidden = !m;
-  if (!m) return;
+  if (!m) {
+    shownMeasure.delete(task.id);
+    return;
+  }
   const l = task.limits || {};
   const of = (key, used) => (l[key] != null ? used / l[key] : 0);
+  const near = Math.max(of("memory_mb", m.memory / 1024 ** 2), of("disk_mb", (m.disk || 0) / 1024 ** 2));
+  el.classList.toggle("ask", near >= 0.8);
+  el.classList.toggle("slowed", l.cpu_percent != null && m.cpu_percent >= l.cpu_percent * 0.9);
+  // The numbers run from what was shown to the new measure, so a trend
+  // reads rather than a flicker.
+  const from = shownMeasure.get(task.id);
+  shownMeasure.set(task.id, m);
+  if (!from || !moving()) {
+    el.textContent = measureText(m, l);
+    return;
+  }
+  const start = performance.now();
+  measureFor = task.id;
+  const step = (now) => {
+    const k = Math.min(1, (now - start) / 500);
+    const e = 1 - (1 - k) ** 3;
+    const mix = (a, b) => (a == null || b == null ? b : a + (b - a) * e);
+    el.textContent = measureText(
+      { cpu_percent: Math.round(mix(from.cpu_percent, m.cpu_percent)), memory: mix(from.memory, m.memory), disk: mix(from.disk, m.disk), processes: m.processes },
+      l
+    );
+    measureFrame = k < 1 ? requestAnimationFrame(step) : 0;
+  };
+  measureFrame = requestAnimationFrame(step);
+}
+
+/** The last measure shown for each task at work, to run on from. */
+const shownMeasure = new Map();
+let measureFrame = 0;
+let measureFor = null;
+
+function measureText(m, l) {
   const parts = [
     `CPU ${m.cpu_percent}%${l.cpu_percent != null ? ` / ${l.cpu_percent}%` : ""}`,
     `${bytesText(m.memory)}${l.memory_mb != null ? ` / ${limitText(LIMIT_FIELDS[1], l.memory_mb)}` : ""}`,
   ];
   if (m.disk != null) parts.push(`disk +${bytesText(m.disk)}${l.disk_mb != null ? ` / ${limitText(LIMIT_FIELDS[2], l.disk_mb)}` : ""}`);
   parts.push(plural(m.processes, "process", "processes"));
-  el.textContent = parts.join(" · ");
-  const near = Math.max(of("memory_mb", m.memory / 1024 ** 2), of("disk_mb", (m.disk || 0) / 1024 ** 2));
-  el.classList.toggle("ask", near >= 0.8);
-  el.classList.toggle("slowed", l.cpu_percent != null && m.cpu_percent >= l.cpu_percent * 0.9);
+  return parts.join(" · ");
 }
 
 /** Tasks whose run was told to stop and has not ended yet. */
@@ -1909,11 +2114,25 @@ function left(deadline) {
 /** The current task's questions, as cards the person answers. */
 function renderQuestions() {
   const task = currentTask();
-  const cards = task
-    ? questionsOf(task.id).map((q) =>
+  const box = $("questions");
+  const asked = task ? questionsOf(task.id) : [];
+  // An answered question folds away, on the task it was asked on; one
+  // going already goes on.
+  const going = [];
+  if (task && task.id === questionsFor) {
+    for (const el of box.querySelectorAll(".question")) {
+      if (el.classList.contains("leaving") || !asked.some((q) => String(q.id) === el.dataset.q)) going.push(el);
+    }
+  }
+  questionsFor = task?.id;
+  const cards = asked.map((q) => {
+    // Seen for the first time: it opens, and its edge pulses twice.
+    if (!questionsSeen.has(q.id)) arrive(`question:${q.id}`, QUESTION_ARRIVES_MS);
+    questionsSeen.add(q.id);
+    return arriving(
         h(
           "div",
-          { class: "question" },
+          { class: "question", "data-q": q.id },
           h(
             "div",
             { class: "question-text" },
@@ -1951,11 +2170,33 @@ function renderQuestions() {
               "Deny"
             )
           )
-        )
-      )
-    : [];
-  replace($("questions"), ...cards);
+        ),
+      `question:${q.id}`
+    );
+  });
+  replace(box, ...cards);
+  if (!moving()) return;
+  // It opens to its own height, so the opening keeps one pace.
+  for (const el of cards) {
+    if (!el.classList.contains("arrived")) continue;
+    el.classList.remove("arrived");
+    el.style.setProperty("--open-h", `${el.offsetHeight}px`);
+    el.classList.add("arrived");
+  }
+  for (const el of going) {
+    if (!el.classList.contains("leaving")) {
+      el.classList.remove("arrived");
+      leave(el);
+    }
+    box.append(el);
+  }
 }
+
+/** The questions shown at least once, and the task they were shown for. */
+const questionsSeen = new Set();
+let questionsFor;
+/** It opens, then its edge pulses twice. */
+const QUESTION_ARRIVES_MS = 2400;
 
 async function answer(id, approve, remember) {
   try {
@@ -2206,8 +2447,8 @@ function streamItem(item) {
     case "finished":
       return h(
         "div",
-        { class: `event finished ${item.error ? "error" : ""}` },
-        h("span", { class: "event-mark" }, item.error ? "!" : "■"),
+        { class: `event finished ${item.error ? "error" : item.stopped ? "" : "done"}` },
+        h("span", { class: "event-mark" }, item.error ? "!" : item.stopped ? "■" : checkMark()),
         h("span", {}, item.text)
       );
     default:
@@ -2228,9 +2469,24 @@ function renderStream(id) {
       )
     );
   } else {
-    replace(stream, ...items.map(streamItem));
+    // What came in while the person watched arrives; the rest stands.
+    replace(stream, ...items.map((item) => arriving(streamItem(item), item)));
   }
   if (stick) stream.scrollTop = stream.scrollHeight;
+}
+
+/** A tick that draws itself as a run ends well. */
+function checkMark() {
+  const ns = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(ns, "svg");
+  svg.setAttribute("viewBox", "0 0 14 14");
+  svg.setAttribute("class", "check-mark");
+  svg.setAttribute("aria-hidden", "true");
+  const path = document.createElementNS(ns, "path");
+  path.setAttribute("d", "M2.5 7.4 L5.7 10.4 L11.5 3.8");
+  path.setAttribute("pathLength", "1");
+  svg.append(path);
+  return svg;
 }
 
 /** Folds one agent event into the task's stream. */
@@ -2304,6 +2560,7 @@ function fold(task, event) {
       kind: "finished",
       // A person's own stop is no failure; a limit's is.
       error: Boolean(event.error) && event.error !== "stopped: you stopped the run",
+      stopped,
       text: stopped
         ? `Stopped: ${event.error.slice("stopped: ".length)}. Review what it changed before it reaches the folder${refused}.`
         : event.error
@@ -2334,7 +2591,11 @@ async function onRun({ task, seq, event }) {
   if (state.loaded.has(task)) {
     // Already in the loaded stream: the daemon sent it before the load.
     if (seq > (state.lastSeq.get(task) || 0)) {
+      const items = streamOf(task);
+      const had = items.length;
       fold(task, event);
+      // Folded as it happened, not loaded: it arrives in the stream.
+      if (task === state.current) for (const item of items.slice(had)) arrive(item, item.kind === "finished" ? 800 : SETTLE_MS);
       state.lastSeq.set(task, seq);
     }
   } else if (state.loading.has(task)) {
@@ -4881,21 +5142,40 @@ async function loadThemes() {
     fail(err);
   }
   if (!appearance.editing) applyTheme(currentTheme());
+  applyMotion(appearance.kept.motion);
   retheme();
 }
 
+/** Keeps what `next` changes of the themes and the motion; the rest as it is. */
 async function keepThemes(next) {
   try {
-    appearance.kept = await call("set_themes", { themes: next });
+    appearance.kept = await call("set_themes", { themes: { ...appearance.kept, ...next } });
     return true;
   } catch (err) {
     fail(err);
     return false;
   } finally {
     if (!appearance.editing) applyTheme(currentTheme());
+    applyMotion(appearance.kept.motion);
     retheme();
     renderAppearance();
   }
+}
+
+const MOTIONS = [
+  ["system", "As the computer says", "Moves, unless the computer's “reduce motion” is on."],
+  ["on", "On", "Menus, tabs, new events, questions and the task list move a little as they change."],
+  ["off", "Off", "Nothing moves; every change shows at once."],
+];
+
+function setMotion(motion) {
+  return keepThemes({ motion });
+}
+
+/** Turns motion off when the window moves, on when it does not. */
+function toggleMotion() {
+  const next = moving() ? "off" : "on";
+  setMotion(next).then((kept) => kept && toast(`Motion ${next}`));
 }
 
 function useTheme(id) {
@@ -5140,7 +5420,35 @@ function renderAppearance() {
     EXT.themes.length
       ? h("section", { class: "key-group", "aria-label": "From extensions" }, h("h3", {}, "From extensions"), h("div", { class: "theme-grid", role: "radiogroup", "aria-label": "Themes from extensions" }, EXT.themes.map(themeCard)))
       : null,
-    appearance.editing ? null : h("div", { class: "agent-actions" }, h("span", { class: "muted" }, `In use: ${current.name}`), ...actions)
+    appearance.editing ? null : h("div", { class: "agent-actions" }, h("span", { class: "muted" }, `In use: ${current.name}`), ...actions),
+    appearance.editing
+      ? null
+      : h(
+          "section",
+          { class: "key-group", "aria-label": "Motion" },
+          h("h3", {}, "Motion"),
+          h(
+            "div",
+            { class: "policy-pick", role: "radiogroup", "aria-label": "Motion" },
+            MOTIONS.map(([value, name, text]) =>
+              h(
+                "label",
+                { class: "policy-option", for: `motion-${value}` },
+                h("input", {
+                  type: "radio",
+                  name: "motion",
+                  id: `motion-${value}`,
+                  "data-key": `motion-${value}`,
+                  value,
+                  checked: (appearance.kept.motion || "system") === value,
+                  onchange: () => setMotion(value),
+                }),
+                h("span", { class: "policy-name" }, name),
+                h("span", { class: "policy-text" }, text)
+              )
+            )
+          )
+        )
   );
 }
 
@@ -5151,7 +5459,7 @@ function renderAppearance() {
 // a policy of their own never go.
 
 const PROFILE_PARTS = [
-  ["appearance", "Appearance", "The theme in use and your own themes"],
+  ["appearance", "Appearance", "The theme in use, your own themes and the motion"],
   ["shortcuts", "Shortcuts", "The shortcuts you set yourself"],
   ["policy", "Policy", "Kule's balanced or careful policy"],
   ["budget", "Daily budget", "What every task may cost together in a day"],
@@ -5552,6 +5860,7 @@ const COMMANDS = [
   { id: "shortcuts.search", title: "Search the shortcuts", group: "General", keys: "", inFields: true, run: () => openShortcuts(true) },
 
   { id: "theme.next", title: "Next theme", group: "Appearance", keys: "", inFields: true, run: () => nextTheme() },
+  { id: "motion.toggle", title: "Turn motion on or off", group: "Appearance", keys: "", inFields: true, run: () => toggleMotion() },
   { id: "theme.new", title: "New theme from the one in use…", group: "Appearance", keys: "", run: () => newThemeFrom(currentTheme()) },
   { id: "theme.import", title: "Import a theme…", group: "Appearance", keys: "", run: () => importTheme() },
   { id: "theme.export", title: "Export the theme in use…", group: "Appearance", keys: "", run: () => exportTheme(currentTheme()) },
