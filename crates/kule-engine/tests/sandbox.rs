@@ -107,6 +107,54 @@ fn kule_state_next_to_the_copy_cannot_be_touched() {
     assert!(s.task.effects().is_ok());
 }
 
+/// A process that left its session and its parent still lives in the
+/// sandbox; ending the sandbox's strays ends it, and nothing else.
+#[test]
+fn processes_left_behind_end_with_the_sandbox() {
+    let s = Setup::new();
+    let sandbox = s.sandbox();
+    let script = "import os, time\n\
+                  if os.fork(): os._exit(0)\n\
+                  os.setsid()\n\
+                  if os.fork(): os._exit(0)\n\
+                  fd = os.open('/dev/null', os.O_RDWR)\n\
+                  for i in (0, 1, 2): os.dup2(fd, i)\n\
+                  open('left.pid', 'w').write(str(os.getpid()))\n\
+                  time.sleep(60)\n";
+    assert!(ok(&sandbox_python(&sandbox, script)));
+    let pid_file = s.task.copy().join("left.pid");
+    let started = std::time::Instant::now();
+    while fs::read_to_string(&pid_file).map_or(true, |t| t.is_empty())
+        && started.elapsed() < std::time::Duration::from_secs(5)
+    {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    let pid: i32 = fs::read_to_string(&pid_file).unwrap().parse().unwrap();
+    // SAFETY: signal 0 only asks whether the process is there.
+    let alive = |pid: i32| unsafe { libc::kill(pid, 0) } == 0;
+    assert!(alive(pid));
+    // A process of the person's own in the copy, outside the sandbox, stays.
+    let mut own = Command::new("sleep")
+        .arg("30")
+        .current_dir(s.task.copy())
+        .spawn()
+        .unwrap();
+
+    sandbox.end_strays();
+    let started = std::time::Instant::now();
+    while alive(pid) && started.elapsed() < std::time::Duration::from_secs(3) {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    let own_alive = alive(own.id() as i32);
+    let _ = own.kill();
+    let _ = own.wait();
+    // SAFETY: as above; a stray the test could not end is ended here.
+    let left = alive(pid);
+    unsafe { libc::kill(pid, libc::SIGKILL) };
+    assert!(!left, "a process left in the sandbox outlived it");
+    assert!(own_alive, "a process outside the sandbox was ended");
+}
+
 #[test]
 fn kules_home_cannot_be_read_but_the_copy_can() {
     let s = Setup::new();

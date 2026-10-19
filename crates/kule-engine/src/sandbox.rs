@@ -234,6 +234,17 @@ pub struct Sandbox {
     /// Marks this sandbox's refusals where the platform reports them (macOS).
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     tag: String,
+    /// The task's id: what every sandbox of the task carries (macOS), to
+    /// find its processes by.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    task: String,
+}
+
+/// The service name no service has that a task's sandboxes, and only
+/// they, may look up: how its processes are told from every other.
+#[cfg(target_os = "macos")]
+fn task_mark(task: &str) -> String {
+    format!("dev.kule.task.{task}")
 }
 
 /// One operation the sandbox refused.
@@ -287,6 +298,7 @@ impl Sandbox {
             gpu: true,
             file_size: None,
             tag: format!("kule-{}-{nanos:x}", task.id()),
+            task: task.id().to_owned(),
         })
     }
 
@@ -490,6 +502,107 @@ impl Sandbox {
         &self.hidden
     }
 
+    /// Ends what still runs in this sandbox: a process that left its
+    /// command's session and parent, which ending the command's process
+    /// group does not reach. Returns how many it ended. A process of the
+    /// person's own, outside the sandbox, is never one of them.
+    pub fn end_strays(&self) -> usize {
+        let strays = self.strays();
+        crate::resources::kill(&strays);
+        strays.len()
+    }
+
+    /// macOS knows which processes a task's sandboxes hold: those whose
+    /// sandbox lets them look up the task's mark, which only its own do.
+    #[cfg(target_os = "macos")]
+    fn strays(&self) -> Vec<i32> {
+        unsafe extern "C" {
+            fn sandbox_check(
+                pid: libc::pid_t,
+                operation: *const libc::c_char,
+                filter: libc::c_int,
+                ...
+            ) -> libc::c_int;
+        }
+        const FILTER_NONE: libc::c_int = 0;
+        const FILTER_GLOBAL_NAME: libc::c_int = 2;
+        const NO_REPORT: libc::c_int = 0x4000_0000;
+        let Ok(mark) = std::ffi::CString::new(task_mark(&self.task)) else {
+            return Vec::new();
+        };
+        let me = std::process::id() as i32;
+        crate::ports::macos::all_pids()
+            .into_iter()
+            .filter(|&pid| pid > 1 && pid != me)
+            .filter(|&pid| {
+                // SAFETY: sandbox_check only reads its arguments.
+                unsafe {
+                    sandbox_check(pid, std::ptr::null(), FILTER_NONE | NO_REPORT) == 1
+                        && sandbox_check(
+                            pid,
+                            c"mach-lookup".as_ptr(),
+                            FILTER_GLOBAL_NAME | NO_REPORT,
+                            mark.as_ptr(),
+                        ) == 0
+                }
+            })
+            .collect()
+    }
+
+    /// Linux keeps no list of a Landlock domain's processes: a stray is a
+    /// process of ours under no-new-privileges (as every sandboxed one is,
+    /// and a person's shell is not) that works in the task's folders, by
+    /// its directory, its program or a file it holds open.
+    #[cfg(target_os = "linux")]
+    fn strays(&self) -> Vec<i32> {
+        use std::fs;
+        let dirs: Vec<PathBuf> = [&self.copy, &self.tmp]
+            .into_iter()
+            .chain(self.layer.iter())
+            .filter_map(|d| fs::canonicalize(d).ok())
+            .collect();
+        let inside = |link: PathBuf| {
+            fs::read_link(link).is_ok_and(|to| dirs.iter().any(|d| to.starts_with(d)))
+        };
+        // SAFETY: getuid cannot fail.
+        let uid = unsafe { libc::getuid() }.to_string();
+        let me = std::process::id() as i32;
+        let Ok(procs) = fs::read_dir("/proc") else {
+            return Vec::new();
+        };
+        procs
+            .flatten()
+            .filter_map(|e| e.file_name().to_str()?.parse::<i32>().ok())
+            .filter(|&pid| pid > 1 && pid != me)
+            .filter(|&pid| {
+                let Ok(status) = fs::read_to_string(format!("/proc/{pid}/status")) else {
+                    return false;
+                };
+                let field = |name: &str| {
+                    status
+                        .lines()
+                        .find_map(|l| l.strip_prefix(name))
+                        .map(|v| v.split_whitespace().next().unwrap_or("").to_owned())
+                };
+                if field("Uid:").as_deref() != Some(uid.as_str())
+                    || field("NoNewPrivs:").as_deref() != Some("1")
+                {
+                    return false;
+                }
+                let base = PathBuf::from(format!("/proc/{pid}"));
+                inside(base.join("cwd"))
+                    || inside(base.join("exe"))
+                    || fs::read_dir(base.join("fd"))
+                        .is_ok_and(|fds| fds.flatten().any(|fd| inside(fd.path())))
+            })
+            .collect()
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    fn strays(&self) -> Vec<i32> {
+        Vec::new()
+    }
+
     /// A command that runs `program` inside the sandbox, in the copy, with
     /// `TMPDIR` pointing at the task's temporary directory.
     pub fn command(&self, program: &str, args: &[String]) -> Result<Command> {
@@ -677,10 +790,20 @@ impl Sandbox {
     fn seatbelt_profile(&self) -> (String, Vec<(String, &Path)>) {
         let tag = format!("(with message \"{}\")", self.tag);
         let mut params = Vec::new();
+        // A task's id is hex; anything else would not reach the profile.
+        let mark = if self.task.chars().all(|c| c.is_ascii_alphanumeric()) {
+            format!(
+                "(allow mach-lookup (global-name \"{}\"))\n",
+                task_mark(&self.task)
+            )
+        } else {
+            String::new()
+        };
         let mut text = format!(
             "(version 1)\n\
              (deny default {tag})\n\
              {SEATBELT_BASE}\
+             {mark}\
              (deny file-write* {tag})\n\
              (allow file-write*\n  \
                (literal \"/dev/null\") (literal \"/dev/zero\") (literal \"/dev/dtracehelper\")\n  \

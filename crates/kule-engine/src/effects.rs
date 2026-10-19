@@ -1,12 +1,12 @@
 //! Effect sets: what the copy holds that the baseline does not.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
 use crate::error::Result;
-use crate::fsops::same_bytes;
+use crate::fsops::{self, same_bytes};
 use crate::git::{self, GitSummary};
 use crate::ignore;
 use crate::manifest::{Baseline, Entry, Kind, Stamp, Tree, scan};
@@ -57,6 +57,11 @@ pub struct EffectSet {
     /// commit deletes; a plain folder has only the task's own undo.
     #[serde(default)]
     pub repository: bool,
+    /// What each changed file holds and where each changed link points, by
+    /// path and hashed, as read for a commit or its review. Part of the
+    /// digest: a commit takes only the content that was reviewed.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub contents: BTreeMap<String, String>,
 }
 
 /// A path the copy renamed.
@@ -113,12 +118,32 @@ impl EffectSet {
             .filter(|m| taken(&m.from) && taken(&m.to))
             .cloned()
             .collect();
+        let contents = self
+            .contents
+            .iter()
+            .filter(|(path, _)| taken(path))
+            .map(|(path, hash)| (path.clone(), hash.clone()))
+            .collect();
         EffectSet {
             git: self.git.clone(),
             moves,
             repository: self.repository,
             effects,
+            contents,
         }
+    }
+
+    /// Reads what each file and link of the set holds now under `root`
+    /// (the copy), without following a link on the way, into
+    /// [`EffectSet::contents`].
+    pub(crate) fn read_contents(&mut self, root: &Path) -> Result<()> {
+        self.contents = self
+            .effects
+            .iter()
+            .filter(|e| e.change != Change::Deleted && e.kind != Kind::Dir)
+            .map(|e| Ok((e.path.clone(), fsops::content_hash(root, &e.path)?)))
+            .collect::<Result<_>>()?;
+        Ok(())
     }
 
     /// The deleted paths that are not moves: what is gone for good once
@@ -172,6 +197,7 @@ pub(crate) fn compute(copy: &Path, work: &Path, baseline: &Baseline) -> Result<E
         git,
         moves,
         repository: baseline.git.is_some(),
+        contents: BTreeMap::new(),
     })
 }
 

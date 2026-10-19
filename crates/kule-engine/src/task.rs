@@ -508,7 +508,30 @@ impl Task {
             );
             set.effects.sort_by(|a, b| a.path.cmp(&b.path));
         }
+        set.read_contents(&self.copy())?;
         Ok(set)
+    }
+
+    /// After a commit's copy: the folder holds what the set's contents say
+    /// for every path, but for files whose secrets the commit put back in
+    /// and files merged with the folder's own changes, which hold `merged`.
+    /// Anything else came in from somewhere other than what was reviewed.
+    fn verify_committed(&self, set: &EffectSet, merged: &[(String, String)]) -> Result<()> {
+        for (path, reviewed) in &set.contents {
+            if secrets::is_env_file(path) {
+                continue;
+            }
+            let wanted = merged
+                .iter()
+                .find(|(p, _)| p == path)
+                .map_or(reviewed, |(_, hash)| hash);
+            if fsops::content_hash(self.workspace(), path)? != *wanted {
+                return Err(Error::Invalid(format!(
+                    "{path} changed while it was being committed; nothing was committed"
+                )));
+            }
+        }
+        Ok(())
     }
 
     /// [`Task::commit_if`], taking the paths the workspace ignores too when
@@ -520,6 +543,11 @@ impl Task {
     ) -> Result<Option<Checkpoint>> {
         let _lock = self.lock()?;
         self.workspace_in_place()?;
+        // Nothing left running in the task's sandbox changes the copy
+        // while it is read and committed.
+        if let Ok(sandbox) = crate::Sandbox::new(self) {
+            sandbox.end_strays();
+        }
         let mut baseline = self.load_baseline()?;
         let set = self.commit_set(&baseline, include_ignored)?;
         if set.is_empty() {
@@ -581,7 +609,18 @@ impl Task {
         let paths = set.paths();
         // The folder gets the real values; the copy is masked again below.
         self.unmask_copy(&paths)?;
-        if let Err(failed) = fsops::mirror(&self.copy(), self.workspace(), &paths, true) {
+        let merged: Vec<(String, String)> = merges
+            .iter()
+            .map(|m| {
+                (
+                    m.path.clone(),
+                    format!("file:{}", blake3::hash(&m.bytes).to_hex()),
+                )
+            })
+            .collect();
+        let placed = fsops::mirror(&self.copy(), self.workspace(), &paths, true)
+            .and_then(|()| self.verify_committed(&set, &merged));
+        if let Err(failed) = placed {
             let _ = self.mask_copy(&mut baseline);
             // Part of it may be in place: put back what the commit replaced
             // and forget the checkpoint, so nothing is left half done. Only

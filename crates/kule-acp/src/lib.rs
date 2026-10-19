@@ -331,6 +331,7 @@ pub async fn run_pictured(
     if let Some(reason) = control.reason() {
         return Err(Error(reason));
     }
+    let strays = sandbox.clone();
     let terminals = sandbox.map(|s| {
         Arc::new(terminals::Terminals::new(
             s,
@@ -364,7 +365,7 @@ pub async fn run_pictured(
     // The sandbox starts the agent in a session of its own; when the run
     // ends, however it ends, everything the agent left running in it goes
     // too, so nothing keeps changing the copy behind the person's review.
-    let _group = Group(child.id() as i32);
+    let _group = Group(child.id() as i32, strays);
     control.started_agent(child.id() as i32);
     let stdin = child.stdin.take().ok_or_else(|| error("no stdin"))?;
     let stdout = child.stdout.take().ok_or_else(|| error("no stdout"))?;
@@ -644,8 +645,9 @@ pub async fn run_pictured(
 /// How long a stopped agent has to end its turn.
 const STOP_GRACE: Duration = Duration::from_secs(10);
 
-/// The agent's process group, killed when dropped.
-struct Group(i32);
+/// The agent's process group, killed when dropped, and with the sandbox,
+/// whatever left the group but still runs in the task's sandbox.
+struct Group(i32, Option<kule_engine::Sandbox>);
 
 impl Drop for Group {
     fn drop(&mut self) {
@@ -655,6 +657,9 @@ impl Drop for Group {
             unsafe {
                 libc::kill(-self.0, libc::SIGKILL);
             }
+        }
+        if let Some(sandbox) = &self.1 {
+            sandbox.end_strays();
         }
     }
 }

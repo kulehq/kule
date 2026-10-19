@@ -373,7 +373,7 @@ pub fn mirror(src: &Path, dst: &Path, paths: &[String], atomic: bool) -> Result<
     // 2. Bring in what `src` has, parents before children.
     for (p, (s, _)) in paths.iter().zip(&stamps) {
         let Some(s) = s else { continue };
-        let (from, to) = (src.join(p), dst.join(p));
+        let to = dst.join(p);
         in_parent(&to, || {
             if s.kind == Kind::Dir {
                 if Stamp::of(&to)?.is_none() {
@@ -381,13 +381,14 @@ pub fn mirror(src: &Path, dst: &Path, paths: &[String], atomic: bool) -> Result<
                 }
             } else if atomic {
                 let tmp = temp_beside(&to);
-                let placed = place(&from, &tmp, s).and_then(|()| fs::rename(&tmp, &to).at(&to));
+                let placed =
+                    place_beneath(src, p, &tmp, s).and_then(|()| fs::rename(&tmp, &to).at(&to));
                 if placed.is_err() {
                     let _ = fs::remove_file(&tmp);
                 }
                 placed?;
             } else {
-                place(&from, &to, s)?;
+                place_beneath(src, p, &to, s)?;
             }
             Ok(())
         })?;
@@ -457,6 +458,162 @@ fn place(from: &Path, to: &Path, stamp: &Stamp) -> Result<()> {
         Kind::Symlink => symlink(stamp.link.as_deref().unwrap_or_default(), to).at(to),
         Kind::Dir => fs::create_dir(to).at(to),
     }
+}
+
+/// [`place`] for the entry `rel` under `root`, read without following a link
+/// at any step of its way: a file or link put in place of what `stamp`
+/// describes, or a directory on the way swapped for a link, is refused, so
+/// nothing from outside `root` can come along.
+fn place_beneath(root: &Path, rel: &str, to: &Path, stamp: &Stamp) -> Result<()> {
+    let from = root.join(rel);
+    let changed = || Error::Invalid(format!("{rel} changed while it was being copied"));
+    match (stamp.kind, beneath(root, rel).at(&from)?) {
+        (Kind::File, Beneath::File(file)) => {
+            copy_from(&file, to).at(to)?;
+            finish(to, stamp)
+        }
+        (Kind::Symlink, Beneath::Link(target)) => symlink(target, to).at(to),
+        (Kind::Dir, Beneath::Dir) => fs::create_dir(to).at(to),
+        _ => Err(changed()),
+    }
+}
+
+/// A new file at `to` with what `file` holds: cloned where the filesystem
+/// allows it, copied otherwise.
+fn copy_from(file: &File, to: &Path) -> io::Result<()> {
+    use std::os::fd::AsRawFd;
+    #[cfg(target_os = "macos")]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        let name = std::ffi::CString::new(to.as_os_str().as_bytes())?;
+        // SAFETY: a descriptor we own and a NUL-terminated path.
+        if unsafe { libc::fclonefileat(file.as_raw_fd(), libc::AT_FDCWD, name.as_ptr(), 0) } == 0 {
+            return Ok(());
+        }
+    }
+    let mut out = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(to)?;
+    #[cfg(target_os = "linux")]
+    {
+        // SAFETY: two descriptors we own; FICLONE shares the source's extents.
+        if unsafe { libc::ioctl(out.as_raw_fd(), libc::FICLONE, file.as_raw_fd()) } == 0 {
+            return Ok(());
+        }
+    }
+    let mut from = file;
+    io::copy(&mut from, &mut out)?;
+    Ok(())
+}
+
+/// What an entry is, found under a root without following a link at any
+/// step of its path; a link on the way, or anything but a file, link or
+/// directory, is `Missing`.
+pub(crate) enum Beneath {
+    File(File),
+    Link(PathBuf),
+    Dir,
+    Missing,
+}
+
+pub(crate) fn beneath(root: &Path, rel: &str) -> io::Result<Beneath> {
+    use std::os::fd::{AsRawFd, FromRawFd};
+    use std::os::unix::ffi::{OsStrExt, OsStringExt};
+    let (parent, name) = match rel.rsplit_once('/') {
+        Some((parent, name)) => (Some(parent), name),
+        None => (None, rel),
+    };
+    if matches!(name, "" | "." | "..") {
+        return Ok(Beneath::Missing);
+    }
+    let dir = match parent {
+        None => File::open(root)?,
+        Some(parent) => match crate::outline::open_beneath(root, parent)? {
+            Some(dir) => dir,
+            None => return Ok(Beneath::Missing),
+        },
+    };
+    if !dir.metadata()?.is_dir() {
+        return Ok(Beneath::Missing);
+    }
+    let cname = std::ffi::CString::new(std::ffi::OsStr::new(name).as_bytes())?;
+    let gone = |e: io::Error| match e.raw_os_error() {
+        Some(libc::ENOENT | libc::ENOTDIR | libc::ELOOP | libc::ENXIO) => Ok(Beneath::Missing),
+        _ => Err(e),
+    };
+    // SAFETY: an all-zero stat is valid, and fstatat fills it.
+    let mut st: libc::stat = unsafe { std::mem::zeroed() };
+    // SAFETY: a directory descriptor we own and a NUL-terminated name.
+    if unsafe {
+        libc::fstatat(
+            dir.as_raw_fd(),
+            cname.as_ptr(),
+            &mut st,
+            libc::AT_SYMLINK_NOFOLLOW,
+        )
+    } == -1
+    {
+        return gone(io::Error::last_os_error());
+    }
+    match st.st_mode & libc::S_IFMT {
+        libc::S_IFDIR => Ok(Beneath::Dir),
+        libc::S_IFLNK => {
+            let mut buf = vec![0u8; libc::PATH_MAX as usize + 1];
+            // SAFETY: reads at most buf.len() bytes into buf.
+            let n = unsafe {
+                libc::readlinkat(
+                    dir.as_raw_fd(),
+                    cname.as_ptr(),
+                    buf.as_mut_ptr().cast(),
+                    buf.len(),
+                )
+            };
+            if n < 0 {
+                return gone(io::Error::last_os_error());
+            }
+            buf.truncate(n as usize);
+            Ok(Beneath::Link(PathBuf::from(std::ffi::OsString::from_vec(
+                buf,
+            ))))
+        }
+        libc::S_IFREG => {
+            let flags = libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK;
+            // SAFETY: openat reads the name and returns a new descriptor or -1.
+            let fd = unsafe { libc::openat(dir.as_raw_fd(), cname.as_ptr(), flags) };
+            if fd == -1 {
+                return gone(io::Error::last_os_error());
+            }
+            // SAFETY: fd was just opened and is owned by nothing else.
+            let file = unsafe { File::from_raw_fd(fd) };
+            Ok(if file.metadata()?.is_file() {
+                Beneath::File(file)
+            } else {
+                Beneath::Missing
+            })
+        }
+        _ => Ok(Beneath::Missing),
+    }
+}
+
+/// What the entry `rel` under `root` holds, hashed: a file's bytes or a
+/// link's target, read as [`beneath`] finds it.
+pub(crate) fn content_hash(root: &Path, rel: &str) -> Result<String> {
+    use std::os::unix::ffi::OsStrExt;
+    let at = root.join(rel);
+    Ok(match beneath(root, rel).at(&at)? {
+        Beneath::File(mut file) => {
+            let mut hasher = blake3::Hasher::new();
+            io::copy(&mut file, &mut hasher).at(&at)?;
+            format!("file:{}", hasher.finalize().to_hex())
+        }
+        Beneath::Link(target) => format!(
+            "link:{}",
+            blake3::hash(target.as_os_str().as_bytes()).to_hex()
+        ),
+        Beneath::Dir => "dir".to_owned(),
+        Beneath::Missing => "missing".to_owned(),
+    })
 }
 
 fn finish(path: &Path, stamp: &Stamp) -> Result<()> {
