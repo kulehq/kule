@@ -163,7 +163,15 @@ git: hook pre-commit changed (it runs on the next matching git command)
 `kule exec` runs commands in the operating system's sandbox (Seatbelt on
 macOS, Landlock on Linux). They may write only to the task's copy, its own
 `TMPDIR` and `/tmp`; credentials such as `~/.ssh`, `~/.aws`, `~/.npmrc` and
-cargo's registry token cannot be read; `--no-network` shuts TCP. Package
+cargo's registry token cannot be read; `--no-network` shuts TCP. Your own
+files (Documents, Desktop, Downloads, Pictures, Movies, Music, iCloud Drive
+and cloud storage folders) are hidden too, and so is the folder the
+workspace lies in, with the projects beside it, where that folder is in
+your home (not the home itself, nor a dot folder or `~/Library`). Inside
+those, the workspace's git directory (a worktree's repository next to it)
+and the folders your `PATH` and SDK variables name stay readable. A project
+beside the workspace that it builds from (`path = "../shared"`) is opened
+read-only with `--reveal ../shared`. Package
 managers (cargo, npm, pip, uv, Go, NuGet, Yarn, pnpm) get caches of the
 task's own, so nothing a command leaves in a cache reaches a build you run
 later; your caches stay read-only. On macOS the cargo and npm caches start

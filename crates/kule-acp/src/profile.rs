@@ -17,7 +17,8 @@ use std::path::{Component, Path};
 use std::process::Command;
 
 use kule_engine::{
-    AgentKey, CacheSources, Error, HIDDEN_IN_HOME, Kept, Policy, Proxy, Result, Sandbox, Task,
+    AgentKey, CacheSources, Error, HIDDEN_IN_HOME, Kept, PERSONAL_IN_HOME, Policy, Proxy, Result,
+    Sandbox, Task,
 };
 use serde::{Deserialize, Serialize};
 
@@ -978,7 +979,10 @@ impl Profile {
             .iter()
             .flat_map(|l| l.profile.login.iter().map(String::as_str))
             .collect();
-        let hidden = HIDDEN_IN_HOME.iter().filter(|h| !logins.contains(h));
+        let hidden = HIDDEN_IN_HOME
+            .iter()
+            .filter(|h| !logins.contains(h))
+            .chain(PERSONAL_IN_HOME);
         let homes = [
             Some(DEFAULT_HOME),
             kule_home.and_then(Path::to_str),
@@ -1775,6 +1779,11 @@ hosts = ["openrouter.ai"]
             (
                 "inside hidden",
                 r#"state = [".aws/opencode"]"#,
+                "Kule keeps hidden",
+            ),
+            (
+                "inside the person's own",
+                r#"state = ["Documents/opencode"]"#,
                 "Kule keeps hidden",
             ),
             (

@@ -105,6 +105,13 @@
   names it (its keys' hosts count), no longer by every command; a profile
   of your own lists its model's host in `hosts` or `keys`. Go's module
   proxy now asks, as other hosts do.
+- Your own files (Documents, Desktop, Downloads, Pictures, Movies, Music,
+  iCloud Drive and cloud storage folders) are hidden from a task's
+  commands, and so is the folder the workspace lies in, with the projects
+  beside it, where it is a folder of yours in your home. The workspace's
+  git directory and the folders your `PATH` and SDK variables name stay
+  readable there; `kule exec --reveal ../shared` opens a project the
+  workspace builds from, read-only.
 - Go programs in a task check certificates against the roots the proxy
   names (`GODEBUG=x509sslcertoverrideplatform=1`, after your own
   settings), so their HTTPS works through the proxy on macOS. A refusal

@@ -253,7 +253,9 @@ enum Cmd {
     Path { task: String },
     /// Run a command inside the task's copy, in the sandbox, then show what
     /// it changed. The sandbox lets it write only to the copy, the task's
-    /// TMPDIR and package caches, and hides credentials (~/.ssh, ~/.aws, …).
+    /// TMPDIR and package caches, and hides credentials (~/.ssh, ~/.aws, …),
+    /// your own folders (Documents, Desktop, …) and the projects beside the
+    /// workspace.
     /// Its network goes through the task's proxy, which lets through what
     /// the policy allows and logs every connection.
     Exec {
@@ -265,7 +267,8 @@ enum Cmd {
         #[arg(long, value_name = "PATH")]
         hide: Vec<PathBuf>,
         /// Let the command read PATH although it is hidden by default, such
-        /// as ~/Library/Keychains for an agent's own login (repeatable).
+        /// as ~/Library/Keychains for an agent's own login, or a project
+        /// beside the workspace that it builds from, read-only (repeatable).
         #[arg(long, value_name = "PATH")]
         reveal: Vec<PathBuf>,
         /// Pass environment variable NAME on to the command (repeatable). Only

@@ -34,6 +34,7 @@ impl Setup {
         write(".config/gh/hosts.yml", "token: secret\n");
         write(".ssh/id_ed25519", "private\n");
         write("Documents/notes.txt", "notes\n");
+        write("work/plan.txt", "plan\n");
         write(".claude/settings.json", "{}\n");
         fs::write(ws.path().join("a.txt"), "a\n").unwrap();
         let task = Task::create(home.path(), ws.path()).unwrap();
@@ -204,7 +205,9 @@ fn the_agents_own_state_is_its_own() {
     );
     assert!(!layer.join(".ssh").exists());
     assert!(!layer.join(".config/gh").exists());
-    assert!(Path::new(&layer.join("Documents")).is_symlink());
+    // The person's own files are hidden, and not in the layer either.
+    assert!(!layer.join("Documents").exists());
+    assert!(Path::new(&layer.join("work")).is_symlink());
 }
 
 #[test]

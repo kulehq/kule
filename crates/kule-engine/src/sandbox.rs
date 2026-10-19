@@ -74,6 +74,46 @@ fn passes(name: &str) -> bool {
     PASSED_ENV.contains(&name) || name.starts_with("LC_")
 }
 
+/// Where the person's tools are, as the variables passed to commands name
+/// them: each `PATH` entry, and the others that hold a path (`JAVA_HOME`,
+/// `GOROOT`, …).
+fn tools_from_env() -> Vec<PathBuf> {
+    let mut tools: Vec<PathBuf> = std::env::var_os("PATH")
+        .map(|path| std::env::split_paths(&path).collect())
+        .unwrap_or_default();
+    tools.extend(
+        PASSED_ENV
+            .iter()
+            .filter(|name| **name != "PATH")
+            .filter_map(std::env::var_os)
+            .map(PathBuf::from),
+    );
+    tools.retain(|t| t.is_absolute());
+    tools
+}
+
+/// The git directories of a workspace that is a linked worktree or keeps
+/// its repository elsewhere (`.git` a file naming it), with the common
+/// one a worktree's names; none for a repository of its own.
+fn git_dirs(workspace: &Path) -> Vec<PathBuf> {
+    let Ok(text) = std::fs::read_to_string(workspace.join(".git")) else {
+        return Vec::new();
+    };
+    let Some(named) = text.lines().next().and_then(|l| l.strip_prefix("gitdir: ")) else {
+        return Vec::new();
+    };
+    let Ok(dir) = std::fs::canonicalize(workspace.join(named.trim())) else {
+        return Vec::new();
+    };
+    let mut dirs = vec![dir.clone()];
+    if let Ok(common) = std::fs::read_to_string(dir.join("commondir"))
+        && let Ok(common) = std::fs::canonicalize(dir.join(common.trim()))
+    {
+        dirs.push(common);
+    }
+    dirs
+}
+
 /// Credentials under the home directory, hidden from every command: no agent
 /// profile may open them.
 pub const HIDDEN_IN_HOME: &[&str] = &[
@@ -142,6 +182,22 @@ pub const HIDDEN_IN_HOME: &[&str] = &[
     ".codex/auth.json",
     ".gemini/gemini-credentials.json",
     ".gemini/oauth_creds.json",
+];
+
+/// The person's own files under the home directory, and those kept in step
+/// with other computers, hidden from every command: a task works on its
+/// copy. A folder of tools inside one stays readable (see
+/// [`Sandbox::hide_personal`]).
+pub const PERSONAL_IN_HOME: &[&str] = &[
+    "Desktop",
+    "Documents",
+    "Downloads",
+    "Movies",
+    "Music",
+    "Pictures",
+    "Videos",
+    "Library/Mobile Documents",
+    "Library/CloudStorage",
 ];
 
 /// macOS services that act for a caller outside its sandbox: opening apps
@@ -264,6 +320,15 @@ pub struct Sandbox {
     tmp: PathBuf,
     writable: Vec<PathBuf>,
     hidden: Vec<PathBuf>,
+    /// Readable, never writable, inside a hidden path: tools and the
+    /// workspace's git directory in a folder hidden as the person's own
+    /// (see [`Sandbox::hide_personal`]). A path hidden inside one of these,
+    /// or one itself, stays hidden.
+    see_through: Vec<PathBuf>,
+    /// The folders hidden as the person's own, among `hidden`.
+    personal: Vec<PathBuf>,
+    /// The task's folder, resolved.
+    workspace: PathBuf,
     /// Readable but never writable, even inside a writable path.
     protected: Vec<PathBuf>,
     network: Network,
@@ -371,6 +436,9 @@ impl Sandbox {
                 real_or_planned(&task.home())?,
                 real_or_planned(task.workspace())?,
             ],
+            see_through: Vec::new(),
+            personal: Vec::new(),
+            workspace: real_or_planned(task.workspace())?,
             protected: Vec::new(),
             network: Network::Allow,
             passed_env: Vec::new(),
@@ -423,6 +491,7 @@ impl Sandbox {
             for secret in HIDDEN_IN_HOME {
                 sandbox.hide(&sources.home.join(secret))?;
             }
+            sandbox.hide_personal(&sources.home, &tools_from_env())?;
             sandbox.use_task_caches(&sources)?;
         }
         Ok(sandbox)
@@ -530,6 +599,62 @@ impl Sandbox {
         Ok(())
     }
 
+    /// Hides the person's own files under `home` ([`PERSONAL_IN_HOME`]) and
+    /// the folder the workspace lies in, with the other projects beside
+    /// it. That folder stays readable where it is `home` itself, outside
+    /// `home`, or among the settings in it (a name starting with `.`, or
+    /// `Library`), where toolchains live. Inside a hidden folder, the
+    /// workspace's git directory (a linked worktree's repository beside
+    /// it) and the folders `tools` lead to (`PATH`, an SDK's variable)
+    /// stay readable: a tool's folder whole, the git directory alone. Both
+    /// are taken from the person's side, never from the copy.
+    pub fn hide_personal(&mut self, home: &Path, tools: &[PathBuf]) -> Result<()> {
+        let home = real_or_planned(home)?;
+        let mut folders: Vec<PathBuf> = PERSONAL_IN_HOME
+            .iter()
+            .map(|name| real_or_planned(&home.join(name)))
+            .collect::<Result<_>>()?;
+        if let Some(parent) = self.workspace.parent()
+            && let Ok(within) = parent.strip_prefix(&home)
+            && let Some(first) = within.components().next()
+            && first.as_os_str() != "Library"
+            && !within
+                .components()
+                .any(|c| c.as_os_str().to_string_lossy().starts_with('.'))
+        {
+            folders.push(parent.to_owned());
+        }
+        // Not the home directory or above it: that would leave everything.
+        let tools: Vec<PathBuf> = tools
+            .iter()
+            .filter(|t| t.is_absolute())
+            .filter_map(|t| std::fs::canonicalize(t).ok())
+            .filter(|t| !home.starts_with(t))
+            .collect();
+        let git = git_dirs(&self.workspace);
+        for folder in folders {
+            // A folder a tool is in, or on the way to one, is left alone.
+            if tools.iter().any(|t| folder.starts_with(t)) {
+                continue;
+            }
+            for tool in &tools {
+                if let Ok(within) = tool.strip_prefix(&folder)
+                    && let Some(first) = within.components().next()
+                {
+                    self.see_through.push(folder.join(first));
+                }
+            }
+            for dir in git.iter().filter(|d| d.starts_with(&folder)) {
+                self.see_through.push(dir.clone());
+            }
+            self.personal.push(folder.clone());
+            self.hidden.push(folder);
+        }
+        self.see_through.sort();
+        self.see_through.dedup();
+        Ok(())
+    }
+
     /// Takes `path` off the hidden list, for a command that needs it (an
     /// agent reading its own login from the keychain). Hidden paths inside
     /// it stay hidden. `path` is taken as it is written, not where a link
@@ -539,9 +664,21 @@ impl Sandbox {
     /// Revealing the keychain's files (`~/Library/Keychains`) opens the
     /// keychain's service on macOS too, which reads items for its caller:
     /// without them it opens none, unlocked keychains included.
+    ///
+    /// A path inside a folder hidden as the person's own (a project beside
+    /// the workspace that it builds from) becomes readable, not writable;
+    /// what is hidden inside it stays hidden.
     pub fn reveal(&mut self, path: &Path) -> Result<()> {
         let here = here(path)?;
         if std::fs::symlink_metadata(&here).is_ok_and(|m| m.file_type().is_symlink()) {
+            return Ok(());
+        }
+        if self
+            .personal
+            .iter()
+            .any(|folder| here.starts_with(folder) && here != *folder)
+        {
+            self.see_through.push(here);
             return Ok(());
         }
         let mut i = 0;
@@ -1080,6 +1217,20 @@ impl Sandbox {
             ));
             params.push((format!("H{i}"), path.as_path()));
         }
+        // Tools and the git directory in a hidden folder of the person's,
+        // to read; what is hidden inside them, or as them, is taken away
+        // again after.
+        for (i, path) in self.see_through.iter().enumerate() {
+            text.push_str(&format!("(allow file-read* (subpath (param \"S{i}\")))\n"));
+            params.push((format!("S{i}"), path.as_path()));
+        }
+        for (i, path) in self.hidden.iter().enumerate() {
+            if self.see_through.iter().any(|s| path.starts_with(s)) {
+                text.push_str(&format!(
+                    "(deny file-read* file-write* (subpath (param \"H{i}\")) {tag})\n"
+                ));
+            }
+        }
         // The copy and tmp sit in Kule's home, which is hidden: they come back
         // last, so a hidden path never takes them away. So does the home
         // layer, which is the task's too.
@@ -1123,6 +1274,7 @@ impl Sandbox {
             .skip(1)
             .chain(self.tmp.ancestors().skip(1))
             .chain(self.layer.iter().flat_map(|l| l.ancestors().skip(1)))
+            .chain(self.see_through.iter().flat_map(|s| s.ancestors().skip(1)))
             .collect();
         for (i, dir) in ancestors.into_iter().enumerate() {
             text.push_str(&format!(
@@ -1316,7 +1468,17 @@ impl Sandbox {
                 .iter()
                 .fold(roots, |roots, hidden| carve(roots, hidden))
         };
-        let readable = carve_all(vec![PathBuf::from("/")]);
+        let mut readable = carve_all(vec![PathBuf::from("/")]);
+        // Tools and the git directory in a hidden folder of the person's
+        // come back to read, but for what is hidden inside them, or as them.
+        for see in &self.see_through {
+            readable.extend(
+                self.hidden
+                    .iter()
+                    .filter(|h| h.starts_with(see))
+                    .fold(vec![see.clone()], |roots, h| carve(roots, h)),
+            );
+        }
         // Writable roots are carved the same way: an allowance for a
         // directory would otherwise reach a hidden path inside it. The cost
         // is that nothing new can be created directly in such a directory,

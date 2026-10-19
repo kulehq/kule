@@ -163,6 +163,8 @@ fn histories_browsers_and_credentials_in_the_home_are_hidden() {
         ".cache/huggingface/token",
         ".config/Code/User/globalStorage/state.vscdb",
         "Library/Application Support/Code/User/globalStorage/state.vscdb",
+        // The person's own files (see the tests further down).
+        "Documents/taxes.pdf",
     ];
     for path in hidden.iter().chain(&["notes/plain.txt"]) {
         let full = home.path().join(path);
@@ -1381,4 +1383,165 @@ fn a_command_denied_the_gpu_gets_no_metal_device() {
     let mut denied = s.sandbox();
     denied.deny_gpu();
     assert_eq!(metal_works(Some(&denied), &probe), Some(false));
+}
+
+/// A person's home for the tests below, outside /tmp as a real one is, with
+/// files at `paths`.
+fn home_with(paths: &[&str]) -> TempDir {
+    let home = TempDir::new_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
+    for path in paths {
+        let full = home.path().join(path);
+        fs::create_dir_all(full.parent().unwrap()).unwrap();
+        fs::write(&full, "secret\n").unwrap();
+    }
+    home
+}
+
+/// A task on `workspace`, with Kule's home elsewhere.
+fn task_on(workspace: &Path) -> (TempDir, Task) {
+    let kule = TempDir::new_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
+    let task = Task::create(kule.path(), workspace).unwrap();
+    (kule, task)
+}
+
+fn git(dir: &Path, args: &[&str]) {
+    let out = Command::new("git")
+        .args(["-c", "user.name=k", "-c", "user.email=k@k"])
+        .args(args)
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{out:?}");
+}
+
+#[test]
+fn the_persons_own_folders_and_the_other_projects_are_hidden() {
+    let home = home_with(&[
+        "code/proj/README.md",
+        "code/other/secret.txt",
+        "code/notes.txt",
+        "Documents/taxes.pdf",
+        "Desktop/a.txt",
+        "Downloads/b.txt",
+        "Pictures/c.jpg",
+        "Library/Mobile Documents/com~apple~CloudDocs/d.txt",
+        "Library/CloudStorage/Dropbox/e.txt",
+        "notes/plain.txt",
+    ]);
+    let home = fs::canonicalize(home.path()).unwrap();
+    let (_kule, task) = task_on(&home.join("code/proj"));
+    let mut sandbox = Sandbox::new(&task).unwrap();
+    sandbox.hide_personal(&home, &[]).unwrap();
+    for path in [
+        "code/other/secret.txt",
+        "code/notes.txt",
+        "Documents/taxes.pdf",
+        "Desktop/a.txt",
+        "Downloads/b.txt",
+        "Pictures/c.jpg",
+        "Library/Mobile Documents/com~apple~CloudDocs/d.txt",
+        "Library/CloudStorage/Dropbox/e.txt",
+    ] {
+        let out = sh(&sandbox, &format!("cat '{}'", home.join(path).display()));
+        assert!(!ok(&out), "{path} was readable");
+    }
+    let out = sh(&sandbox, &format!("ls '{}'", home.join("code").display()));
+    assert!(!ok(&out), "the other projects were listed: {out:?}");
+    let out = sh(
+        &sandbox,
+        &format!("cat README.md '{}'", home.join("notes/plain.txt").display()),
+    );
+    assert!(ok(&out), "{out:?}");
+
+    // A project the workspace builds from, revealed: read, never written.
+    let other = home.join("code/other");
+    sandbox.reveal(&other).unwrap();
+    let out = sh(
+        &sandbox,
+        &format!("cat '{}'", other.join("secret.txt").display()),
+    );
+    assert!(ok(&out), "{out:?}");
+    let out = sh(
+        &sandbox,
+        &format!("echo x > '{}'", other.join("new.txt").display()),
+    );
+    assert!(!ok(&out) && !other.join("new.txt").exists(), "{out:?}");
+    let out = sh(
+        &sandbox,
+        &format!("cat '{}'", home.join("code/notes.txt").display()),
+    );
+    assert!(!ok(&out), "more than the revealed project opened: {out:?}");
+}
+
+#[test]
+fn a_tool_or_a_worktrees_repository_beside_the_workspace_stays_readable() {
+    let home = home_with(&["dev/main/src.txt", "dev/other/secret.txt"]);
+    let home = fs::canonicalize(home.path()).unwrap();
+    let dev = home.join("dev");
+    git(&dev.join("main"), &["init", "-q"]);
+    git(&dev.join("main"), &["add", "."]);
+    git(&dev.join("main"), &["commit", "-q", "-m", "one"]);
+    git(&dev.join("main"), &["worktree", "add", "-q", "../proj"]);
+    git(&dev.join("other"), &["init", "-q"]);
+    fs::create_dir_all(dev.join("sdk/bin")).unwrap();
+    fs::write(dev.join("sdk/bin/tool"), "#!/bin/sh\necho tool\n").unwrap();
+    fs::set_permissions(
+        dev.join("sdk/bin/tool"),
+        std::os::unix::fs::PermissionsExt::from_mode(0o755),
+    )
+    .unwrap();
+    fs::write(dev.join("sdk/token"), "secret\n").unwrap();
+    let (_kule, task) = task_on(&dev.join("proj"));
+    let mut sandbox = Sandbox::new(&task).unwrap();
+    sandbox
+        .hide_personal(&home, &[dev.join("sdk/bin")])
+        .unwrap();
+    sandbox.hide(&dev.join("sdk/token")).unwrap();
+
+    let out = sh(&sandbox, "git log --oneline | wc -l");
+    assert!(ok(&out) && text(&out) == "1", "{out:?}");
+    let out = sh(
+        &sandbox,
+        &format!("'{}'", dev.join("sdk/bin/tool").display()),
+    );
+    assert_eq!(text(&out), "tool", "{out:?}");
+    for path in ["main/src.txt", "other/secret.txt", "sdk/token"] {
+        let out = sh(&sandbox, &format!("cat '{}'", dev.join(path).display()));
+        assert!(!ok(&out), "{path} was readable");
+    }
+
+    // The copy's `.git` is the agent's to write: what it names opens
+    // nothing more.
+    fs::write(
+        task.copy().join(".git"),
+        format!("gitdir: {}\n", dev.join("other/.git").display()),
+    )
+    .unwrap();
+    let sandbox = {
+        let mut sandbox = Sandbox::new(&task).unwrap();
+        sandbox.hide_personal(&home, &[]).unwrap();
+        sandbox
+    };
+    let out = sh(
+        &sandbox,
+        &format!("cat '{}'", dev.join("other/.git/HEAD").display()),
+    );
+    assert!(!ok(&out), "another repository opened: {out:?}");
+}
+
+#[test]
+fn folders_where_toolchains_live_stay_readable() {
+    for (workspace, beside) in [
+        ("proj", "notes.txt"),
+        (".local/proj", ".local/share/tool.txt"),
+        ("Library/Developer/proj", "Library/Developer/tool.txt"),
+    ] {
+        let home = home_with(&[&format!("{workspace}/README.md"), beside]);
+        let home = fs::canonicalize(home.path()).unwrap();
+        let (_kule, task) = task_on(&home.join(workspace));
+        let mut sandbox = Sandbox::new(&task).unwrap();
+        sandbox.hide_personal(&home, &[]).unwrap();
+        let out = sh(&sandbox, &format!("cat '{}'", home.join(beside).display()));
+        assert!(ok(&out), "{beside} beside {workspace}: {out:?}");
+    }
 }
