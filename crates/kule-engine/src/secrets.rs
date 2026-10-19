@@ -26,6 +26,7 @@ use serde::{Deserialize, Serialize};
 use crate::error::{Error, IoContext, Result};
 use crate::fsops::read_json;
 use crate::remembered::plain_host;
+use crate::sealing::{KeyHome, Sealer};
 
 pub const SECRETS_FILE: &str = "secrets.json";
 
@@ -52,25 +53,121 @@ impl SecretInfo {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// A kept secret with its value, as Kule holds it while it works.
+#[derive(Debug, Clone)]
 struct Stored {
-    #[serde(flatten)]
     info: SecretInfo,
     value: String,
 }
 
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Default)]
 struct Store {
-    #[serde(default)]
     secrets: Vec<Stored>,
 }
 
-fn read_store(home: &Path) -> Result<Store> {
+/// `secrets.json` as it is on disk: each value sealed with the key, and
+/// where the key is kept (see [`crate::sealing`]). A file from before
+/// sealing holds the values themselves, sealed at the next read.
+#[derive(Debug, Default, Serialize, Deserialize)]
+struct OnDisk {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    key: Option<KeyHome>,
+    #[serde(default)]
+    secrets: Vec<DiskSecret>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct DiskSecret {
+    #[serde(flatten)]
+    info: SecretInfo,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    sealed: Option<String>,
+    /// Only in a file from before sealing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    value: Option<String>,
+}
+
+fn read_disk(home: &Path) -> Result<OnDisk> {
     let path = home.join(SECRETS_FILE);
     if !path.is_file() {
-        return Ok(Store::default());
+        return Ok(OnDisk::default());
     }
     read_json(&path)
+}
+
+/// The kept secrets with their values, unsealed; values kept unsealed by
+/// an older Kule are sealed on the way.
+fn read_store(home: &Path) -> Result<Store> {
+    let disk = read_disk(home)?;
+    if disk.secrets.is_empty() {
+        return Ok(Store::default());
+    }
+    // The key only for what is sealed: a file from before sealing needs
+    // none to be read.
+    let sealer = if disk.secrets.iter().any(|s| s.sealed.is_some()) {
+        Some(Sealer::open(home, disk.key)?)
+    } else {
+        None
+    };
+    let mut plain = false;
+    let secrets = disk
+        .secrets
+        .into_iter()
+        .map(|s| {
+            let value = match (s.sealed, s.value) {
+                (Some(sealed), _) => sealer
+                    .as_ref()
+                    .expect("opened for what is sealed")
+                    .unseal(&sealed)?,
+                (None, Some(value)) => {
+                    plain = true;
+                    value
+                }
+                (None, None) => {
+                    return Err(Error::Invalid(format!(
+                        "{}: kept without a value",
+                        s.info.name
+                    )));
+                }
+            };
+            Ok(Stored {
+                info: s.info,
+                value,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let store = Store { secrets };
+    if plain {
+        write_store(home, &store)?;
+    }
+    Ok(store)
+}
+
+/// Writes `store` with every value sealed.
+fn write_store(home: &Path, store: &Store) -> Result<()> {
+    let kept = read_disk(home)?.key;
+    let sealer = Sealer::open(home, kept)?;
+    let disk = OnDisk {
+        key: Some(sealer.home),
+        secrets: store
+            .secrets
+            .iter()
+            .map(|s| {
+                Ok(DiskSecret {
+                    info: s.info.clone(),
+                    sealed: Some(sealer.seal(&s.value)?),
+                    value: None,
+                })
+            })
+            .collect::<Result<_>>()?,
+    };
+    write_private(&home.join(SECRETS_FILE), &disk)
+}
+
+/// Where the key to the secrets in `home` is kept; `None` before the first
+/// secret is kept.
+pub fn secrets_key_home(home: &Path) -> Result<Option<KeyHome>> {
+    Ok(read_disk(home)?.key)
 }
 
 /// Writes `value` as JSON readable by its owner alone, replacing what was
@@ -139,7 +236,7 @@ pub fn add_secret(
         info: info.clone(),
         value: value.to_owned(),
     });
-    write_private(&home.join(SECRETS_FILE), &store)?;
+    write_store(home, &store)?;
     Ok(info)
 }
 
@@ -154,14 +251,15 @@ pub fn remove_secret(home: &Path, name: &str, workspace: Option<&Path>) -> Resul
         .retain(|s| !(s.info.name == name && s.info.workspace == workspace));
     let gone = store.secrets.len() != before;
     if gone {
-        write_private(&home.join(SECRETS_FILE), &store)?;
+        write_store(home, &store)?;
     }
     Ok(gone)
 }
 
 /// Every kept secret, without its value.
 pub fn secrets(home: &Path) -> Result<Vec<SecretInfo>> {
-    Ok(read_store(home)?
+    // Names and hosts alone: the values stay sealed.
+    Ok(read_disk(home)?
         .secrets
         .into_iter()
         .map(|s| s.info)

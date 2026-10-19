@@ -4520,3 +4520,13 @@ body.dragging-panel * {
   gap: 6px;
   font-weight: 550;
 }
+
+/* Settings → Secrets: the key that seals them is a file. */
+.secrets-key-file {
+  padding: 8px 10px;
+  border: 1px solid var(--ask);
+  border-radius: var(--radius);
+  background: var(--ask-soft);
+  color: var(--ask);
+  font-size: 13px;
+}

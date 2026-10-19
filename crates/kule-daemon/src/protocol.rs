@@ -325,6 +325,9 @@ pub enum Call {
     },
     /// The person's secrets, without their values.
     Secrets,
+    /// Who keeps the key that seals the secrets' values: the system, or a
+    /// file; `null` before the first secret.
+    SecretsKey,
     /// Keeps a secret for `hosts`, on `workspace` or every folder.
     AddSecret {
         name: String,

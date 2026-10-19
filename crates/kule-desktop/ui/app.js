@@ -3386,11 +3386,23 @@ async function openSecrets() {
 async function renderSecrets() {
   if (state.view !== "secrets") return;
   let kept = [];
+  let keyHome = null;
   try {
-    kept = await call("secrets");
+    [kept, keyHome] = await Promise.all([call("secrets"), call("secrets_key")]);
   } catch (err) {
     fail(err);
   }
+  // Where the key that seals the values is: said plainly when it is a file.
+  const sealed =
+    keyHome === "system"
+      ? h("p", { class: "muted" }, "The values are sealed with a key your system's keychain keeps.")
+      : keyHome === "file"
+        ? h(
+            "p",
+            { class: "secrets-key-file" },
+            "The values are sealed with a key kept in a file in Kule's home: this computer offers no keychain, or Kule's home is not ~/.kule. Anyone who can read your files can open them."
+          )
+        : null;
   const folders = [...new Set(state.tasks.map((t) => t.workspace))].sort();
   const input = (id, label, hint, attrs) =>
     h(
@@ -3427,7 +3439,8 @@ async function renderSecrets() {
         "p",
         { class: "muted" },
         "API keys a task's commands use without seeing them. A command finds a placeholder in the variable of the secret's name; the task's proxy puts the value into requests to the secret's hosts, over HTTPS, and nowhere else. Values in a folder's .env files that look like secrets are kept out of the copy the same way."
-      )
+      ),
+      sealed
     ),
     kept.length === 0
       ? h("p", { class: "muted" }, "No secrets kept.")

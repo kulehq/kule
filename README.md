@@ -521,18 +521,22 @@ does not, since it learns the agent's directories from what is refused.
 
 `kule secrets add STRIPE_KEY --host api.stripe.com` (the value is typed
 without echo, or piped in; never an argument) keeps a secret in Kule's
-home, readable by you alone and hidden from every sandbox. A task's
+home, hidden from every sandbox, its value sealed with a key your system's
+keychain (macOS) or Secret Service (Linux) keeps; a computer without one,
+or a home other than `~/.kule`, keeps the key in a file beside, and
+Settings → Secrets says so. A task's
 commands find a placeholder in `$STRIPE_KEY`. The task's proxy looks
 inside TLS for the secret's hosts and no other: it makes a certificate
 authority of its own for each run, valid only for those hosts by its name
 constraints, with a key that never leaves its memory, and points
 `SSL_CERT_FILE`, `NODE_EXTRA_CA_CERTS`, `REQUESTS_CA_BUNDLE` and the like
-at it. On the way to `api.stripe.com` the placeholder in the request line
-(percent-encoded there), a header (`Authorization: Basic` included) or
-the body becomes the value; sent anywhere else it is a string that opens
-nothing. A body is filled whole up to 1 MiB, with its `Content-Length`
-made right, and a chunked one chunk by chunk; in JSON the value is
-escaped, in a form percent-encoded. Requests on a connection follow one
+at it. On the way to `api.stripe.com` the placeholder in a credential
+header (`Authorization`, `Basic` included; `x-api-key`, `x-goog-api-key`
+and the like) becomes the value; in the URL, any other header or the body
+it stays a placeholder, so the value never reaches what could repeat it
+back, and sent anywhere else it is a string that opens nothing. A request
+to that host carrying credentials Kule does not hold for it is refused
+(403). Requests on a connection follow one
 another (keep-alive); one whose framing two readers could take
 differently is refused. The connection log names
 the secrets that went out (`net: api.stripe.com:443 · tunneled · with

@@ -46,6 +46,7 @@ mod protect;
 pub mod remembered;
 pub mod resources;
 mod sandbox;
+mod sealing;
 mod secrets;
 #[cfg(target_os = "macos")]
 pub mod shield;
@@ -93,7 +94,10 @@ pub use sandbox::{
     Denial, HIDDEN_IN_HOME, Network, PASSED_ENV, Sandbox, denials, isolates_network,
     protects_in_place, record_denials,
 };
-pub use secrets::{AgentKey, SECRETS_FILE, SecretInfo, Vault, add_secret, remove_secret, secrets};
+pub use sealing::KeyHome;
+pub use secrets::{
+    AgentKey, SECRETS_FILE, SecretInfo, Vault, add_secret, remove_secret, secrets, secrets_key_home,
+};
 pub use steps::{Step, StepChange};
 pub use task::{AgentAtWork, Task, TaskInfo};
 pub use textdiff::{DiffSkip, Hunk, Line, LineKind, TextDiff};

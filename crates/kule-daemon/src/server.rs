@@ -433,6 +433,7 @@ pub fn dispatch(service: &Arc<Service>, call: Call) -> Result<Value, String> {
         Call::HomeDiff { task, path } => json(service.home_diff(&task, &path)?),
         Call::UndoHome { task } => json(service.undo_home(&task)?),
         Call::Secrets => json(service.secrets()?),
+        Call::SecretsKey => json(service.secrets_key()?),
         Call::AddSecret {
             name,
             value,

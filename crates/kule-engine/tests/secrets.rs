@@ -136,6 +136,51 @@ fn the_values_are_kept_where_no_sandbox_reads_them() {
     assert!(!kept.starts_with(s.task.copy()));
 }
 
+/// The values in Kule's home are sealed: the file says what is kept and
+/// for which hosts, never a value; a file from before sealing is sealed at
+/// the next read, and every value still reaches its hosts.
+#[test]
+fn kept_values_are_sealed_on_disk() {
+    let home = TempDir::new().unwrap();
+    add_secret(
+        home.path(),
+        "API_KEY",
+        "sk-real-1",
+        &["api.example.com".into()],
+        None,
+    )
+    .unwrap();
+    let file = fs::read_to_string(home.path().join(kule_engine::SECRETS_FILE)).unwrap();
+    assert!(!file.contains("sk-real-1"), "{file}");
+    assert!(
+        file.contains("API_KEY") && file.contains("api.example.com"),
+        "{file}"
+    );
+    assert_eq!(
+        kule_engine::secrets_key_home(home.path()).unwrap(),
+        Some(kule_engine::KeyHome::File)
+    );
+
+    // As an older Kule left it: the value as it is.
+    let old = TempDir::new().unwrap();
+    fs::write(
+        old.path().join(kule_engine::SECRETS_FILE),
+        r#"{ "secrets": [{ "name": "OLD_KEY", "hosts": ["api.example.com"], "added_unix": 1, "value": "sk-old-2" }] }"#,
+    )
+    .unwrap();
+    let ws = TempDir::new().unwrap();
+    let task = Task::create(old.path(), ws.path()).unwrap();
+    let vault = task.vault().unwrap();
+    let p = vault.env()[0].1.clone();
+    let (filled, _) = vault.fill(
+        "api.example.com",
+        &format!("GET / HTTP/1.1\r\nAuthorization: Bearer {p}\r\n\r\n"),
+    );
+    assert!(filled.contains("sk-old-2"), "{filled}");
+    let file = fs::read_to_string(old.path().join(kule_engine::SECRETS_FILE)).unwrap();
+    assert!(!file.contains("sk-old-2"), "{file}");
+}
+
 #[test]
 fn a_secret_typed_into_the_copy_is_masked_before_an_agent_starts() {
     let s = Setup::new();

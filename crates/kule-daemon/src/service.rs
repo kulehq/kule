@@ -559,6 +559,11 @@ impl Service {
         kule_engine::secrets(&self.home).map_err(text)
     }
 
+    /// Who keeps the key that seals the secrets' values.
+    pub fn secrets_key(&self) -> Result<Option<kule_engine::KeyHome>> {
+        kule_engine::secrets_key_home(&self.home).map_err(text)
+    }
+
     /// Keeps a secret; the value goes nowhere but into Kule's home.
     pub fn add_secret(
         &self,

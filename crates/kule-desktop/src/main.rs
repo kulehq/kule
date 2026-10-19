@@ -337,6 +337,11 @@ fn secrets(kule: K<'_>) -> Result<serde_json::Value> {
 }
 
 #[tauri::command(async)]
+fn secrets_key(kule: K<'_>) -> Result<serde_json::Value> {
+    kule.call(Call::SecretsKey)
+}
+
+#[tauri::command(async)]
 fn add_secret(
     kule: K<'_>,
     name: String,
@@ -924,6 +929,7 @@ fn main() {
             rules,
             forget_rule,
             secrets,
+            secrets_key,
             add_secret,
             remove_secret,
             apply_home,
