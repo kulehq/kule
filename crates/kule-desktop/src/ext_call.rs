@@ -56,12 +56,11 @@ pub fn granted(home: &Path, ext: &str, person: Option<&Path>) -> Result<Granted>
     }
     // A folder an agent could have rewritten since it was installed.
     if let Some(dir) = &listed.dev
-        && let Some(root) =
-            kule_ext::under_any(dir, &kule_daemon::extensions::agent_dirs(home, person)?)
+        && kule_ext::under_any(dir, &kule_daemon::extensions::agent_dirs(home, person)?).is_some()
     {
+        // The extension is told why, not where the agent's folders are.
         return Err(format!(
-            "extension {ext} is held: its folder is under {}, where an agent can write",
-            root.display()
+            "extension {ext} is held: its folder is where an agent can write"
         ));
     }
     if !listed.enabled {

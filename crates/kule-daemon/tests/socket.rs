@@ -70,6 +70,8 @@ fn calls_reach_the_service_and_errors_come_back() {
         })
         .unwrap_err();
     assert!(error.contains("no task nope"), "{error}");
+    // Where Kule keeps its tasks stays its own business.
+    assert!(!error.contains(home.path().to_str().unwrap()), "{error}");
 }
 
 /// The most a prompt may carry (every place it may name, at its longest,

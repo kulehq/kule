@@ -53,7 +53,7 @@ impl Alerts {
             },
             Some(error) => Alert {
                 title: format!("Task {task} failed"),
-                body: error.chars().take(200).collect(),
+                body: plain(error).chars().take(200).collect(),
             },
         }
     }
@@ -131,12 +131,30 @@ impl Alerts {
     }
 }
 
+/// What an agent said, fit for a system notification: no control
+/// characters or marks that turn the text around.
+fn plain(text: &str) -> String {
+    text.chars()
+        .filter(|&c| {
+            !c.is_control()
+                && !matches!(c, '\u{061C}' | '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
 
     use super::*;
     use crate::service::Overlap;
+
+    #[test]
+    fn what_an_agent_said_reaches_a_notification_without_hidden_characters() {
+        let alerts = Alerts::default();
+        let said = alerts.finished("t1", Some("failed\u{1b}[2K\u{202E}gnp.exe\nnow"));
+        assert_eq!(said.body, "failed[2Kgnp.exenow");
+    }
 
     fn view(id: &str, overlaps: &[(&str, &str, &[&str])]) -> TaskView {
         TaskView {

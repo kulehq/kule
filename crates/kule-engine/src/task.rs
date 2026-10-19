@@ -356,10 +356,8 @@ impl Task {
     pub fn open(home: &Path, id: &str) -> Result<Task> {
         let dir = home.join("tasks").join(id);
         if id.is_empty() || id.contains('/') || !dir.join("task.json").is_file() {
-            return Err(Error::Invalid(format!(
-                "no task {id} under {}",
-                home.display()
-            )));
+            // Without the home's path: the message reaches extensions too.
+            return Err(Error::Invalid(format!("no task {id}")));
         }
         let info = read_json(&dir.join("task.json"))?;
         Ok(Task { info, dir })
