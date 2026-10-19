@@ -36,9 +36,6 @@ use crate::secrets::Vault;
 
 /// The most a request's line and headers may take.
 const MAX_HEAD: usize = 64 * 1024;
-/// A request body, or one chunk of it, up to this is held to put secrets
-/// in; a larger one passes as it is.
-const MAX_BODY: u64 = 1024 * 1024;
 
 pub(crate) struct Interceptor {
     vault: Vault,
@@ -195,42 +192,26 @@ impl Interceptor {
                 )));
             };
             let request = Request::of(&head).map_err(io)?;
-            let (mut head, names) = self.vault.fill(host, &forward(&head, request.close));
-            used.extend(names);
-            // The body too: whole when it is small enough to hold, chunk by
-            // chunk when it comes in chunks.
-            let kind = headers(&head, "content-type").next().map(str::to_owned);
-            let fill = |data: &[u8]| self.vault.fill_body(host, kind.as_deref(), data);
-            match request.framing {
-                Framing::Length(length) if length <= MAX_BODY => {
-                    let mut body = Vec::new();
-                    client
-                        .by_ref()
-                        .take(length)
-                        .read_to_end(&mut body)
-                        .map_err(io)?;
-                    if (body.len() as u64) < length {
-                        return Err(Error::Invalid(format!("{host}: request body cut short")));
-                    }
-                    let (body, names) = fill(&body);
-                    if !names.is_empty() {
-                        head = with_length(&head, body.len());
-                        used.extend(names);
-                    }
-                    upstream.stream.write_all(head.as_bytes()).map_err(io)?;
-                    upstream.stream.write_all(&body).map_err(io)?;
-                }
-                Framing::Chunked => {
-                    upstream.stream.write_all(head.as_bytes()).map_err(io)?;
-                    let names =
-                        relay_chunks(&mut client, &mut upstream.stream, &fill).map_err(io)?;
-                    used.extend(names);
-                }
-                framing => {
-                    upstream.stream.write_all(head.as_bytes()).map_err(io)?;
-                    relay(framing, &mut client, &mut upstream.stream).map_err(io)?;
-                }
+            // Someone else's credentials to the person's host: an account
+            // the work could be sent to. Answered here, never passed on.
+            if let Some(header) = self.vault.foreign_credential(host, &head) {
+                let said = format!(
+                    "Kule refused this request: its {header} is not a credential Kule holds for {host}.\n"
+                );
+                write!(
+                    client.stream,
+                    "HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{said}",
+                    said.len()
+                )
+                .map_err(io)?;
+                client.stream.flush().map_err(io)?;
+                break;
             }
+            let (head, names) = self.vault.fill(host, &forward(&head, request.close));
+            used.extend(names);
+            // The body as it came: a secret goes in the credentials alone.
+            upstream.stream.write_all(head.as_bytes()).map_err(io)?;
+            relay(request.framing, &mut client, &mut upstream.stream).map_err(io)?;
             upstream.stream.flush().map_err(io)?;
             // The response, as it comes, with any secret it repeats blanked
             // out (an echo, an error quoting the key).
@@ -636,69 +617,6 @@ impl Response {
     }
 }
 
-/// `head` with its `Content-Length` set to `length`.
-fn with_length(head: &str, length: usize) -> String {
-    let mut out = String::with_capacity(head.len());
-    let mut set = false;
-    for line in head.split_inclusive("\r\n") {
-        let name = line.split(':').next().unwrap_or("").trim();
-        if line.contains(':') && name.eq_ignore_ascii_case("content-length") {
-            if !set {
-                out.push_str(&format!("Content-Length: {length}\r\n"));
-                set = true;
-            }
-            continue;
-        }
-        out.push_str(line);
-    }
-    out
-}
-
-/// Passes a chunked request body on with `fill` run over each chunk that
-/// is small enough to hold, its size made what the filled chunk is; returns
-/// the names `fill` put in. A placeholder split by a chunk edge is not seen.
-fn relay_chunks<S: Read>(
-    from: &mut Conn<S>,
-    to: &mut impl Write,
-    fill: &impl Fn(&[u8]) -> (Vec<u8>, Vec<String>),
-) -> io::Result<Vec<String>> {
-    let mut used = BTreeSet::new();
-    loop {
-        let line = from.line()?;
-        let text = String::from_utf8_lossy(&line);
-        let size = text.trim().split(';').next().unwrap_or("").trim();
-        let size = u64::from_str_radix(size, 16)
-            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "bad chunk size"))?;
-        if size == 0 {
-            to.write_all(&line)?;
-            // Trailers, up to the empty line.
-            loop {
-                let line = from.line()?;
-                to.write_all(&line)?;
-                if line == b"\r\n" {
-                    return Ok(used.into_iter().collect());
-                }
-            }
-        }
-        if size > MAX_BODY {
-            to.write_all(&line)?;
-            io::copy(&mut from.by_ref().take(size + 2), to)?;
-            continue;
-        }
-        let mut chunk = vec![0u8; size as usize + 2];
-        from.read_exact(&mut chunk)?;
-        if !chunk.ends_with(b"\r\n") {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "bad chunk end"));
-        }
-        chunk.truncate(size as usize);
-        let (chunk, names) = fill(&chunk);
-        used.extend(names);
-        to.write_all(format!("{:x}\r\n", chunk.len()).as_bytes())?;
-        to.write_all(&chunk)?;
-        to.write_all(b"\r\n")?;
-    }
-}
-
 /// Passes a message's body on, as its framing says it is.
 fn relay<S: Read>(framing: Framing, from: &mut Conn<S>, to: &mut impl Write) -> io::Result<()> {
     match framing {
@@ -1010,38 +928,56 @@ mod tests {
         assert_eq!(used, ["API_KEY"]);
     }
 
+    /// A secret goes in its credentials alone: in a body, a URL or any other
+    /// header (a prompt sent to a model, say) the placeholder stays as it is,
+    /// so the value never reaches what could repeat it back.
     #[test]
-    fn a_secret_in_a_body_reaches_its_host_whole_or_in_chunks() {
+    fn a_secret_goes_nowhere_but_the_credentials() {
         let host = echo_host();
         let home = TempDir::new().unwrap();
         let (interceptor, p) = interceptor(&home, host.roots);
-        let json = format!("{{\"key\":\"{p}\"}}");
+        let json = format!("{{\"prompt\":\"say {p}\"}}");
         let chunk = format!("key={p}");
         let sent = format!(
-            "POST /a HTTP/1.1\r\nHost: {HOST}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{json}\
+            "POST /a?key={p} HTTP/1.1\r\nHost: {HOST}\r\nX-Note: {p}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{json}\
              POST /b HTTP/1.1\r\nHost: {HOST}\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n{:x}\r\n{chunk}\r\n0\r\n\r\n",
             json.len(),
             chunk.len()
         );
         let (reply, used) = ask(&interceptor, host.port, HOST, &sent);
         let reply = reply.unwrap();
-        assert!(host.saw_real.load(Ordering::SeqCst));
-        assert_eq!(used, ["API_KEY"]);
-        // The length the host got is the filled body's; what it repeats of
-        // the secret comes back blanked.
-        let filled = "{\"key\":\"real-value\"}";
-        assert!(
-            reply.contains(&format!(
-                "Content-Length: {}\r\n\r\n{{\"key\":\"**********\"}}",
-                filled.len()
-            )),
-            "{reply}"
-        );
-        assert!(
-            reply.contains("e\r\nkey=**********\r\n0\r\n\r\n"),
-            "{reply}"
-        );
-        assert!(!reply.contains(&p), "{reply}");
+        assert!(!host.saw_real.load(Ordering::SeqCst), "{reply}");
+        assert!(used.is_empty(), "{used:?}");
+        assert!(reply.contains(&json), "{reply}");
+    }
+
+    /// To a host Kule holds a secret for, a request carrying credentials of
+    /// its own (an account that is not the person's) goes nowhere.
+    #[test]
+    fn credentials_kule_does_not_hold_are_refused() {
+        let host = echo_host();
+        let home = TempDir::new().unwrap();
+        let (interceptor, p) = interceptor(&home, host.roots);
+        for credential in [
+            "x-api-key: someone-elses-key".to_owned(),
+            "Authorization: Bearer someone-elses-key".to_owned(),
+        ] {
+            let sent = format!(
+                "POST /upload HTTP/1.1\r\nHost: {HOST}\r\n{credential}\r\nContent-Length: 4\r\nConnection: close\r\n\r\nfile"
+            );
+            let (reply, _) = ask(&interceptor, host.port, HOST, &sent);
+            let reply = reply.unwrap_or_default();
+            assert!(reply.starts_with("HTTP/1.1 403"), "{credential}: {reply}");
+            assert!(!reply.contains("someone-elses-key"), "{reply}");
+        }
+        // Its own placeholder, or no credentials at all, go through.
+        for credential in [format!("x-api-key: {p}\r\n"), String::new()] {
+            let sent = format!(
+                "GET /v1 HTTP/1.1\r\nHost: {HOST}\r\n{credential}Connection: close\r\n\r\n"
+            );
+            let (reply, _) = ask(&interceptor, host.port, HOST, &sent);
+            assert!(reply.unwrap().starts_with("HTTP/1.1 200"), "{credential}");
+        }
     }
 
     #[test]

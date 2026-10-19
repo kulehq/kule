@@ -399,22 +399,18 @@ impl Vault {
 
     /// `head` (a request line and its headers) bound for `host`, with the
     /// placeholders of the secrets that may go there put back to their
-    /// values, also inside `Authorization: Basic` credentials; and the names
-    /// of the secrets that went in.
+    /// values in its credential headers alone (see [`CREDENTIAL_HEADERS`]),
+    /// also inside `Authorization: Basic`; and the names of the secrets
+    /// that went in. Anywhere else (the URL, another header, the body) a
+    /// placeholder stays one: a value there could reach what repeats it
+    /// back, a model given it in a prompt, say.
     pub fn fill(&self, host: &str, head: &str) -> (String, Vec<String>) {
-        let going: Vec<&Held> = self
-            .held
-            .iter()
-            .filter(|h| h.hosts.iter().any(|h| h == host))
-            .collect();
+        let going = self.going_to(host);
         let mut used = BTreeSet::new();
         let mut out = String::with_capacity(head.len());
         for (i, line) in head.split_inclusive('\n').enumerate() {
-            if i == 0 {
-                // The request line: a value in its URL is percent-encoded.
-                let (filled, names) = replace_bytes(&going, line.as_bytes(), Encoding::Url);
-                used.extend(names);
-                out.push_str(&String::from_utf8_lossy(&filled));
+            if i == 0 || !is_credential(line) {
+                out.push_str(line);
                 continue;
             }
             let basic = line
@@ -452,22 +448,41 @@ impl Vault {
         (out, used.into_iter().collect())
     }
 
-    /// A request body of `content_type` bound for `host`, with the
-    /// placeholders of the secrets that may go there put back to their
-    /// values, written as that kind of body needs (escaped in JSON,
-    /// percent-encoded in a form); and the names of the secrets that went in.
-    pub(crate) fn fill_body(
-        &self,
-        host: &str,
-        content_type: Option<&str>,
-        body: &[u8],
-    ) -> (Vec<u8>, Vec<String>) {
-        let going: Vec<&Held> = self
-            .held
+    fn going_to(&self, host: &str) -> Vec<&Held> {
+        self.held
             .iter()
             .filter(|h| h.hosts.iter().any(|h| h == host))
-            .collect();
-        replace_bytes(&going, body, Encoding::of_body(content_type))
+            .collect()
+    }
+
+    /// The credential header of `head`, bound for `host`, that holds none of
+    /// the placeholders of the secrets kept for `host`: credentials Kule
+    /// does not hold, an account that is not the person's. `None` when every
+    /// credential is Kule's, or Kule holds nothing for `host`.
+    pub(crate) fn foreign_credential(&self, host: &str, head: &str) -> Option<String> {
+        let going = self.going_to(host);
+        if going.is_empty() {
+            return None;
+        }
+        head.split_inclusive('\n')
+            .skip(1)
+            .filter(|line| is_credential(line))
+            .find_map(|line| {
+                let (name, value) = line.split_once(':')?;
+                let value = value.trim();
+                let basic = value
+                    .strip_prefix("Basic ")
+                    .or_else(|| value.strip_prefix("basic "))
+                    .and_then(|v| {
+                        base64::engine::general_purpose::STANDARD
+                            .decode(v.trim())
+                            .ok()
+                    })
+                    .and_then(|d| String::from_utf8(d).ok());
+                let said = basic.as_deref().unwrap_or(value);
+                let ours = going.iter().any(|h| said.contains(&h.placeholder));
+                (!ours).then(|| name.trim().to_owned())
+            })
     }
 
     /// Every real value the vault holds, as it is and as it reads in JSON
@@ -492,6 +507,26 @@ impl Vault {
     }
 }
 
+/// The headers that carry credentials, where a secret is filled in, and
+/// where any other value is someone else's credentials.
+pub const CREDENTIAL_HEADERS: &[&str] = &[
+    "authorization",
+    "x-api-key",
+    "x-goog-api-key",
+    "api-key",
+    "x-auth-token",
+    "private-token",
+];
+
+fn is_credential(line: &str) -> bool {
+    line.split_once(':').is_some_and(|(name, _)| {
+        let name = name.trim();
+        CREDENTIAL_HEADERS
+            .iter()
+            .any(|c| name.eq_ignore_ascii_case(c))
+    })
+}
+
 fn replace_all(held: &[&Held], text: &str) -> (String, Vec<String>) {
     let (out, used) = replace_bytes(held, text.as_bytes(), Encoding::Raw);
     // Placeholders and values are both text, so text stays text.
@@ -514,19 +549,6 @@ enum Encoding {
 }
 
 impl Encoding {
-    /// For a request body of `content_type`.
-    fn of_body(content_type: Option<&str>) -> Encoding {
-        let kind = content_type.unwrap_or("").to_ascii_lowercase();
-        let kind = kind.split(';').next().unwrap_or("").trim();
-        if kind == "application/json" || kind.ends_with("+json") {
-            Encoding::Json
-        } else if kind == "application/x-www-form-urlencoded" {
-            Encoding::Url
-        } else {
-            Encoding::Raw
-        }
-    }
-
     fn write(self, value: &str, out: &mut Vec<u8>) {
         match self {
             Encoding::Raw => out.extend_from_slice(value.as_bytes()),
@@ -921,7 +943,7 @@ mod tests {
     }
 
     #[test]
-    fn a_secret_in_a_url_or_a_body_is_written_as_it_needs_there() {
+    fn a_secret_goes_into_credential_headers_alone() {
         let (home, ws, dir) = (
             TempDir::new().unwrap(),
             TempDir::new().unwrap(),
@@ -939,37 +961,28 @@ mod tests {
         let p = vault.env()[0].1.clone();
         let host = "api.example.com";
 
-        let (filled, used) = vault.fill(
-            host,
-            &format!("GET /v1?key={p} HTTP/1.1\r\nX-Key: {p}\r\n\r\n"),
-        );
-        assert_eq!(
-            filled,
-            "GET /v1?key=a%2Bb%2Fc%22d%5Ce HTTP/1.1\r\nX-Key: a+b/c\"d\\e\r\n\r\n"
-        );
+        // In the URL or a header that holds no credentials, it stays.
+        let elsewhere = format!("GET /v1?key={p} HTTP/1.1\r\nX-Key: {p}\r\n\r\n");
+        let (filled, used) = vault.fill(host, &elsewhere);
+        assert_eq!((filled, used.len()), (elsewhere, 0));
+        // In a credential header, however cased, it is filled.
+        let (filled, used) =
+            vault.fill(host, &format!("GET /v1 HTTP/1.1\r\nX-Api-Key: {p}\r\n\r\n"));
+        assert_eq!(filled, "GET /v1 HTTP/1.1\r\nX-Api-Key: a+b/c\"d\\e\r\n\r\n");
         assert_eq!(used, ["KEY"]);
 
-        let body = |kind: Option<&str>, text: &str| {
-            let (out, used) = vault.fill_body(host, kind, text.as_bytes());
-            (String::from_utf8(out).unwrap(), used.len())
-        };
-        let json = format!("{{\"key\":\"{p}\",\"n\":1}}");
+        // Credentials that are not Kule's are told apart from its own.
+        let ours = format!("GET / HTTP/1.1\r\nAuthorization: Bearer {p}\r\n\r\n");
+        assert_eq!(vault.foreign_credential(host, &ours), None);
+        let theirs = "GET / HTTP/1.1\r\nx-api-key: sk-other\r\n\r\n";
         assert_eq!(
-            body(Some("application/json; charset=utf-8"), &json),
-            ("{\"key\":\"a+b/c\\\"d\\\\e\",\"n\":1}".to_owned(), 1)
+            vault.foreign_credential(host, theirs).as_deref(),
+            Some("x-api-key")
         );
-        assert_eq!(
-            body(
-                Some("application/x-www-form-urlencoded"),
-                &format!("key={p}&x=1")
-            ),
-            ("key=a%2Bb%2Fc%22d%5Ce&x=1".to_owned(), 1)
-        );
-        assert_eq!(body(Some("text/plain"), &p), ("a+b/c\"d\\e".to_owned(), 1));
-        assert_eq!(body(None, "no secret"), ("no secret".to_owned(), 0));
-        // Never for another host.
-        let (out, used) = vault.fill_body("evil.example.com", None, p.as_bytes());
-        assert_eq!((out, used.len()), (p.into_bytes(), 0));
+        assert_eq!(vault.foreign_credential("other.example", theirs), None);
+        let basic = base64::engine::general_purpose::STANDARD.encode(format!("x:{p}"));
+        let ours = format!("GET / HTTP/1.1\r\nAuthorization: Basic {basic}\r\n\r\n");
+        assert_eq!(vault.foreign_credential(host, &ours), None);
 
         // A response that repeats it may hold any of those forms.
         assert_eq!(
