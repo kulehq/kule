@@ -609,9 +609,16 @@ permissions, the SDK and the package format;
   sandbox cannot move a path, so there tasks share the system's `/tmp`.
 - Package registries are read-only to commands (a publish is refused) for
   npm, yarn, pnpm and bun, cargo, pip, uv and poetry, and gem, whose
-  tools trust the task's authority. Go's, NuGet's and Maven's tools on
-  macOS trust the system's roots alone, so their registries pass through
-  unseen, writes included.
+  tools trust the task's authority. NuGet's and Maven's tools on macOS
+  trust the system's roots alone, so their registries pass through unseen,
+  writes included, as Go's module proxy does.
+- On macOS, while a task's network goes through the proxy, the system's
+  certificate service stays closed to its commands: it fetches the
+  addresses a certificate names past the proxy. Go is told to check
+  certificates against the roots `SSL_CERT_FILE` names instead. A tool
+  that checks them only through that service cannot use HTTPS in a task;
+  pip 24.2 and later works with `--use-deprecated=legacy-certs` (older pip
+  refuses the option, so Kule does not set it).
 - Gemini needs an API key from AI Studio (Google no longer serves the
   Code Assist sign-in to clients like this), saved outside the keychain,
   which the sandbox keeps read-only: `GEMINI_FORCE_FILE_STORAGE=true gemini`,

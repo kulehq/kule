@@ -288,6 +288,7 @@ mod tests {
             operation: operation.into(),
             path: path.into(),
             saved: None,
+            hint: None,
         }
     }
 

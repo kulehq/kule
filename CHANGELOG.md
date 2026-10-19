@@ -105,6 +105,11 @@
   names it (its keys' hosts count), no longer by every command; a profile
   of your own lists its model's host in `hosts` or `keys`. Go's module
   proxy now asks, as other hosts do.
+- Go programs in a task check certificates against the roots the proxy
+  names (`GODEBUG=x509sslcertoverrideplatform=1`, after your own
+  settings), so their HTTPS works through the proxy on macOS. A refusal
+  that keeps a tool from HTTPS says what to do (pip 24.2 and later:
+  `--use-deprecated=legacy-certs`), in `kule exec` and in the timeline.
 - Daemon protocol 28: `Isolation` and `SetIsolation`.
 
 ### Motion

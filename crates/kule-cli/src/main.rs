@@ -577,14 +577,7 @@ fn run() -> Result<ExitCode> {
                 && let Some(denials) = sandbox.denials(started.elapsed())?
             {
                 record_denials(&task, &denials)?;
-                for d in &denials {
-                    println!(
-                        "sandbox: refused {} {} ({})",
-                        paint::plain_line(&d.operation),
-                        paint::plain_line(&d.path),
-                        paint::plain_line(&d.process)
-                    );
-                }
+                print_denials(&denials);
             }
             return Ok(match status.code() {
                 Some(0) => ExitCode::SUCCESS,
@@ -700,14 +693,7 @@ fn run() -> Result<ExitCode> {
             print_home(&task)?;
             if let Some(denials) = sandbox.denials(started.elapsed())? {
                 record_denials(&task, &denials)?;
-                for d in &denials {
-                    println!(
-                        "sandbox: refused {} {} ({})",
-                        paint::plain_line(&d.operation),
-                        paint::plain_line(&d.path),
-                        paint::plain_line(&d.process)
-                    );
-                }
+                print_denials(&denials);
             }
             let put_back: Vec<Denial> = put_back.iter().map(Denial::put_back).collect();
             record_denials(&task, &put_back)?;
@@ -1209,6 +1195,27 @@ fn print_connections(log: &[Connection]) {
             c.port,
             paint::dim(&format!("({})", c.rules.join(", ")))
         );
+    }
+}
+
+/// What the sandbox refused, each hint once after the refusals it explains.
+fn print_denials(denials: &[Denial]) {
+    let mut hints: Vec<&str> = Vec::new();
+    for d in denials {
+        println!(
+            "sandbox: refused {} {} ({})",
+            paint::plain_line(&d.operation),
+            paint::plain_line(&d.path),
+            paint::plain_line(&d.process)
+        );
+        if let Some(hint) = &d.hint
+            && !hints.contains(&hint.as_str())
+        {
+            hints.push(hint);
+        }
+    }
+    for hint in hints {
+        println!("  {hint}");
     }
 }
 

@@ -313,6 +313,27 @@ pub struct Denial {
     /// For a path Kule put back: where what it held instead was moved.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub saved: Option<String>,
+    /// Why the sandbox refuses it and what to do instead, where a tool
+    /// cannot work without it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hint: Option<String>,
+}
+
+/// What a person can do about a refusal that keeps a tool from working.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn hint(operation: &str, path: &str) -> Option<String> {
+    match (operation, path) {
+        ("mach-lookup", "com.apple.trustd.agent") => Some(
+            "macOS checks certificates in this service, which also fetches the \
+             addresses a certificate names past the proxy, so it stays closed while \
+             the network goes through it. A tool that checks certificates only \
+             there cannot use HTTPS in a task; pip 24.2 and later works with \
+             --use-deprecated=legacy-certs (or PIP_USE_DEPRECATED=legacy-certs \
+             in the agent's profile)."
+                .to_owned(),
+        ),
+        _ => None,
+    }
 }
 
 impl Denial {
@@ -324,6 +345,7 @@ impl Denial {
             operation: "file-write (put back)".to_owned(),
             path: put_back.path.display().to_string(),
             saved: put_back.saved.as_ref().map(|p| p.display().to_string()),
+            hint: None,
         }
     }
 }
@@ -798,6 +820,21 @@ impl Sandbox {
             // Node's built-in fetch ignores the variables above unless told
             // to (Node 24+); without the proxy its connections just fail.
             command.env("NODE_USE_ENV_PROXY", "1");
+            // Go on macOS checks certificates with the system's services,
+            // which a command reaches only with the network open; told to,
+            // it checks them against the roots `SSL_CERT_FILE` names, as on
+            // Linux. Go before 1.27 does that unless its module says a newer
+            // Go; older Go ignores the setting. The last setting of a name
+            // wins, so this one goes after the person's.
+            let godebug = match current("GODEBUG") {
+                Some(theirs) if !theirs.is_empty() => {
+                    let mut value = theirs;
+                    value.push(",x509sslcertoverrideplatform=1");
+                    value
+                }
+                _ => "x509sslcertoverrideplatform=1".into(),
+            };
+            command.env("GODEBUG", godebug);
         }
         Ok(command)
     }
@@ -1147,6 +1184,7 @@ fn parse_denial(message: &str) -> Option<Denial> {
         operation: operation.to_owned(),
         path: path.to_owned(),
         saved: None,
+        hint: hint(operation, path),
     })
 }
 
@@ -1496,6 +1534,19 @@ mod tests {
             );
         }
         assert!(parse_denial("something else").is_none());
+    }
+
+    #[test]
+    fn a_refused_certificate_service_says_what_to_do() {
+        let trust = parse_denial(
+            "Sandbox: Python(4242) deny(1) mach-lookup com.apple.trustd.agent\nkule-1-2",
+        )
+        .unwrap();
+        assert!(trust.hint.unwrap().contains("legacy-certs"));
+        let other =
+            parse_denial("Sandbox: Python(4242) deny(1) mach-lookup com.apple.lsd.mapdb\nkule-1-2")
+                .unwrap();
+        assert_eq!(other.hint, None);
     }
 }
 

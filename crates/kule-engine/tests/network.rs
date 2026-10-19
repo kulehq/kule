@@ -504,3 +504,81 @@ fn an_agents_key_is_a_placeholder_to_everything_the_run_starts() {
     );
     assert!(!err.contains("sk-pasted-key"), "{err}");
 }
+
+/// Go checks certificates against the roots the proxy's variables name,
+/// with the person's own Go settings kept: on macOS it would otherwise ask
+/// the system's services, which a command reaches only with the network
+/// open. A Go program whose module says Go 1.21 trusts the task's authority
+/// as one of the system's roots.
+#[test]
+fn go_trusts_the_roots_the_proxy_names() {
+    let has_go = std::process::Command::new("go")
+        .arg("version")
+        .output()
+        .is_ok_and(|o| o.status.success());
+    if !has_go {
+        eprintln!("skipped: no go here");
+        return;
+    }
+    let src = TempDir::new().unwrap();
+    fs::write(src.path().join("go.mod"), "module probe\ngo 1.21\n").unwrap();
+    fs::write(
+        src.path().join("main.go"),
+        r#"package main
+
+import (
+	"crypto/x509"
+	"encoding/pem"
+	"fmt"
+	"os"
+)
+
+func main() {
+	fmt.Println(os.Getenv("GODEBUG"))
+	data, err := os.ReadFile(os.Getenv("NODE_EXTRA_CA_CERTS"))
+	if err != nil {
+		fmt.Println("read:", err)
+		return
+	}
+	block, _ := pem.Decode(data)
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		fmt.Println("parse:", err)
+		return
+	}
+	if _, err := cert.Verify(x509.VerifyOptions{}); err != nil {
+		fmt.Println("verify:", err)
+		return
+	}
+	fmt.Println("trusted")
+}
+"#,
+    )
+    .unwrap();
+    let probe = src.path().join("probe");
+    let built = std::process::Command::new("go")
+        .args(["build", "-o"])
+        .arg(&probe)
+        .arg(".")
+        .current_dir(src.path())
+        .output()
+        .unwrap();
+    assert!(built.status.success(), "{built:?}");
+
+    let s = Setup::new();
+    let mut sandbox = Sandbox::new(&s.task).unwrap();
+    sandbox.use_proxy(&s._proxy);
+    let out = sandbox
+        .command(probe.to_str().unwrap(), &[])
+        .unwrap()
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&out.stdout);
+    let mut lines = text.lines();
+    assert_eq!(
+        lines.next(),
+        Some("x509sslcertoverrideplatform=1"),
+        "{out:?}"
+    );
+    assert_eq!(lines.next(), Some("trusted"), "{out:?}");
+}

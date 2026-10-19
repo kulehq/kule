@@ -4076,7 +4076,8 @@ async function loadTimeline(id) {
               {},
               h("span", { class: "change denied" }, "×"),
               `${d.operation} ${d.path} (${d.process})`,
-              d.saved ? ` · what was there is in ${d.saved}` : null
+              d.saved ? ` · what was there is in ${d.saved}` : null,
+              d.hint ? h("div", { class: "muted" }, d.hint) : null
             )
           )
       )
