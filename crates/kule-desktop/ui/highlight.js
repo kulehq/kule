@@ -5,6 +5,19 @@
 // after vendor/material-icons/icons.js and vendor/prism/prism.js.
 "use strict";
 
+/** Characters that show nothing yet change what text means or how it
+ * reads: control characters (but tab, line feed and carriage return) and
+ * the marks that turn text around. */
+const UNSEEN = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F؜‎‏‪-‮⁦-⁩]/g;
+
+/** `text` as a person should read it: each unseen character written out,
+ * as ⟨U+202E⟩, so a file name, a line of code or anything an agent wrote
+ * cannot pass for something else. Every text the window shows goes
+ * through it. */
+function shown(text) {
+  return text.replace(UNSEEN, (c) => `⟨U+${c.codePointAt(0).toString(16).toUpperCase().padStart(4, "0")}⟩`);
+}
+
 /** Whether the window is light now: the theme's scheme, else the computer's. */
 function lightScheme() {
   const scheme = document.documentElement.dataset.scheme;
@@ -87,7 +100,7 @@ function highlighted(text, language) {
   }
   const nodes = (list) =>
     list.map((t) => {
-      if (typeof t === "string") return document.createTextNode(t);
+      if (typeof t === "string") return document.createTextNode(shown(t));
       const span = document.createElement("span");
       const aliases = t.alias ? [].concat(t.alias) : [];
       span.className = [t.type, ...aliases].map((c) => `tok-${c}`).join(" ");

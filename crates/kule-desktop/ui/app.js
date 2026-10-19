@@ -39,11 +39,13 @@ function h(tag, attrs, ...children) {
     // Through the style object: the window's content security policy
     // refuses a style attribute, not styles set from script.
     else if (key === "style") el.style.cssText = value;
+    else if (key === "title" || key.startsWith("aria-")) el.setAttribute(key, shown(String(value)));
     else el.setAttribute(key, value === true ? "" : String(value));
   }
   for (const child of children.flat()) {
     if (child === undefined || child === null || child === false) continue;
-    el.append(child instanceof Node ? child : document.createTextNode(String(child)));
+    // Shown with what it hides written out (see `shown`, highlight.js).
+    el.append(child instanceof Node ? child : document.createTextNode(shown(String(child))));
   }
   return el;
 }
