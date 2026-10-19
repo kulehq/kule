@@ -235,8 +235,10 @@ fn git_dirs(tree: &Tree) -> Vec<String> {
 }
 
 /// The deleted paths whose file lives on at a created or replaced one: the
-/// same inode, and for a file the same size and modification time, which a
-/// rename keeps and a write does not. Read from metadata alone, so sorting
+/// same inode, made at the same time where an inode number is given again
+/// (see [`Stamp::same_entry`]), and for a file the same size and
+/// modification time, which a rename keeps and a write does not. Read
+/// from metadata alone, so sorting
 /// thousands of photos costs no reading; an agent that means to could pass
 /// a deletion off as a move, which is why a move is still shown as one.
 fn moves(effects: &[Effect], baseline: &Baseline, now: &Tree) -> Vec<Move> {
@@ -261,6 +263,7 @@ fn moves(effects: &[Effect], baseline: &Baseline, now: &Tree) -> Vec<Move> {
             continue;
         };
         let same = before.kind == stamp.kind
+            && before.same_entry(stamp)
             && (stamp.kind == Kind::Dir
                 || (before.size == stamp.size && before.mtime == stamp.mtime));
         if same {
@@ -296,5 +299,60 @@ fn differs(copy: &Path, work: &Path, path: &str, entry: &Entry, now: &Stamp) -> 
                 _ => Ok(true),
             }
         }
+    }
+}
+
+/// Inode numbers given again are Linux's: APFS never does.
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::*;
+    use crate::manifest::Entry;
+
+    fn stamp(ino: u64, born: Option<(i64, i64)>) -> Stamp {
+        Stamp {
+            kind: Kind::File,
+            size: 2,
+            mode: 0o644,
+            mtime: (1_700_000_000, 0),
+            ctime: (1_700_000_000, 0),
+            ino,
+            link: None,
+            born,
+        }
+    }
+
+    fn effect(path: &str, change: Change) -> Effect {
+        Effect {
+            path: path.to_owned(),
+            change,
+            kind: Kind::File,
+            ignored: false,
+        }
+    }
+
+    /// The moves found when `a`, made at `was`, is deleted and `b`, made at
+    /// `now`, has its inode number, size and modification time.
+    fn moved(was: Option<(i64, i64)>, now: Option<(i64, i64)>) -> Vec<Move> {
+        let mut baseline = Baseline::default();
+        baseline.entries.insert(
+            "a".to_owned(),
+            Entry {
+                work: stamp(1, None),
+                copy: stamp(7, was),
+            },
+        );
+        let tree: Tree = [("b".to_owned(), stamp(7, now))].into_iter().collect();
+        let effects = [effect("a", Change::Deleted), effect("b", Change::Created)];
+        moves(&effects, &baseline, &tree)
+    }
+
+    /// Linux filesystems give a deleted file's inode number to the next one
+    /// made (ext4 at once): when each was made tells them apart, and where
+    /// that is not known, a deletion is not passed off as a move.
+    #[test]
+    fn an_inode_number_given_again_is_not_a_move() {
+        assert_eq!(moved(Some((1, 0)), Some((1, 0))).len(), 1);
+        assert!(moved(Some((1, 0)), Some((2, 0))).is_empty());
+        assert!(moved(None, None).is_empty());
     }
 }

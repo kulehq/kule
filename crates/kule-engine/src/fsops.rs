@@ -583,7 +583,12 @@ pub(crate) fn beneath(root: &Path, rel: &str) -> io::Result<Beneath> {
         return gone(io::Error::last_os_error());
     }
     match st.st_mode & libc::S_IFMT {
-        libc::S_IFDIR => Ok(Beneath::Dir(u32::from(st.st_mode) & 0o7777)),
+        libc::S_IFDIR => {
+            // mode_t is u16 on macOS, u32 on Linux.
+            #[allow(clippy::useless_conversion)]
+            let mode = u32::from(st.st_mode) & 0o7777;
+            Ok(Beneath::Dir(mode))
+        }
         libc::S_IFLNK => {
             let mut buf = vec![0u8; libc::PATH_MAX as usize + 1];
             // SAFETY: reads at most buf.len() bytes into buf.

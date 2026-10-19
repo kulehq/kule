@@ -132,7 +132,7 @@ pub fn read(text: &str) -> Result<ProfileFile> {
     if let Some(Budget { daily: Some(m) }) = &file.budget {
         let currency_ok =
             m.currency.len() == 3 && m.currency.chars().all(|c| c.is_ascii_uppercase());
-        if !(m.amount.is_finite() && m.amount > 0.0) || !currency_ok {
+        if !(m.amount.is_finite() && m.amount > 0.0 && currency_ok) {
             return Err(format!(
                 "budget: {} {} is not a budget",
                 m.amount, m.currency

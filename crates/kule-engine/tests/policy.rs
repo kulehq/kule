@@ -333,6 +333,28 @@ fn moving_files_is_not_deleting_them() {
     assert_eq!(s.judged().verdict, Verdict::Allow);
 }
 
+/// A file made where another was deleted, which the filesystem gave the
+/// deleted one's inode number, with its size and modification time, is
+/// not that file moved: the deletions count.
+#[test]
+fn a_new_file_on_a_deleted_ones_inode_is_not_a_move() {
+    let s = data(30, false);
+    let copy = s.copy();
+    for i in 0..30 {
+        let old = copy.join(format!("data/{i}.txt"));
+        let meta = fs::metadata(&old).unwrap();
+        fs::remove_file(&old).unwrap();
+        let new = copy.join(format!("data/n{i}.txt"));
+        fs::write(&new, format!("{}\n", i % 10)).unwrap();
+        filetime::set_file_mtime(&new, filetime::FileTime::from_last_modification_time(&meta))
+            .unwrap();
+    }
+    let set = s.task.effects().unwrap();
+    assert!(set.moves.is_empty(), "{:?}", set.moves);
+    assert_eq!(set.deleted().count(), 30);
+    assert_eq!(s.judged().verdict, Verdict::Ask);
+}
+
 #[test]
 fn a_file_rewritten_under_a_new_name_is_not_a_move() {
     let s = data(1, false);

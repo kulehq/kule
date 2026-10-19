@@ -20,13 +20,19 @@ pub enum Kind {
     Symlink,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Eq, Serialize, Deserialize)]
 pub struct Stamp {
     pub kind: Kind,
     pub size: u64,
     /// Permission bits only.
     pub mode: u32,
     pub mtime: (i64, i64),
+    /// When the entry was made, where nobody can set it (Linux's statx):
+    /// ext4 gives a deleted file's inode number to the next one made, and
+    /// this tells the two apart. `None` elsewhere, and in stamps from
+    /// before Kule kept it, which compare equal to any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub born: Option<(i64, i64)>,
     /// Any write or chmod moves the change time, and nothing can set it back,
     /// except that writes within one tick of the filesystem's clock share it
     /// (see `clock`).
@@ -35,7 +41,33 @@ pub struct Stamp {
     pub link: Option<String>,
 }
 
+impl PartialEq for Stamp {
+    fn eq(&self, other: &Stamp) -> bool {
+        let born = match (self.born, other.born) {
+            (Some(a), Some(b)) => a == b,
+            _ => true,
+        };
+        born && self.kind == other.kind
+            && self.size == other.size
+            && self.mode == other.mode
+            && self.mtime == other.mtime
+            && self.ctime == other.ctime
+            && self.ino == other.ino
+            && self.link == other.link
+    }
+}
+
 impl Stamp {
+    /// Whether this stamp and `other`, which share an inode number, are
+    /// of the same entry: on Linux, by when each was made; elsewhere the
+    /// number is never given to another while a stamp may name it (APFS).
+    pub fn same_entry(&self, other: &Stamp) -> bool {
+        if cfg!(target_os = "linux") {
+            self.born.is_some() && self.born == other.born
+        } else {
+            true
+        }
+    }
     /// The stamp of `path`, or `None` when nothing is there, including when
     /// a parent is no longer a directory. Sockets, FIFOs and devices count as
     /// nothing: Kule does not track them.
@@ -78,6 +110,7 @@ impl Stamp {
             ctime: (meta.ctime(), meta.ctime_nsec()),
             ino: meta.ino(),
             link,
+            born: born(meta),
         }))
     }
 
@@ -102,6 +135,17 @@ impl Stamp {
     pub fn is_unknown(&self) -> bool {
         self.ctime == (i64::MIN, -1)
     }
+}
+
+/// When the entry `meta` describes was made, on Linux (statx, where the
+/// filesystem keeps it); `None` elsewhere.
+fn born(meta: &Metadata) -> Option<(i64, i64)> {
+    if !cfg!(target_os = "linux") {
+        return None;
+    }
+    let made = meta.created().ok()?;
+    let since = made.duration_since(std::time::UNIX_EPOCH).ok()?;
+    Some((since.as_secs() as i64, i64::from(since.subsec_nanos())))
 }
 
 /// Every tracked entry under `root` (not `root` itself), by relative path.
