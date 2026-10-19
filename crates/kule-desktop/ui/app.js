@@ -1322,6 +1322,70 @@ async function openPolicy() {
   await renderPolicy();
 }
 
+// --- Isolation ---------------------------------------------------------------
+
+// What this computer cannot give an agent's commands. With a gap and no
+// acceptance no agent runs; accepted, the title bar says so while it holds.
+
+let isolation = { gaps: [], accept_weaker: false };
+
+async function loadIsolation() {
+  try {
+    isolation = await call("isolation");
+  } catch (err) {
+    fail(err);
+  }
+  renderIsolation();
+}
+
+async function setIsolation(accept) {
+  try {
+    isolation = await call("set_isolation", { acceptWeaker: accept });
+    toast(accept ? "Agents run with weaker isolation on this computer" : "Agents run only fully isolated");
+  } catch (err) {
+    fail(err);
+  }
+  renderIsolation();
+  renderPolicy();
+}
+
+function renderIsolation() {
+  const chip = $("isolation-warning");
+  chip.hidden = !isolation.gaps.length;
+  chip.textContent = isolation.accept_weaker ? "Weaker isolation" : "Agents held: isolation";
+  chip.classList.toggle("deny", !isolation.accept_weaker);
+  chip.title = `This computer cannot give an agent's commands ${isolation.gaps.join("; nor ")}.`;
+}
+
+/** Policy's word on isolation, where this computer leaves a gap. */
+function isolationSection() {
+  if (!isolation.gaps.length) return null;
+  return h(
+    "section",
+    { class: "isolation", "aria-label": "Isolation" },
+    h("h3", {}, "Isolation on this computer"),
+    h("p", {}, "It cannot give an agent's commands:"),
+    h("ul", {}, isolation.gaps.map((gap) => h("li", {}, gap))),
+    h(
+      "p",
+      { class: "muted" },
+      "Kule runs no agent less isolated than it means to without your say. On Ubuntu, allowing unprivileged user namespaces closes most of it: sudo sysctl kernel.apparmor_restrict_unprivileged_userns=0."
+    ),
+    h(
+      "label",
+      { class: "isolation-accept", for: "isolation-accept" },
+      h("input", {
+        type: "checkbox",
+        id: "isolation-accept",
+        "data-key": "isolation-accept",
+        checked: isolation.accept_weaker,
+        onchange: (e) => setIsolation(e.currentTarget.checked),
+      }),
+      " Run agents with what this computer gives"
+    )
+  );
+}
+
 async function renderPolicy() {
   if (state.view !== "policy") return;
   let choice = "balanced";
@@ -1342,6 +1406,7 @@ async function renderPolicy() {
         "What passes on its own, what waits for you and what never passes, for every task. A repository can add its own refusals in .kule/policy.cedar; what you told Kule not to ask about again is under Rules."
       )
     ),
+    isolationSection(),
     policyPicker(choice, "settings", renderPolicy),
     groupPolicies(choice)
   );
@@ -5776,6 +5841,7 @@ const COMMANDS = [
   },
   { id: "group.new", title: "New group…", group: "Tasks", keys: "", run: () => { revealPanel("tasks"); newGroup(); } },
   { id: "group.policy", title: "Group policies", group: "Settings", keys: "", run: () => openPolicy() },
+  { id: "isolation.settings", title: "Isolation on this computer", group: "Settings", keys: "", run: () => openPolicy() },
   { id: "task.terminal", title: "Open a terminal in the task's copy", group: "Tasks", keys: "Mod+T", run: () => withTask((t) => openTerminal(t)) },
   { id: "task.fork", title: "Fork the task: a new one from its copy as it is now", group: "Tasks", keys: "Mod+Shift+D", run: () => withTask((t) => forkTask(t.id, null)) },
   { id: "task.delete", title: "Delete the task (press twice)", group: "Tasks", keys: "Mod+Backspace", run: () => withTask((t) => deleteByKey(t)) },
@@ -6347,6 +6413,8 @@ async function start() {
 
   await loadAgentChoices();
   $("open-settings").addEventListener("click", () => openSettings());
+  $("isolation-warning").addEventListener("click", () => openPolicy());
+  loadIsolation();
   const sections = [...document.querySelectorAll("#settings-tabs .tab")];
   for (const tab of sections) {
     tab.addEventListener("click", () => openSettings(tab.dataset.view));

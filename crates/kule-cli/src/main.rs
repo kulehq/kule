@@ -321,6 +321,14 @@ enum Cmd {
         /// ISO 4217 [default: USD]
         currency: Option<String>,
     },
+    /// Show what this computer cannot give a sandboxed command. Kule runs
+    /// nothing less isolated than it means to until you accept it here.
+    Isolation {
+        /// `on` runs commands with what this computer gives; `off` refuses
+        /// them while anything is missing.
+        #[arg(long, value_name = "on|off")]
+        accept_weaker: Option<String>,
+    },
     /// List the steps of the task's uncommitted work: what each tool call changed.
     Steps { task: String },
     /// Show the task's uncommitted changes and what the policy says about them.
@@ -731,6 +739,35 @@ fn run() -> Result<ExitCode> {
             };
             task.set_budget(budget)?;
             print_spent(&task)?;
+        }
+        Cmd::Isolation { accept_weaker } => {
+            match accept_weaker.as_deref() {
+                None => {}
+                Some(word @ ("on" | "off")) => kule_engine::set_isolation(
+                    &home,
+                    &kule_engine::Isolation {
+                        accept_weaker: word == "on",
+                    },
+                )?,
+                Some(other) => bail!("{other}: on or off"),
+            }
+            let gaps = kule_engine::isolation_gaps(Network::Proxy(0));
+            if gaps.is_empty() {
+                println!("this computer gives a sandboxed command all of its isolation");
+            } else {
+                println!("this computer cannot give a sandboxed command:");
+                for gap in &gaps {
+                    println!("  - {gap}");
+                }
+                println!(
+                    "{}",
+                    if kule_engine::isolation(&home)?.accept_weaker {
+                        "accepted: commands run with what it gives"
+                    } else {
+                        "not accepted: commands are refused (kule isolation --accept-weaker on)"
+                    }
+                );
+            }
         }
         Cmd::DailyBudget { amount, currency } => {
             match amount.as_deref() {
@@ -1186,14 +1223,15 @@ fn print_ruling(ruling: &Ruling) {
     }
 }
 
+/// Says, on every run you accepted it for, what the command goes without
+/// here; without your acceptance the sandbox refuses the command instead.
 fn warn_if_network_not_isolated() {
-    if !kule_engine::isolates_network() {
+    let gaps = kule_engine::isolation_gaps(Network::Proxy(0));
+    if !gaps.is_empty() {
         eprintln!(
-            "kule: this system refuses unprivileged user namespaces, so the sandbox \
-             checks only the proxy's port: a command can reach any address on that \
-             port and send datagrams anywhere. The agent's settings are put back \
-             after the run instead of kept read-only. Allow them (on Ubuntu: sysctl \
-             kernel.apparmor_restrict_unprivileged_userns=0) to close that."
+            "kule: weaker isolation on this computer: the command goes without {}. \
+             On Ubuntu, sysctl kernel.apparmor_restrict_unprivileged_userns=0 closes most of it.",
+            gaps.join("; nor ")
         );
     }
 }

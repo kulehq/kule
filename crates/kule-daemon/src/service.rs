@@ -69,6 +69,15 @@ pub struct DailyBudget {
     pub spent: kule_engine::Spent,
 }
 
+/// What this computer cannot give an agent's commands, said for a person,
+/// and whether they accepted running with less; with gaps and no
+/// acceptance, no agent runs.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IsolationView {
+    pub gaps: Vec<String>,
+    pub accept_weaker: bool,
+}
+
 /// A task as the task list shows it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskView {
@@ -1224,6 +1233,23 @@ impl Service {
             }
             None => Err(format!("no agent is at work in task {id}")),
         }
+    }
+
+    /// What an agent's commands would go without here; runs go through the
+    /// proxy, so a network of their own counts.
+    pub fn isolation(&self) -> Result<IsolationView> {
+        Ok(IsolationView {
+            gaps: kule_engine::isolation_gaps(kule_engine::Network::Proxy(0)),
+            accept_weaker: kule_engine::isolation(&self.home)
+                .map_err(text)?
+                .accept_weaker,
+        })
+    }
+
+    pub fn set_isolation(&self, accept_weaker: bool) -> Result<IsolationView> {
+        kule_engine::set_isolation(&self.home, &kule_engine::Isolation { accept_weaker })
+            .map_err(text)?;
+        self.isolation()
     }
 
     /// The limits of every task that sets none of its own.

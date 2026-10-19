@@ -579,8 +579,12 @@ permissions, the SDK and the package format;
   Commands get a network namespace of their own, with nothing but the
   proxy in reach; that takes unprivileged user namespaces, which Ubuntu
   24.04 refuses by default (`sysctl
-  kernel.apparmor_restrict_unprivileged_userns=0`). Without them only the
-  proxy's port is checked, and Kule says so. An agent's settings inside its
+  kernel.apparmor_restrict_unprivileged_userns=0`). Without them Kule runs
+  no agent until you accept weaker isolation (Settings → Policy, or `kule
+  isolation --accept-weaker on`), and says what is missing while you do.
+  Unix sockets outside the task's folders are out of reach through
+  Landlock's rule for them (ABI 9), or covered for the command on older
+  kernels. An agent's settings inside its
   state directory are mounted read-only for the agent alone, so changes the
   person makes meanwhile stay. Without user namespaces, and for settings
   that are links or do not exist yet, they are put back after the run

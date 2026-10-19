@@ -107,6 +107,40 @@ fn kule_state_next_to_the_copy_cannot_be_touched() {
     assert!(s.task.effects().is_ok());
 }
 
+/// Where this computer gives a command less isolation than Kule means to,
+/// the command runs only once the person accepted that. CI runs this a
+/// second time with unprivileged user namespaces refused.
+#[test]
+fn weaker_isolation_runs_only_once_accepted() {
+    let s = Setup::new();
+    let network = Network::Proxy(9);
+    if kule_engine::isolation_gaps(network).is_empty() {
+        // CI's second run says it took user namespaces away.
+        assert!(
+            std::env::var_os("KULE_TEST_EXPECT_GAPS").is_none(),
+            "no gap where one was expected"
+        );
+        eprintln!("skipped: this computer gives a command all of its isolation");
+        return;
+    }
+    let mut refused = s.sandbox();
+    refused.set_network(network);
+    let error = refused.command("true", &[]).expect_err("ran less isolated");
+    assert!(error.to_string().contains("weaker isolation"), "{error}");
+
+    kule_engine::set_isolation(
+        s._home.path(),
+        &kule_engine::Isolation {
+            accept_weaker: true,
+        },
+    )
+    .unwrap();
+    let mut accepted = s.sandbox();
+    accepted.set_network(network);
+    let out = accepted.command("true", &[]).unwrap().output().unwrap();
+    assert!(ok(&out), "{out:?}");
+}
+
 /// A process that left its session and its parent still lives in the
 /// sandbox; ending the sandbox's strays ends it, and nothing else.
 #[test]

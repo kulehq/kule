@@ -29,6 +29,7 @@ mod groups;
 mod history;
 mod home;
 mod ignore;
+mod isolation;
 mod labels;
 mod limits;
 mod loopback;
@@ -70,6 +71,7 @@ pub use groups::{
 };
 pub use history::{Entry as HistoryEntry, Event as HistoryEvent};
 pub use home::{HomeApplied, HomeChange};
+pub use isolation::{Isolation, isolation, isolation_gaps, set_isolation};
 pub use kule_entities as entities;
 pub use labels::{MAX_LABEL, ORDER_FILE, TaskColor, arranged, set_task_order, task_order};
 pub use limits::{Limits, TaskLimits, limits, set_limits};

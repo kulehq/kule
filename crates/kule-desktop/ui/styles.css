@@ -4474,3 +4474,49 @@ body.dragging-panel * {
 :root[data-motion="off"] .task-header.running::after {
   display: none;
 }
+
+/* The title bar's word when this computer gives agents less isolation. */
+.title-warning {
+  position: relative;
+  margin-right: 8px;
+  border: 0;
+  background: var(--ask-soft);
+  color: var(--ask);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.title-warning.deny {
+  background: var(--deny-soft);
+  color: var(--deny);
+}
+
+/* Settings → Policy: what this computer cannot give. */
+.isolation {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 18px;
+  padding: 12px 14px;
+  border: 1px solid var(--ask);
+  border-radius: var(--radius);
+  background: var(--ask-soft);
+}
+
+.isolation h3 {
+  color: var(--ask);
+  font-size: 14px;
+}
+
+.isolation ul {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.isolation-accept {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 550;
+}

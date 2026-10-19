@@ -404,6 +404,8 @@ pub fn dispatch(service: &Arc<Service>, call: Call) -> Result<Value, String> {
             json(crate::shortcuts::load(service.home())?)
         }
         Call::StopRun { task } => json(service.stop_run(&task)?),
+        Call::Isolation => json(service.isolation()?),
+        Call::SetIsolation { accept_weaker } => json(service.set_isolation(accept_weaker)?),
         Call::Limits => json(service.limits()?),
         Call::SetLimits { limits } => json(service.set_limits(&limits)?),
         Call::SetTaskLimits { task, limits } => json(service.set_task_limits(&task, &limits)?),

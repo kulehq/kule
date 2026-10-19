@@ -92,6 +92,17 @@
 - Daemon protocol 26: `StopRun`, `Limits`, `SetLimits`, `SetTaskLimits`,
   the `resources` run event, and the limits and time used in each task.
 
+### Security
+
+- Hardened containment of agents on macOS and Linux, and the integrity of
+  what a commit takes. Upgrading is strongly recommended; details follow
+  in a security advisory once this release is out.
+- Where a computer cannot give an agent's commands all of their isolation
+  (Linux without unprivileged user namespaces), Kule runs no agent until
+  you accept weaker isolation in Settings → Policy or with `kule isolation
+  --accept-weaker on`; the title bar says so while it holds.
+- Daemon protocol 28: `Isolation` and `SetIsolation`.
+
 ### Motion
 
 - The window moves a little where something changes, never just to

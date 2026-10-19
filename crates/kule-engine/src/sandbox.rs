@@ -238,6 +238,9 @@ pub struct Sandbox {
     /// find its processes by.
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     task: String,
+    /// The person accepted running with what this computer gives, where it
+    /// gives less than Kule means to (see [`crate::isolation_gaps`]).
+    accept_weaker: bool,
 }
 
 /// The service name no service has that a task's sandboxes, and only
@@ -299,6 +302,8 @@ impl Sandbox {
             file_size: None,
             tag: format!("kule-{}-{nanos:x}", task.id()),
             task: task.id().to_owned(),
+            // A choice that cannot be read is no choice.
+            accept_weaker: crate::isolation::isolation(&task.home()).is_ok_and(|i| i.accept_weaker),
         })
     }
 
@@ -608,6 +613,16 @@ impl Sandbox {
     pub fn command(&self, program: &str, args: &[String]) -> Result<Command> {
         use std::os::unix::process::CommandExt;
 
+        // Less isolated than meant only with the person's say.
+        let gaps = crate::isolation::isolation_gaps(self.network);
+        if !gaps.is_empty() && !self.accept_weaker {
+            return Err(Error::Invalid(format!(
+                "this computer cannot give the command {}. Kule does not run it less isolated \
+                 without your say: accept weaker isolation in Settings → Policy, or with \
+                 `kule isolation --accept-weaker on`",
+                gaps.join("; nor ")
+            )));
+        }
         let mut command = self.platform_command(program, args)?;
         // A session of its own: no controlling terminal, so nothing it runs
         // can push keystrokes into the person's terminal (TIOCSTI), and its

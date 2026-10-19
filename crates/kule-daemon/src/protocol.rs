@@ -10,7 +10,7 @@ use serde_json::Value;
 
 /// Changes whenever a call, a result or a notice changes shape; a client
 /// and a daemon that disagree on it cannot talk.
-pub const PROTOCOL: u32 = 27;
+pub const PROTOCOL: u32 = 28;
 
 /// What a daemon says about itself.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -248,6 +248,12 @@ pub enum Call {
     /// Stops the agent at work in the task.
     StopRun {
         task: String,
+    },
+    /// What this computer cannot give a sandboxed command, and whether
+    /// the person accepted running agents with less.
+    Isolation,
+    SetIsolation {
+        accept_weaker: bool,
     },
     /// The limits on the runs of every task that sets none of its own.
     Limits,

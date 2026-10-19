@@ -452,7 +452,11 @@ Open Settings with Mod+, or the gear at the bottom left.
     was refused, as checkboxes.
 - **Policy**: balanced or careful for every task, and a policy for each
   group. A repository can add refusals of its own in
-  `.kule/policy.cedar`.
+  `.kule/policy.cedar`. Where this computer cannot give agents all of
+  their isolation (Linux without unprivileged user namespaces), Policy
+  lists what is missing, and no agent runs until you tick *Run agents
+  with what this computer gives*; the title bar then says *Weaker
+  isolation* while it holds.
 - **Rules**: the approvals you told Kule to remember (a connection's
   *Approve and remember*, or *Don't ask again in this folder* on a held
   file in Review, which first shows what it would have let through), each with

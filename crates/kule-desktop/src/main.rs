@@ -22,9 +22,9 @@ use kule_daemon::settings_profile::{Part, ProfileFile};
 use kule_daemon::shortcuts::Shortcuts;
 use kule_daemon::themes::{ThemeFile, Themes};
 use kule_daemon::{
-    AgentProfile, Alert, Alerts, Call, Client, Commit, DailyBudget, Hello, Limits, Money, Notice,
-    PROTOCOL, PolicyChoice, Question, Result, Review, RunEvent, Sequenced, TaskChange, TaskColor,
-    TaskLimits, TaskView, Timeline, default_home,
+    AgentProfile, Alert, Alerts, Call, Client, Commit, DailyBudget, Hello, IsolationView, Limits,
+    Money, Notice, PROTOCOL, PolicyChoice, Question, Result, Review, RunEvent, Sequenced,
+    TaskChange, TaskColor, TaskLimits, TaskView, Timeline, default_home,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -669,6 +669,16 @@ fn set_daily_budget(kule: K<'_>, budget: Option<Money>) -> Result<DailyBudget> {
 }
 
 #[tauri::command(async)]
+fn isolation(kule: K<'_>) -> Result<IsolationView> {
+    kule.call(Call::Isolation)
+}
+
+#[tauri::command(async)]
+fn set_isolation(kule: K<'_>, accept_weaker: bool) -> Result<IsolationView> {
+    kule.call(Call::SetIsolation { accept_weaker })
+}
+
+#[tauri::command(async)]
 fn limits(kule: K<'_>) -> Result<Limits> {
     kule.call(Call::Limits)
 }
@@ -956,6 +966,8 @@ fn main() {
             set_shortcuts,
             daily_budget,
             set_daily_budget,
+            isolation,
+            set_isolation,
             limits,
             set_limits,
             set_task_limits,
