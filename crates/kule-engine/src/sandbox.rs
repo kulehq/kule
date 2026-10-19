@@ -919,28 +919,19 @@ impl Sandbox {
         Vec::new()
     }
 
-    /// A command that runs `program` inside the sandbox, in the copy, with
-    /// `TMPDIR` pointing at the task's temporary directory.
-    pub fn command(&self, program: &str, args: &[String]) -> Result<Command> {
+    /// A command for `program` whose first step between fork and exec gives
+    /// it a session of its own: no controlling terminal, so nothing it runs
+    /// can push keystrokes into the person's terminal (TIOCSTI), and its
+    /// whole process group can be stopped when it is done. The steps a
+    /// platform adds come after, inside that session and group.
+    #[cfg_attr(not(any(target_os = "macos", target_os = "linux")), allow(dead_code))]
+    fn session_command(&self, program: impl AsRef<std::ffi::OsStr>) -> Command {
         use std::os::unix::process::CommandExt;
 
-        // Less isolated than meant only with the person's say.
-        let gaps = crate::isolation::isolation_gaps(self.network);
-        if !gaps.is_empty() && !self.accept_weaker {
-            return Err(Error::Invalid(format!(
-                "this computer cannot give the command {}. Kule does not run it less isolated \
-                 without your say: accept weaker isolation in Settings → Policy, or with \
-                 `kule isolation --accept-weaker on`",
-                gaps.join("; nor ")
-            )));
-        }
-        let mut command = self.platform_command(program, args)?;
-        // A session of its own: no controlling terminal, so nothing it runs
-        // can push keystrokes into the person's terminal (TIOCSTI), and its
-        // whole process group can be stopped when it is done.
-        // SAFETY: setsid is async-signal-safe and touches nothing but the
-        // child between fork and exec.
+        let mut command = Command::new(program);
         let file_size = self.file_size;
+        // SAFETY: setsid and setrlimit are async-signal-safe and touch
+        // nothing but the child between fork and exec.
         unsafe {
             command.pre_exec(move || {
                 if libc::setsid() == -1 {
@@ -961,6 +952,23 @@ impl Sandbox {
                 Ok(())
             });
         }
+        command
+    }
+
+    /// A command that runs `program` inside the sandbox, in the copy, with
+    /// `TMPDIR` pointing at the task's temporary directory.
+    pub fn command(&self, program: &str, args: &[String]) -> Result<Command> {
+        // Less isolated than meant only with the person's say.
+        let gaps = crate::isolation::isolation_gaps(self.network);
+        if !gaps.is_empty() && !self.accept_weaker {
+            return Err(Error::Invalid(format!(
+                "this computer cannot give the command {}. Kule does not run it less isolated \
+                 without your say: accept weaker isolation in Settings → Policy, or with \
+                 `kule isolation --accept-weaker on`",
+                gaps.join("; nor ")
+            )));
+        }
+        let mut command = self.platform_command(program, args)?;
         // Only what tools need to find themselves and the person's
         // settings, and what was passed on purpose: tokens and agent sockets
         // in the environment (GITHUB_TOKEN, AWS_*, SSH_AUTH_SOCK) stay out.
@@ -1025,6 +1033,18 @@ pub fn isolates_network() -> bool {
     return crate::namespace::available();
     #[cfg(not(target_os = "linux"))]
     return cfg!(target_os = "macos");
+}
+
+/// Whether a command's processes are its own: it sees and signals no other,
+/// and what it leaves running ends with it. On Linux that takes a PID
+/// namespace, refused where user namespaces are; elsewhere what it leaves
+/// is found by its sandbox and ended with the task (see
+/// [`Sandbox::end_strays`]).
+pub fn own_processes() -> bool {
+    #[cfg(target_os = "linux")]
+    return crate::namespace::pids_available();
+    #[cfg(not(target_os = "linux"))]
+    return false;
 }
 
 /// Whether a protected path inside a writable directory stays read-only
@@ -1131,7 +1151,7 @@ fn real_or_planned(path: &Path) -> Result<PathBuf> {
 impl Sandbox {
     fn platform_command(&self, program: &str, args: &[String]) -> Result<Command> {
         let (profile, params) = self.seatbelt_profile();
-        let mut command = Command::new("/usr/bin/sandbox-exec");
+        let mut command = self.session_command("/usr/bin/sandbox-exec");
         command.arg("-p").arg(profile);
         for (key, value) in params {
             command.arg("-D").arg(format!("{key}={}", value.display()));
@@ -1386,7 +1406,7 @@ impl Sandbox {
         use std::os::unix::process::CommandExt;
 
         let mut ruleset = Some(self.landlock_ruleset()?);
-        let mut command = Command::new(program);
+        let mut command = self.session_command(program);
         command.args(args);
         // Namespaces of its own first: its uid map is written under /proc,
         // and Landlock would refuse that afterwards, and any mount.
@@ -1416,10 +1436,19 @@ impl Sandbox {
         let own_tmp = self.writable.iter().any(|w| w == Path::new("/tmp"))
             && !in_tmp
             && crate::namespace::mounts_available();
-        if matches!(net, Net::Own(_)) || !read_only.is_empty() || !masked.is_empty() || own_tmp {
+        let own_pids = crate::namespace::pids_available();
+        if matches!(net, Net::Own(_))
+            || !read_only.is_empty()
+            || !masked.is_empty()
+            || own_tmp
+            || own_pids
+        {
             let mut isolation = Isolation::new(net, &read_only)
                 .and_then(|i| i.mask_sockets(&masked))
                 .at(Path::new("/proc/self/ns"))?;
+            if own_pids {
+                isolation = isolation.own_pids();
+            }
             if own_tmp {
                 isolation = isolation.own_tmp(&self.tmp).at(&self.tmp)?;
             }

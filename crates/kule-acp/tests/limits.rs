@@ -193,9 +193,10 @@ fn a_run_over_its_memory_limit_is_stopped_at_once() {
         return;
     }
     let s = Setup::new();
-    let pid_file = s.task.copy().join("pid");
-    // (A script's commands are split at semicolons.)
-    let script = "exec python3 -c \"import os,time\nopen('pid','w').write(str(os.getpid()))\nb=b'x'*(400*1024*1024)\ntime.sleep(60)\"";
+    // It beats into a file while it lives. (A script's commands are split
+    // at semicolons.)
+    let beat = s.task.copy().join("beat");
+    let script = "exec python3 -c \"import time\nbeat=lambda: open('beat','a').write('.')\nbeat()\nb=b'x'*(400*1024*1024)\nwhile True:\n  beat()\n  time.sleep(0.02)\"";
     let ran = s.run(
         script,
         Plan {
@@ -205,11 +206,11 @@ fn a_run_over_its_memory_limit_is_stopped_at_once() {
     );
     stopped(&ran, "over its memory limit of 150 MB");
     assert!(ran.took < Duration::from_secs(10), "{:?}", ran.took);
-    let pid: i32 = fs::read_to_string(&pid_file).unwrap().parse().unwrap();
-    assert!(
-        kule_engine::resources::tree(&[pid]).is_empty(),
-        "still alive"
-    );
+    assert!(beat.exists(), "it never beat");
+    let len = || fs::metadata(&beat).map_or(0, |m| m.len());
+    let before = len();
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(len(), before, "still alive");
 }
 
 #[test]

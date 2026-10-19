@@ -45,6 +45,7 @@ pub fn isolation_gaps(network: Network) -> Vec<String> {
             network,
             crate::namespace::available(),
             crate::namespace::mounts_available(),
+            crate::namespace::pids_available(),
             crate::sandbox::landlock_abi(),
             crate::bind_filter::available(),
         )
@@ -57,13 +58,14 @@ pub fn isolation_gaps(network: Network) -> Vec<String> {
 }
 
 /// [`isolation_gaps`] from what the system offers: a network namespace,
-/// a mount namespace, Landlock's ABI, and Kule doing a command's binds
-/// (`bind_filter`).
+/// a mount namespace, a PID namespace, Landlock's ABI, and Kule doing a
+/// command's binds (`bind_filter`).
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub(crate) fn gaps(
     network: Network,
     own_network: bool,
     own_mounts: bool,
+    own_pids: bool,
     abi: i64,
     bind_filter: bool,
 ) -> Vec<String> {
@@ -98,6 +100,24 @@ pub(crate) fn gaps(
             "a /tmp of its own: it shares /tmp with your other programs and tasks".to_owned(),
         );
     }
+    if !own_pids {
+        gaps.push(
+            "processes of its own: what it leaves running is found by a guess, which one could slip"
+                .to_owned(),
+        );
+        // Landlock keeps its signals in from ABI 6.
+        if abi < 6 {
+            gaps.push("signals kept in: it could signal your other programs".to_owned());
+        }
+    }
+    // Abstract sockets belong to a network; Landlock keeps them in from
+    // ABI 6 where the command shares the person's.
+    if shared && abi < 6 {
+        gaps.push(
+            "abstract sockets kept out: on your network it could reach programs listening on one (the X server)"
+                .to_owned(),
+        );
+    }
     gaps
 }
 
@@ -108,16 +128,23 @@ mod tests {
     #[test]
     fn every_missing_piece_is_a_gap_and_nothing_else_is() {
         let proxy = Network::Proxy(1);
-        assert!(gaps(proxy, true, true, 9, true).is_empty());
-        assert!(gaps(proxy, true, true, 6, true).is_empty());
-        assert!(gaps(Network::Allow, false, true, 9, true).is_empty());
-        assert_eq!(gaps(proxy, false, true, 9, true).len(), 1);
-        assert_eq!(gaps(proxy, false, false, 6, true).len(), 4);
-        assert_eq!(gaps(proxy, false, false, 9, true).len(), 3);
+        assert!(gaps(proxy, true, true, true, 9, true).is_empty());
+        assert!(gaps(proxy, true, true, true, 6, true).is_empty());
+        assert!(gaps(Network::Allow, false, true, true, 9, true).is_empty());
+        assert_eq!(gaps(proxy, false, true, true, 9, true).len(), 1);
+        assert_eq!(gaps(proxy, false, false, true, 6, true).len(), 4);
+        assert_eq!(gaps(proxy, false, false, true, 9, true).len(), 3);
         // Servers on the person's network, with nobody doing their binds.
-        assert!(gaps(proxy, true, true, 9, false).is_empty());
-        assert_eq!(gaps(Network::Allow, true, true, 9, false).len(), 1);
-        assert_eq!(gaps(proxy, false, true, 9, false).len(), 2);
+        assert!(gaps(proxy, true, true, true, 9, false).is_empty());
+        assert_eq!(gaps(Network::Allow, true, true, true, 9, false).len(), 1);
+        assert_eq!(gaps(proxy, false, true, true, 9, false).len(), 2);
+        // Processes of its own; before ABI 6 they also keep its signals in.
+        assert_eq!(gaps(proxy, true, true, false, 9, true).len(), 1);
+        assert_eq!(gaps(proxy, true, true, false, 5, true).len(), 2);
+        assert!(gaps(proxy, true, true, true, 5, true).is_empty());
+        // Abstract sockets, kept in by a network of its own or ABI 6.
+        assert_eq!(gaps(Network::Allow, true, true, true, 5, true).len(), 1);
+        assert!(gaps(Network::Allow, true, true, true, 6, true).is_empty());
     }
 
     #[test]

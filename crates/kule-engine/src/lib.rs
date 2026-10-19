@@ -96,7 +96,7 @@ pub use remembered::{
 };
 pub use sandbox::{
     Denial, HIDDEN_IN_HOME, Network, PASSED_ENV, PERSONAL_IN_HOME, Sandbox, denials,
-    isolates_network, protects_in_place, record_denials,
+    isolates_network, own_processes, protects_in_place, record_denials,
 };
 pub use sealing::KeyHome;
 pub use secrets::{

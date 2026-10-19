@@ -225,21 +225,25 @@ fn permission_requests_are_answered_with_the_allow_option() {
 #[test]
 fn processes_the_agent_left_running_end_with_the_run() {
     let s = Setup::new();
-    s.run("background pid.txt");
-    let pid: i32 = fs::read_to_string(s.task.copy().join("pid.txt"))
-        .unwrap()
-        .trim()
-        .parse()
-        .unwrap();
-    let start = std::time::Instant::now();
-    // SAFETY: signal 0 only checks that the process exists.
-    while unsafe { libc::kill(pid, 0) } == 0 {
-        assert!(
-            start.elapsed() < std::time::Duration::from_secs(5),
-            "process {pid} outlived the run"
-        );
-        std::thread::sleep(std::time::Duration::from_millis(20));
+    let beat = s.task.copy().join("beat");
+    s.run("background beat");
+    assert!(beat.exists(), "the process never beat");
+    assert!(stops_beating(&beat), "a process outlived the run");
+}
+
+/// Whether what adds to `file` stops within a few seconds: its length then
+/// holds for a while.
+fn stops_beating(file: &std::path::Path) -> bool {
+    let len = || fs::metadata(file).map_or(0, |m| m.len());
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while std::time::Instant::now() < until {
+        let before = len();
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        if len() == before {
+            return true;
+        }
     }
+    false
 }
 
 fn usd(amount: f64) -> Cost {
@@ -462,47 +466,32 @@ fn the_agent_s_commands_run_inside_its_sandbox() {
 }
 
 /// What a command leaves running, such as a server it started in the
-/// background, ends with the run; the command itself ends when its own
+/// background, ends with the run at the latest (where its processes are
+/// its own, with the command); the command itself ends when its own
 /// process does, though the leftover holds its output open.
 #[test]
 fn what_a_command_leaves_running_ends_with_the_run() {
     let s = Setup::new();
     let started = std::time::Instant::now();
-    let said = said_of(&s, "shell sleep 30 & echo $!", true);
+    // Beats into a file while it lives; a prompt's commands are split at
+    // semicolons, so the loop has none.
+    let said = said_of(
+        &s,
+        "shell awk 'BEGIN{while(!system(\"printf . >> beat && sleep 0.02\")){}}' & sleep 0.3 && echo started",
+        true,
+    );
     assert!(
         started.elapsed() < std::time::Duration::from_secs(10),
         "{:?}",
         started.elapsed()
     );
-    let pid: i32 = said[0]
-        .trim_start_matches("exit 0: ")
-        .trim()
-        .parse()
-        .unwrap_or_else(|_| panic!("{said:?}"));
-    assert!(gone(pid), "the background process {pid} outlived the run");
-}
-
-/// Whether process `pid` is gone within a few seconds: killed, it may stay
-/// a zombie until whoever inherited it reaps it, and a zombie runs nothing.
-fn gone(pid: i32) -> bool {
-    let until = std::time::Instant::now() + std::time::Duration::from_secs(3);
-    loop {
-        // SAFETY: signal 0 only asks whether the process is there.
-        if unsafe { libc::kill(pid, 0) } != 0 {
-            return true;
-        }
-        #[cfg(target_os = "linux")]
-        if fs::read_to_string(format!("/proc/{pid}/stat")).is_ok_and(|s| {
-            s.rsplit_once(") ")
-                .is_some_and(|(_, rest)| rest.starts_with('Z'))
-        }) {
-            return true;
-        }
-        if std::time::Instant::now() > until {
-            return false;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(50));
-    }
+    assert_eq!(said[0].trim(), "exit 0: started", "{said:?}");
+    let beat = s.task.copy().join("beat");
+    assert!(beat.exists(), "the background process never beat");
+    assert!(
+        stops_beating(&beat),
+        "the background process outlived the run"
+    );
 }
 
 /// Pictures go after the prompt's text to an agent that takes them; one

@@ -258,9 +258,15 @@ fn weaker_isolation_runs_only_once_accepted() {
 }
 
 /// A process that left its session and its parent still lives in the
-/// sandbox; ending the sandbox's strays ends it, and nothing else.
+/// sandbox; ending the sandbox's strays ends it, and nothing else. Where
+/// a command's processes are its own, none outlives it (see
+/// `what_a_command_leaves_running_ends_with_it`).
 #[test]
 fn processes_left_behind_end_with_the_sandbox() {
+    if kule_engine::own_processes() {
+        eprintln!("skipped: what a command leaves running ends with it here");
+        return;
+    }
     let s = Setup::new();
     let sandbox = s.sandbox();
     let script = "import os, time\n\
@@ -781,12 +787,53 @@ fn only_the_environment_tools_need_reaches_a_command() {
 #[test]
 fn commands_run_in_a_session_of_their_own() {
     let s = Setup::new();
-    let out = sandbox_python(
-        &s.sandbox(),
-        "import os; print(os.getsid(0) == os.getpid(), os.getpgrp() == os.getpid())",
-    );
-    assert!(ok(&out), "{out:?}");
-    assert_eq!(text(&out), "True True");
+    if !kule_engine::own_processes() {
+        let out = sandbox_python(
+            &s.sandbox(),
+            "import os; print(os.getsid(0) == os.getpid(), os.getpgrp() == os.getpid())",
+        );
+        assert!(ok(&out), "{out:?}");
+        assert_eq!(text(&out), "True True");
+        return;
+    }
+    // The process Kule started leads both from outside the command's PID
+    // namespace; the command, two processes down, is in them.
+    let mut child = s
+        .sandbox()
+        .command("sleep", &["30".to_owned()])
+        .unwrap()
+        .spawn()
+        .unwrap();
+    let pid = child.id() as i32;
+    // `pid (name) state ppid pgrp session …`, with ids as Kule sees them.
+    let stat = |pid: i32| -> Vec<i32> {
+        let text = fs::read_to_string(format!("/proc/{pid}/stat")).unwrap_or_default();
+        let fields = text.rsplit_once(") ").map_or("", |(_, rest)| rest);
+        fields
+            .split(' ')
+            .skip(1)
+            .take(3)
+            .filter_map(|f| f.parse().ok())
+            .collect()
+    };
+    let child_of = |parent: i32| -> i32 {
+        let started = std::time::Instant::now();
+        loop {
+            let children = fs::read_to_string(format!("/proc/{parent}/task/{parent}/children"))
+                .unwrap_or_default();
+            if let Some(first) = children.split_whitespace().next() {
+                return first.parse().unwrap();
+            }
+            assert!(started.elapsed() < std::time::Duration::from_secs(5));
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    };
+    let command = child_of(child_of(pid));
+    let seen = (stat(pid), stat(command));
+    let _ = child.kill();
+    let _ = child.wait();
+    assert_eq!(seen.0[1..], [pid, pid], "Kule's child leads no session");
+    assert_eq!(seen.1[1..], [pid, pid], "the command is outside its group");
 }
 
 #[test]
@@ -1686,4 +1733,207 @@ fn the_projects_a_workspace_builds_from_are_suggested_from_its_own_manifests() {
     kule_engine::add_beside(kule.path(), &ws, &home.join("code/shared"), &home).unwrap();
     let suggested = kule_engine::suggest_beside(kule.path(), &ws, &home).unwrap();
     assert_eq!(suggested, ["code/Lib", "code/ui"].map(|p| home.join(p)));
+}
+
+/// Whether something still appends to `file`: its length changes within
+/// half a second.
+#[cfg(target_os = "linux")]
+fn still_beats(file: &Path) -> bool {
+    let len = || fs::metadata(file).map_or(0, |m| m.len());
+    let before = len();
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    len() != before
+}
+
+/// Whether commands get processes of their own here, as they must wherever
+/// user namespaces work: a broken PID namespace is never taken for a
+/// missing one.
+#[cfg(target_os = "linux")]
+fn own_processes_here() -> bool {
+    if !kule_engine::isolates_network() {
+        eprintln!("skipped: this computer gives a command no namespaces of its own");
+        return false;
+    }
+    assert!(
+        kule_engine::own_processes(),
+        "user namespaces work here, yet a command gets no processes of its own"
+    );
+    true
+}
+
+/// A process that left its session and its parent, closed what it held and
+/// moved out of the task's folders, beating into a file in the copy.
+#[cfg(target_os = "linux")]
+const ESCAPE: &str = "import os, time\n\
+                      beat = os.path.abspath('beat')\n\
+                      if os.fork(): os._exit(0)\n\
+                      os.setsid()\n\
+                      if os.fork(): os._exit(0)\n\
+                      fd = os.open('/dev/null', os.O_RDWR)\n\
+                      for i in (0, 1, 2): os.dup2(fd, i)\n\
+                      os.chdir('/')\n\
+                      while True:\n\
+                      \x20   with open(beat, 'a') as f: f.write('.')\n\
+                      \x20   time.sleep(0.02)\n";
+
+/// Where a command's processes are its own, what it leaves running ends
+/// with it, however it hid: nobody has to find it afterwards.
+#[cfg(target_os = "linux")]
+#[test]
+fn what_a_command_leaves_running_ends_with_it() {
+    if !own_processes_here() {
+        return;
+    }
+    let s = Setup::new();
+    let beat = s.task.copy().join("beat");
+    // The command starts it, waits until it beats, and ends.
+    let script = "import os, subprocess, sys, time\n\
+                  subprocess.run([sys.executable, '-c', sys.argv[1]], check=True)\n\
+                  while not os.path.exists('beat'): time.sleep(0.01)\n";
+    let out = s
+        .sandbox()
+        .command(
+            "python3",
+            &["-c".to_owned(), script.to_owned(), ESCAPE.to_owned()],
+        )
+        .unwrap()
+        .output()
+        .unwrap();
+    assert!(ok(&out), "{out:?}");
+    let left = still_beats(&beat);
+    if left {
+        let _ = Command::new("pkill").args(["-9", "-f", "beat"]).status();
+    }
+    assert!(!left, "a process the command left outlived it");
+}
+
+/// Killing the process Kule started, or its group, ends everything the
+/// command started, what left its session included.
+#[cfg(target_os = "linux")]
+#[test]
+fn ending_the_command_ends_all_it_started() {
+    if !own_processes_here() {
+        return;
+    }
+    for by_group in [false, true] {
+        let s = Setup::new();
+        let beat = s.task.copy().join("beat");
+        let script = "import os, subprocess, sys, time\n\
+                      subprocess.run([sys.executable, '-c', sys.argv[1]], check=True)\n\
+                      time.sleep(60)\n";
+        let mut child = s
+            .sandbox()
+            .command(
+                "python3",
+                &["-c".to_owned(), script.to_owned(), ESCAPE.to_owned()],
+            )
+            .unwrap()
+            .spawn()
+            .unwrap();
+        let started = std::time::Instant::now();
+        while !beat.exists() && started.elapsed() < std::time::Duration::from_secs(5) {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert!(still_beats(&beat), "the escaped process never beat");
+        if by_group {
+            // SAFETY: kill only sends a signal; the command leads its group.
+            unsafe { libc::kill(-(child.id() as i32), libc::SIGKILL) };
+        } else {
+            child.kill().unwrap();
+        }
+        let killed = std::time::Instant::now();
+        let mut ended = false;
+        while !ended && killed.elapsed() < std::time::Duration::from_secs(5) {
+            ended = child.try_wait().unwrap().is_some();
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        // Reaped already where it ended; ended here where it did not.
+        let _ = child.kill();
+        let _ = child.wait();
+        assert!(
+            ended,
+            "the command outlived its kill (by group: {by_group})"
+        );
+        let left = still_beats(&beat);
+        if left {
+            let _ = Command::new("pkill").args(["-9", "-f", "beat"]).status();
+        }
+        assert!(
+            !left,
+            "a process outlived its command (by group: {by_group})"
+        );
+    }
+}
+
+/// The command sees no process but its own under /proc, and cannot signal
+/// one of the person's.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_command_sees_and_signals_only_its_own_processes() {
+    if !own_processes_here() {
+        return;
+    }
+    let s = Setup::new();
+    let mut own = Command::new("sleep").arg("30").spawn().unwrap();
+    let pid = own.id();
+    let out = sh(
+        &s.sandbox(),
+        &format!(
+            "test -r /proc/self/status || exit 3; \
+             test -e /proc/{pid} && exit 4; \
+             kill -TERM {pid} 2>/dev/null; exit 0"
+        ),
+    );
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    let alive = own.try_wait().unwrap().is_none();
+    let _ = own.kill();
+    let _ = own.wait();
+    assert!(ok(&out), "{out:?}");
+    assert!(alive, "the command ended a process of the person's");
+}
+
+/// Kule sees the command end as it ended, with its code or by its signal;
+/// a signal sent to the process Kule started reaches the command; and Kule
+/// learns at once that the command started, not when it ends.
+#[cfg(target_os = "linux")]
+#[test]
+fn the_command_ends_as_it_ended_and_gets_its_signals() {
+    use std::os::unix::process::ExitStatusExt;
+    let s = Setup::new();
+    let status = |script: &str| sh(&s.sandbox(), script).status;
+    assert_eq!(status("exit 7").code(), Some(7));
+    assert_eq!(status("kill -TERM $$").signal(), Some(libc::SIGTERM));
+
+    let started = std::time::Instant::now();
+    let mut child = s
+        .sandbox()
+        .command("sleep", &["30".to_owned()])
+        .unwrap()
+        .spawn()
+        .unwrap();
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(10),
+        "starting the command waited for it"
+    );
+    // SAFETY: kill only sends a signal.
+    unsafe { libc::kill(child.id() as i32, libc::SIGTERM) };
+    let sent = std::time::Instant::now();
+    let ended = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break Some(status);
+        }
+        if sent.elapsed() > std::time::Duration::from_secs(5) {
+            break None;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    };
+    if ended.is_none() {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+    assert_eq!(
+        ended.and_then(|s| s.signal()),
+        Some(libc::SIGTERM),
+        "the signal did not reach the command"
+    );
 }

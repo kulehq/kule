@@ -378,9 +378,14 @@ fn a_layer_with_changes_waiting_is_never_given_to_another_agent() {
 }
 
 /// What still runs in the home layer, and nowhere else of the task's, is
-/// ended before the layer is applied.
+/// ended before the layer is applied. Where a command's processes are its
+/// own, none outlives it to be ended (see the sandbox's tests).
 #[test]
 fn a_process_left_in_the_home_layer_ends_before_it_is_applied() {
+    if kule_engine::own_processes() {
+        eprintln!("skipped: what a command leaves running ends with it here");
+        return;
+    }
     let s = Setup::new();
     let pid: i32 = s
         .run("cd \"$HOME\"; nohup sleep 60 >/dev/null 2>&1 </dev/null & echo $!")

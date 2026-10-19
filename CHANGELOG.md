@@ -130,6 +130,13 @@
   settings), so their HTTPS works through the proxy on macOS. A refusal
   that keeps a tool from HTTPS says what to do (pip 24.2 and later:
   `--use-deprecated=legacy-certs`), in `kule exec` and in the timeline.
+- On Linux each command's processes are its own (a PID namespace, with a
+  `/proc` that shows only them): it sees and signals no other program,
+  and what it leaves running ends with it. A background server an agent
+  starts lives as long as the agent, or the terminal command that started
+  it. Kule still sees how the command ended, its code or its signal, and
+  the signals sent to it reach it. Where the computer cannot give this,
+  it is one more piece of isolation you accept going without.
 - Daemon protocol 28: `Isolation` and `SetIsolation`.
 
 ### Motion

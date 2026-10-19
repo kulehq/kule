@@ -606,7 +606,10 @@ permissions, the SDK and the package format;
 - Linux: Landlock reports refusals only to the audit log, so they are not
   listed; the command still gets EPERM. Network rules need Linux 6.7.
   Commands get a network namespace of their own, with nothing but the
-  proxy in reach; that takes unprivileged user namespaces, which Ubuntu
+  proxy in reach, and processes of their own: a command sees and signals
+  no other program, and what it leaves running ends with it (a server
+  started in the background lives as long as the agent or terminal
+  command that started it). That takes unprivileged user namespaces, which Ubuntu
   24.04 refuses by default (`sysctl
   kernel.apparmor_restrict_unprivileged_userns=0`). Without them Kule runs
   no agent until you accept weaker isolation (Settings → Policy, or `kule

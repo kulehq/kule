@@ -15,6 +15,13 @@
 //! over itself, for the command alone: Kule and the person keep writing to
 //! it as before. Landlock then forbids the command any change to mounts.
 //!
+//! Its processes are its own, too: in a PID namespace the command can
+//! neither see nor signal any other process, and when it ends, the kernel
+//! ends everything it left running, however it hid. The process Kule starts
+//! stays outside and waits; inside, a small first process (the namespace's
+//! init) passes signals on to the command and reaps what is orphaned. Each
+//! exits as the command did.
+//!
 //! The namespaces need an unprivileged user namespace, which some systems
 //! refuse (Ubuntu 24.04 by default, through AppArmor). There the command
 //! runs without them, under Landlock's port rules alone, and protected
@@ -48,15 +55,31 @@ pub(crate) fn mounts_available() -> bool {
     })
 }
 
+/// Whether this system lets an unprivileged process have processes of its
+/// own, with a `/proc` that shows only them; asked once, by trying.
+pub(crate) fn pids_available() -> bool {
+    static AVAILABLE: OnceLock<bool> = OnceLock::new();
+    *AVAILABLE.get_or_init(|| {
+        Isolation::new(Net::Shared, &[]).is_ok_and(|isolation| {
+            // The command is the second process there, and /proc says so.
+            run_probe(
+                isolation.own_pids(),
+                "test $$ = 2 && read p rest < /proc/self/stat && test \"$p\" = 2",
+            )
+        })
+    })
+}
+
 /// Runs `true` the way a command would run with this isolation.
 fn probe(net: Net, read_only: &[PathBuf]) -> bool {
+    Isolation::new(net, read_only).is_ok_and(|isolation| run_probe(isolation, "exit 0"))
+}
+
+fn run_probe(isolation: Isolation, script: &str) -> bool {
     use std::os::unix::process::CommandExt;
-    let Ok(isolation) = Isolation::new(net, read_only) else {
-        return false;
-    };
     let mut probe = std::process::Command::new("/bin/sh");
     probe
-        .args(["-c", "exit 0"])
+        .args(["-c", script])
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
@@ -102,6 +125,8 @@ pub(crate) struct Isolation {
     masked: Vec<CString>,
     /// The task's own directory, mounted over `/tmp` for the command.
     tmp: Option<CString>,
+    /// Processes of its own (see the module's notes).
+    pids: bool,
 }
 
 impl Isolation {
@@ -151,7 +176,16 @@ impl Isolation {
             read_only,
             masked: Vec::new(),
             tmp: None,
+            pids: false,
         })
+    }
+
+    /// Gives the command a PID namespace of its own, and a `/proc` that
+    /// shows only it: what it leaves running ends with it.
+    pub(crate) fn own_pids(mut self) -> Isolation {
+        self.namespaces |= libc::CLONE_NEWPID | libc::CLONE_NEWNS;
+        self.pids = true;
+        self
     }
 
     /// Gives the command `dir` as its `/tmp`, in a mount namespace of its
@@ -187,6 +221,10 @@ impl Isolation {
             write_file(c"/proc/self/setgroups", b"deny")?;
             write_file(c"/proc/self/uid_map", &self.uid_map)?;
             write_file(c"/proc/self/gid_map", &self.gid_map)?;
+            if self.pids {
+                // Returns only in the process that goes on to the command.
+                split()?;
+            }
             if self.namespaces & libc::CLONE_NEWNET != 0 {
                 loopback_up()?;
             }
@@ -203,6 +241,16 @@ impl Isolation {
                     c"/".as_ptr(),
                     std::ptr::null(),
                     libc::MS_REC | libc::MS_PRIVATE,
+                    std::ptr::null(),
+                ))?;
+            }
+            if self.pids {
+                // Only its own processes to see under /proc.
+                check(libc::mount(
+                    c"proc".as_ptr(),
+                    c"/proc".as_ptr(),
+                    c"proc".as_ptr(),
+                    libc::MS_NOSUID | libc::MS_NODEV | libc::MS_NOEXEC,
                     std::ptr::null(),
                 ))?;
             }
@@ -264,6 +312,194 @@ fn check(result: libc::c_int) -> io::Result<libc::c_int> {
     } else {
         Ok(result)
     }
+}
+
+/// Starts the command's PID namespace, after `unshare` asked for one: this
+/// process (the one Kule started and waits on) forks the namespace's first
+/// process and stays outside as its keeper; that one forks the command's.
+/// Returns only in the command's process, with the signal mask it came
+/// with. Keeper and init take every signal through `sigwaitinfo`, so none
+/// ends them by surprise, and pass it on; a SIGKILL to the keeper (or its
+/// process group, which all three share) ends the init with it, and the
+/// kernel ends the rest.
+///
+/// # Safety
+/// As [`write_file`]: between fork and exec, nothing allocated.
+unsafe fn split() -> io::Result<()> {
+    // SAFETY: plain system calls on stack buffers.
+    unsafe {
+        let mut all: libc::sigset_t = std::mem::zeroed();
+        let mut before: libc::sigset_t = std::mem::zeroed();
+        libc::sigfillset(&mut all);
+        check(libc::sigprocmask(libc::SIG_BLOCK, &all, &mut before))?;
+        // The init learns of the keeper's end by this pipe closing, and
+        // tells it how the command ended over the other.
+        let (keeper_end, keeper_alive) = raw_pipe()?;
+        let (told, tell) = raw_pipe()?;
+        let init = check(libc::fork())?;
+        if init > 0 {
+            libc::close(keeper_end);
+            libc::close(tell);
+            keep(init, &all, keeper_alive, told);
+        }
+        libc::close(keeper_alive);
+        libc::close(told);
+        // Ends with the keeper; a keeper already gone ends it here.
+        check(libc::prctl(
+            libc::PR_SET_PDEATHSIG,
+            libc::SIGKILL as libc::c_ulong,
+        ))?;
+        let mut gone = libc::pollfd {
+            fd: keeper_end,
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        if libc::poll(&mut gone, 1, 0) != 0 {
+            libc::_exit(1);
+        }
+        libc::close(keeper_end);
+        let command = check(libc::fork())?;
+        if command > 0 {
+            init_loop(command, &all, tell);
+        }
+        libc::close(tell);
+        check(libc::sigprocmask(
+            libc::SIG_SETMASK,
+            &before,
+            std::ptr::null_mut(),
+        ))?;
+    }
+    Ok(())
+}
+
+/// The keeper: waits for the init, passes signals on to it, and ends as
+/// the command ended, by the same signal or with the same code.
+///
+/// # Safety
+/// As [`split`]; `all` is the blocked set.
+unsafe fn keep(init: libc::pid_t, all: &libc::sigset_t, alive: RawFd, told: RawFd) -> ! {
+    // SAFETY: plain system calls on stack buffers.
+    unsafe {
+        close_except(&[alive, told]);
+        loop {
+            let signal = libc::sigwaitinfo(all, std::ptr::null_mut());
+            if signal == libc::SIGCHLD {
+                let mut status = 0;
+                if libc::waitpid(init, &mut status, libc::WNOHANG) == init {
+                    // The command's own end, unless the init was ended first.
+                    let mut command = [0u8; 4];
+                    if libc::read(told, command.as_mut_ptr().cast(), 4) == 4 {
+                        status = libc::c_int::from_ne_bytes(command);
+                    }
+                    end_as(status, all);
+                }
+            } else if signal > 0 {
+                libc::kill(init, signal);
+            }
+        }
+    }
+}
+
+/// The namespace's init: passes signals on to the command, reaps every
+/// process orphaned to it, and once the command is gone, tells the keeper
+/// how it ended and exits, which ends whatever it left running.
+///
+/// # Safety
+/// As [`split`]; `all` is the blocked set.
+unsafe fn init_loop(command: libc::pid_t, all: &libc::sigset_t, tell: RawFd) -> ! {
+    // SAFETY: plain system calls on stack buffers.
+    unsafe {
+        close_except(&[tell]);
+        loop {
+            let signal = libc::sigwaitinfo(all, std::ptr::null_mut());
+            if signal == libc::SIGCHLD {
+                loop {
+                    let mut status = 0;
+                    let reaped = libc::waitpid(-1, &mut status, libc::WNOHANG);
+                    if reaped <= 0 {
+                        break;
+                    }
+                    if reaped == command {
+                        let bytes = status.to_ne_bytes();
+                        libc::write(tell, bytes.as_ptr().cast(), 4);
+                        libc::_exit(0);
+                    }
+                }
+            } else if signal > 0 {
+                libc::kill(command, signal);
+            }
+        }
+    }
+}
+
+/// Exits the way `status` says a process ended: by its signal, without a
+/// core file, or with its code.
+///
+/// # Safety
+/// As [`split`]; `all` is the blocked set.
+unsafe fn end_as(status: libc::c_int, all: &libc::sigset_t) -> ! {
+    // SAFETY: plain system calls on stack buffers.
+    unsafe {
+        if libc::WIFSIGNALED(status) {
+            let signal = libc::WTERMSIG(status);
+            let none = libc::rlimit {
+                rlim_cur: 0,
+                rlim_max: 0,
+            };
+            libc::setrlimit(libc::RLIMIT_CORE, &none);
+            libc::signal(signal, libc::SIG_DFL);
+            libc::sigprocmask(libc::SIG_UNBLOCK, all, std::ptr::null_mut());
+            libc::kill(libc::getpid(), signal);
+            libc::_exit(128 + signal);
+        }
+        libc::_exit(if libc::WIFEXITED(status) {
+            libc::WEXITSTATUS(status)
+        } else {
+            1
+        });
+    }
+}
+
+/// Closes every descriptor but `keep`: keeper and init hold nothing of the
+/// command's, Kule's pipe that waits for its exec included.
+///
+/// # Safety
+/// As [`split`].
+unsafe fn close_except(keep: &[RawFd]) {
+    let mut keep_sorted = [0; 2];
+    let keep_sorted = &mut keep_sorted[..keep.len()];
+    keep_sorted.copy_from_slice(keep);
+    keep_sorted.sort_unstable();
+    let mut first: libc::c_uint = 0;
+    // SAFETY: as the caller's.
+    unsafe {
+        for &fd in keep_sorted.iter() {
+            let fd = fd as libc::c_uint;
+            if fd > first {
+                close_range(first, fd - 1);
+            }
+            first = fd + 1;
+        }
+        close_range(first, libc::c_uint::MAX);
+    }
+}
+
+/// # Safety
+/// As [`split`].
+unsafe fn close_range(first: libc::c_uint, last: libc::c_uint) {
+    // SAFETY: closes descriptors only; Landlock's ABI 3, which every
+    // sandbox needs, came after close_range (Linux 5.9).
+    unsafe {
+        libc::syscall(libc::SYS_close_range, first, last, 0);
+    }
+}
+
+/// A pipe for between fork and exec: (read end, write end), closed on exec.
+fn raw_pipe() -> io::Result<(RawFd, RawFd)> {
+    let mut fds = [0; 2];
+    // SAFETY: fds has room for the two descriptors.
+    check(unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC) })?;
+    Ok((fds[0], fds[1]))
 }
 
 /// The flags of the mount `path` is on that a remount has to repeat.

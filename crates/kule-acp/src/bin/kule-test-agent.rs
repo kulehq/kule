@@ -8,7 +8,8 @@
 //! - `sleep <ms>`: waits, the way a real agent waits for its model;
 //! - `ask`: asks the client for permission and says what it chose;
 //! - `ask-reject-only`: the same, with no option that allows;
-//! - `background <file>`: leaves a process running, its pid in the file;
+//! - `background <file>`: leaves a process running that adds a byte to the
+//!   file every few milliseconds;
 //! - `reviewed-write <path> <text>`: an edit that writes the file while a
 //!   review (a `think` call) runs inside it, the review ending first, as
 //!   Codex does;
@@ -504,11 +505,15 @@ async fn perform(
             ),
         )),
         // A real agent waits for its model between tool calls.
-        // Leaves a process running after the turn, writing its pid to the
-        // file, the way an agent's `npm run dev &` would.
+        // Leaves a process running after the turn, the way an agent's
+        // `npm run dev &` would; it beats into the file while it lives (its
+        // pid would say nothing outside the sandbox's own process space).
         "background" => {
             let _ = std::process::Command::new("sh")
-                .args(["-c", &format!("echo $$ > {rest}; exec sleep 30")])
+                .args([
+                    "-c",
+                    &format!("while :; do printf . >> {rest}; sleep 0.02; done"),
+                ])
                 .current_dir(dir)
                 .spawn();
             tokio::time::sleep(std::time::Duration::from_millis(200)).await;
