@@ -172,3 +172,74 @@ fn a_link_put_in_the_folder_during_a_commit_takes_nothing_outside() {
         "theirs\n"
     );
 }
+
+/// Permission bits are part of what was reviewed: a file made executable
+/// after the review, or while the commit runs, is not committed.
+#[test]
+fn a_mode_changed_after_the_review_is_not_committed() {
+    use std::os::unix::fs::PermissionsExt;
+    let mode = |p: &std::path::Path| fs::metadata(p).unwrap().permissions().mode() & 0o7777;
+    let (_home, ws, task) = task();
+    let before = mode(&ws.path().join("a.txt"));
+    fs::write(task.copy().join("a.txt"), "two\n").unwrap();
+    let reviewed = task.pending(false).unwrap().digest();
+    fs::set_permissions(task.copy().join("a.txt"), fs::Permissions::from_mode(0o755)).unwrap();
+    let outcome = task.commit_if(|set| {
+        if set.digest() == reviewed {
+            Ok(())
+        } else {
+            Err(Error::Invalid("not what was reviewed".into()))
+        }
+    });
+    assert!(outcome.is_err(), "{outcome:?}");
+    assert_eq!(mode(&ws.path().join("a.txt")), before);
+
+    let copy = task.copy();
+    let outcome = task.commit_if(|_| {
+        // After the check, before the copy: a process left in the copy.
+        fs::set_permissions(copy.join("a.txt"), fs::Permissions::from_mode(0o777)).unwrap();
+        Ok(())
+    });
+    assert!(outcome.is_err(), "{outcome:?}");
+    assert_eq!(mode(&ws.path().join("a.txt")), before);
+    assert_eq!(
+        fs::read_to_string(ws.path().join("a.txt")).unwrap(),
+        "one\n"
+    );
+}
+
+/// A file that runs as its owner or group never comes into the folder from
+/// a task; one the folder had already keeps its bits.
+#[test]
+fn a_file_set_to_run_as_its_owner_is_not_committed() {
+    use std::os::unix::fs::PermissionsExt;
+    let (_home, ws, task) = task();
+    fs::write(task.copy().join("tool"), "#!/bin/sh\n").unwrap();
+    fs::set_permissions(task.copy().join("tool"), fs::Permissions::from_mode(0o4755)).unwrap();
+    let refused = task.commit_if(|_| Ok(())).unwrap_err();
+    assert!(refused.to_string().contains("setuid"), "{refused}");
+    assert!(!ws.path().join("tool").exists());
+
+    fs::set_permissions(task.copy().join("tool"), fs::Permissions::from_mode(0o2755)).unwrap();
+    assert!(task.commit_if(|_| Ok(())).is_err());
+    assert!(!ws.path().join("tool").exists());
+
+    fs::set_permissions(task.copy().join("tool"), fs::Permissions::from_mode(0o755)).unwrap();
+    task.commit_if(|_| Ok(())).unwrap();
+    assert!(ws.path().join("tool").is_file());
+
+    let home = TempDir::new().unwrap();
+    let ws = TempDir::new().unwrap();
+    let own = ws.path().join("own");
+    fs::write(&own, "one\n").unwrap();
+    fs::set_permissions(&own, fs::Permissions::from_mode(0o4755)).unwrap();
+    let task = Task::create(home.path(), ws.path()).unwrap();
+    fs::write(task.copy().join("own"), "two\n").unwrap();
+    fs::set_permissions(task.copy().join("own"), fs::Permissions::from_mode(0o4755)).unwrap();
+    task.commit_if(|_| Ok(())).unwrap();
+    assert_eq!(fs::read_to_string(&own).unwrap(), "two\n");
+    assert_eq!(
+        fs::metadata(&own).unwrap().permissions().mode() & 0o7777,
+        0o4755
+    );
+}

@@ -571,12 +571,40 @@ impl Sandbox {
 
     /// Ends what still runs in this sandbox: a process that left its
     /// command's session and parent, which ending the command's process
-    /// group does not reach. Returns how many it ended. A process of the
-    /// person's own, outside the sandbox, is never one of them.
-    pub fn end_strays(&self) -> usize {
-        let strays = self.strays();
-        crate::resources::kill(&strays);
-        strays.len()
+    /// group does not reach. Looks again until a look finds none, since one
+    /// may start another while it is being ended; returns how many it
+    /// ended, or an error when they keep coming. A process of the person's
+    /// own, outside the sandbox, is never one of them.
+    pub fn end_strays(&self) -> Result<usize> {
+        let mut ended = std::collections::HashSet::new();
+        for _ in 0..STRAY_LOOKS {
+            // One already sent SIGKILL may still be there, on its way out.
+            let found: Vec<i32> = self
+                .strays()
+                .into_iter()
+                .filter(|p| !ended.contains(p))
+                .collect();
+            if found.is_empty() {
+                return Ok(ended.len());
+            }
+            crate::resources::kill(&found);
+            ended.extend(found);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        Err(Error::Invalid(format!(
+            "processes in task {}'s sandbox kept starting others while they were ended",
+            self.task
+        )))
+    }
+
+    /// Ends what still runs in any of `task`'s sandboxes, its home layer's
+    /// included, before Kule reads what they wrote: an error when that
+    /// cannot be done, and nothing is read beside them.
+    pub fn end_all(task: &Task) -> Result<usize> {
+        let mut sandbox = Sandbox::new(task)?;
+        // Only to find them by: no command starts from this sandbox.
+        sandbox.layer = Some(task.home_layer()).filter(|l| l.is_dir());
+        sandbox.end_strays()
     }
 
     /// macOS knows which processes a task's sandboxes hold: those whose
@@ -836,6 +864,9 @@ fn here(path: &Path) -> Result<PathBuf> {
 /// The first hidden paths, which [`Sandbox::reveal`] never takes away:
 /// Kule's home and the task's folder (see [`Sandbox::new`]).
 const ALWAYS_HIDDEN: usize = 2;
+
+/// How many times [`Sandbox::end_strays`] looks before it gives up.
+const STRAY_LOOKS: usize = 200;
 
 /// The resolved form of a path that may not exist: its nearest existing
 /// ancestor resolved, the rest appended.

@@ -498,7 +498,7 @@ fn place_beneath(root: &Path, rel: &str, to: &Path, stamp: &Stamp) -> Result<()>
             finish(to, stamp)
         }
         (Kind::Symlink, Beneath::Link(target)) => symlink(target, to).at(to),
-        (Kind::Dir, Beneath::Dir) => fs::create_dir(to).at(to),
+        (Kind::Dir, Beneath::Dir(_)) => fs::create_dir(to).at(to),
         _ => Err(changed()),
     }
 }
@@ -538,7 +538,8 @@ fn copy_from(file: &File, to: &Path) -> io::Result<()> {
 pub(crate) enum Beneath {
     File(File),
     Link(PathBuf),
-    Dir,
+    /// With its permission bits.
+    Dir(u32),
     Missing,
 }
 
@@ -582,7 +583,7 @@ pub(crate) fn beneath(root: &Path, rel: &str) -> io::Result<Beneath> {
         return gone(io::Error::last_os_error());
     }
     match st.st_mode & libc::S_IFMT {
-        libc::S_IFDIR => Ok(Beneath::Dir),
+        libc::S_IFDIR => Ok(Beneath::Dir(u32::from(st.st_mode) & 0o7777)),
         libc::S_IFLNK => {
             let mut buf = vec![0u8; libc::PATH_MAX as usize + 1];
             // SAFETY: reads at most buf.len() bytes into buf.
@@ -621,25 +622,43 @@ pub(crate) fn beneath(root: &Path, rel: &str) -> io::Result<Beneath> {
     }
 }
 
-/// What the entry `rel` under `root` holds, hashed: a file's bytes or a
-/// link's target, read as [`beneath`] finds it.
+/// What the entry `rel` under `root` holds, hashed: a file's bytes and
+/// permission bits, a link's target, a directory's permission bits, read as
+/// [`beneath`] finds it.
 pub(crate) fn content_hash(root: &Path, rel: &str) -> Result<String> {
     use std::os::unix::ffi::OsStrExt;
     let at = root.join(rel);
     Ok(match beneath(root, rel).at(&at)? {
         Beneath::File(mut file) => {
+            let mode = file.metadata().at(&at)?.permissions().mode();
             let mut hasher = blake3::Hasher::new();
             io::copy(&mut file, &mut hasher).at(&at)?;
-            format!("file:{}", hasher.finalize().to_hex())
+            file_hash(hasher.finalize(), mode)
         }
         Beneath::Link(target) => format!(
             "link:{}",
             blake3::hash(target.as_os_str().as_bytes()).to_hex()
         ),
-        Beneath::Dir => "dir".to_owned(),
+        Beneath::Dir(mode) => format!("dir:{mode:o}"),
         Beneath::Missing => "missing".to_owned(),
     })
 }
+
+/// [`content_hash`] of a file whose bytes hash to `hash`, with `mode`.
+pub(crate) fn file_hash(hash: blake3::Hash, mode: u32) -> String {
+    format!("file:{}:{:o}", hash.to_hex(), mode & 0o7777)
+}
+
+/// The permission bits in a file's [`content_hash`]; `None` for anything
+/// but a file.
+pub(crate) fn hash_mode(hash: &str) -> Option<u32> {
+    let (_, mode) = hash.strip_prefix("file:")?.rsplit_once(':')?;
+    u32::from_str_radix(mode, 8).ok()
+}
+
+/// Permission bits that make a file run as its owner or group: a commit
+/// never brings them into the folder where it had none.
+pub(crate) const RUNS_AS_OWNER: u32 = 0o6000;
 
 fn finish(path: &Path, stamp: &Stamp) -> Result<()> {
     let mtime = FileTime::from_unix_time(stamp.mtime.0, stamp.mtime.1 as u32);

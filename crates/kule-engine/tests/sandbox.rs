@@ -280,7 +280,7 @@ fn processes_left_behind_end_with_the_sandbox() {
         .spawn()
         .unwrap();
 
-    sandbox.end_strays();
+    sandbox.end_strays().unwrap();
     let started = std::time::Instant::now();
     while alive(pid) && started.elapsed() < std::time::Duration::from_secs(3) {
         std::thread::sleep(std::time::Duration::from_millis(50));
@@ -293,6 +293,48 @@ fn processes_left_behind_end_with_the_sandbox() {
     unsafe { libc::kill(pid, libc::SIGKILL) };
     assert!(!left, "a process left in the sandbox outlived it");
     assert!(own_alive, "a process outside the sandbox was ended");
+}
+
+/// A stray that keeps starting another as it goes is ended too, not only
+/// the one a single look found.
+#[test]
+fn a_stray_that_keeps_starting_others_is_ended() {
+    let s = Setup::new();
+    let sandbox = s.sandbox();
+    let script = "import os, time\n\
+                  if os.fork(): os._exit(0)\n\
+                  os.setsid()\n\
+                  fd = os.open('/dev/null', os.O_RDWR)\n\
+                  for i in (0, 1, 2): os.dup2(fd, i)\n\
+                  while True:\n\
+                  \x20   if os.fork(): os._exit(0)\n\
+                  \x20   open('chain.pid', 'w').write(str(os.getpid()))\n\
+                  \x20   time.sleep(0.001)\n";
+    assert!(ok(&sandbox_python(&sandbox, script)));
+    let pid_file = s.task.copy().join("chain.pid");
+    let started = std::time::Instant::now();
+    while !pid_file.exists() && started.elapsed() < std::time::Duration::from_secs(5) {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    std::thread::sleep(std::time::Duration::from_millis(200));
+
+    let ended = sandbox.end_strays();
+    let last = || fs::read_to_string(&pid_file).unwrap_or_default();
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    let seen = last();
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    let still = last() != seen;
+    if still {
+        // Not ended by the test's sandbox: end the chain from outside.
+        let _ = Command::new("pkill")
+            .args(["-9", "-f", "chain.pid"])
+            .status();
+    }
+    assert!(ended.is_ok(), "{ended:?}");
+    assert!(
+        !still,
+        "a stray that keeps starting others outlived the sandbox"
+    );
 }
 
 #[test]

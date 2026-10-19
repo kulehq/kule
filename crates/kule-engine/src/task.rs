@@ -366,10 +366,7 @@ impl Task {
                 .unwrap_or_default();
             if real != text {
                 fsops::replace_file(&full, real.as_bytes())?;
-                real_hashes.push((
-                    path.clone(),
-                    format!("file:{}", blake3::hash(real.as_bytes()).to_hex()),
-                ));
+                real_hashes.push((path.clone(), fsops::content_hash(&self.copy(), path)?));
             }
         }
         Ok(real_hashes)
@@ -563,15 +560,23 @@ impl Task {
         self.workspace_in_place()?;
         // Nothing left running in the task's sandbox changes the copy
         // while it is read and committed.
-        if let Ok(sandbox) = crate::Sandbox::new(self) {
-            sandbox.end_strays();
-        }
+        crate::Sandbox::end_all(self)?;
         let mut baseline = self.load_baseline()?;
         let set = self.commit_set(&baseline, include_ignored)?;
         if set.is_empty() {
             return Ok(None);
         }
         check(&set)?;
+        // A file that runs as its owner or group comes in only where the
+        // folder's own file already did.
+        for (path, hash) in &set.contents {
+            let had = baseline.entries.get(path).map_or(0, |e| e.work.mode);
+            if fsops::hash_mode(hash).is_some_and(|m| m & fsops::RUNS_AS_OWNER & !had != 0) {
+                return Err(Error::Invalid(format!(
+                    "{path} is set to run as its owner or group (setuid/setgid), which a commit never brings in; nothing was committed"
+                )));
+            }
+        }
         let work_git = git::read(self.workspace())?;
         let mut conflicts = Vec::new();
         let mut merges = Vec::new();
@@ -629,13 +634,8 @@ impl Task {
         let unmasked = self.unmask_copy(&set, &checkpoint.merged)?;
         let mut merged: Vec<(String, String)> = merges
             .iter()
-            .map(|m| {
-                (
-                    m.path.clone(),
-                    format!("file:{}", blake3::hash(&m.bytes).to_hex()),
-                )
-            })
-            .collect();
+            .map(|m| Ok((m.path.clone(), fsops::content_hash(&self.copy(), &m.path)?)))
+            .collect::<Result<_>>()?;
         merged.extend(unmasked);
         let placed = fsops::mirror(&self.copy(), self.workspace(), &paths, true)
             .and_then(|()| self.verify_committed(&set, &merged));
@@ -738,7 +738,8 @@ impl Task {
             return Ok(None);
         };
         // The copy's side as it was reviewed, or no merge.
-        if reviewed.is_some_and(|r| *r != format!("file:{}", blake3::hash(&ours).to_hex())) {
+        let mode = Stamp::of(&self.copy().join(&effect.path))?.map_or(0, |s| s.mode);
+        if reviewed.is_some_and(|r| *r != fsops::file_hash(blake3::hash(&ours), mode)) {
             return Err(Error::Invalid(format!(
                 "{} changed since it was reviewed; nothing was committed",
                 effect.path

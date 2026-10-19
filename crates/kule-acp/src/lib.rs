@@ -663,8 +663,9 @@ impl Drop for Group {
                 libc::kill(-self.0, libc::SIGKILL);
             }
         }
+        // What it cannot end now, a commit ends or refuses over.
         if let Some(sandbox) = &self.1 {
-            sandbox.end_strays();
+            let _ = sandbox.end_strays();
         }
     }
 }

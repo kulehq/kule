@@ -466,9 +466,7 @@ impl Task {
         };
         // Nothing left running in the task's sandbox changes the layer
         // while it is applied.
-        if let Ok(sandbox) = crate::Sandbox::new(self) {
-            sandbox.end_strays();
-        }
+        crate::Sandbox::end_all(self)?;
         let wanted: Vec<HomeChange> = self
             .home_changes()?
             .into_iter()
