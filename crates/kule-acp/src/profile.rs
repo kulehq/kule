@@ -1042,13 +1042,12 @@ impl Profile {
     /// Other agents' state, their logins and what the person said to them,
     /// is hidden. `home` is the person's home directory.
     pub fn apply(&self, sandbox: &mut Sandbox, home: &Path) -> Result<()> {
-        for other in &self.others {
-            sandbox.hide(&home.join(other))?;
-        }
+        // State and logins as they are written: a link the agent put in
+        // place of one (it can write there) opens nothing more.
         for state in &self.state {
             let path = home.join(state);
             if path.exists() {
-                sandbox.allow_write(&path)?;
+                sandbox.allow_write_here(&path)?;
             }
         }
         for path in &self.login {
@@ -1061,6 +1060,10 @@ impl Profile {
             for path in &self.reveal_on_macos {
                 sandbox.reveal(&home.join(path))?;
             }
+        }
+        // After the reveals, so none takes another agent's away.
+        for other in &self.others {
+            sandbox.hide(&home.join(other))?;
         }
         for name in &self.pass_env {
             sandbox.pass_env(name);

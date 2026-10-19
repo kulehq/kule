@@ -394,6 +394,160 @@ fn a_protected_directory_too_large_to_note_is_still_never_changed() {
     );
 }
 
+/// An agent's login or state turned into a link (it can write there)
+/// opens nothing more: revealing the login leaves what the link points to
+/// hidden, and the state is writable only as the link itself.
+#[test]
+fn a_link_in_place_of_a_login_or_state_opens_nothing_more() {
+    let s = Setup::new();
+    let home = TempDir::new_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
+    let home = fs::canonicalize(home.path()).unwrap();
+    fs::create_dir_all(home.join(".ssh")).unwrap();
+    fs::write(home.join(".ssh/id_ed25519"), "private\n").unwrap();
+    let elsewhere = s.outside().join("LaunchAgents");
+    fs::create_dir_all(&elsewhere).unwrap();
+    fs::create_dir_all(home.join(".agent")).unwrap();
+    std::os::unix::fs::symlink(home.join(".ssh/id_ed25519"), home.join(".agent/login.json"))
+        .unwrap();
+    std::os::unix::fs::symlink(&elsewhere, home.join(".other-state")).unwrap();
+
+    let mut sandbox = s.sandbox();
+    sandbox.hide(&home.join(".ssh/id_ed25519")).unwrap();
+    sandbox.reveal(&home.join(".agent/login.json")).unwrap();
+    sandbox
+        .allow_write_here(&home.join(".other-state"))
+        .unwrap();
+    let out = sh(
+        &sandbox,
+        &format!(
+            "cat '{0}/.agent/login.json'; cat '{0}/.ssh/id_ed25519'; echo job > '{0}/.other-state/job.plist'",
+            home.display()
+        ),
+    );
+    assert!(
+        !String::from_utf8_lossy(&out.stdout).contains("private"),
+        "{out:?}"
+    );
+    assert!(!elsewhere.join("job.plist").exists());
+
+    // Kule's home and the folder stay hidden, whatever is revealed.
+    let mut sandbox = s.sandbox();
+    sandbox
+        .reveal(&fs::canonicalize(s.task.workspace()).unwrap())
+        .unwrap();
+    let out = sh(
+        &sandbox,
+        &format!("cat '{}/README.md'", s.task.workspace().display()),
+    );
+    assert!(
+        !String::from_utf8_lossy(&out.stdout).contains("hello"),
+        "{out:?}"
+    );
+}
+
+/// A hidden directory reached through a link (dotfiles kept elsewhere and
+/// linked in) stays hidden through the link and where it really is.
+#[test]
+fn a_hidden_directory_behind_a_link_stays_hidden() {
+    let s = Setup::new();
+    let home = TempDir::new_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
+    let home = fs::canonicalize(home.path()).unwrap();
+    fs::create_dir_all(home.join("dotfiles/ssh")).unwrap();
+    fs::write(home.join("dotfiles/ssh/id_ed25519"), "private\n").unwrap();
+    fs::write(home.join("dotfiles/zshrc"), "export A=1\n").unwrap();
+    std::os::unix::fs::symlink(home.join("dotfiles/ssh"), home.join(".ssh")).unwrap();
+    let mut sandbox = s.sandbox();
+    sandbox.hide(&home.join(".ssh")).unwrap();
+    let out = sh(
+        &sandbox,
+        &format!(
+            "cat '{0}/.ssh/id_ed25519'; cat '{0}/dotfiles/ssh/id_ed25519'; cat '{0}/dotfiles/zshrc'",
+            home.display()
+        ),
+    );
+    let said = text(&out);
+    assert!(!said.contains("private"), "{out:?}");
+    assert_eq!(said, "export A=1", "{out:?}");
+}
+
+/// The person's other terminals are out of a command's reach.
+#[cfg(target_os = "linux")]
+#[test]
+fn other_terminals_are_out_of_reach() {
+    let s = Setup::new();
+    let (mut leader, mut follower) = (0, 0);
+    // SAFETY: openpty fills the two descriptors; null names and modes.
+    let made = unsafe {
+        libc::openpty(
+            &mut leader,
+            &mut follower,
+            std::ptr::null_mut(),
+            std::ptr::null(),
+            std::ptr::null(),
+        )
+    };
+    assert_eq!(made, 0);
+    // SAFETY: follower is a live terminal descriptor.
+    let name = unsafe { std::ffi::CStr::from_ptr(libc::ttyname(follower)) }
+        .to_string_lossy()
+        .into_owned();
+    let out = sh(
+        &s.sandbox(),
+        &format!(
+            "printf owned > {name} && echo wrote; cat {name} </dev/null & sleep 0.3; kill $! 2>/dev/null"
+        ),
+    );
+    assert!(!text(&out).contains("wrote"), "{out:?}");
+    // SAFETY: plain non-blocking read of the leader.
+    let heard = unsafe {
+        libc::fcntl(leader, libc::F_SETFL, libc::O_NONBLOCK);
+        let mut buf = [0u8; 16];
+        libc::read(leader, buf.as_mut_ptr().cast(), buf.len())
+    };
+    assert!(heard <= 0, "the command wrote to another terminal");
+    // SAFETY: closing the two descriptors made above.
+    unsafe {
+        libc::close(leader);
+        libc::close(follower);
+    }
+}
+
+/// A protected file deeper in a writable directory cannot be changed by
+/// renaming a directory on the way to it, changing the file under the new
+/// name and renaming it back.
+#[test]
+fn a_protected_file_cannot_be_reached_by_renaming_its_folder() {
+    let s = Setup::new();
+    let state = s.outside().join("agent-state");
+    fs::create_dir_all(state.join("plugins/x")).unwrap();
+    fs::write(state.join("plugins/x/hooks.json"), "{}\n").unwrap();
+    let mut sandbox = s.sandbox();
+    sandbox.allow_write(&state).unwrap();
+    sandbox
+        .protect(&state.join("plugins/x/hooks.json"))
+        .unwrap();
+    let kept = sandbox.keep_protected().unwrap();
+    let _ = sh(
+        &sandbox,
+        &format!(
+            "cd '{}' && mv plugins p2; echo '{{\"run\":1}}' > p2/x/hooks.json; mv p2 plugins; \
+             mv plugins/x plugins/y; echo '{{\"run\":1}}' > plugins/y/hooks.json; mv plugins/y plugins/x; \
+             echo session > other.json",
+            state.display()
+        ),
+    );
+    kept.restore().unwrap();
+    assert_eq!(
+        fs::read_to_string(state.join("plugins/x/hooks.json")).unwrap(),
+        "{}\n"
+    );
+    // The rest of the directory stays the agent's.
+    assert_eq!(
+        fs::read_to_string(state.join("other.json")).unwrap(),
+        "session\n"
+    );
+}
+
 #[test]
 fn a_protected_file_inside_a_writable_directory_stays_read_only() {
     let s = Setup::new();
@@ -880,6 +1034,14 @@ fn any_program_s_server_is_held_to_loopback_on_linux() {
         (
             "every address",
             "import socket; s=socket.socket(); s.bind(('0.0.0.0', 0)); print(s.getsockname()[0])",
+            "127.0.0.1",
+        ),
+        // Servers that bind from a thread of their own (Go's do).
+        (
+            "from a thread",
+            "import socket, threading\n\
+             def serve():\n    s=socket.socket(); s.bind(('0.0.0.0', 0)); print(s.getsockname()[0])\n\
+             t=threading.Thread(target=serve); t.start(); t.join()",
             "127.0.0.1",
         ),
         (

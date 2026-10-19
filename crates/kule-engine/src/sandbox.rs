@@ -497,10 +497,27 @@ impl Sandbox {
 
     /// Takes `path` off the hidden list, for a command that needs it (an
     /// agent reading its own login from the keychain). Hidden paths inside
-    /// it stay hidden.
+    /// it stay hidden. `path` is taken as it is written, not where a link
+    /// there leads: a link an agent put in place of its login reveals
+    /// nothing. Kule's home and the task's folder are never revealed.
     pub fn reveal(&mut self, path: &Path) -> Result<()> {
-        let path = real_or_planned(path)?;
-        self.hidden.retain(|hidden| hidden != &path);
+        let here = here(path)?;
+        if std::fs::symlink_metadata(&here).is_ok_and(|m| m.file_type().is_symlink()) {
+            return Ok(());
+        }
+        let mut i = 0;
+        self.hidden.retain(|hidden| {
+            i += 1;
+            i <= ALWAYS_HIDDEN || hidden != &here
+        });
+        Ok(())
+    }
+
+    /// Lets commands write in `path` as it is written: a link there is not
+    /// followed, so a link an agent put in place of its state directory
+    /// opens nothing more (the link itself can be replaced, no more).
+    pub fn allow_write_here(&mut self, path: &Path) -> Result<()> {
+        self.writable.push(here(path)?);
         Ok(())
     }
 
@@ -807,6 +824,19 @@ fn real(path: &Path) -> Result<PathBuf> {
     std::fs::canonicalize(path).at(path)
 }
 
+/// `path` with its parent resolved and its own name kept: where the entry
+/// itself is, whatever a link there points to.
+fn here(path: &Path) -> Result<PathBuf> {
+    match (path.parent(), path.file_name()) {
+        (Some(parent), Some(name)) => Ok(real_or_planned(parent)?.join(name)),
+        _ => real_or_planned(path),
+    }
+}
+
+/// The first hidden paths, which [`Sandbox::reveal`] never takes away:
+/// Kule's home and the task's folder (see [`Sandbox::new`]).
+const ALWAYS_HIDDEN: usize = 2;
+
 /// The resolved form of a path that may not exist: its nearest existing
 /// ancestor resolved, the rest appended.
 fn real_or_planned(path: &Path) -> Result<PathBuf> {
@@ -934,10 +964,18 @@ impl Sandbox {
         }
         if self.network != Network::Allow {
             // Name lookups would carry data out past the proxy, which
-            // resolves names itself.
-            text.push_str(&format!(
-                "(deny mach-lookup (global-name \"com.apple.dnssd.service\") {tag})\n"
-            ));
+            // resolves names itself; so would the certificate services,
+            // which fetch the addresses a certificate names (its issuer,
+            // OCSP, revocation lists) outside the sandbox.
+            for service in [
+                "com.apple.dnssd.service",
+                "com.apple.trustd.agent",
+                "com.apple.ocspd",
+            ] {
+                text.push_str(&format!(
+                    "(deny mach-lookup (global-name \"{service}\") {tag})\n"
+                ));
+            }
         }
         for (i, path) in self.hidden.iter().enumerate() {
             text.push_str(&format!(
@@ -955,11 +993,29 @@ impl Sandbox {
             text.push_str("(allow file-read* file-write* (subpath (param \"L\")))\n");
             params.push(("L".to_owned(), layer.as_path()));
         }
+        let writable = self.writable();
+        let mut between = 0;
         for (i, path) in self.protected.iter().enumerate() {
             text.push_str(&format!(
                 "(deny file-write* (subpath (param \"P{i}\")) {tag})\n"
             ));
             params.push((format!("P{i}"), path.as_path()));
+            // A rule holds a path by its name: a directory on the way to it
+            // inside a writable root, renamed, would take it out from under
+            // the rule, to be changed and renamed back.
+            for dir in path.ancestors().skip(1) {
+                if !writable
+                    .iter()
+                    .any(|root| dir.starts_with(root) && dir != *root)
+                {
+                    break;
+                }
+                text.push_str(&format!(
+                    "(deny file-write-unlink file-write-create (literal (param \"Q{between}\")) {tag})\n"
+                ));
+                params.push((format!("Q{between}"), dir));
+                between += 1;
+            }
         }
         // Resolving the working directory (realpath) looks at every directory
         // on the way to the copy and tmp, inside the hidden home too; what
@@ -1174,22 +1230,30 @@ impl Sandbox {
         // cannot be (`keep_protected`).
         // The copy and tmp sit in Kule's home, which is hidden: they come
         // back after the carving, as on macOS.
+        // A root that is a link gets no rule: Landlock would open it and
+        // allow what it points to (see `allow_write_here`).
         let mut writable = carve_all(
             self.writable
                 .iter()
                 .filter(|root| !self.protected.iter().any(|p| root.starts_with(p)))
+                .filter(|root| {
+                    std::fs::symlink_metadata(root).is_ok_and(|m| !m.file_type().is_symlink())
+                })
                 .cloned()
                 .collect(),
         );
         writable.extend([self.copy.clone(), self.tmp.clone()]);
         writable.extend(self.layer.clone());
+        // Not `/dev/pts`: the person's other terminals are there. A command
+        // keeps the terminal it was given (already open, and `/dev/tty`);
+        // a new one, whose other end opens by its path there, it cannot
+        // make.
         let mut devices: Vec<PathBuf> = [
             "/dev/null",
             "/dev/zero",
             "/dev/full",
             "/dev/tty",
             "/dev/ptmx",
-            "/dev/pts",
         ]
         .map(PathBuf::from)
         .to_vec();
@@ -1305,8 +1369,18 @@ fn carve(roots: Vec<PathBuf>, hidden: &Path) -> Vec<PathBuf> {
             out.push(root);
             continue;
         }
+        // Not a link among them: Landlock would allow what it points to,
+        // a hidden path perhaps (a dotfiles link to `~/.ssh`). What a link
+        // points to is reachable through it where it lies under a path
+        // allowed on its own.
         let children = std::fs::read_dir(&root)
-            .map(|entries| entries.flatten().map(|e| e.path()).collect())
+            .map(|entries| {
+                entries
+                    .flatten()
+                    .filter(|e| e.file_type().is_ok_and(|t| !t.is_symlink()))
+                    .map(|e| e.path())
+                    .collect()
+            })
             .unwrap_or_default();
         out.extend(carve(children, hidden));
     }

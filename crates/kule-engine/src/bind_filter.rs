@@ -179,8 +179,21 @@ fn check(r: libc::c_int) -> io::Result<libc::c_int> {
     }
 }
 
-/// Descriptor `fd` of process `pid`, as a descriptor of Kule's.
-fn take_fd(pid: i32, fd: i32) -> io::Result<OwnedFd> {
+/// The process thread `tid` belongs to: a notification names the thread
+/// that called, and `pidfd_open` takes a process.
+fn process_of(tid: i32) -> io::Result<i32> {
+    let status = std::fs::read_to_string(format!("/proc/{tid}/status"))?;
+    status
+        .lines()
+        .find_map(|l| l.strip_prefix("Tgid:"))
+        .and_then(|v| v.trim().parse().ok())
+        .ok_or_else(|| io::Error::from_raw_os_error(libc::ESRCH))
+}
+
+/// Descriptor `fd` of the process thread `tid` belongs to, as a
+/// descriptor of Kule's.
+fn take_fd(tid: i32, fd: i32) -> io::Result<OwnedFd> {
+    let pid = process_of(tid)?;
     // SAFETY: plain system calls; descriptors made here are owned here.
     unsafe {
         let pidfd = libc::syscall(libc::SYS_pidfd_open, pid, 0);
@@ -373,10 +386,18 @@ fn answer(listener: RawFd, request: &libc::seccomp_notif) -> Answer {
     let args = request.data.args;
     // Every decision is made on a copy of the socket itself, not on its
     // number in the process, which may be reused meanwhile.
-    let Ok(socket) = take_fd(pid, args[0] as i32) else {
-        // Not a descriptor, or gone: the kernel says so itself.
-        return Answer::Continue;
+    let socket = match take_fd(pid, args[0] as i32) {
+        Ok(socket) => socket,
+        // Not a descriptor: the kernel says so itself.
+        Err(e) if e.raw_os_error() == Some(libc::EBADF) => return Answer::Continue,
+        // A socket Kule cannot look at is one it cannot hold to loopback.
+        Err(_) => return Answer::Refuse(libc::EACCES),
     };
+    // The process may have gone, and its id been given to another, since
+    // it asked: what was taken would be the other's.
+    if !still_valid(listener, request.id) {
+        return Answer::Refuse(libc::EACCES);
+    }
     let socket = socket.as_raw_fd();
     let Some(family) = int_option(socket, libc::SOL_SOCKET, libc::SO_DOMAIN) else {
         // Not a socket: the kernel refuses it as it would.

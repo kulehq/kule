@@ -305,6 +305,100 @@ fn processes_outside_the_sandbox_cannot_be_signalled_or_read() {
     );
 }
 
+/// With its network held to the proxy, a command cannot have the system's
+/// certificate services fetch an address for it: a certificate that names
+/// its issuer at a listener outside is checked, and the listener hears
+/// nothing.
+#[test]
+fn certificate_checks_fetch_nothing_past_the_proxy() {
+    let s = Setup::new();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    listener.set_nonblocking(true).unwrap();
+    let dir = fs::canonicalize(s.task.copy()).unwrap();
+    let openssl = |args: &[&str]| {
+        let out = Command::new("/usr/bin/openssl")
+            .args(args)
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{out:?}");
+    };
+    openssl(&[
+        "req",
+        "-x509",
+        "-newkey",
+        "rsa:2048",
+        "-nodes",
+        "-keyout",
+        "ca.key",
+        "-out",
+        "ca.pem",
+        "-days",
+        "2",
+        "-subj",
+        "/CN=Kule test CA",
+    ]);
+    openssl(&[
+        "req",
+        "-newkey",
+        "rsa:2048",
+        "-nodes",
+        "-keyout",
+        "leaf.key",
+        "-out",
+        "leaf.csr",
+        "-subj",
+        "/CN=leaf.kule.test",
+    ]);
+    fs::write(
+        dir.join("ext.cnf"),
+        format!(
+            "authorityInfoAccess=caIssuers;URI:http://127.0.0.1:{port}/issuer.cer,OCSP;URI:http://127.0.0.1:{port}/ocsp\n\
+             crlDistributionPoints=URI:http://127.0.0.1:{port}/crl\n"
+        ),
+    )
+    .unwrap();
+    openssl(&[
+        "x509",
+        "-req",
+        "-in",
+        "leaf.csr",
+        "-CA",
+        "ca.pem",
+        "-CAkey",
+        "ca.key",
+        "-CAcreateserial",
+        "-out",
+        "leaf.pem",
+        "-days",
+        "2",
+        "-extfile",
+        "ext.cnf",
+    ]);
+
+    let mut sandbox = Sandbox::new(&s.task).unwrap();
+    sandbox.set_network(kule_engine::Network::Deny);
+    let _ = sandbox
+        .command("sh", &["-c".to_owned(), "security verify-cert -c leaf.pem -p ssl -s leaf.kule.test; security verify-cert -c leaf.pem -p basic".to_owned()])
+        .unwrap()
+        .output()
+        .unwrap();
+    let started = Instant::now();
+    let mut heard = false;
+    while started.elapsed() < Duration::from_secs(4) {
+        if listener.accept().is_ok() {
+            heard = true;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    assert!(
+        !heard,
+        "a certificate check fetched an address past the proxy"
+    );
+}
+
 /// The tools agents use every day keep working under all of the above.
 #[test]
 fn everyday_tools_still_work() {

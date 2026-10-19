@@ -203,6 +203,19 @@ impl Interceptor {
                     "{host}: a request head that is not text"
                 )));
             };
+            // A head read one way here and another way by the host could
+            // hide a second request, or another host, from the checks below.
+            if let Err(why) = plain_head(&head, host) {
+                let said = format!("Kule refused this request: {why}.\n");
+                write!(
+                    client.stream,
+                    "HTTP/1.1 400 Bad Request\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{said}",
+                    said.len()
+                )
+                .map_err(io)?;
+                client.stream.flush().map_err(io)?;
+                break;
+            }
             let request = Request::of(&head).map_err(io)?;
             // Someone else's credentials to the person's host, or anything
             // but a read from a registry: ways the work could be carried
@@ -232,7 +245,7 @@ impl Interceptor {
             used.extend(names);
             // The body as it came: a secret goes in the credentials alone.
             upstream.stream.write_all(head.as_bytes()).map_err(io)?;
-            relay(request.framing, &mut client, &mut upstream.stream).map_err(io)?;
+            relay(request.framing, &mut client, &mut upstream.stream, false).map_err(io)?;
             upstream.stream.flush().map_err(io)?;
             // The response, as it comes, with any secret it repeats blanked
             // out (an echo, an error quoting the key).
@@ -246,7 +259,7 @@ impl Interceptor {
                     to: &mut client.stream,
                 };
                 out.write_all(&head).map_err(io)?;
-                relay(response.framing, &mut upstream, &mut out).map_err(io)?;
+                relay(response.framing, &mut upstream, &mut out, true).map_err(io)?;
                 out.finish().map_err(io)?;
                 if !response.interim {
                     break response.close;
@@ -591,6 +604,70 @@ impl Request {
     }
 }
 
+/// Methods a request may use; others (`PRI`, `CONNECT`, made-up ones) are
+/// refused.
+const METHODS: &[&str] = &["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"];
+
+/// Whether `head`, a request head ending in an empty line, can be read
+/// only one way, and goes to `host`: lines end in CRLF and hold no other CR
+/// or LF, a method from [`METHODS`], a path (not another host's address),
+/// HTTP/1.1 or 1.0, header names that are tokens right up to the colon, no
+/// folded lines or control characters, and one `Host`, the tunnel's.
+fn plain_head(head: &str, host: &str) -> std::result::Result<(), String> {
+    let body = head
+        .strip_suffix("\r\n\r\n")
+        .ok_or("its head does not end as HTTP says")?;
+    let mut lines = body.split("\r\n");
+    let first = lines.next().unwrap_or_default();
+    if body.split("\r\n").any(|l| l.contains(['\r', '\n'])) {
+        return Err("a line in its head ends in a bare CR or LF".to_owned());
+    }
+    let parts: Vec<&str> = first.split(' ').collect();
+    let [method, target, version] = parts[..] else {
+        return Err("its request line is not method, path and version".to_owned());
+    };
+    if !METHODS.contains(&method) {
+        return Err(format!("the method {method:?} is not one Kule passes"));
+    }
+    if !matches!(version, "HTTP/1.1" | "HTTP/1.0") {
+        return Err(format!("{version:?} is not HTTP/1.1 or 1.0"));
+    }
+    let path_ok = target.starts_with('/') || (method == "OPTIONS" && target == "*");
+    if !path_ok || target.bytes().any(|b| b <= b' ' || b == 0x7f) {
+        return Err("it names an address, not a path on the host".to_owned());
+    }
+    let mut hosts = Vec::new();
+    for line in lines {
+        let Some((name, value)) = line.split_once(':') else {
+            return Err("a header line has no name".to_owned());
+        };
+        let token = !name.is_empty()
+            && name
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&b));
+        if !token {
+            return Err(format!("{name:?} is not a header name"));
+        }
+        if value.chars().any(|c| c.is_control() && c != '\t') {
+            return Err(format!("the {name} header holds a control character"));
+        }
+        if name.eq_ignore_ascii_case("host") {
+            hosts.push(value.trim());
+        }
+    }
+    let ours = |h: &str| {
+        let h = h.strip_suffix(":443").unwrap_or(h);
+        h.eq_ignore_ascii_case(host)
+    };
+    match hosts[..] {
+        [one] if ours(one) => Ok(()),
+        [one] => Err(format!(
+            "its Host is {one:?}, and this connection is to {host}"
+        )),
+        _ => Err("it needs one Host header".to_owned()),
+    }
+}
+
 /// What may go to a registry: reading, and npm's audit of what is installed
 /// (its advisories for the packages named).
 fn reads(request: &Request) -> bool {
@@ -654,8 +731,14 @@ impl Response {
     }
 }
 
-/// Passes a message's body on, as its framing says it is.
-fn relay<S: Read>(framing: Framing, from: &mut Conn<S>, to: &mut impl Write) -> io::Result<()> {
+/// Passes a message's body on, as its framing says it is; trailers after a
+/// chunked body only where `trailers` (a response).
+fn relay<S: Read>(
+    framing: Framing,
+    from: &mut Conn<S>,
+    to: &mut impl Write,
+    trailers: bool,
+) -> io::Result<()> {
     match framing {
         Framing::Empty => Ok(()),
         Framing::Length(length) => {
@@ -669,24 +752,51 @@ fn relay<S: Read>(framing: Framing, from: &mut Conn<S>, to: &mut impl Write) -> 
             Ok(())
         }
         Framing::Chunked => loop {
+            let bad = |why: &str| io::Error::new(io::ErrorKind::InvalidData, why.to_owned());
             let line = from.line()?;
+            // One reading of where each chunk ends: hex digits, then any
+            // extension, then CRLF and nothing else.
+            let text =
+                std::str::from_utf8(&line[..line.len() - 2]).map_err(|_| bad("bad chunk size"))?;
+            if text.contains(['\r', '\n']) {
+                return Err(bad("bad chunk size"));
+            }
+            let size = text
+                .split(';')
+                .next()
+                .unwrap_or_default()
+                .trim_end_matches([' ', '\t']);
+            if size.is_empty() || size.len() > 16 || !size.bytes().all(|b| b.is_ascii_hexdigit()) {
+                return Err(bad("bad chunk size"));
+            }
+            let size = u64::from_str_radix(size, 16).map_err(|_| bad("bad chunk size"))?;
             to.write_all(&line)?;
-            let text = String::from_utf8_lossy(&line);
-            let size = text.trim().split(';').next().unwrap_or("").trim();
-            let size = u64::from_str_radix(size, 16)
-                .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "bad chunk size"))?;
             if size == 0 {
-                // Trailers, up to the empty line.
+                // Trailers, up to the empty line: a request's carry none,
+                // as no header goes on unchecked.
                 loop {
                     let line = from.line()?;
+                    if line != b"\r\n" && !trailers {
+                        return Err(bad("a request's trailers"));
+                    }
                     to.write_all(&line)?;
                     if line == b"\r\n" {
                         return Ok(());
                     }
                 }
             }
-            // A chunk cut short leaves the next line to meet the end.
-            io::copy(&mut from.by_ref().take(size + 2), to)?;
+            if io::copy(&mut from.by_ref().take(size), to)? < size {
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "chunk cut short",
+                ));
+            }
+            let mut end = [0u8; 2];
+            from.read_exact(&mut end)?;
+            if &end != b"\r\n" {
+                return Err(bad("a chunk longer than its size"));
+            }
+            to.write_all(&end)?;
         },
         Framing::Close => {
             let mut buf = vec![0u8; 16 * 1024];
@@ -763,7 +873,7 @@ mod tests {
                         let text = String::from_utf8_lossy(&head).into_owned();
                         let framing = Request::of(&text).unwrap().framing;
                         // The body after the head, as it came.
-                        if relay(framing, &mut tls, &mut head).is_err() {
+                        if relay(framing, &mut tls, &mut head, false).is_err() {
                             break;
                         }
                         if head.windows(10).any(|w| w == b"real-value") {
@@ -1051,6 +1161,76 @@ mod tests {
         }
     }
 
+    /// A head the host could read apart from Kule, or one for another host
+    /// behind the same address, goes nowhere: the second request it could
+    /// hide would pass no check.
+    #[test]
+    fn a_request_read_two_ways_or_for_another_host_is_refused() {
+        let host = echo_host();
+        let home = TempDir::new().unwrap();
+        let (interceptor, p) = interceptor(&home, host.roots);
+        let auth = format!("x-api-key: {p}");
+        for sent in [
+            // A bare LF ends a header for a lenient host, and starts one.
+            format!(
+                "GET / HTTP/1.1\r\nHost: {HOST}\r\n{auth}\nContent-Length: 30\r\nConnection: close\r\n\r\n"
+            ),
+            format!(
+                "GET / HTTP/1.1\r\nHost: {HOST}\r\n{auth}\r\nX: a\r\n folded\r\nConnection: close\r\n\r\n"
+            ),
+            format!(
+                "GET / HTTP/1.1\r\nHost: {HOST}\r\n{auth}\r\nContent-Length : 3\r\nConnection: close\r\n\r\n"
+            ),
+            format!("GET / HTTP/1.1\r\nHost: other.example\r\n{auth}\r\nConnection: close\r\n\r\n"),
+            format!(
+                "GET / HTTP/1.1\r\nHost: {HOST}\r\nHost: other.example\r\n{auth}\r\nConnection: close\r\n\r\n"
+            ),
+            format!(
+                "GET https://other.example/ HTTP/1.1\r\nHost: {HOST}\r\n{auth}\r\nConnection: close\r\n\r\n"
+            ),
+            format!("PRI * HTTP/2.0\r\nHost: {HOST}\r\n{auth}\r\n\r\n"),
+            format!("GET / HTTP/1.1\r\n{auth}\r\nConnection: close\r\n\r\n"),
+        ] {
+            let (reply, _) = ask(&interceptor, host.port, HOST, &sent);
+            let reply = reply.unwrap_or_default();
+            assert!(reply.starts_with("HTTP/1.1 400"), "{sent:?}: {reply}");
+        }
+        assert!(!host.saw_real.load(Ordering::SeqCst));
+        // The same, read one way, goes through.
+        let sent =
+            format!("GET / HTTP/1.1\r\nHost: {HOST}:443\r\n{auth}\r\nConnection: close\r\n\r\n");
+        let (reply, _) = ask(&interceptor, host.port, HOST, &sent);
+        assert!(reply.unwrap().starts_with("HTTP/1.1 200"));
+    }
+
+    #[test]
+    fn a_chunked_request_is_read_one_way_only() {
+        let relayed = |sent: &[u8], trailers| {
+            let mut from = Conn {
+                buf: Vec::new(),
+                stream: Cursor::new(sent.to_vec()),
+            };
+            relay(Framing::Chunked, &mut from, &mut Vec::new(), trailers)
+        };
+        assert!(relayed(b"3\r\nabc\r\n0\r\n\r\n", false).is_ok());
+        // Longer than its size says; a sign before the size; a size that
+        // would overflow; a bare LF in the size line; a request's trailer.
+        for bad in [
+            &b"3\r\nabcdef\r\n0\r\n\r\n"[..],
+            b"+3\r\nabc\r\n0\r\n\r\n",
+            b"ffffffffffffffff\r\nabc\r\n",
+            b"3\nx\r\nabc\r\n0\r\n\r\n",
+            b"3\r\nabc\r\n0\r\nX-Api-Key: other\r\n\r\n",
+        ] {
+            assert!(
+                relayed(bad, false).is_err(),
+                "{}",
+                String::from_utf8_lossy(bad)
+            );
+        }
+        assert!(relayed(b"3\r\nabc\r\n0\r\nT: 1\r\n\r\n", true).is_ok());
+    }
+
     #[test]
     fn a_client_that_leaves_a_kept_connection_is_no_error() {
         let host = echo_host();
@@ -1175,7 +1355,7 @@ mod tests {
             stream: Cursor::new(sent[5..].to_vec()),
         };
         let mut out = Vec::new();
-        relay(Framing::Chunked, &mut from, &mut out).unwrap();
+        relay(Framing::Chunked, &mut from, &mut out, true).unwrap();
         assert_eq!(out, &sent[..sent.len() - 4]);
         let mut rest = String::new();
         from.read_to_string(&mut rest).unwrap();
@@ -1186,14 +1366,14 @@ mod tests {
             stream: Cursor::new(b"llo world".to_vec()),
         };
         let mut out = Vec::new();
-        relay(Framing::Length(5), &mut from, &mut out).unwrap();
+        relay(Framing::Length(5), &mut from, &mut out, true).unwrap();
         assert_eq!(out, b"hello");
-        assert!(relay(Framing::Length(50), &mut from, &mut Vec::new()).is_err());
+        assert!(relay(Framing::Length(50), &mut from, &mut Vec::new(), true).is_err());
 
         let mut from = Conn {
             buf: b"5\r\nab".to_vec(),
             stream: Cursor::new(Vec::new()),
         };
-        assert!(relay(Framing::Chunked, &mut from, &mut Vec::new()).is_err());
+        assert!(relay(Framing::Chunked, &mut from, &mut Vec::new(), true).is_err());
     }
 }
