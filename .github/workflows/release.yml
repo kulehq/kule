@@ -81,7 +81,7 @@ jobs:
           mkdir dist
           cp "$bundle"/dmg/*.dmg "dist/Kule_${VERSION}_universal.dmg"
           tar -C "$app/Contents/MacOS" -czf "dist/kule-$VERSION-macos-universal.tar.gz" kule
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: macos
           path: dist/
@@ -172,7 +172,7 @@ jobs:
                    dnf install -y -q /dist/*.rpm && kule --version && test -x /usr/bin/kule-desktop'
           version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)
           tar -C target/release -czf "dist/kule-$version-linux-x86_64.tar.gz" kule
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: linux
           path: dist/
@@ -202,7 +202,7 @@ jobs:
           done
           mv crates/kule-cli/sbom.json "dist/kule-$version.cdx.json"
           mv crates/kule-desktop/sbom.json "dist/kule-desktop-$version.cdx.json"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: sbom
           path: dist/
