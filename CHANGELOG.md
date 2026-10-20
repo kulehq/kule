@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+The first preview release will be `0.2.0-preview.1`.
+
+### Documentation
+
+- A documentation site, in English and Turkish, at
+  https://kulehq.github.io/kule/: install, a quick start, the concepts,
+  the desktop app panel by panel, a page for every `kule` command, the
+  files and settings Kule keeps, platforms, troubleshooting, and a video
+  tour. It is built from the Markdown in `docs/` (`website/`).
+- The README is a shorter, task-first introduction: what Kule does, a
+  quick start from source, the commands at a glance and how to develop it.
+
+### Writes in your home
+
+- `kule home TASK diff|apply|discard` takes a path however it is typed:
+  `~/.zshrc` unquoted (which the shell turns into your full home path),
+  quoted, or relative to your home. A path outside your home, or one with
+  `..`, is refused with a message that says so.
+
 ### Keeping up with the folder
 
 - A task brings what its folder changed meanwhile into its copy: your own

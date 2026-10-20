@@ -1,0 +1,26 @@
+{
+  "title": {
+    "message": "Kule",
+    "description": "The title in the navbar"
+  },
+  "logo.alt": {
+    "message": "Kule",
+    "description": "The alt text of navbar logo"
+  },
+  "item.label.Docs": {
+    "message": "Dokümanlar",
+    "description": "Navbar item with label Docs"
+  },
+  "item.label.CLI reference": {
+    "message": "CLI başvurusu",
+    "description": "Navbar item with label CLI reference"
+  },
+  "item.label.Install": {
+    "message": "Kurulum",
+    "description": "Navbar item with label Install"
+  },
+  "item.label.GitHub": {
+    "message": "GitHub",
+    "description": "Navbar item with label GitHub"
+  }
+}

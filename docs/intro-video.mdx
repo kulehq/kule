@@ -1,0 +1,44 @@
+---
+title: Video tour
+sidebar_label: Video tour
+description: A three-minute tour of Kule, from a new task to a reviewed commit and an undo.
+---
+
+import useBaseUrl from '@docusaurus/useBaseUrl';
+
+# Video tour
+
+A short tour of the desktop app: a task on a small web project, an agent at
+work, a connection Kule asks about, the review, a commit and an undo. The
+video has a Turkish version too: switch the language at the top right.
+
+<video
+  controls
+  preload="metadata"
+  playsInline
+  poster={useBaseUrl('/video/kule-tour-en.jpg')}
+  style={{ width: '100%', borderRadius: '12px', background: '#000' }}>
+  <source src={useBaseUrl('/video/kule-tour-en.mp4')} type="video/mp4" />
+  <track kind="captions" srcLang="en" label="English" src={useBaseUrl('/video/kule-tour-en.vtt')} default />
+</video>
+
+## What the video shows
+
+| Chapter | Where to read more |
+| --- | --- |
+| Why Kule: agents run with your permissions on your real files | [What is Kule?](index.md) |
+| Making a task, a copy-on-write copy of a folder | [Tasks and copies](concepts/tasks-and-copies.md) |
+| Giving the agent a prompt and watching it work | [Live](app/live.md) |
+| A connection the policy asks you about | [Network and questions](concepts/network-and-questions.md) |
+| Reviewing what changed, and the policy's verdict | [Review](app/review.md) |
+| Committing, and undoing the commit | [Review, commit and undo](concepts/review-commit-undo.md) |
+| Secrets and limits | [Secrets](concepts/secrets.md) · [Budgets and limits](concepts/budgets-and-limits.md) |
+| The same from a terminal | [CLI reference](cli/index.md) |
+
+:::note
+
+The tour is recorded from Kule's real interface with a scripted demo
+project, so it shows the same screens you see, at an even pace. Try it on
+your own folder with the [quick start](getting-started/quick-start.md).
+
+:::

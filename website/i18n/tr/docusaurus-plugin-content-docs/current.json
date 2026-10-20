@@ -1,0 +1,62 @@
+{
+  "version.label": {
+    "message": "Next",
+    "description": "The label for version current"
+  },
+  "sidebar.docs.category.Getting started": {
+    "message": "Başlarken",
+    "description": "The label for category 'Getting started' in sidebar 'docs'"
+  },
+  "sidebar.docs.category.Concepts": {
+    "message": "Kavramlar",
+    "description": "The label for category 'Concepts' in sidebar 'docs'"
+  },
+  "sidebar.docs.category.The desktop app": {
+    "message": "Masaüstü uygulaması",
+    "description": "The label for category 'The desktop app' in sidebar 'docs'"
+  },
+  "sidebar.docs.category.CLI reference": {
+    "message": "CLI başvurusu",
+    "description": "The label for category 'CLI reference' in sidebar 'docs'"
+  },
+  "sidebar.docs.category.Tasks": {
+    "message": "Görevler",
+    "description": "The label for category 'Tasks' in sidebar 'docs'"
+  },
+  "sidebar.docs.category.Working in a task": {
+    "message": "Görevde çalışmak",
+    "description": "The label for category 'Working in a task' in sidebar 'docs'"
+  },
+  "sidebar.docs.category.Review and history": {
+    "message": "İnceleme ve geçmiş",
+    "description": "The label for category 'Review and history' in sidebar 'docs'"
+  },
+  "sidebar.docs.category.Cost and limits": {
+    "message": "Maliyet ve sınırlar",
+    "description": "The label for category 'Cost and limits' in sidebar 'docs'"
+  },
+  "sidebar.docs.category.Groups": {
+    "message": "Gruplar",
+    "description": "The label for category 'Groups' in sidebar 'docs'"
+  },
+  "sidebar.docs.category.Policy and access": {
+    "message": "Politika ve erişim",
+    "description": "The label for category 'Policy and access' in sidebar 'docs'"
+  },
+  "sidebar.docs.category.Home and secrets": {
+    "message": "Ev dizini ve gizli değerler",
+    "description": "The label for category 'Home and secrets' in sidebar 'docs'"
+  },
+  "sidebar.docs.category.Agents and extensions": {
+    "message": "Ajanlar ve eklentiler",
+    "description": "The label for category 'Agents and extensions' in sidebar 'docs'"
+  },
+  "sidebar.docs.category.Daemon": {
+    "message": "Daemon",
+    "description": "The label for category 'Daemon' in sidebar 'docs'"
+  },
+  "sidebar.docs.category.Reference": {
+    "message": "Başvuru",
+    "description": "The label for category 'Reference' in sidebar 'docs'"
+  }
+}

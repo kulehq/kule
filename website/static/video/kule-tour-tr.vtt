@@ -1,0 +1,124 @@
+WEBVTT
+
+00:04.902 --> 00:10.584
+Yapay zekâ ajanları komutları senin yetkilerinle, gerçek dosyaların üzerinde
+
+00:10.584 --> 00:11.406
+çalıştırır.
+
+00:11.406 --> 00:14.023
+Kule araya bir kontrol odası koyar.
+
+00:14.023 --> 00:16.789
+Her görev, klasörünün bir kopyasıdır.
+
+00:16.789 --> 00:22.546
+Ajan bu kopyada, yalıtılmış bir ortamda çalışır; sen inceleyip commit etmeden
+
+00:22.546 --> 00:24.714
+klasörüne hiçbir şey ulaşmaz.
+
+00:25.914 --> 00:30.421
+Herhangi bir klasörle başla: kod, notlar, belgeler ya da fotoğraflar.
+
+00:30.421 --> 00:32.642
+Burada küçük bir web mağazası var.
+
+00:32.642 --> 00:37.737
+macOS'ta kopya bir klon olduğu için, dosyalar değişene kadar neredeyse hiç yer
+
+00:37.737 --> 00:38.325
+kaplamaz.
+
+00:39.527 --> 00:41.965
+Sonra ajana ne yapacağını söyle.
+
+00:41.965 --> 00:48.138
+Kule; Claude Code, Codex, Gemini ya da ACP konuşan herhangi bir ajanı çalıştırır.
+
+00:50.028 --> 00:54.322
+Her araç çağrısı, yazdırdığı çıktıyla birlikte anında görünür.
+
+00:54.322 --> 00:57.577
+Her değişiklik, geri dönebileceğin bir adımdır.
+
+00:57.577 --> 01:03.325
+Altta, çalışmanın bilgisayarından ne kadar kullandığı, koyduğun sınırlarla birlikte
+
+01:03.325 --> 01:03.879
+görünür.
+
+01:05.080 --> 01:07.708
+Her bağlantı görevin proxy'sinden geçer.
+
+01:07.708 --> 01:09.680
+Paket depolarına izin verilir.
+
+01:09.680 --> 01:15.068
+Burada bir paketin kurulum betiği, politikanın tanımadığı bir telemetri sunucusuna
+
+01:15.068 --> 01:17.697
+bağlanmak istiyor; Kule bunu sana sorar.
+
+01:17.697 --> 01:19.931
+Reddedersen ajan onsuz devam eder.
+
+01:21.133 --> 01:27.647
+Çalışma bitince İnceleme, her dosyanın içinde neyin değiştiğini gösterir: yalnızca
+
+01:27.647 --> 01:31.778
+satırları değil; metotları, alanları ve anahtarları.
+
+01:31.778 --> 01:35.433
+Kaynak kod değişiklikleri kendiliğinden geçer.
+
+01:35.433 --> 01:41.709
+package.json ve kilit dosyası neyin kurulacağını belirlediği için senin onayını
+
+01:41.709 --> 01:42.265
+bekler.
+
+01:42.265 --> 01:48.224
+Onayla ve commit et; değişiklikler bir kontrol noktasıyla klasörüne ulaşır.
+
+01:49.424 --> 01:54.771
+Zaman çizelgesi her commit'i ve görevin yaptığı her bağlantıyı tutar; reddettiğin de
+
+01:54.771 --> 01:55.216
+burada.
+
+01:55.216 --> 01:56.680
+Fikrini mi değiştirdin?
+
+01:56.680 --> 01:59.035
+Geri al, klasörü eski hâline getirir.
+
+02:06.100 --> 02:08.446
+API anahtarların Kule'de kalır.
+
+02:08.446 --> 02:14.653
+Ajan yalnızca bir yer tutucu görür; gerçek anahtarı, belirlediğin sunuculara giden
+
+02:14.653 --> 02:16.318
+isteklere proxy ekler.
+
+02:16.318 --> 02:22.070
+Sınırlar her çalışmayı izin verdiğin işlemci, bellek, disk ve süreyle tutar;
+
+02:22.070 --> 02:24.871
+bütçeler de maliyete bir tavan koyar.
+
+02:26.071 --> 02:31.218
+Pencerenin yaptığı her şeyi kule komut satırı aracı da aynı görevler üzerinde yapar;
+
+02:31.218 --> 02:33.362
+istersen betiklere bağlayabilirsin.
+
+02:44.653 --> 02:52.058
+Kule açık kaynaklıdır, Apache lisansıyla dağıtılır ve macOS ile Linux için bir
+
+02:52.058 --> 02:53.862
+önizleme sürümüdür.
+
+02:53.862 --> 02:57.944
+Dokümanlar kulehq.github.io/kule adresinde.

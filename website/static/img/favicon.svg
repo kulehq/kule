@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- Kule's app icon on Apple's grid: an 824 x 824 rounded square inside a
+       1024 x 1024 canvas, with room for the shadow. The glyph is the tower
+       as three shapes: the beacon, the cab, the stem. -->
+  <defs>
+    <filter id="lift" x="-10%" y="-10%" width="120%" height="125%">
+      <feDropShadow dx="0" dy="10" stdDeviation="12" flood-color="#000000" flood-opacity="0.28"/>
+    </filter>
+  </defs>
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="#ff5a3c" filter="url(#lift)"/>
+  <circle cx="512" cy="262" r="30" fill="#ffffff"/>
+  <rect x="336" y="318" width="352" height="112" rx="56" fill="#ffffff"/>
+  <path d="M466 470 L558 470 L588 806 Q590 826 570 826 L454 826 Q434 826 436 806 Z" fill="#ffffff"/>
+</svg>

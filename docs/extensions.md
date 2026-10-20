@@ -1,9 +1,24 @@
+---
+title: Writing a Kule extension
+sidebar_label: Extensions
+description: Add commands, panels, themes, settings, review notes, agent profiles and MCP servers to Kule with a sandboxed JavaScript extension.
+---
+
 # Writing a Kule extension
 
-> **A preview.** The extension format (`"kule_extension": 1`) and the SDK may
-> still change before Kule 1.0. Any change that breaks extensions will be
-> named in the changelog, with what to do about it. Tell us what gets in
-> your way: [issues](https://github.com/kulehq/kule/issues).
+:::note A preview
+
+The extension format (`"kule_extension": 1`) and the SDK may still change
+before Kule 1.0. Any change that breaks extensions will be named in the
+[changelog](https://github.com/kulehq/kule/blob/main/CHANGELOG.md), with what
+to do about it. Tell us what gets in your way:
+[issues](https://github.com/kulehq/kule/issues).
+
+:::
+
+To install, approve and manage extensions from a terminal, see
+[`kule ext`](cli/ext.md). In the app, use **Settings → Extensions**
+(see [Settings](app/settings.md)).
 
 An extension adds to Kule: commands, panels, themes, settings, notes on a
 review, agent profiles and MCP servers for agents. It is plain JavaScript and
@@ -45,7 +60,8 @@ kule ext install me.hello-0.1.0.kulext
 
 The desktop app does the same under **Settings → Extensions**.
 
-`examples/extensions/` has three to read:
+[`examples/extensions/`](https://github.com/kulehq/kule/tree/main/examples/extensions)
+has three to read:
 
 | Example | What it shows |
 | --- | --- |

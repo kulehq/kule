@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="600" height="600" viewBox="306 222 412 624">
+  <!-- The glyph alone, in the colour of whatever holds it: beacon, cab, stem. -->
+  <g fill="#ff5a3c">
+    <circle cx="512" cy="262" r="30"/>
+    <rect x="336" y="318" width="352" height="112" rx="56"/>
+    <path d="M466 470 L558 470 L588 806 Q590 826 570 826 L454 826 Q434 826 436 806 Z"/>
+  </g>
+</svg>

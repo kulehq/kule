@@ -1,0 +1,46 @@
+---
+title: Video tanıtım
+sidebar_label: Video tanıtım
+description: Yeni bir görevden incelenmiş bir commit'e ve geri almaya kadar üç dakikalık bir Kule turu.
+---
+
+import useBaseUrl from '@docusaurus/useBaseUrl';
+
+# Video tanıtım
+
+Masaüstü uygulamasında kısa bir tur: küçük bir web projesi üzerinde bir
+görev, çalışan bir ajan, Kule'nin size sorduğu bir bağlantı, inceleme, bir
+commit ve onun geri alınması. Videonun İngilizcesi de var: dili sağ üstten
+değiştirebilirsiniz.
+
+<video
+  controls
+  preload="metadata"
+  playsInline
+  poster={useBaseUrl('/video/kule-tour-tr.jpg')}
+  style={{ width: '100%', borderRadius: '12px', background: '#000' }}>
+  <source src={useBaseUrl('/video/kule-tour-tr.mp4')} type="video/mp4" />
+  <track kind="captions" srcLang="tr" label="Türkçe" src={useBaseUrl('/video/kule-tour-tr.vtt')} default />
+</video>
+
+## Videoda neler var
+
+| Bölüm | Ayrıntısı |
+| --- | --- |
+| Neden Kule: ajanlar sizin yetkilerinizle, gerçek dosyalarınızda çalışır | [Kule nedir?](index.md) |
+| Görev açmak: bir klasörün copy-on-write kopyası | [Görevler ve kopyalar](concepts/tasks-and-copies.md) |
+| Ajana bir istem (prompt) vermek ve çalışmasını izlemek | [Live](app/live.md) |
+| Politikanın size sorduğu bir bağlantı | [Ağ ve sorular](concepts/network-and-questions.md) |
+| Neyin değiştiğini ve politikanın kararını incelemek | [Review](app/review.md) |
+| Commit etmek ve commit'i geri almak | [İnceleme, commit ve geri alma](concepts/review-commit-undo.md) |
+| Gizli değerler ve sınırlar | [Gizli değerler](concepts/secrets.md) · [Bütçeler ve sınırlar](concepts/budgets-and-limits.md) |
+| Aynısı terminalden | [CLI başvurusu](cli/index.md) |
+
+:::note
+
+Tur, Kule'nin gerçek arayüzünden, senaryolu bir demo projeyle kaydedildi;
+yani gördüğünüz ekranlar uygulamadakilerle aynı, yalnızca tempo sabit.
+Kendi klasörünüzde denemek için [hızlı başlangıç](getting-started/quick-start.md)
+sayfasına bakın.
+
+:::

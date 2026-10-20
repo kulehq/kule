@@ -1,0 +1,267 @@
+---
+title: Kule'yi kurun
+sidebar_label: Kurulum
+description: Kule'yi macOS ya da Linux'ta kaynak koddan derleyin veya bir önizleme sürümü indirin; ardından ajanları kurup her şeyin çalıştığını doğrulayın.
+---
+
+# Kule'yi kurun
+
+Kule iki programdan oluşur:
+
+- **`kule`**, komut satırı aracı;
+- **`kule-desktop`**, masaüstü uygulaması (macOS'ta `Kule.app`).
+
+İkisi de aynı motoru ve aynı görevleri kullanır. Yalnızca komut satırını,
+yalnızca uygulamayı ya da ikisini birden kullanabilirsiniz.
+
+| Platform | Durum |
+| --- | --- |
+| macOS 13 (Ventura) ya da sonrası, Apple silicon ve Intel | Destekleniyor |
+| Linux x86_64 (Ubuntu 22.04 ya da sonrası, Fedora, …) | Destekleniyor |
+| Diğer mimarilerde Linux | Kaynak koddan derleyin; hazır sürüm dosyası yok |
+| Windows | Henüz değil (planlanıyor) |
+
+:::note Henüz bir sürüm yok
+
+Kule bir **önizleme** (preview). İlk ön sürüm `0.2.0-preview.1` olacak ve
+[sürümler sayfasında](https://github.com/kulehq/kule/releases) henüz bir şey
+yok. Şimdilik [kaynak koddan derleyin](#build-from-source).
+
+:::
+
+## Kaynak koddan derleme {#build-from-source}
+
+### 1. Gereksinimleri kurun
+
+**Rust.** [rustup](https://rustup.rs)'ı kurun. Bir sürüm seçmeniz
+gerekmez: deponun
+[`rust-toolchain.toml`](https://github.com/kulehq/kule/blob/main/rust-toolchain.toml)
+dosyası tam derleyici sürümünü (Rust 1.99.1) belirtir ve `cargo` onu ilk
+derlemede kendisi kurar.
+
+**macOS'ta:** Xcode komut satırı araçları.
+
+```sh
+xcode-select --install
+```
+
+**Linux'ta:** bir C araç zinciri, `pkg-config` ve masaüstü uygulamasının
+(Tauri ve WebKitGTK) ihtiyaç duyduğu kütüphaneler. Kule'nin CI'ının
+Ubuntu'da kurduğu paketler şunlar:
+
+```sh
+sudo apt-get update
+sudo apt-get install -y build-essential pkg-config \
+  libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev
+```
+
+Fedora'da Tauri'nin listesindeki karşılıkları `webkit2gtk4.1-devel`,
+`libappindicator-gtk3-devel`, `librsvg2-devel` ve `libxdo-devel`; yanında
+bir C derleyicisi ve `pkgconf` gerekir. Yalnızca komut satırını
+istiyorsanız WebKitGTK kütüphanelerini atlayıp yalnızca `-p kule`'yi
+derleyebilirsiniz (aşağıda).
+
+### 2. Derleyin
+
+```sh
+git clone https://github.com/kulehq/kule.git
+cd kule
+cargo build --release -p kule -p kule-desktop
+```
+
+İlk derleme birkaç dakika sürer. Bittiğinde:
+
+| Dosya | Nedir |
+| --- | --- |
+| `target/release/kule` | Komut satırı aracı |
+| `target/release/kule-desktop` | Masaüstü uygulaması |
+
+Uygulama olmadan, yalnızca komut satırı:
+
+```sh
+cargo build --release -p kule
+```
+
+### 3. `kule`'yi `PATH`'inize ekleyin
+
+Zaten `PATH`'inizde olan bir klasör seçin, örneğin `~/.local/bin`:
+
+```sh
+mkdir -p ~/.local/bin
+ln -sf "$PWD/target/release/kule" ~/.local/bin/kule
+kule --version
+```
+
+### 4. Uygulamayı başlatın
+
+```sh
+./target/release/kule-desktop
+```
+
+Geliştirme sırasında `cargo run -p kule-desktop` de kullanabilirsiniz.
+
+Uygulama Kule **daemon**'ını (arka plan sürecini) kendisi başlatır (kendi
+programını `kule-desktop daemon` olarak çalıştırır); yani ayrıca
+başlatmanız gereken bir şey yoktur. Daemon'ın ne yaptığı için
+[`kule daemon`](../cli/daemon.md) sayfasına bakın.
+
+## Bir önizleme sürümü indirme
+
+Bir sürüm yayımlandığında her biri şu dosyaları içerir:
+
+| Dosya | Ne için |
+| --- | --- |
+| `Kule_<version>_universal.dmg` | macOS 13 ya da sonrası; Apple silicon ve Intel tek bir uygulamada. `kule` komutu uygulamanın içindedir. |
+| `Kule_<version>_amd64.deb` | Debian ve Ubuntu: `kule-desktop` ve `kule`'yi `/usr/bin`'e koyar. |
+| `Kule-<version>-1.x86_64.rpm` | Fedora: aynısı, RPM olarak. |
+| `kule-<version>-linux-x86_64.tar.gz` | Linux x86_64 için yalnızca `kule` komutu. |
+| `kule-<version>.cdx.json`, `kule-desktop-<version>.cdx.json` | CLI'ın ve uygulamanın CycloneDX SBOM'u: derlendikleri her crate. |
+| `SHA256SUMS` | Yukarıdaki her dosyanın sağlama toplamı. |
+| `kule.rb` | Bir Homebrew cask'ı; **yalnızca** macOS uygulaması notarize edilmiş bir sürümde. |
+
+### Önce indirdiğinizi doğrulayın
+
+Her dosyanın `SHA256SUMS` içinde bir sağlama toplamı ve bir **build
+provenance attestation**'ı (derleme kaynağı belgesi) vardır. Bu belge,
+dosyanın bu depodan, sürüm workflow'u tarafından, sürümün etiketinden
+derlendiğini kanıtlar. Herhangi bir şeyi açmadan önce ikisini de kontrol
+edin:
+
+```sh
+shasum -a 256 -c SHA256SUMS --ignore-missing
+gh attestation verify Kule_<version>_universal.dmg --repo kulehq/kule \
+  --signer-workflow kulehq/kule/.github/workflows/release.yml \
+  --source-ref refs/tags/v<version>
+```
+
+(`gh`, [GitHub CLI](https://cli.github.com)'dır. `.deb`, `.rpm` ya da
+`.tar.gz`'yi kontrol etmek için dosya adını değiştirin.)
+
+### macOS
+
+1. `.dmg`'yi açın ve **Kule**'yi **Applications** klasörüne sürükleyin.
+2. Komutu `PATH`'inize ekleyin:
+
+   ```sh
+   ln -sf /Applications/Kule.app/Contents/MacOS/kule ~/.local/bin/kule
+   ```
+
+3. Kule'yi açın.
+
+Bir önizleme sürümü Apple tarafından **notarize edilmemiştir, ad hoc
+imzalıdır**; bu yüzden macOS onu ilk seferde açmayı reddeder. Bir sürümün
+hangi türden olduğunu sürüm notları söyler. Bir önizleme için, indirdiğinizi
+doğruladıktan sonra şunlardan birini yapın:
+
+- **System Settings → Privacy & Security**'yi açıp Kule için **Open
+  Anyway**'i seçin; ya da
+- bir kez şunu çalıştırın:
+
+  ```sh
+  xattr -dr com.apple.quarantine /Applications/Kule.app
+  ```
+
+Notarize edilmiş bir sürüm normal şekilde açılır ve ayrıca uygulamayı kurup
+komutu bağlayan bir Homebrew cask'ı olan `kule.rb`'yi de içerir.
+
+### Linux
+
+```sh
+# Debian, Ubuntu
+sudo apt-get install ./Kule_<version>_amd64.deb
+# Fedora
+sudo dnf install ./Kule-<version>-1.x86_64.rpm
+```
+
+İkisi de `kule-desktop` ve `kule`'yi `/usr/bin`'e koyar. Yalnızca komut
+satırı için `.tar.gz`'yi açın ve `kule`'yi `PATH`'inize ekleyin.
+
+:::warning Ubuntu 24.04 ve kullanıcı ad alanları
+
+Kule'nin Linux sandbox'ı ayrıcalıksız kullanıcı ad alanlarına (unprivileged
+user namespaces) ihtiyaç duyar; Ubuntu 24.04 bunları varsayılan olarak
+kapatır. İlk ajan çalıştırmanızdan önce
+[Sorun giderme](../troubleshooting.md) sayfasına (*Linux: agents do not
+start*) bakın.
+
+:::
+
+## Ajanları kurma
+
+Kule ajanlarla birlikte gelmez. Her birini **Kule olmadan nasıl yapıyorsanız
+öyle** kurar ve oturum açarsınız; Kule'nin çalıştırmaları o oturumu
+kullanır.
+
+| Ajan | Neye ihtiyaç duyar | Oturum açma |
+| --- | --- | --- |
+| **Claude Code** | Node.js (Kule, ACP adaptörünü `npx` ile başlatır) | Bir terminalde Claude Code'a bir kez oturum açın ya da `ANTHROPIC_API_KEY`'i ayarlayın. |
+| **Codex** | Node.js (`npx`) | `codex login` (ChatGPT oturumu da olur) ya da `OPENAI_API_KEY`. |
+| **Gemini** | Gemini CLI | Google AI Studio'dan alınan, bir dosyada saklanan API anahtarı: `GEMINI_FORCE_FILE_STORAGE=true gemini` çalıştırın, sonra `/auth`. |
+
+Notlar:
+
+- Gemini bir **AI Studio API anahtarı** ister: Google, Code Assist oturum
+  açmayı artık Kule gibi istemcilere sunmuyor. Anahtar keychain'de değil,
+  bir dosyada saklanmalıdır; çünkü sandbox keychain'i salt okunur tutar.
+- Kule, `npx`'in indireceği her ajan adaptörünü **sürüm başına bir kez**,
+  sandbox'ın dışında ve paketin kurulum betiklerini çalıştırmadan kurar:
+  macOS'ta `~/Library/Application Support/Kule/packages` altına (Linux'ta
+  `~/.local/share/kule/packages`).
+- Kule'ye verdiğiniz bir API anahtarını (*Settings → Secrets*'ta ya da
+  `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `GEMINI_API_KEY` olarak) ajan
+  asla görmez: ajan bir yer tutucu alır, anahtarı proxy doldurur. Bkz.
+  [Gizli değerler](../concepts/secrets.md).
+- Agent Client Protocol (ACP) konuşan başka ajanlar da eklenebilir. Bkz.
+  [Ajanlar](../using-agents.md).
+
+## Her şeyin çalıştığını doğrulama
+
+```sh
+kule --version
+```
+
+```text
+kule 0.2.0-preview.1
+```
+
+(Sayı, derlediğiniz ya da indirdiğiniz sürümdür.)
+
+Hangi ajanların başlayabildiği ve diğerlerinin neden başlayamadığı:
+
+```sh
+kule agents list
+```
+
+```text
+claude-code      built in
+gemini           built in
+codex            built in
+
+Add your own in ~/.kule/agents.toml (format: kule agents show claude-code).
+```
+
+Bu bilgisayarın sandbox'a ihtiyaç duyduğu her şeyi verip vermediği:
+
+```sh
+kule isolation
+```
+
+```text
+this computer gives a sandboxed command all of its isolation
+```
+
+Linux'ta `kule isolation` bunun yerine eksik olan her şeyi listeler. Bkz.
+[`kule isolation`](../cli/isolation.md).
+
+## Kule verilerini nerede tutar
+
+Her şey **Kule'nin ev klasöründe** durur, varsayılan olarak `~/.kule`:
+görevler ve kopyaları, ayarlar, politika, gizli değerler. Başka bir klasör
+kullanmak için `KULE_HOME`'u ayarlayın (ya da `--home` verin). Hiçbir
+sandbox Kule'nin ev klasörünü göremez. Bkz.
+[Dosyalar ve ayarlar](../reference/files.md).
+
+## Sırada
+
+- [Terminalde hızlı başlangıç](quick-start.md)
+- [Uygulamada ilk göreviniz](first-task-in-the-app.md)

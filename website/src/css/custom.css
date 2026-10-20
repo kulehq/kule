@@ -1,0 +1,104 @@
+/* Kule's colours: coral on a dark ground, as in brand/. */
+
+:root {
+  --ifm-color-primary: #e5482b;
+  --ifm-color-primary-dark: #d43e22;
+  --ifm-color-primary-darker: #c83a20;
+  --ifm-color-primary-darkest: #a5301a;
+  --ifm-color-primary-light: #ea5f45;
+  --ifm-color-primary-lighter: #ec6a52;
+  --ifm-color-primary-lightest: #f08c79;
+  --ifm-code-font-size: 92%;
+  --ifm-font-family-base: 'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --ifm-font-family-monospace: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.08);
+  --kule-ground: #131418;
+}
+
+[data-theme='dark'] {
+  --ifm-color-primary: #ff6a4f;
+  --ifm-color-primary-dark: #ff5133;
+  --ifm-color-primary-darker: #ff4525;
+  --ifm-color-primary-darkest: #f02a07;
+  --ifm-color-primary-light: #ff836b;
+  --ifm-color-primary-lighter: #ff8f79;
+  --ifm-color-primary-lightest: #ffb3a4;
+  --ifm-background-color: var(--kule-ground);
+  --ifm-navbar-background-color: #1a1b21;
+  --docusaurus-highlighted-code-line-bg: rgba(255, 255, 255, 0.1);
+}
+
+/* Command synopsis blocks in the CLI reference. */
+.markdown h2 code,
+.markdown h3 code {
+  font-size: 0.9em;
+}
+
+/* The home page. */
+.kule-hero {
+  background: var(--kule-ground);
+  color: #f4f4f6;
+  padding: 4rem 1rem 3rem;
+  text-align: center;
+}
+.kule-hero h1 {
+  font-size: clamp(2rem, 6vw, 3.4rem);
+  margin-bottom: 0.6rem;
+}
+.kule-hero p {
+  font-size: 1.2rem;
+  max-width: 44rem;
+  margin: 0 auto 1.8rem;
+  color: #c9cad2;
+}
+.kule-hero .button + .button {
+  margin-left: 0.8rem;
+}
+.kule-loop {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.5rem;
+  margin: 2rem auto 0;
+  font-family: var(--ifm-font-family-monospace);
+  font-size: 0.95rem;
+}
+.kule-loop span {
+  border: 1px solid #3a3c46;
+  border-radius: 999px;
+  padding: 0.25rem 0.8rem;
+}
+.kule-loop span.arrow {
+  border: none;
+  color: #ff6a4f;
+  padding: 0.25rem 0;
+}
+.kule-features {
+  padding: 3rem 1rem;
+}
+.kule-features h3 {
+  margin-top: 1rem;
+}
+.kule-video {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 0 1rem 3rem;
+}
+.kule-video video {
+  width: 100%;
+  border-radius: 12px;
+  border: 1px solid var(--ifm-color-emphasis-300);
+  background: #000;
+}
+.kule-terminal {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 0 1rem 3rem;
+}
+@media (max-width: 600px) {
+  .kule-hero .button {
+    display: block;
+    margin: 0.5rem auto 0 !important;
+    max-width: 18rem;
+  }
+}

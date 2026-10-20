@@ -1,9 +1,24 @@
+---
+title: Kule's security model
+sidebar_label: Security model
+description: What Kule protects, from whom, where its boundaries are, and how to report a vulnerability.
+---
+
 # Kule's security model
 
 Kule is built on Zero Trust and follows OWASP: the Top 10, the Application
 Security Verification Standard (ASVS), and the Top 10 for LLM and agentic
 applications. This page says what Kule protects, from whom, and where the
-boundaries are. To report a problem, see [SECURITY.md](../SECURITY.md).
+boundaries are.
+
+:::warning Reporting a vulnerability
+
+Report it privately, as
+[SECURITY.md](https://github.com/kulehq/kule/blob/main/SECURITY.md) says
+(the repository's **Security** tab → **Report a vulnerability**; only the
+maintainers see it). Never in a public issue, pull request or discussion.
+
+:::
 
 ## What is protected
 

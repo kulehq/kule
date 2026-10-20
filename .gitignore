@@ -1,2 +1,9 @@
 /target
 crates/kule-desktop/binaries/
+
+# The docs site
+website/node_modules/
+website/build/
+website/.docusaurus/
+# The video tour harness: kept locally (it drives a private recording tool)
+website/video/

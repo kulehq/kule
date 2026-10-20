@@ -1,0 +1,115 @@
+WEBVTT
+
+00:04.903 --> 00:10.359
+AI agents run commands with your permissions, on your real files.
+
+00:10.359 --> 00:13.380
+Kule puts a control room in between.
+
+00:13.380 --> 00:16.402
+Every task is a copy of your folder.
+
+00:16.402 --> 00:23.033
+The agent works in that copy, inside a sandbox, and nothing reaches your folder
+
+00:23.033 --> 00:25.634
+until you review it and commit.
+
+00:26.835 --> 00:31.792
+Start with any folder: code, notes, documents or photos.
+
+00:31.792 --> 00:34.271
+Here it is a small web shop.
+
+00:34.271 --> 00:41.086
+On macOS the copy is a clone, so it takes almost no space until files change.
+
+00:42.289 --> 00:45.696
+Then tell the agent what to do.
+
+00:45.696 --> 00:53.060
+Kule runs Claude Code, Codex, Gemini, or any agent that speaks ACP.
+
+00:54.261 --> 00:58.449
+Every tool call shows up as it happens, with what it prints.
+
+00:58.449 --> 01:01.311
+Each change is a step you can go back to.
+
+01:01.311 --> 01:06.825
+The bar under the prompt shows what the run takes of your computer, against the
+
+01:06.825 --> 01:07.872
+limits you set.
+
+01:09.074 --> 01:13.256
+Every connection goes through the task's proxy.
+
+01:13.256 --> 01:15.391
+Package registries pass.
+
+01:15.391 --> 01:22.863
+Here, a package's install script wants to reach a telemetry host the policy does not
+
+01:22.863 --> 01:24.909
+know, so Kule asks you.
+
+01:24.909 --> 01:28.646
+Deny it, and the agent goes on without it.
+
+01:29.848 --> 01:35.929
+When the run is over, Review shows what changed inside each file: methods, fields
+
+01:35.929 --> 01:37.805
+and keys, not just lines.
+
+01:37.805 --> 01:40.132
+Source edits pass on their own.
+
+01:40.132 --> 01:46.063
+package.json and the lockfile decide what gets installed, so they wait for your
+
+01:46.063 --> 01:46.739
+approval.
+
+01:46.739 --> 01:52.219
+Approve and commit, and the changes reach your folder, with a checkpoint.
+
+01:53.421 --> 01:59.472
+The timeline keeps every commit, and every connection the task made, the one you
+
+01:59.472 --> 02:00.304
+denied too.
+
+02:00.304 --> 02:01.665
+Changed your mind?
+
+02:01.665 --> 02:03.632
+Undo puts the folder back.
+
+02:10.076 --> 02:12.668
+Your API keys stay with Kule.
+
+02:12.668 --> 02:20.087
+The agent only sees a placeholder, and the proxy puts in the real key for the hosts
+
+02:20.087 --> 02:20.892
+you name.
+
+02:20.892 --> 02:28.311
+Limits hold each run to the processor, memory, disk and time you allow, and budgets
+
+02:28.311 --> 02:30.367
+cap what runs may cost.
+
+02:31.568 --> 02:37.800
+Everything the window does, the kule CLI does too, on the same tasks, so you can
+
+02:37.800 --> 02:38.579
+script it.
+
+02:50.108 --> 02:59.782
+Kule is open source, under the Apache license, and a preview for macOS and Linux.
+
+02:59.782 --> 03:04.439
+Read the docs at kulehq.github.io/kule.
