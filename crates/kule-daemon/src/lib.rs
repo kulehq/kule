@@ -27,8 +27,8 @@ pub use kule_view::refs::Reference;
 pub use protocol::{Call, Hello, PROTOCOL, Redacted, Request, Response};
 pub use server::{MAX_REQUEST, bind, dispatch, new_token, run, serve, socket_path, token_path};
 pub use service::{
-    Commit, DailyBudget, GroupImpact, GroupPolicyText, IsolationView, Notice, Overlap, Result,
-    Review, RunEvent, Sequenced, Service, TaskChange, TaskView, Timeline,
+    Behind, Commit, DailyBudget, GroupImpact, GroupPolicyText, IsolationView, Notice, Overlap,
+    Result, Review, RunEvent, Sequenced, Service, TaskChange, TaskView, Timeline,
 };
 
 /// Kule's home: `KULE_HOME`, else `~/.kule`.

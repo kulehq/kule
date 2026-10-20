@@ -10,7 +10,7 @@ use serde_json::Value;
 
 /// Changes whenever a call, a result or a notice changes shape; a client
 /// and a daemon that disagree on it cannot talk.
-pub const PROTOCOL: u32 = 29;
+pub const PROTOCOL: u32 = 30;
 
 /// What a daemon says about itself.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -64,6 +64,11 @@ pub enum Call {
         remember: Vec<String>,
     },
     Rollback {
+        task: String,
+    },
+    /// Brings what the workspace changed since the last sync into the
+    /// task's copy.
+    Sync {
         task: String,
     },
     Undo {

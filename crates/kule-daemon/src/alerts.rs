@@ -200,6 +200,7 @@ mod tests {
             limits: Default::default(),
             own_limits: Default::default(),
             time_used_secs: 0,
+            behind: Default::default(),
         }
     }
 

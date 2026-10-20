@@ -150,6 +150,41 @@ pub struct TaskView {
     /// How long its runs took together.
     #[serde(default)]
     pub time_used_secs: u64,
+    /// What the workspace changed since the task's last sync, which a
+    /// sync would bring into the copy.
+    #[serde(default)]
+    pub behind: Behind,
+}
+
+/// The most paths of each list a task view carries of what the workspace
+/// changed; the counts tell the rest.
+const BEHIND_SHOWN: usize = 100;
+
+/// What the workspace changed since a task's last sync (see
+/// `Task::behind`), as a task view carries it.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Behind {
+    /// The first of the paths a sync would bring in or merge.
+    pub changed: Vec<String>,
+    pub changed_count: usize,
+    /// The first of those the task changed too.
+    pub both: Vec<String>,
+    pub both_count: usize,
+    /// The workspace's repository changed.
+    pub repository: bool,
+}
+
+impl From<kule_engine::Behind> for Behind {
+    fn from(b: kule_engine::Behind) -> Behind {
+        let first = |paths: &[String]| paths.iter().take(BEHIND_SHOWN).cloned().collect();
+        Behind {
+            changed: first(&b.changed),
+            changed_count: b.changed.len(),
+            both: first(&b.both),
+            both_count: b.both.len(),
+            repository: b.repository,
+        }
+    }
 }
 
 /// The ACP registry as the app shows it.
@@ -181,6 +216,8 @@ struct Scan {
     workspace: PathBuf,
     /// What the work a commit would take changes, inside the files too.
     touched: Touched,
+    /// What the workspace changed since the last sync.
+    behind: Behind,
 }
 
 /// A changed file as last outlined: the metadata of its two sides then
@@ -328,6 +365,8 @@ pub enum TaskChange {
     Removed,
     /// The copy went back to one of its steps.
     WentBack,
+    /// What the workspace changed came into the copy.
+    Synced,
 }
 
 /// How many events of a task's runs are kept for a window that opens later.
@@ -964,6 +1003,12 @@ impl Service {
             workspace_gone: !task.workspace_exists(),
             workspace: task.workspace().to_owned(),
             touched: self.touched(task, &effects),
+            // Never what fails the scan: the copy's side stands on its own.
+            behind: if task.workspace_exists() {
+                task.behind().map(Behind::from).unwrap_or_default()
+            } else {
+                Behind::default()
+            },
         })
     }
 
@@ -1143,6 +1188,18 @@ impl Service {
         Ok(thrown)
     }
 
+    /// Brings what the workspace changed since the last sync into the
+    /// task's copy, between the agent's runs (see `Task::sync`).
+    pub fn sync(&self, id: &str) -> Result<kule_engine::Synced> {
+        let synced = self.idle(id)?.sync();
+        let _ = self.rescan(id);
+        let synced = synced.map_err(text)?;
+        if !synced.is_empty() {
+            self.changed(id, TaskChange::Synced);
+        }
+        Ok(synced)
+    }
+
     /// Reverts the newest commit; returns its checkpoint, if there was one.
     pub fn undo(&self, id: &str) -> Result<Option<u32>> {
         let undone = self.idle(id)?.undo();
@@ -1313,10 +1370,14 @@ impl Service {
                 refs: refs.clone(),
             },
         );
-        let (service, prompt) = (
-            Arc::clone(self),
-            kule_view::refs::with_places(prompt, &refs),
-        );
+        let prompt = kule_view::refs::with_places(prompt, &refs);
+        // What came in from the workspace since the agent's last run, told
+        // once; the person's prompt is shown as they wrote it.
+        let prompt = match task.take_sync_note() {
+            Ok(Some(note)) => format!("{note}\n\n{prompt}"),
+            _ => prompt,
+        };
+        let service = Arc::clone(self);
         std::thread::spawn(move || {
             let run = service.run(&task, &profile, &prompt, &pictures, limit, plan, &control);
             let (error, denials) = match run {
@@ -1562,6 +1623,7 @@ impl Service {
             limits: task.limits_in_force().map_err(text)?,
             own_limits: task.limits().map_err(text)?,
             time_used_secs: task.time_used().map_err(text)?.as_secs(),
+            behind: scan.behind,
         })
     }
 
@@ -1953,6 +2015,48 @@ mod tests {
         );
     }
 
+    #[test]
+    fn the_view_shows_what_the_folder_changed_until_a_sync_brings_it_in() {
+        let s = Setup::new();
+        let notices = s.app.subscribe();
+        let (id, copy) = s.task();
+        fs::write(s.ws.path().join("new.txt"), "new\n").unwrap();
+
+        let view = s.app.view(&id).unwrap();
+        assert_eq!(view.behind.changed, ["new.txt"]);
+        assert_eq!(view.behind.changed_count, 1);
+
+        let synced = s.app.sync(&id).unwrap();
+        assert_eq!(synced.brought, ["new.txt"]);
+        assert!(copy.join("new.txt").exists());
+        let view = s.app.view(&id).unwrap();
+        assert_eq!(view.behind, Behind::default());
+        assert_eq!(view.changes, 0);
+        // Nothing to bring in is no change of the task's.
+        s.app.sync(&id).unwrap();
+
+        let heard: Vec<TaskChange> =
+            std::iter::from_fn(|| notices.recv_timeout(Duration::from_secs(2)).ok())
+                .filter_map(|n| match n {
+                    Notice::TaskChanged { task, change } if task == id => Some(change),
+                    _ => None,
+                })
+                .collect();
+        assert_eq!(heard, [TaskChange::Created, TaskChange::Synced]);
+    }
+
+    #[test]
+    fn a_view_carries_the_first_paths_the_folder_changed_and_counts_the_rest() {
+        let s = Setup::new();
+        let (id, _) = s.task();
+        for n in 0..BEHIND_SHOWN + 5 {
+            fs::write(s.ws.path().join(format!("f{n:03}.txt")), "x\n").unwrap();
+        }
+        let behind = s.app.view(&id).unwrap().behind;
+        assert_eq!(behind.changed.len(), BEHIND_SHOWN);
+        assert_eq!(behind.changed_count, BEHIND_SHOWN + 5);
+    }
+
     /// A large copy takes seconds to walk: the list answers at once from
     /// the last scan, and says when a fresh one finds something else.
     #[test]
@@ -2257,6 +2361,7 @@ mod tests {
             s.app.commit(&id, true, false, None).map(|_| ()),
             s.app.rollback(&id).map(|_| ()),
             s.app.undo(&id).map(|_| ()),
+            s.app.sync(&id).map(|_| ()),
             s.app.remove(&id),
             s.app.start_run(&id, "claude-code", "hi", Vec::new()),
         ] {

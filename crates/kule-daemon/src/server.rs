@@ -363,6 +363,7 @@ pub fn dispatch(service: &Arc<Service>, call: Call) -> Result<Value, String> {
             &remember,
         )?),
         Call::Rollback { task } => json(service.rollback(&task)?),
+        Call::Sync { task } => json(service.sync(&task)?),
         Call::Undo { task } => json(service.undo(&task)?),
         Call::BackToStep { task, step } => json(service.back_to_step(&task, step)?),
         Call::ForkTask { task, step } => json(service.fork(&task, step)?),

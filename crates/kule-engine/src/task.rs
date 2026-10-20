@@ -279,7 +279,7 @@ impl Task {
 
     /// What the copy and the folder held at the last sync, for merging:
     /// hidden from the sandbox with the rest of the task.
-    fn base_dir(&self) -> PathBuf {
+    pub(crate) fn base_dir(&self) -> PathBuf {
         self.dir.join("base")
     }
 
@@ -304,7 +304,7 @@ impl Task {
     /// still held what it held at the last sync, the baseline takes the
     /// masked file as that, so masking shows as no change. Whether the
     /// baseline changed.
-    fn mask_copy(&self, baseline: &mut Baseline) -> Result<bool> {
+    pub(crate) fn mask_copy(&self, baseline: &mut Baseline) -> Result<bool> {
         let copy = self.copy();
         let candidates: Vec<String> = baseline
             .entries
@@ -845,7 +845,7 @@ impl Task {
     /// What the folder held at `path` at the last sync, as it stood with
     /// `expected`: in this task's base, or kept by the commit of another
     /// task on the same folder that replaced it since.
-    fn base_of(&self, path: &str, expected: &Stamp) -> Result<Option<Vec<u8>>> {
+    pub(crate) fn base_of(&self, path: &str, expected: &Stamp) -> Result<Option<Vec<u8>>> {
         // A file that changed while the copy was made: what both started
         // from was never pinned down.
         if expected.is_unknown() {
@@ -1386,7 +1386,7 @@ impl Task {
 
     /// [`Task::resync`] without saving: the baseline in memory only, so a
     /// commit or undo can record its checkpoint first.
-    fn settle(&self, baseline: &mut Baseline, paths: &[String]) -> Result<()> {
+    pub(crate) fn settle(&self, baseline: &mut Baseline, paths: &[String]) -> Result<()> {
         // The base follows: what the two hold now is what both start from.
         // A task from before bases were kept has none to follow.
         if self.base_dir().is_dir() {
@@ -1462,7 +1462,7 @@ impl Task {
         Ok(())
     }
 
-    fn clock(&self, watched: &Path) -> Result<Clock> {
+    pub(crate) fn clock(&self, watched: &Path) -> Result<Clock> {
         Clock::new(&self.dir, watched)
     }
 
@@ -1470,11 +1470,11 @@ impl Task {
         Store::new(self.dir.join("checkpoints"), self.key_path())
     }
 
-    fn load_baseline(&self) -> Result<Baseline> {
+    pub(crate) fn load_baseline(&self) -> Result<Baseline> {
         read_json(&self.dir.join("baseline.json"))
     }
 
-    fn save_baseline(&self, baseline: &Baseline) -> Result<()> {
+    pub(crate) fn save_baseline(&self, baseline: &Baseline) -> Result<()> {
         write_json(&self.dir.join("baseline.json"), baseline)
     }
 
@@ -1516,7 +1516,7 @@ impl Task {
         alive.then_some(pid)
     }
 
-    fn lock(&self) -> Result<Lock> {
+    pub(crate) fn lock(&self) -> Result<Lock> {
         if let Some(pid) = self.agent_pid() {
             return Err(Error::Invalid(format!(
                 "an agent is at work in task {} (process {pid}); wait until it is done",
@@ -1547,7 +1547,7 @@ impl Drop for AgentAtWork {
     }
 }
 
-struct Lock(PathBuf);
+pub(crate) struct Lock(PathBuf);
 
 impl Drop for Lock {
     fn drop(&mut self) {

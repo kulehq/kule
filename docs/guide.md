@@ -216,6 +216,24 @@ ruling on them:
   autostart entries) is marked and opens its diff right away.
 - **Where tasks meet**: other tasks on the same folder that changed the
   same files, down to the method or section.
+- **Changed in the folder**: what the folder changed since the copy was
+  made or last brought up to date, such as your own edits or another
+  task's commit. The agent works on the folder as it was until
+  *Bring into the copy* (Mod+Shift+G, also in the task's menu) brings
+  these in:
+  - a file only the folder changed comes in as it is;
+  - a file the task changed too is merged by method, section or key, and
+    stays the task's change;
+  - when any of them does not merge, nothing comes in, and Kule names
+    what both changed;
+  - settings files such as `.env` come in masked, like the rest of the
+    copy;
+  - steps start over, as after a commit, and the agent hears what came
+    in at the start of its next turn.
+
+  It waits while an agent is at work. Programs still running in the
+  task's sandbox are stopped first, as before a commit. Your folder is
+  only read.
 
 The button follows the ruling:
 
@@ -515,6 +533,7 @@ by name, **Mod+/** lists the shortcuts. Kule's defaults:
 | Rename the task | F2 |
 | Open a terminal in the copy | Mod+T |
 | Fork the task | Mod+Shift+D |
+| Bring the folder's changes into the copy | Mod+Shift+G |
 | Delete the task (press twice) | Mod+Backspace |
 | Show Tasks / Files | Mod+0 / Mod+Shift+E |
 | Show the agent chat / Review / Timeline / Preview | Mod+1 / Mod+2 / Mod+3 / Mod+4 |
@@ -567,6 +586,7 @@ The `kule` command does most of what the app does, on the same tasks:
 | `kule status TASK` / `kule steps TASK` | What changed, and the policy's ruling / each tool call's changes. |
 | `kule commit TASK [--approve]` | Commit; `--approve` for changes that wait for you. |
 | `kule rollback TASK` / `kule undo TASK` | Throw the changes away / take the last commit back. |
+| `kule sync TASK` | Bring what the folder changed meanwhile into the copy. |
 | `kule history TASK` | The signed history, checked. |
 | `kule budget TASK 5` / `kule daily-budget 20` | Budgets (`off` takes one away). |
 | `kule name`, `kule color`, `kule group` | Names, colours, groups and group policies. |

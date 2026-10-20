@@ -14,6 +14,10 @@ pub enum Error {
     /// applying it would overwrite changes Kule did not make.
     #[error("the workspace changed since Kule last saw it, at: {}", .0.join(", "))]
     Conflict(Vec<String>),
+    /// The folder and the task's copy both changed these paths, in ways
+    /// that do not merge, so a sync brought nothing in.
+    #[error("the folder and the task both changed: {}; nothing was brought in", .0.join(", "))]
+    BothChanged(Vec<String>),
     /// The policy did not let the transaction through: it waits for a
     /// person (`Ask`) or may never pass (`Deny`).
     #[error("the policy holds this transaction ({:?})", .0.verdict)]

@@ -310,6 +310,9 @@ function taskItem(task, list) {
   if (task.ignored) parts.push(`${task.ignored} ignored`);
   const others = new Set((task.overlaps || []).map((o) => o.task)).size;
   if (others) parts.push(`meets ${plural(others, "task")}`);
+  const behind = task.behind || {};
+  if (behind.changed_count) parts.push(`folder changed ${behind.changed_count}`);
+  else if (behind.repository) parts.push("folder's repository changed");
   const sub = `${parts.join(", ")} · ${task.id}`;
   const ordered = list === "tasks";
   const item = h(
@@ -413,6 +416,10 @@ function taskMenu(task, list, e) {
       "aria-keyshortcuts": "Alt+ArrowDown",
     }),
     item("Open terminal", () => (closeMenu(), openTerminal(task))),
+    item(busy ? "Bring in the folder's changes (agent at work)" : "Bring in the folder's changes", () => (closeMenu(), bringIn(task.id)), {
+      disabled: busy,
+      title: "What the folder changed since the copy was made or last brought up to date; files the task changed too are merged",
+    }),
     item(busy ? "Fork task (agent at work)" : "Fork task", () => (closeMenu(), forkTask(task.id, null)), {
       disabled: busy,
       title: "A new task on the same folder, starting from this one's copy as it is now",
@@ -3147,6 +3154,7 @@ async function loadReview(id) {
     ...filesGroup("Deleted", byChange("deleted"), held, outlines),
     ...movesGroup(moves),
     ...gitGroup(review.effects.git),
+    ...folderGroup(task, busy),
     ...meetsGroup(task),
     ...extensionNotesGroup(id),
     ...ignoredGroup(id, ignored, include, held),
@@ -3309,6 +3317,52 @@ function movesGroup(moves) {
 function otherLabel(id) {
   const label = state.tasks.find((t) => t.id === id)?.label;
   return label ? ` (${label})` : "";
+}
+
+/**
+ * What the folder changed since the task's copy was made or last brought
+ * up to date: the agent does not see it until it is brought in. Files the
+ * task changed too are merged; if any do not merge, nothing comes in.
+ */
+function folderGroup(task, busy) {
+  const behind = task && task.behind;
+  if (!behind || (!behind.changed_count && !behind.repository)) return [];
+  const both = new Set(behind.both);
+  const mark = () => h("span", { class: "change modified", title: "In the folder, not yet in the copy" }, "‹");
+  const lines = behind.changed.map((p) =>
+    h("li", {}, mark(), h("span", {}, p, both.has(p) ? h("span", { class: "entity-note" }, " · the task changed it too") : null))
+  );
+  const more = behind.changed_count - behind.changed.length;
+  if (more > 0) lines.push(h("li", { class: "muted" }, `and ${more} more`));
+  if (behind.repository) lines.push(h("li", {}, mark(), h("span", {}, "the repository: commits, branches, staged files")));
+  const bring = h(
+    "button",
+    {
+      class: "button",
+      type: "button",
+      "data-key": "sync",
+      disabled: busy,
+      title: busy ? "Waits until the agent's turn is over" : "Brings these into the copy; the agent hears of them at its next turn",
+      onclick: (e) => inFlight(e.currentTarget, () => bringIn(task.id)),
+    },
+    "Bring into the copy"
+  );
+  return [
+    h(
+      "h2",
+      { class: "group-title", "data-tab": "In the folder" },
+      behind.changed_count ? `Changed in the folder · ${plural(behind.changed_count, "path")}` : "Changed in the folder"
+    ),
+    h(
+      "p",
+      { class: "muted home-note" },
+      behind.both_count
+        ? `The copy does not have these yet. ${plural(behind.both_count, "file")} the task changed too would be merged by function, section or key; if any does not merge, nothing comes in.`
+        : "The copy does not have these yet: the agent works on the folder as it was."
+    ),
+    h("ul", { class: "files" }, lines),
+    h("div", { class: "review-actions" }, bring),
+  ];
 }
 
 function meetsGroup(task) {
@@ -4060,6 +4114,28 @@ async function rollback(id) {
     fail(err);
   }
   await refresh();
+}
+
+/** Brings what the folder changed since the task's last sync into its copy. */
+async function bringIn(id) {
+  try {
+    const synced = await call("sync_task", { task: id });
+    const parts = [];
+    if (synced.brought.length) parts.push(plural(synced.brought.length, "change"));
+    if (synced.merged.length) parts.push(`${plural(synced.merged.length, "file")} merged with the task's work`);
+    if (synced.repository) parts.push("the repository's commits");
+    if (parts.length) {
+      toast(`Brought in ${parts.join(", ")}; the agent hears of it at its next turn`);
+    } else if (synced.kept.length) {
+      toast(`The task keeps its own ${plural(synced.kept.length, "ignored path")} both changed`);
+    } else {
+      toast("The copy has everything the folder changed");
+    }
+  } catch (err) {
+    fail(err);
+  }
+  await refresh();
+  if (id === state.current) await loadReview(id);
 }
 
 // --- Timeline --------------------------------------------------------------
@@ -6061,6 +6137,10 @@ const COMMANDS = [
   { id: "isolation.settings", title: "Isolation on this computer", group: "Settings", keys: "", run: () => openPolicy() },
   { id: "task.terminal", title: "Open a terminal in the task's copy", group: "Tasks", keys: "Mod+T", run: () => withTask((t) => openTerminal(t)) },
   { id: "task.fork", title: "Fork the task: a new one from its copy as it is now", group: "Tasks", keys: "Mod+Shift+D", run: () => withTask((t) => forkTask(t.id, null)) },
+  {
+    id: "task.sync", title: "Bring the folder's changes into the task's copy", group: "Tasks", keys: "Mod+Shift+G",
+    run: () => withTask((t) => (t.running ? toast("Waits until the agent's turn is over") : bringIn(t.id))),
+  },
   { id: "task.delete", title: "Delete the task (press twice)", group: "Tasks", keys: "Mod+Backspace", run: () => withTask((t) => deleteByKey(t)) },
   ...[null, ...COLORS].map((color) => ({
     id: `task.color.${color || "none"}`,

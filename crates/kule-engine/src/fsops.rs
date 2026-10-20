@@ -285,6 +285,22 @@ pub(crate) fn base_one(copy: &Path, base: &Path, rel: &str) -> Result<()> {
     Ok(())
 }
 
+/// Makes `rel` under `base` a file holding `bytes`, as [`base_one`] would
+/// keep it: nothing there when it is larger than [`BASE_MAX`] or in a
+/// directory tools rebuild.
+pub(crate) fn base_put(base: &Path, rel: &str, bytes: &[u8]) -> Result<()> {
+    let to = base.join(rel);
+    remove(&to)?;
+    let rebuilt = rel.split('/').any(|part| NOT_BASE.contains(&part));
+    if rebuilt || bytes.len() as u64 > BASE_MAX {
+        return Ok(());
+    }
+    if let Some(parent) = to.parent() {
+        fs::create_dir_all(parent).at(parent)?;
+    }
+    fs::write(&to, bytes).at(&to)
+}
+
 /// Clones directory `src` to `dst`, which must not exist, in one call.
 #[cfg(target_os = "macos")]
 fn clone_dir_at_once(src: &Path, dst: &Path) -> bool {

@@ -67,6 +67,7 @@ const TASK: &[Entry] = &[
     Command("task.menu", "Task Actions…"),
     Command("task.terminal", "Open Terminal in the Copy"),
     Command("task.fork", "Fork Task"),
+    Command("task.sync", "Bring In the Folder's Changes"),
     Command("task.up", "Move Up"),
     Command("task.down", "Move Down"),
     Separator,

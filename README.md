@@ -106,6 +106,15 @@ each task keeps what the folder held at its last sync (one clone on macOS;
 elsewhere the files up to 1 MiB, outside `.git`, `node_modules`, `target`
 and the like), hidden from the sandbox with the rest of the task.
 
+The copy does not follow the folder by itself: the agent works on the
+folder as it was at the last sync. `kule sync TASK`, or *Bring into the
+copy* under Review, brings in what the folder changed since, by hand or
+by another task's commit. A file only the folder changed comes in as it
+is, a file both changed is merged the same way, and when anything does
+not merge, nothing comes in. Settings files come in masked, the folder is
+only read, and the agent hears what came in at the start of its next
+turn. `kule status` lists what the folder changed meanwhile.
+
 A changed picture (PNG, JPEG, GIF, WebP) shows what it was and what it is
 under Review. Only what its header proves to be such a picture, under
 8 MiB and 40 megapixels, reaches the window.
@@ -117,6 +126,7 @@ kule new ~/code/app                  # task 1a2b3c4d · copy at ~/.kule/tasks/1a
 kule exec 1a2b3c4d -- rm -rf src     # runs in the copy, then lists what changed
 kule status 1a2b3c4d                 # uncommitted changes (--json for machines)
 kule rollback 1a2b3c4d               # throw them away: the copy matches the workspace again
+kule sync 1a2b3c4d                   # bring in what the workspace changed meanwhile
 kule commit 1a2b3c4d                 # or apply them to the workspace, keeping a checkpoint
 kule undo 1a2b3c4d                   # revert the newest commit; repeat to walk further back
 ```

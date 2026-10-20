@@ -199,6 +199,11 @@ fn rollback(kule: K<'_>, task: String) -> Result<usize> {
 }
 
 #[tauri::command(async)]
+fn sync_task(kule: K<'_>, task: String) -> Result<serde_json::Value> {
+    kule.call(Call::Sync { task })
+}
+
+#[tauri::command(async)]
 fn undo(kule: K<'_>, task: String) -> Result<Option<u32>> {
     kule.call(Call::Undo { task })
 }
@@ -940,6 +945,7 @@ fn main() {
             preview,
             commit,
             rollback,
+            sync_task,
             undo,
             back_to_step,
             fork_task,

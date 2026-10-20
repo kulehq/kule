@@ -434,6 +434,10 @@ enum Cmd {
     },
     /// Throw the task's uncommitted changes away.
     Rollback { task: String },
+    /// Bring what the workspace changed since the task's last sync into
+    /// its copy. A file both changed is merged; when anything does not
+    /// merge, nothing comes in. The workspace is only read.
+    Sync { task: String },
     /// Revert the task's newest commit in the workspace and the copy.
     Undo { task: String },
     /// Show the task's signed history (every commit and undo), checked
@@ -457,8 +461,14 @@ fn main() -> ExitCode {
         Err(e) => {
             // An error can carry what an agent wrote or named.
             eprintln!("kule: {}", paint::plain(&format!("{e:#}")));
-            if let Some(Error::Conflict(_)) = e.downcast_ref::<Error>() {
-                eprintln!("hint: roll back, or rerun the task on the current workspace");
+            match e.downcast_ref::<Error>() {
+                Some(Error::Conflict(_)) => {
+                    eprintln!("hint: roll back, or rerun the task on the current workspace");
+                }
+                Some(Error::BothChanged(_)) => eprintln!(
+                    "hint: commit or roll back the task's changes there first, or leave the copy as it is"
+                ),
+                _ => {}
             }
             ExitCode::from(2)
         }
@@ -654,6 +664,12 @@ fn run() -> Result<ExitCode> {
             }
             let plan = kule_acp::governor::Plan::new(&task.limits_in_force()?, time_left);
             let _at_work = task.agent_at_work()?;
+            // What came in from the workspace since the agent's last run,
+            // told once.
+            let prompt = match task.take_sync_note()? {
+                Some(note) => format!("{note}\n\n{prompt}"),
+                None => prompt,
+            };
             let started = Instant::now();
             let usage = RunUsage {
                 agent: profile.name.clone(),
@@ -854,6 +870,7 @@ fn run() -> Result<ExitCode> {
                     "spent": task.spent()?,
                     "budget": task.budget()?,
                     "home": task.home_changes()?,
+                    "behind": task.behind()?,
                 });
                 println!("{}", serde_json::to_string_pretty(&both)?);
             } else {
@@ -868,6 +885,9 @@ fn run() -> Result<ExitCode> {
                 if !committed.is_empty() {
                     print_ruling(&ruling);
                     print_meetings(&home, &task)?;
+                }
+                if task.workspace_exists() {
+                    print_behind(&task)?;
                 }
                 print_spent(&task)?;
             }
@@ -972,6 +992,30 @@ fn run() -> Result<ExitCode> {
         Cmd::Rollback { task } => {
             let set = Task::open(&home, &task)?.rollback()?;
             println!("rolled back {} changes", set.effects.len());
+        }
+        Cmd::Sync { task } => {
+            let synced = Task::open(&home, &task)?.sync()?;
+            if synced.is_empty() && synced.kept.is_empty() {
+                println!("the copy has everything the workspace changed");
+            }
+            for path in &synced.brought {
+                println!("  < {}", paint::plain_line(path));
+            }
+            for path in &synced.merged {
+                println!(
+                    "  ~ {} (merged with the task's change)",
+                    paint::plain_line(path)
+                );
+            }
+            if synced.repository {
+                println!("  < the repository (commits, branches, the index)");
+            }
+            for path in &synced.kept {
+                println!(
+                    "  = {} (the task's own kept: both changed it)",
+                    paint::plain_line(path)
+                );
+            }
         }
         Cmd::Undo { task } => match Task::open(&home, &task)?.undo()? {
             Some(cp) => println!("undid checkpoint {} ({} changes)", cp.id, cp.effects.len()),
@@ -2418,6 +2462,31 @@ fn print_profile(profile: &kule_acp::Profile) {
     if let Some(var) = &profile.own_home {
         println!("home of its own   ${var} points at Kule's folder for it; sign it in there once");
     }
+}
+
+/// What the workspace changed since the task's last sync, and how to bring
+/// it into the copy.
+fn print_behind(task: &Task) -> Result<()> {
+    let behind = task.behind()?;
+    if behind.is_empty() {
+        return Ok(());
+    }
+    println!(
+        "the workspace changed since the task's copy (kule sync {} brings it in):",
+        task.id()
+    );
+    for path in &behind.changed {
+        let both = if behind.both.contains(path) {
+            " (the task changed it too)"
+        } else {
+            ""
+        };
+        println!("  {}{both}", paint::plain_line(path));
+    }
+    if behind.repository {
+        println!("  the repository (commits, branches, the index)");
+    }
+    Ok(())
 }
 
 fn print_meetings(home: &Path, task: &Task) -> Result<()> {

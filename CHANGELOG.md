@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### Keeping up with the folder
+
+- A task brings what its folder changed meanwhile into its copy: your own
+  edits, or another task's commit. `kule sync TASK`, *Bring into the
+  copy* under Review, the task's menu, or Mod+Shift+G.
+  - A file only the folder changed comes in as it is; a file the task
+    changed too is merged by method, section or key and stays the task's
+    change; when anything does not merge, nothing comes in and Kule
+    names what both changed.
+  - Commits, branches and staged files in the folder's repository come
+    in too; a branch both moved does not.
+  - Settings files come in masked, the folder is only read, and steps
+    start over as after a commit.
+  - The agent hears what came in at the start of its next turn.
+- Review, the task list and `kule status` show what the folder changed
+  since the copy was last brought up to date, and which of those files
+  the task changed too.
+
 ### Agent runs
 
 - Live shows what each tool call printed, such as a command's output,

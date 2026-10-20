@@ -190,7 +190,7 @@ await kule.net.fetch("https://hooks.slack.com/…", { method: "POST", headers, b
 | Event | Data | Needs |
 | --- | --- | --- |
 | `run` | `{ task, seq, event }`: an agent's events | `events.read` |
-| `task` | `{ task, change }`: `created`, `committed`, `rolled_back`, `undone`, `removed`, `went_back` | `events.read` |
+| `task` | `{ task, change }`: `created`, `committed`, `rolled_back`, `undone`, `removed`, `went_back`, `synced` | `events.read` |
 | `questions` | The questions waiting now | `questions.read` |
 | `review` | `{ task, digest }`: a review was drawn with new changes | `review.read` |
 | `task-selected` | `{ task }`: the person chose another task | — |
