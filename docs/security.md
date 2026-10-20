@@ -58,7 +58,7 @@ Nothing is trusted by default:
 | Window ↔ daemon | A socket only your user can open, a token, size limits. |
 | Window ↔ untrusted text | Built with DOM calls and `textContent` only; a strict content security policy with no inline scripts; links open only as http(s). |
 | Extensions ↔ Kule | Sandboxed frames on their own origin; every call checked against the permissions you approved; network only to approved public hosts. |
-| Release ↔ you | Checksums, build provenance and a CycloneDX SBOM for every file, from a pinned toolchain (`rust-toolchain.toml`); on macOS signed and notarized where the release has an Apple certificate, else signed ad hoc, as its notes say. The builds see no secret: signing is a job of its own, in an environment that waits for a maintainer's approval, and nothing is published before it. |
+| Release ↔ you | Checksums, build provenance and a CycloneDX SBOM for every file, from a pinned toolchain (`rust-toolchain.toml`); on macOS signed ad hoc, never notarized, as its notes say. No job of the release workflow holds a secret, and publishing waits in an environment for a maintainer's approval: nothing is published before it. |
 
 ## For contributors
 

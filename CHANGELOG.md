@@ -378,9 +378,11 @@ alone for each system. Expect changes from one preview to the next.
   reach, inside an IPv6 address too. Extensions' `net.fetch` uses the same
   check.
 - Releases come with a CycloneDX SBOM of the CLI and of the app, are built
-  with the toolchain `rust-toolchain.toml` names, and are signed in a job
-  of their own that waits for a maintainer's approval: the builds never
-  see the signing certificate.
+  with the toolchain `rust-toolchain.toml` names, and are published by a
+  job of their own that waits for a maintainer's approval. No job of the
+  release workflow holds a secret. The macOS app is signed ad hoc, not
+  notarized; every release's notes say how to check a download and open
+  it.
 - Daemon protocol 28: `Isolation` and `SetIsolation`.
 
 ### Motion

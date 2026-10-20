@@ -16,8 +16,8 @@ Her başlıkta **belirti**, **neden** ve **çözüm** var.
 malicious software" iletisi ya da indirdikten sonra uygulamanın
 başlamaması.
 
-**Neden:** bir önizleme sürümü Apple tarafından notarize edilmemiştir, ad
-hoc imzalıdır.
+**Neden:** Kule'nin macOS uygulaması Apple tarafından notarize edilmemiştir,
+ad hoc imzalıdır.
 
 **Çözüm:** önce indirdiğinizi doğrulayın (`SHA256SUMS` ve `gh attestation
 verify`; bkz. [Kurulum](getting-started/install.md)). Sonra ya **System

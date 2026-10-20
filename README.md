@@ -24,7 +24,7 @@ It works on any folder: code, but also notes, documents, photos and data.
 
 > [!NOTE]
 > **Status: preview (`0.2.0-preview.1`).** macOS 13+ and Linux. Windows is
-> not supported yet. There is no signed release yet: build it from source
+> not supported yet. There is no release yet: build it from source
 > (below). Expect changes between previews; see [CHANGELOG.md](CHANGELOG.md).
 
 ## Why Kule
@@ -132,7 +132,7 @@ Every command takes `--home <DIR>` (or `KULE_HOME`, default `~/.kule`) and
 - **Preview releases:** when one is published, the
   [releases page](https://github.com/kulehq/kule/releases) carries a
   universal macOS `.dmg` and Linux `.deb`/`.rpm`, each with `SHA256SUMS`
-  and a build provenance attestation. Previews are signed ad hoc, not
+  and a build provenance attestation. The macOS app is signed ad hoc, not
   notarized; the [install guide](https://kulehq.github.io/kule/docs/getting-started/install)
   says how to check and open them.
 

@@ -59,7 +59,7 @@ Varsayılan olarak hiçbir şeye güvenilmez:
 | Pencere ↔ daemon | Yalnızca sizin kullanıcınızın açabildiği bir soket, bir token, boyut sınırları. |
 | Pencere ↔ güvenilmeyen metin | Yalnızca DOM çağrıları ve `textContent` ile oluşturulur; satır içi betiklere izin vermeyen sıkı bir içerik güvenlik politikası (CSP); bağlantılar yalnızca http(s) olarak açılır. |
 | Eklentiler ↔ Kule | Kendi origin'lerinde sandbox'lı çerçeveler; her çağrı onayladığınız izinlere karşı denetlenir; ağ yalnızca onaylanmış herkese açık host'lara. |
-| Sürüm ↔ siz | Her dosya için checksum'lar, derleme kaynağı kanıtı (build provenance) ve bir CycloneDX SBOM; sabitlenmiş bir araç zincirinden (`rust-toolchain.toml`); macOS'ta, sürümün bir Apple sertifikası olduğu durumda imzalı ve noter onaylı (notarized), aksi halde notlarında da söylendiği gibi ad hoc imzalı. Derlemeler hiçbir gizli değeri görmez: imzalama ayrı bir iştir (job), bir bakımcının onayını bekleyen bir ortamda çalışır ve ondan önce hiçbir şey yayımlanmaz. |
+| Sürüm ↔ siz | Her dosya için checksum'lar, derleme kaynağı kanıtı (build provenance) ve bir CycloneDX SBOM; sabitlenmiş bir araç zincirinden (`rust-toolchain.toml`); macOS'ta, notlarında da söylendiği gibi ad hoc imzalı, hiçbir zaman noter onaylı (notarized) değil. Sürüm workflow'unun hiçbir işi (job) gizli bir değer tutmaz; yayımlama bir bakımcının onayını bekleyen bir ortamda çalışır ve ondan önce hiçbir şey yayımlanmaz. |
 
 ## Katkıda bulunanlar için {#for-contributors}
 

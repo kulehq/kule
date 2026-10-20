@@ -114,10 +114,10 @@ Bir sürüm yayımlandığında her biri şu dosyaları içerir:
 | `Kule_<version>_universal.dmg` | macOS 13 ya da sonrası; Apple silicon ve Intel tek bir uygulamada. `kule` komutu uygulamanın içindedir. |
 | `Kule_<version>_amd64.deb` | Debian ve Ubuntu: `kule-desktop` ve `kule`'yi `/usr/bin`'e koyar. |
 | `Kule-<version>.x86_64.rpm` | Fedora: aynısı, RPM olarak. |
+| `kule-<version>-macos-universal.tar.gz` | macOS 13 ya da sonrası için yalnızca `kule` komutu. |
 | `kule-<version>-linux-x86_64.tar.gz` | Linux x86_64 için yalnızca `kule` komutu. |
 | `kule-<version>.cdx.json`, `kule-desktop-<version>.cdx.json` | CLI'ın ve uygulamanın CycloneDX SBOM'u: derlendikleri her crate. |
 | `SHA256SUMS` | Yukarıdaki her dosyanın sağlama toplamı. |
-| `kule.rb` | Bir Homebrew cask'ı; **yalnızca** macOS uygulaması notarize edilmiş bir sürümde. |
 
 ### Önce indirdiğinizi doğrulayın
 
@@ -148,9 +148,8 @@ gh attestation verify Kule_<version>_universal.dmg --repo kulehq/kule \
 
 3. Kule'yi açın.
 
-Bir önizleme sürümü Apple tarafından **notarize edilmemiştir, ad hoc
-imzalıdır**; bu yüzden macOS onu ilk seferde açmayı reddeder. Bir sürümün
-hangi türden olduğunu sürüm notları söyler. Bir önizleme için, indirdiğinizi
+Kule'nin macOS uygulaması Apple tarafından **notarize edilmemiştir, ad hoc
+imzalıdır**; bu yüzden macOS onu ilk seferde açmayı reddeder. İndirdiğinizi
 doğruladıktan sonra şunlardan birini yapın:
 
 - **System Settings → Privacy & Security**'yi açıp Kule için **Open
@@ -161,8 +160,9 @@ doğruladıktan sonra şunlardan birini yapın:
   xattr -dr com.apple.quarantine /Applications/Kule.app
   ```
 
-Notarize edilmiş bir sürüm normal şekilde açılır ve ayrıca uygulamayı kurup
-komutu bağlayan bir Homebrew cask'ı olan `kule.rb`'yi de içerir.
+`kule-<version>-macos-universal.tar.gz` içindeki `kule` komutunu bir
+tarayıcı indirdiyse, onun için de bir kez aynısı gerekir:
+`xattr -d com.apple.quarantine kule`.
 
 ### Linux
 

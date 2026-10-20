@@ -112,10 +112,10 @@ Once a release is published, each one carries these files:
 | `Kule_<version>_universal.dmg` | macOS 13 or later, Apple silicon and Intel in one app. The `kule` command is inside the app. |
 | `Kule_<version>_amd64.deb` | Debian and Ubuntu: puts `kule-desktop` and `kule` in `/usr/bin`. |
 | `Kule-<version>.x86_64.rpm` | Fedora: the same, as an RPM. |
+| `kule-<version>-macos-universal.tar.gz` | The `kule` command alone, for macOS 13 or later. |
 | `kule-<version>-linux-x86_64.tar.gz` | The `kule` command alone, for Linux x86_64. |
 | `kule-<version>.cdx.json`, `kule-desktop-<version>.cdx.json` | A CycloneDX SBOM of the CLI and of the app: every crate they are built from. |
 | `SHA256SUMS` | The checksum of every file above. |
-| `kule.rb` | A Homebrew cask, **only** in a release whose macOS app is notarized. |
 
 ### Check the download first
 
@@ -145,9 +145,9 @@ check the `.deb`, `.rpm` or `.tar.gz`.)
 
 3. Open Kule.
 
-A preview is **signed ad hoc, not notarized** by Apple, so macOS refuses to
-open it the first time. The release notes say which kind a release is. For
-a preview, after checking the download, do one of these:
+Kule's macOS app is **signed ad hoc, not notarized** by Apple, so macOS
+refuses to open it the first time. After checking the download, do one of
+these:
 
 - open **System Settings → Privacy & Security** and choose **Open Anyway**
   for Kule; or
@@ -157,8 +157,9 @@ a preview, after checking the download, do one of these:
   xattr -dr com.apple.quarantine /Applications/Kule.app
   ```
 
-A notarized release opens normally and also carries `kule.rb`, a Homebrew
-cask that installs the app and links the command.
+The `kule` command from `kule-<version>-macos-universal.tar.gz`, if a
+browser downloaded it, needs the same once:
+`xattr -d com.apple.quarantine kule`.
 
 ### Linux
 

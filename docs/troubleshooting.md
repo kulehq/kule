@@ -15,7 +15,7 @@ Each entry has the **symptom**, the **cause** and the **fix**.
 **Symptom:** "Kule can't be opened because Apple cannot check it for
 malicious software", or the app does not start after you download it.
 
-**Cause:** a preview release is signed ad hoc, not notarized by Apple.
+**Cause:** Kule's macOS app is signed ad hoc, not notarized by Apple.
 
 **Fix:** first check the download (`SHA256SUMS` and `gh attestation
 verify`, see [Install](getting-started/install.md)). Then either open
