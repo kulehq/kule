@@ -50,6 +50,12 @@
   from. `kule group budget ID AMOUNT [--daily]` sets a group's budgets,
   and `kule budget TASK` without an amount lists every budget over the
   task's next run.
+- A run slowed to its processor limit keeps to it, on a busy computer
+  too: what its processes take before Kule first sees them counts, and
+  so does a slice that ran longer than planned. Before, a run held to
+  40% could get about half of a core.
+- A slowed run that goes quiet, waiting on a timer or the network, runs
+  on; before, it could stay paused until its time limit.
 
 ### The window
 

@@ -255,14 +255,17 @@ fn a_run_over_its_processor_limit_is_slowed_down() {
             .unwrap();
         (cpu, ran.measured)
     };
-    // Unlimited it gets nearly all of it; a busy CI machine takes some.
+    // Unlimited it gets what the machine gives, a busy CI machine as little
+    // as two thirds of it; slowed it gets clearly less, near its 40%, busy
+    // machine or not.
     let (free, _) = got(Plan::default());
-    assert!(free > 2.2, "{free}");
+    assert!(free > 1.5, "{free}");
     let (slowed, measured) = got(Plan {
         cpu_percent: Some(40),
         ..Plan::default()
     });
-    assert!((0.6..1.9).contains(&slowed), "{slowed}");
+    assert!((0.6..1.35).contains(&slowed), "{slowed}");
+    assert!(free > slowed * 1.3, "free {free}, slowed {slowed}");
     // And it is shown as it goes.
     assert!(
         measured
@@ -270,4 +273,26 @@ fn a_run_over_its_processor_limit_is_slowed_down() {
             .any(|m| m.processes >= 2 && (20..80).contains(&m.cpu_percent)),
         "{measured:?}"
     );
+}
+
+#[test]
+fn a_slowed_run_that_goes_quiet_runs_on() {
+    if !python() {
+        eprintln!("skipped: no python3");
+        return;
+    }
+    let s = Setup::new();
+    // Busy for a second, then quiet for one, then done.
+    let script = "exec python3 -c \"import time\ne=time.time()+1\nwhile time.time()<e: pass\ntime.sleep(1)\nopen('done','w').write('1')\"";
+    let ran = s.run(
+        script,
+        Plan {
+            cpu_percent: Some(40),
+            run: Some(Duration::from_secs(20)),
+            ..Plan::default()
+        },
+    );
+    assert_eq!(ran.outcome.as_deref(), Ok("endturn"));
+    assert!(ran.took < Duration::from_secs(8), "{:?}", ran.took);
+    assert!(s.task.copy().join("done").exists());
 }

@@ -120,6 +120,7 @@ pub fn govern(task: &Task, plan: Plan, control: RunControl, watch: Watch) -> Joi
             cpu: HashMap::new(),
             reaped: HashMap::new(),
             share: 1.0,
+            over: 0.0,
             rate: None,
             paused: false,
         }
@@ -183,6 +184,9 @@ struct Governor {
     reaped: HashMap<i32, Duration>,
     /// The share of each slice a slowed run runs in.
     share: f64,
+    /// Processor time it took beyond its limit so far, in seconds; below
+    /// zero, what it left unused.
+    over: f64,
     /// Processor use while running, in cores, smoothed.
     rate: Option<f64>,
     paused: bool,
@@ -213,6 +217,11 @@ impl Governor {
                 self.pids = pids;
                 let (held, used) = self.look();
                 memory = held;
+                // Counted against the processor limit too: what a process
+                // took before it was first seen, or between two slices.
+                if self.plan.cpu_percent.is_some() {
+                    self.over = (self.over + used.as_secs_f64()).min(1.0);
+                }
                 used_since_report += used;
                 used_this_second.1 += used;
                 if let Some(limit) = self.plan.memory
@@ -324,17 +333,21 @@ impl Governor {
             std::thread::sleep(SLICE);
             return self.look().1;
         };
-        let running = SLICE.mul_f64(self.share);
-        if self.share < 1.0 {
-            self.resume();
-        }
-        std::thread::sleep(running);
+        // Whatever its share now: a run paused in the last slice that went
+        // quiet since has a share of all of it, and would stay paused.
+        self.resume();
+        let started = Instant::now();
+        std::thread::sleep(SLICE.mul_f64(self.share));
+        // As long as it really ran: on a busy machine the governor wakes
+        // late.
+        let running = started.elapsed();
         if self.share < 1.0 {
             resources::pause(&self.pids);
             self.paused = true;
-            std::thread::sleep(SLICE - running);
+            std::thread::sleep(SLICE.saturating_sub(running));
         }
         let used = self.look().1;
+        let took = started.elapsed().as_secs_f64();
         // How fast it uses the processor while running, and the share of
         // a slice that keeps it to its limit.
         let now = used.as_secs_f64() / running.as_secs_f64().max(1e-3);
@@ -344,11 +357,13 @@ impl Governor {
         };
         self.rate = Some(rate);
         let allowed = f64::from(percent) / 100.0;
-        self.share = if rate <= allowed {
-            1.0
-        } else {
-            (allowed / rate).clamp(0.02, 1.0)
-        };
+        let slice = SLICE.as_secs_f64();
+        // What it took beyond its limit is taken back in the next slices;
+        // what it left unused makes up for at most one slice, and a burst
+        // costs at most a second.
+        self.over = (self.over + used.as_secs_f64() - allowed * took).clamp(-allowed * slice, 1.0);
+        let budget = allowed * slice - self.over;
+        self.share = (budget / (rate * slice).max(1e-9)).clamp(0.02, 1.0);
         used
     }
 
