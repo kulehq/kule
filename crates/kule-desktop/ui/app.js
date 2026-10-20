@@ -4179,7 +4179,30 @@ const agentsView = {
   note: null,
   trial: null,
   trying: false,
+  /** Cards the person opened or closed, by name: true open, false closed.
+   * Others are closed, unless they wait on the person. */
+  shown: new Map(),
 };
+
+/** Whether an agent's card shows what it opens: one held for approval or
+ * not installed does until the person closes it, as it waits on them. */
+function agentOpen(listed) {
+  const own = agentsView.shown.get(listed.profile.name);
+  return own ?? Boolean(listed.held || listed.missing);
+}
+
+function toggleAgent(name, open) {
+  agentsView.shown.set(name, open);
+  renderAgents();
+}
+
+/** Opens every card, or closes every card when all are open. */
+async function toggleAllAgents() {
+  if (state.view !== "agents") await openSettings("agents");
+  const open = !agentsView.listed.every(agentOpen);
+  for (const listed of agentsView.listed) agentsView.shown.set(listed.profile.name, open);
+  renderAgents();
+}
 
 /** The agents the prompt can pick: the ones that can run. */
 async function loadAgentChoices() {
@@ -4301,23 +4324,48 @@ function agentCard(listed) {
     remove.dataset.key = `remove:${profile.name}`;
     actions.push(remove);
   }
+  const open = agentOpen(listed);
+  const body = `agent-body-${profile.name}`;
   return h(
     "article",
-    { class: "agent-card" },
+    { class: `agent-card${open ? "" : " closed"}` },
+    // The whole head opens and closes the card; a heading around the
+    // button, so a screen reader lists the agents by name.
     h(
-      "header",
+      "h3",
       { class: "agent-card-head" },
-      h("h3", {}, profile.name),
-      h("span", { class: "chip" }, yours ? "yours" : theirs ? `from ${listed.extension}` : "built in"),
-      listed.missing
-        ? h("span", { class: "chip deny" }, "not installed")
-        : h("span", { class: `chip ${held ? "ask" : "allow"}` }, held ? "held" : "can run")
+      h(
+        "button",
+        {
+          class: "agent-toggle",
+          type: "button",
+          "data-key": `agent-toggle:${profile.name}`,
+          "aria-expanded": String(open),
+          "aria-controls": open ? body : null,
+          onclick: () => toggleAgent(profile.name, !open),
+        },
+        h("span", { class: "agent-chevron", "aria-hidden": "true" }, open ? "▾" : "▸"),
+        h("span", { class: "agent-name" }, profile.name),
+        h("span", { class: "chip" }, yours ? "yours" : theirs ? `from ${listed.extension}` : "built in"),
+        listed.missing
+          ? h("span", { class: "chip deny" }, "not installed")
+          : h("span", { class: `chip ${held ? "ask" : "allow"}` }, held ? "held" : "can run"),
+        // Closed, it still says what it runs and that it has notes.
+        !open && (warnings || []).length ? h("span", { class: "chip ask" }, plural(warnings.length, "note")) : null,
+        open ? null : h("span", { class: "agent-summary" }, profile.command.join(" "))
+      )
     ),
-    held ? h("p", { class: "agent-held" }, held) : null,
-    listed.missing ? h("p", { class: "agent-held" }, `It ${installHint(listed.missing)}.`) : null,
-    opens(profile, own_home_dir),
-    (warnings || []).length ? h("ul", { class: "agent-warnings" }, ...warnings.map((w) => h("li", {}, w))) : null,
-    actions.length ? h("div", { class: "agent-actions" }, ...actions) : null
+    open
+      ? h(
+          "div",
+          { class: "agent-body", id: body },
+          held ? h("p", { class: "agent-held" }, held) : null,
+          listed.missing ? h("p", { class: "agent-held" }, `It ${installHint(listed.missing)}.`) : null,
+          opens(profile, own_home_dir),
+          (warnings || []).length ? h("ul", { class: "agent-warnings" }, ...warnings.map((w) => h("li", {}, w))) : null,
+          actions.length ? h("div", { class: "agent-actions" }, ...actions) : null
+        )
+      : null
   );
 }
 
@@ -4573,7 +4621,14 @@ function renderAgents() {
         "div",
         { class: "agent-actions" },
         h("button", { class: "button", type: "button", "data-key": "registry-toggle", "aria-expanded": String(agentsView.registryOpen), onclick: toggleRegistry }, "Add from the ACP registry"),
-        h("button", { class: "button ghost", type: "button", "data-key": "agent-new", onclick: () => editAgent(BLANK, true) }, "Add by hand")
+        h("button", { class: "button ghost", type: "button", "data-key": "agent-new", onclick: () => editAgent(BLANK, true) }, "Add by hand"),
+        agentsView.listed.length
+          ? h(
+              "button",
+              { class: "button ghost", type: "button", "data-key": "agents-toggle-all", onclick: toggleAllAgents },
+              agentsView.listed.every(agentOpen) ? "Close all" : "Open all"
+            )
+          : null
       )
     ),
     agentsView.editing ? agentEditor() : null,
@@ -6896,6 +6951,7 @@ const COMMANDS = [
   { id: "group.new", title: "New group…", group: "Tasks", keys: "", run: () => { revealPanel("tasks"); newGroup(); } },
   { id: "group.policy", title: "Group policies", group: "Settings", keys: "", run: () => openPolicy() },
   { id: "isolation.settings", title: "Isolation on this computer", group: "Settings", keys: "", run: () => openPolicy() },
+  { id: "agents.toggle-all", title: "Open or close every agent's details", group: "Settings", keys: "", run: () => toggleAllAgents() },
   { id: "task.terminal", title: "Open a terminal in the task's copy", group: "Tasks", keys: "Mod+T", run: () => withTask((t) => openTerminal(t)) },
   { id: "task.fork", title: "Fork the task: a new one from its copy as it is now", group: "Tasks", keys: "Mod+Shift+D", run: () => withTask((t) => forkTask(t.id, null)) },
   {

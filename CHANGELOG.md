@@ -63,6 +63,11 @@
   bottom panel as high: the main area between them always keeps at least
   360 pixels across and 160 high. A window made smaller takes the room
   from the sides first, and gives it back when it grows again.
+- Settings → Agents shows each agent as one line, its name, where it
+  comes from, whether it can run, how many notes it has and what it runs;
+  a click on the line, or Enter, opens what it opens. An agent held for
+  approval or not installed starts open. *Open all* and *Close all*, and
+  the command "Open or close every agent's details".
 - Settings' sections scroll sideways when the window is too narrow for
   all of them, with a mouse wheel, a trackpad or the arrow keys; a faded
   edge shows there are more. Panel tabs scroll the same way.

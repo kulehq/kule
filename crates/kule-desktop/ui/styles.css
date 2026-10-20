@@ -1665,6 +1665,74 @@ select:focus-visible {
   margin-bottom: 8px;
 }
 
+/* The head's button reaches past the card's padding, its text where the
+   card's is. */
+h3.agent-card-head {
+  margin: -8px -8px 8px;
+}
+
+.agent-card.closed {
+  padding-block: 8px;
+}
+
+.agent-card.closed h3.agent-card-head {
+  margin: 0 -8px;
+}
+
+.agent-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  padding: 8px;
+  border: 0;
+  border-radius: var(--radius);
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.agent-toggle:hover {
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+.agent-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.agent-chevron {
+  flex: none;
+  width: 12px;
+  color: var(--muted);
+  font-size: calc(13px * var(--text-scale));
+}
+
+.agent-name {
+  margin-right: 4px;
+  font-size: calc(15px * var(--text-scale));
+  font-weight: 600;
+}
+
+.agent-toggle .chip {
+  flex: none;
+}
+
+.agent-summary {
+  overflow: hidden;
+  min-width: 0;
+  margin-left: 8px;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: calc(12px * var(--code-scale));
+  font-weight: 400;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .agent-card-head h3,
 .agent-editor h2,
 .agent-registry h2 {
