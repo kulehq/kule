@@ -24,6 +24,29 @@ jobs:
         run: cargo install --locked cargo-deny --version 0.20.2
       - run: cargo deny --locked check
 
+  # The workflows themselves: expressions, shell steps and runner labels
+  # (actionlint); injection, kept credentials, caches and pins (zizmor).
+  workflows:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Rust toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+      - name: actionlint and zizmor, at the versions the gate pins
+        run: |
+          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+          cargo install --locked zizmor --version 1.30.1
+      - name: Check the workflows (scripts/release-gate.sh)
+        env:
+          # zizmor's online audits ask GitHub whether each pin is real.
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          PATH="$(go env GOPATH)/bin:$PATH"
+          scripts/release-gate.sh workflows
+
   test:
     strategy:
       fail-fast: false
@@ -52,6 +75,12 @@ jobs:
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo test --workspace --locked
+      - name: Canary secrets stay out of a task (scripts/release-gate.sh)
+        run: |
+          go install github.com/betterleaks/betterleaks@v1.9.0
+          PATH="$(go env GOPATH)/bin:$PATH"
+          cargo build --locked -p kule
+          scripts/release-gate.sh canary
       - name: Weaker isolation runs only once accepted (user namespaces refused)
         if: runner.os == 'Linux'
         env:

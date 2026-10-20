@@ -61,3 +61,14 @@ Every change follows these rules:
   or installed, supply chain, logging.
 - **No vulnerability details in public** (commits, CHANGELOG, issues, docs)
   until the fix has shipped.
+
+Before a release, besides CI, `scripts/release-gate.sh` runs on macOS and
+on Linux: the workflows through actionlint and zizmor, the lockfiles
+through osv-scanner (accepted advisories in `osv-scanner.toml`, as in
+`deny.toml`), the built binary through `cargo audit bin` (built with
+cargo-auditable), and canary secrets planted in a workspace's env files,
+which must be masked in a task and found nowhere but the workspace. Each
+tool runs at a pinned version, and none sends what it scans anywhere.
+After the release is built, `scripts/release-gate.sh attest <tag>`
+verifies every asset's provenance against the release workflow and the
+tag. CI runs the workflow and canary checks on every change.

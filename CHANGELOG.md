@@ -140,6 +140,11 @@
   semaphores of its own (an IPC namespace), and a host name of its own (a
   UTS namespace). Where the computer cannot give this, it is one more
   piece of isolation you accept going without.
+- `scripts/release-gate.sh`, the checks before a release: workflows
+  (actionlint, zizmor), lockfiles (osv-scanner), the built binary
+  (cargo-auditable, `cargo audit bin`), canary secrets kept out of a task,
+  and the provenance of a release's assets. CI runs the workflow and
+  canary checks.
 - pnpm keeps its store in the task's caches with every version: through
   `PNPM_HOME` up to pnpm 10 and `pnpm_config_store_dir` from pnpm 11.
   `npm_config_store_dir` is no longer set, so npm 11 no longer warns about

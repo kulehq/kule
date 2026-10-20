@@ -1,0 +1,24 @@
+# What osv-scanner may report and the release gate accepts
+# (scripts/release-gate.sh deps): the advisories deny.toml ignores, for the
+# same reasons, and one cargo-deny leaves out as it reports only the
+# workspace's own crates as unsound. Revisit with deny.toml's.
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2024-0429"
+reason = "glib 0.18: unsound VariantStrIter, under Tauri's GTK 3 stack on Linux; Kule never uses glib itself"
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2024-0370"
+reason = "proc-macro-error: build-time macro of glib 0.18, pulled in by Tauri's GTK 3 stack"
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2026-0370"
+reason = "zvariant: D-Bus types of zbus, through keyring's Secret Service and notify-rust on Linux"
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2026-0371"
+reason = "zbus_names: D-Bus names of zbus, through keyring's Secret Service and notify-rust on Linux"
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2026-0372"
+reason = "zvariant_derive: macros of zvariant, through keyring's Secret Service and notify-rust on Linux"
