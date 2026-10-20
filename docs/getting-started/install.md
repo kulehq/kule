@@ -21,11 +21,12 @@ line, only the app, or both.
 | Linux on other architectures | Build from source; no release files |
 | Windows | Not yet (planned) |
 
-:::note No release yet
+:::note A preview
 
-Kule is a **preview**. The first pre-release will be `0.2.0-preview.1`, and
-nothing is on the [releases page](https://github.com/kulehq/kule/releases)
-yet. For now, [build from source](#build-from-source).
+Kule is a **preview**: expect changes from one preview to the next. The
+first pre-release, [`0.2.0-preview.1`](https://github.com/kulehq/kule/releases/tag/v0.2.0-preview.1), is on the releases page:
+[download it](#download-a-preview-release), or
+[build from source](#build-from-source).
 
 :::
 
@@ -105,7 +106,7 @@ The app starts the Kule **daemon** by itself (it runs its own binary as
 
 ## Download a preview release
 
-Once a release is published, each one carries these files:
+Each release carries these files:
 
 | File | For |
 | --- | --- |

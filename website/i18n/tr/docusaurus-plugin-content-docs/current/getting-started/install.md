@@ -21,11 +21,12 @@ yalnızca uygulamayı ya da ikisini birden kullanabilirsiniz.
 | Diğer mimarilerde Linux | Kaynak koddan derleyin; hazır sürüm dosyası yok |
 | Windows | Henüz değil (planlanıyor) |
 
-:::note Henüz bir sürüm yok
+:::note Bir önizleme
 
-Kule bir **önizleme** (preview). İlk ön sürüm `0.2.0-preview.1` olacak ve
-[sürümler sayfasında](https://github.com/kulehq/kule/releases) henüz bir şey
-yok. Şimdilik [kaynak koddan derleyin](#build-from-source).
+Kule bir **önizleme** (preview): bir önizlemeden ötekine değişiklikler
+bekleyin. İlk ön sürüm, [`0.2.0-preview.1`](https://github.com/kulehq/kule/releases/tag/v0.2.0-preview.1), sürümler sayfasında:
+[indirin](#download-a-preview-release) ya da
+[kaynak koddan derleyin](#build-from-source).
 
 :::
 
@@ -105,9 +106,9 @@ programını `kule-desktop daemon` olarak çalıştırır); yani ayrıca
 başlatmanız gereken bir şey yoktur. Daemon'ın ne yaptığı için
 [`kule daemon`](../cli/daemon.md) sayfasına bakın.
 
-## Bir önizleme sürümü indirme
+## Bir önizleme sürümü indirme {#download-a-preview-release}
 
-Bir sürüm yayımlandığında her biri şu dosyaları içerir:
+Her sürüm şu dosyaları içerir:
 
 | Dosya | Ne için |
 | --- | --- |
