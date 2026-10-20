@@ -99,13 +99,21 @@ kule home <TASK> diff [OPTIONS] <PATH>
 ```
 
 ```console
-$ kule home 1046fb30 diff '~/.zshrc'
+$ kule home 1046fb30 diff ~/.zshrc
 --- ~/.zshrc (yours)
 +++ ~/.zshrc (the task's)
-@@ line 227 @@
+@@ line 226 @@
+ export GITHUB_TOKEN=‹hidden 3fa9c2›
  . "$HOME/.cargo/env"
 +export FOO=1
 ```
+
+Gizli değere benzeyen her şey iki tarafta da gizlenir: anahtar, token ya
+da parola gibi adlandırılmış bir ayarın değeri, Kule'nin sakladığı bir
+gizli değer ve token'a benzeyen her şey. Her biri `‹hidden …›` olarak
+görünür. Aynı değer o diff'in her yerinde aynı işareti alır; böylece
+değişen bir gizli değer yine değişmiş olarak okunur. İşaretler bir diff'ten
+diğerine değişir.
 
 Metin olmayan bir dosya için `not text, so not shown`, çok büyük bir dosya
 için `too large to show` yazar. Uzun bir diff

@@ -93,13 +93,20 @@ kule home <TASK> diff [OPTIONS] <PATH>
 ```
 
 ```console
-$ kule home 1046fb30 diff '~/.zshrc'
+$ kule home 1046fb30 diff ~/.zshrc
 --- ~/.zshrc (yours)
 +++ ~/.zshrc (the task's)
-@@ line 227 @@
+@@ line 226 @@
+ export GITHUB_TOKEN=‹hidden 3fa9c2›
  . "$HOME/.cargo/env"
 +export FOO=1
 ```
+
+What looks like a secret is hidden on both sides: the value of a setting
+named like a key, token or password, a secret Kule keeps, and anything
+shaped like a token. Each shows as `‹hidden …›`, the same mark wherever
+the same value is in that diff, so a changed secret still reads as
+changed. The marks differ from one diff to the next.
 
 A file that is not text says `not text, so not shown`; a very large one
 `too large to show`. A long diff ends with `(cut here: the change is longer)`.

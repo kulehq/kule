@@ -866,6 +866,18 @@ impl Task {
             Some(bytes) => Some(self.unmasked(&layer.real, path, bytes)?),
             None => None,
         };
+        // Compared as they are, shown with what looks secret hidden on both
+        // sides alike: a diff goes to a terminal or a window, not only to
+        // the person.
+        let (vault, key) = (self.vault()?, secrets::view_key()?);
+        let shown = |side: Option<Vec<u8>>| match side {
+            Some(bytes) => match String::from_utf8(bytes) {
+                Ok(text) => Some(secrets::shown(&text, &vault, &key).into_bytes()),
+                Err(e) => Some(e.into_bytes()),
+            },
+            None => None,
+        };
+        let (before, after) = (shown(before), shown(after));
         Ok(textdiff::diff(before.as_deref(), after.as_deref()))
     }
 

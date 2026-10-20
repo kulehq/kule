@@ -1232,6 +1232,87 @@ pub(crate) fn mask_with(
     })
 }
 
+/// A key for [`shown`]: new for each view, so its marks say nothing about
+/// a value beyond that view.
+pub(crate) fn view_key() -> Result<[u8; 32]> {
+    let path = Path::new("/dev/urandom");
+    let mut key = [0u8; 32];
+    std::fs::File::open(path)
+        .and_then(|mut f| f.read_exact(&mut key))
+        .at(path)?;
+    Ok(key)
+}
+
+/// `text` as a person is shown it: the value of every setting that looks
+/// like a secret, every value `vault` holds wherever it is, and every word
+/// shaped like a token, each as `‹hidden 3fa9c2›`. The mark is the value
+/// hashed with `key`, so in one view (both sides of a diff) a value reads
+/// the same wherever it is, and a changed one differently, while what it
+/// is never shows.
+pub(crate) fn shown(text: &str, vault: &Vault, key: &[u8; 32]) -> String {
+    let mark = |value: &str| {
+        let hash = blake3::keyed_hash(key, value.as_bytes()).to_hex();
+        format!("‹hidden {}›", &hash[..6])
+    };
+    let mut text = mask_env(text, |k, value| {
+        let secret = looks_secret(k, value) || vault.placeholder_for_value(value).is_some();
+        Ok(secret.then(|| mark(value)))
+    })
+    .unwrap_or_else(|_| text.to_owned());
+    let mut held = vault.values();
+    // The longest first, so a value inside another is not marked half.
+    held.sort_by_key(|v| std::cmp::Reverse(v.len()));
+    for value in held.iter().filter(|v| !v.is_empty()) {
+        if text.contains(value.as_str()) {
+            text = text.replace(value.as_str(), &mark(value));
+        }
+    }
+    // What is left: words that look like tokens, in any kind of file (a
+    // tool's YAML or JSON settings). Paths and plain URLs are left alone.
+    let mut out = String::with_capacity(text.len());
+    let mut word = String::new();
+    let flush = |word: &mut String, out: &mut String| {
+        let hide = if word.starts_with('‹') || word.starts_with(['/', '~', '.']) {
+            false
+        } else if let Some((_, rest)) = word.split_once("://") {
+            // A URL: by a password in it, or a query value that looks secret.
+            let password = rest
+                .split_once('@')
+                .is_some_and(|(user, _)| user.contains(':') && !user.contains('/'));
+            let query = rest.split_once('?').is_some_and(|(_, q)| {
+                q.split('&').any(|pair| {
+                    let (k, v) = pair.split_once('=').unwrap_or(("", pair));
+                    looks_secret(k, v)
+                })
+            });
+            password || query
+        } else {
+            looks_secret("", word)
+        };
+        if hide {
+            out.push_str(&mark(word));
+        } else {
+            out.push_str(word);
+        }
+        word.clear();
+    };
+    for c in text.chars() {
+        if c.is_whitespace()
+            || matches!(
+                c,
+                '"' | '\'' | '`' | ',' | ';' | '=' | '(' | ')' | '[' | ']' | '{' | '}' | '<' | '>'
+            )
+        {
+            flush(&mut word, &mut out);
+            out.push(c);
+        } else {
+            word.push(c);
+        }
+    }
+    flush(&mut word, &mut out);
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use tempfile::TempDir;
@@ -1245,6 +1326,57 @@ mod tests {
             Ok(looks_secret(key, value).then(|| format!("P{n}")))
         })
         .unwrap()
+    }
+
+    #[test]
+    fn what_looks_secret_is_hidden_from_view_and_the_rest_shown() {
+        let mut vault = Vault::default();
+        vault
+            .with_keys(&[AgentKey {
+                name: "SHOP_KEY".into(),
+                value: "kept-value-1234".into(),
+                hosts: vec!["api.example.com".into()],
+            }])
+            .unwrap();
+        let key = [7u8; 32];
+        let text = "export GITHUB_TOKEN=ghp_k3yL1ke0nlyF0rTest1ng9Abc\nexport EDITOR=vi\n\
+                    alias shop='curl -H \"x-key: kept-value-1234\" https://api.example.com/v1/items'\n\
+                    token: \"tok-Zx81kQm3Lr0ns7TpQw2Exy\"\n\
+                    db: postgres://app:hunter2@db.example.com/app\n\
+                    path: /Users/me/Library/Application/Support/Tool9X\n";
+        let seen = shown(text, &vault, &key);
+        for secret in [
+            "ghp_k3yL1ke0nlyF0rTest1ng9Abc",
+            "kept-value-1234",
+            "tok-Zx81kQm3Lr0ns7TpQw2Exy",
+            "hunter2",
+        ] {
+            assert!(!seen.contains(secret), "{secret} in {seen}");
+        }
+        for kept in [
+            "export EDITOR=vi",
+            "https://api.example.com/v1/items",
+            "/Users/me/Library/Application/Support/Tool9X",
+            "export GITHUB_TOKEN=‹hidden ",
+        ] {
+            assert!(seen.contains(kept), "{kept} not in {seen}");
+        }
+        // One value reads the same wherever it is, and in another view
+        // (another key) differently.
+        let again = shown("A_TOKEN=ghp_k3yL1ke0nlyF0rTest1ng9Abc\n", &vault, &key);
+        let mark = again.trim_start_matches("A_TOKEN=").trim_end();
+        assert!(seen.contains(mark), "{mark} not in {seen}");
+        let other = shown(
+            "A_TOKEN=ghp_k3yL1ke0nlyF0rTest1ng9Abc\n",
+            &vault,
+            &[8u8; 32],
+        );
+        assert_ne!(again, other);
+        assert_ne!(
+            shown("A_TOKEN=ghp_k3yL1ke0nlyF0rTest1ng9Abd\n", &vault, &key),
+            again,
+            "a changed value must read as changed"
+        );
     }
 
     #[test]

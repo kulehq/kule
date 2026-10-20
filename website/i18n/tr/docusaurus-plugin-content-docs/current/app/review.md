@@ -68,7 +68,7 @@ beklerler:
 
 | Düğme | Ne yapar |
 | --- | --- |
-| **Show** | Değişikliğin dosyanıza ne yapacağını satır satır gösteren bir diff. |
+| **Show** | Değişikliğin dosyanıza ne yapacağını satır satır gösteren bir diff; gizli değere benzeyen her şey iki tarafta da `‹hidden …›` olarak görünür. |
 | **Apply** | Dosyanızın hâlâ eskisi gibi olduğunu denetledikten sonra bu tek değişikliği gerçek ev dizininize alır. Yerine geçtiği içerik görevde saklanır. |
 | **Discard** | Değişikliği atar. |
 | **Undo** | O yolları o zamandan beri değiştirmediyseniz son apply'ı geri alır. |

@@ -60,7 +60,7 @@ apart from the commit:
 
 | Button | What it does |
 | --- | --- |
-| **Show** | A line-by-line diff of what the change would do to your file. |
+| **Show** | A line-by-line diff of what the change would do to your file, with what looks like a secret shown as `‹hidden …›` on both sides. |
 | **Apply** | Takes this one change to your real home, after checking your file is still as it was. What it replaces is kept in the task. |
 | **Discard** | Throws the change away. |
 | **Undo** | Takes the last apply back, if you have not changed those paths since. |

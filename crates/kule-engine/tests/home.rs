@@ -490,6 +490,10 @@ fn a_token_in_a_shell_startup_file_is_masked_in_the_layer() {
     assert!(shown.contains("kind: Added, text: \"alias ll"), "{shown}");
     assert!(!shown.contains("kule_secret_"), "{shown}");
     assert!(!shown.contains("Removed"), "{shown}");
+    // Nor the value itself: the diff is shown in a terminal or a window,
+    // so what looks secret is hidden on both sides.
+    assert!(!shown.contains(token), "{shown}");
+    assert!(shown.contains("export GITHUB_TOKEN=‹hidden "), "{shown}");
     s.task.apply_home(&[".zshrc".to_owned()]).unwrap();
     assert_eq!(
         fs::read_to_string(p.join(".zshrc")).unwrap(),

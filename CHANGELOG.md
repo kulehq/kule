@@ -30,6 +30,11 @@ The first preview release will be `0.2.0-preview.1`.
   `~/.zshrc` unquoted (which the shell turns into your full home path),
   quoted, or relative to your home. A path outside your home, or one with
   `..`, is refused with a message that says so.
+- A home diff (`kule home TASK diff`, *Show* in Review) hides what looks
+  like a secret on both sides, as `‹hidden …›`: settings named like keys,
+  tokens or passwords, the secrets Kule keeps, and anything shaped like a
+  token. One value has one mark in a diff, so a changed secret still
+  reads as changed.
 
 ### Keeping up with the folder
 
