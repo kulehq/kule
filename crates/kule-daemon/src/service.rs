@@ -44,6 +44,12 @@ pub struct GroupImpact {
     /// An agent is at work in the task: its connections keep the policy it
     /// started with until the run ends.
     pub running: bool,
+    /// The limits on its runs now, and in the other group.
+    pub limits_now: kule_engine::Limits,
+    pub limits_then: kule_engine::Limits,
+    /// The budgets over its runs now, and in the other group.
+    pub budgets_now: Vec<kule_engine::BudgetLeft>,
+    pub budgets_then: Vec<kule_engine::BudgetLeft>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -67,6 +73,16 @@ pub struct GroupPolicyText {
 pub struct DailyBudget {
     pub budget: Option<kule_engine::Money>,
     pub spent: kule_engine::Spent,
+}
+
+/// A budget tasks share, a group's or the daily one for every task, and
+/// what was spent against it in its currency.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SharedBudget {
+    #[serde(flatten)]
+    pub scope: kule_engine::BudgetScope,
+    pub budget: kule_engine::Money,
+    pub spent: f64,
 }
 
 /// What this computer cannot give an agent's commands, said for a person,
@@ -140,8 +156,8 @@ pub struct TaskView {
     /// The group the person put the task in.
     #[serde(default)]
     pub group: Option<u64>,
-    /// What its runs may take: its own limits, and every task's where it
-    /// sets none.
+    /// What its runs may take, field by field: its own limits, else its
+    /// group's, else every task's.
     #[serde(default)]
     pub limits: kule_engine::Limits,
     /// The limits it sets itself.
@@ -526,20 +542,25 @@ impl Service {
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let kept = streams.entry(task.to_owned()).or_default();
         // An answer arrives in many small chunks; kept as one, the prompt
-        // stays in reach of a window that opens later.
+        // stays in reach of a window that opens later. A piece of another
+        // message starts one of its own.
         let merged = match (kept.back_mut(), &event) {
             (
                 Some(Sequenced {
                     seq: last,
                     event:
                         RunEvent::Agent {
-                            event: kule_acp::Event::Message { text: kept_text },
+                            event:
+                                kule_acp::Event::Message {
+                                    text: kept_text,
+                                    id: kept_id,
+                                },
                         },
                 }),
                 RunEvent::Agent {
-                    event: kule_acp::Event::Message { text },
+                    event: kule_acp::Event::Message { text, id },
                 },
-            ) => {
+            ) if kept_id == id => {
                 kept_text.push_str(text);
                 *last = seq;
                 true
@@ -822,6 +843,10 @@ impl Service {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .contains(id),
+            limits_now: task.limits_in_force_in(now).map_err(text)?,
+            limits_then: task.limits_in_force_in(group).map_err(text)?,
+            budgets_now: task.budgets_in(now).map_err(text)?,
+            budgets_then: task.budgets_in(group).map_err(text)?,
         })
     }
 
@@ -846,6 +871,53 @@ impl Service {
             budget: kule_engine::daily_budget(&self.home).map_err(text)?,
             spent: kule_engine::spent_today(&self.home).map_err(text)?,
         })
+    }
+
+    /// Every budget tasks share that is set, each group's (all runs, and
+    /// any 24 hours) and the daily one, with what was spent against it. The
+    /// tasks' runs are read only when one is set.
+    pub fn shared_budgets(&self) -> Result<Vec<SharedBudget>> {
+        use kule_engine::BudgetScope;
+        let mut out = Vec::new();
+        let groups = kule_engine::groups(&self.home).map_err(text)?;
+        if groups
+            .iter()
+            .any(|g| g.budget.is_some() || g.daily_budget.is_some())
+        {
+            let spent = kule_engine::groups_spent(&self.home).map_err(text)?;
+            for group in groups {
+                let used = spent.get(&group.id).cloned().unwrap_or_default();
+                if let Some(budget) = group.budget {
+                    out.push(SharedBudget {
+                        spent: used.total.in_currency(&budget.currency),
+                        scope: BudgetScope::Group {
+                            group: group.id,
+                            name: group.name.clone(),
+                        },
+                        budget,
+                    });
+                }
+                if let Some(budget) = group.daily_budget {
+                    out.push(SharedBudget {
+                        spent: used.today.in_currency(&budget.currency),
+                        scope: BudgetScope::GroupDaily {
+                            group: group.id,
+                            name: group.name,
+                        },
+                        budget,
+                    });
+                }
+            }
+        }
+        if let Some(budget) = kule_engine::daily_budget(&self.home).map_err(text)? {
+            let spent = kule_engine::spent_today(&self.home).map_err(text)?;
+            out.push(SharedBudget {
+                spent: spent.in_currency(&budget.currency),
+                scope: BudgetScope::Daily,
+                budget,
+            });
+        }
+        Ok(out)
     }
 
     /// Sets what every task may spend together in 24 hours; `None` for no
@@ -1332,7 +1404,9 @@ impl Service {
                 data: c.data,
             })
             .collect();
-        let limit = budget_left(&self.home, &task)?;
+        // The tightest of the task's, its group's and the daily budget;
+        // refused, naming it, when one is spent.
+        let limit = task.run_budget().map_err(text)?;
         let plan = plan(&task)?;
         if !self
             .running
@@ -1371,9 +1445,10 @@ impl Service {
             },
         );
         let prompt = kule_view::refs::with_places(prompt, &refs);
-        // What came in from the workspace since the agent's last run, told
-        // once; the person's prompt is shown as they wrote it.
-        let prompt = match task.take_sync_note() {
+        // What came in from the workspace since the agent's last run, and
+        // what the sandbox refused it and why, told once; the person's
+        // prompt is shown as they wrote it.
+        let prompt = match task.take_agent_notes() {
             Ok(Some(note)) => format!("{note}\n\n{prompt}"),
             _ => prompt,
         };
@@ -1455,6 +1530,44 @@ impl Service {
         self.view(id)
     }
 
+    /// Sets the limits on each of group `id`'s tasks' runs, where a task
+    /// sets none of its own; runs going on keep the limits they started
+    /// with.
+    pub fn set_group_limits(
+        &self,
+        id: u64,
+        limits: &kule_engine::TaskLimits,
+    ) -> Result<kule_engine::Group> {
+        let group = kule_engine::set_group_limits(&self.home, id, limits).map_err(text)?;
+        notify(&self.subscribers, Notice::Tasks);
+        Ok(group)
+    }
+
+    /// Sets what group `id`'s tasks may cost together: all of their runs,
+    /// and any 24 hours; `None` for no limit.
+    pub fn set_group_budget(
+        &self,
+        id: u64,
+        budget: Option<kule_engine::Money>,
+        daily: Option<kule_engine::Money>,
+    ) -> Result<kule_engine::Group> {
+        let group = kule_engine::set_group_budget(&self.home, id, budget, daily).map_err(text)?;
+        notify(&self.subscribers, Notice::Tasks);
+        Ok(group)
+    }
+
+    /// What each group's tasks spent, all of their runs and the last 24
+    /// hours', by group id.
+    pub fn groups_spent(&self) -> Result<std::collections::BTreeMap<u64, kule_engine::GroupSpent>> {
+        kule_engine::groups_spent(&self.home).map_err(text)
+    }
+
+    /// Every budget task `id`'s next run is held to, with what is left of
+    /// each.
+    pub fn task_budgets(&self, id: &str) -> Result<Vec<kule_engine::BudgetLeft>> {
+        self.open(id)?.budgets().map_err(text)
+    }
+
     /// One run, start to end, held to `plan`; returns what the sandbox
     /// refused.
     #[allow(clippy::too_many_arguments)]
@@ -1471,7 +1584,11 @@ impl Service {
         let started = Instant::now();
         let governor = self.govern(task, plan, control);
         let outcome = self.run_governed(task, profile, prompt, pictures, limit, control, started);
-        // The run is over by now, however it ended.
+        // The run is over by now, however it ended; one that failed before
+        // its agent started (the policy, the proxy, installing or launching
+        // the agent) never marked it, and the governor would wait for it
+        // for ever.
+        control.finish();
         let _ = governor.join();
         outcome
     }
@@ -1746,31 +1863,6 @@ impl Service {
     fn policy(&self, task: &Task) -> Result<Policy> {
         Policy::for_task(task).map_err(text)
     }
-}
-
-/// What the next run of `task` may cost; refused when its budget is spent.
-/// Also refused when every task together spent the daily budget; the tighter
-/// of the two limits stands.
-fn budget_left(home: &Path, task: &Task) -> Result<Option<kule_engine::Money>> {
-    let left = match task.budget_left().map_err(text)? {
-        Some(left) if left.amount <= 0.0 => {
-            return Err(format!(
-                "task {} has spent its budget; raise it or turn it off to run again",
-                task.id()
-            ));
-        }
-        left => left,
-    };
-    let daily = match kule_engine::daily_left(home).map_err(text)? {
-        Some(daily) if daily.amount <= 0.0 => {
-            return Err(
-                "the daily budget is spent: every task together, in the last 24 hours; raise it or turn it off to run again"
-                    .to_owned(),
-            );
-        }
-        daily => daily,
-    };
-    Ok(kule_engine::Money::tighter(left, daily))
 }
 
 /// The limits the next run of `task` is held to; refused when the task's
@@ -2580,6 +2672,39 @@ mod tests {
         assert_eq!(kept[1].event, output("a", "last"));
     }
 
+    /// The pieces of one message are kept as one; a piece of another
+    /// message starts its own, so two answers never run together.
+    #[test]
+    fn pieces_of_one_message_are_kept_as_one_and_messages_apart() {
+        let s = Setup::new();
+        let (id, _) = s.task();
+        let piece = |text: &str, message: Option<&str>| RunEvent::Agent {
+            event: kule_acp::Event::Message {
+                text: text.into(),
+                id: message.map(str::to_owned),
+            },
+        };
+        for (text, message) in [
+            ("continuing once with that ", Some("m1")),
+            ("noted", Some("m1")),
+            ("API Error: ", Some("m2")),
+            ("refused", Some("m2")),
+            ("without", None),
+            (" an id", None),
+        ] {
+            s.app.emit(&id, piece(text, message));
+        }
+        let kept: Vec<RunEvent> = s.app.stream(&id).into_iter().map(|s| s.event).collect();
+        assert_eq!(
+            kept,
+            [
+                piece("continuing once with that noted", Some("m1")),
+                piece("API Error: refused", Some("m2")),
+                piece("without an id", None),
+            ]
+        );
+    }
+
     /// A place a prompt names is a file the copy holds, reached without a
     /// link; one that is not refuses the run before anything starts.
     #[test]
@@ -2796,6 +2921,170 @@ mod tests {
 
         s.app.set_daily_budget(None).unwrap();
         assert_eq!(s.app.daily_budget().unwrap().budget, None);
+    }
+
+    #[test]
+    fn a_group_s_budget_and_limits_hold_its_tasks_and_a_move_says_so_first() {
+        let s = Setup::new();
+        let (inside, _) = s.task();
+        let (outside, _) = s.task();
+        let usd = |amount| kule_engine::Money {
+            amount,
+            currency: "USD".into(),
+        };
+        let group = s.app.create_group("clients", None).unwrap();
+        s.app.set_task_group(&inside, Some(group.id)).unwrap();
+        let kept = s
+            .app
+            .set_group_budget(group.id, Some(usd(3.0)), Some(usd(1.0)))
+            .unwrap();
+        assert_eq!(
+            (kept.budget, kept.daily_budget),
+            (Some(usd(3.0)), Some(usd(1.0)))
+        );
+        assert!(s.app.set_group_budget(group.id + 1, None, None).is_err());
+        let kept = s
+            .app
+            .set_group_limits(
+                group.id,
+                &kule_engine::TaskLimits {
+                    memory_mb: Some(Some(2048)),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(kept.limits.memory_mb, Some(Some(2048)));
+        assert_eq!(s.app.groups().unwrap()[0].budget, Some(usd(3.0)));
+
+        // The task in the group runs under the group's limits; the other
+        // under every task's.
+        assert_eq!(s.app.view(&inside).unwrap().limits.memory_mb, Some(2048));
+        assert_eq!(s.app.view(&outside).unwrap().limits.memory_mb, None);
+        let budgets = s.app.task_budgets(&inside).unwrap();
+        assert_eq!(budgets.len(), 2);
+        assert!(s.app.task_budgets(&outside).unwrap().is_empty());
+
+        // Moving the other task in says first what it would be held to.
+        let impact = s.app.group_impact(&outside, Some(group.id)).unwrap();
+        assert_eq!(
+            (impact.limits_now.memory_mb, impact.limits_then.memory_mb),
+            (None, Some(2048))
+        );
+        assert!(impact.budgets_now.is_empty());
+        assert_eq!(impact.budgets_then, budgets);
+
+        s.app
+            .open(&inside)
+            .unwrap()
+            .record_usage(&kule_engine::RunUsage {
+                agent: "claude-code".into(),
+                started_unix: unix_now(),
+                cost: Some(usd(1.5)),
+                ..Default::default()
+            })
+            .unwrap();
+        let spent = s.app.groups_spent().unwrap();
+        assert!((spent[&group.id].today.in_currency("USD") - 1.5).abs() < 1e-9);
+        // The budgets tasks share, each with what was spent against it.
+        let shared = s.app.shared_budgets().unwrap();
+        assert_eq!(
+            shared
+                .iter()
+                .map(|b| (b.scope.clone(), b.budget.amount, b.spent))
+                .collect::<Vec<_>>(),
+            [
+                (
+                    kule_engine::BudgetScope::Group {
+                        group: group.id,
+                        name: "clients".into()
+                    },
+                    3.0,
+                    1.5
+                ),
+                (
+                    kule_engine::BudgetScope::GroupDaily {
+                        group: group.id,
+                        name: "clients".into()
+                    },
+                    1.0,
+                    1.5
+                ),
+            ]
+        );
+        s.app.set_daily_budget(Some(usd(9.0))).unwrap();
+        assert_eq!(
+            s.app.shared_budgets().unwrap().last().unwrap().scope,
+            kule_engine::BudgetScope::Daily
+        );
+        s.app.set_daily_budget(None).unwrap();
+        // Spent for the day: refused, naming the group's budget; the task in
+        // no group runs on.
+        let e = s
+            .app
+            .start_run(&inside, "claude-code", "hi", Vec::new())
+            .unwrap_err();
+        assert!(
+            e.contains("group \"clients\"'s daily budget is spent"),
+            "{e}"
+        );
+        assert!(
+            s.app
+                .open(&outside)
+                .unwrap()
+                .run_budget()
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn a_run_that_fails_before_its_agent_starts_ends_and_says_why() {
+        use kule_engine::GroupPolicy;
+        let s = Setup::new();
+        let (id, _) = s.task();
+        // The group judges by a policy of its own that is gone by the run:
+        // the run fails before any agent starts.
+        let group = s.app.create_group("strict", None).unwrap();
+        s.app
+            .set_group_policy(
+                group.id,
+                GroupPolicy::Own,
+                Some(kule_engine::CAREFUL_POLICY),
+            )
+            .unwrap();
+        s.app.set_task_group(&id, Some(group.id)).unwrap();
+        fs::remove_file(
+            s.app
+                .home
+                .join(kule_engine::GROUP_POLICY_DIR)
+                .join(format!("{}.cedar", group.id)),
+        )
+        .unwrap();
+        s.app
+            .start_run(&id, "claude-code", "hi", Vec::new())
+            .unwrap();
+
+        // Waits a while, never forever: a run that hangs fails the test.
+        let deadline = Instant::now() + Duration::from_secs(20);
+        let finished = loop {
+            let error = s
+                .app
+                .stream(&id)
+                .into_iter()
+                .find_map(|kept| match kept.event {
+                    RunEvent::Finished { error, .. } => Some(error),
+                    _ => None,
+                });
+            if let Some(error) = error {
+                break error;
+            }
+            assert!(Instant::now() < deadline, "the run never ended");
+            std::thread::sleep(Duration::from_millis(50));
+        };
+        let error = finished.expect("the run failed");
+        assert!(error.contains("cannot be read"), "{error}");
+        assert!(!s.app.view(&id).unwrap().running);
+        assert!(s.app.stop_run(&id).is_err() || !s.app.busy());
     }
 
     #[test]

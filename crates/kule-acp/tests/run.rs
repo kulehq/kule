@@ -93,6 +93,24 @@ fn done(events: &[Event]) -> Vec<Done<'_>> {
         .collect()
 }
 
+#[test]
+fn each_piece_of_an_answer_says_which_message_it_is_part_of() {
+    let s = Setup::new();
+    let events = s.run("say-in m1 one; say-in m1 two; say-in m2 three");
+    let pieces: Vec<(String, Option<String>)> = events
+        .iter()
+        .filter_map(|e| match e {
+            Event::Message { text, id } => Some((text.clone(), id.clone())),
+            _ => None,
+        })
+        .collect();
+    let piece = |text: &str, id: &str| (text.to_owned(), Some(id.to_owned()));
+    assert_eq!(
+        pieces,
+        [piece("one", "m1"), piece("two", "m1"), piece("three", "m2")]
+    );
+}
+
 /// Real agents wait for their model between tool calls; then every step
 /// holds exactly what its call changed.
 #[test]
@@ -116,7 +134,8 @@ fn each_tool_call_becomes_a_step() {
         ]
     );
     assert!(events.contains(&Event::Message {
-        text: "halfway".into()
+        text: "halfway".into(),
+        id: None
     }));
     assert_eq!(
         events.last(),
@@ -208,7 +227,8 @@ fn permission_requests_are_answered_with_the_allow_option() {
         granted: true,
     }));
     assert!(events.contains(&Event::Message {
-        text: "permission: allow".into()
+        text: "permission: allow".into(),
+        id: None
     }));
 
     // Told apart by what the option does, not by its words.
@@ -413,7 +433,7 @@ fn said(events: &[Event]) -> Vec<String> {
     events
         .iter()
         .filter_map(|e| match e {
-            Event::Message { text } => Some(text.clone()),
+            Event::Message { text, .. } => Some(text.clone()),
             _ => None,
         })
         .collect()
@@ -530,7 +550,8 @@ fn pictures_go_only_to_an_agent_that_takes_them() {
     let taken = run(&["--pictures"]);
     assert!(
         taken.contains(&Event::Message {
-            text: "pictures: image/png 12".into()
+            text: "pictures: image/png 12".into(),
+            id: None
         }),
         "{taken:?}"
     );
@@ -538,7 +559,8 @@ fn pictures_go_only_to_an_agent_that_takes_them() {
     let left = run(&[]);
     assert!(
         left.contains(&Event::Message {
-            text: "pictures: ".into()
+            text: "pictures: ".into(),
+            id: None
         }),
         "{left:?}"
     );
@@ -557,7 +579,8 @@ fn a_prompt_reaches_the_agent_as_it_was_sent() {
     let events = s.run(prompt);
     assert!(
         events.contains(&Event::Message {
-            text: prompt.into()
+            text: prompt.into(),
+            id: None
         }),
         "{events:?}"
     );
@@ -595,7 +618,8 @@ fn the_session_is_given_the_mcp_servers_it_is_offered() {
     let events = runtime.block_on(rx.collect::<Vec<_>>());
     assert!(
         events.contains(&Event::Message {
-            text: "mcp db: npx -y @acme/db@1.2.3 --stdio".into()
+            text: "mcp db: npx -y @acme/db@1.2.3 --stdio".into(),
+            id: None
         }),
         "{events:?}"
     );
@@ -603,7 +627,8 @@ fn the_session_is_given_the_mcp_servers_it_is_offered() {
     let events = s.run("mcp");
     assert!(
         events.contains(&Event::Message {
-            text: "mcp ".into()
+            text: "mcp ".into(),
+            id: None
         }),
         "{events:?}"
     );

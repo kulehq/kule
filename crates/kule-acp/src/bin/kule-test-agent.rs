@@ -41,7 +41,7 @@ use std::sync::{Arc, Mutex};
 
 use agent_client_protocol::schema::v1::{
     AgentCapabilities, CancelNotification, ContentBlock, ContentChunk, Cost, CreateTerminalRequest,
-    EnvVariable, InitializeRequest, InitializeResponse, McpServer, NewSessionRequest,
+    EnvVariable, InitializeRequest, InitializeResponse, McpServer, MessageId, NewSessionRequest,
     NewSessionResponse, PermissionOption, PermissionOptionKind, PromptCapabilities, PromptRequest,
     PromptResponse, ReleaseTerminalRequest, RequestPermissionOutcome, RequestPermissionRequest,
     SessionId, SessionNotification, SessionUpdate, StopReason, Terminal, TerminalOutputRequest,
@@ -459,6 +459,17 @@ async fn perform(
             end(&edit)
         }
         "say" => say(rest.to_owned()),
+        // A piece of message ID: `say-in m1 hello`.
+        "say-in" => {
+            let (id, text) = rest.split_once(' ').unwrap_or((rest, ""));
+            cx.send_notification(SessionNotification::new(
+                session.clone(),
+                SessionUpdate::AgentMessageChunk(
+                    ContentChunk::new(ContentBlock::Text(TextContent::new(text.to_owned())))
+                        .message_id(MessageId::new(id.to_owned())),
+                ),
+            ))
+        }
         "run" | "run-raw" | "run-big" => {
             // A command's tool call, its output shown in two updates: half,
             // then all of it (as content, or for `run-raw` as raw output).

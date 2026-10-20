@@ -427,9 +427,21 @@ fn hint(operation: &str, path: &str) -> Option<String> {
              in the agent's profile)."
                 .to_owned(),
         ),
+        ("mach-lookup", "com.apple.windowserver.active" | "com.apple.windowserver") => Some(
+            "A program wanted the screen (macOS's window server). Programs with \
+             windows do not run in a task: its commands stay away from the screen, \
+             the keyboard and the clipboard. LibreOffice is one, even with --headless; \
+             macOS may say it quit unexpectedly. Read or convert such files with a \
+             command-line tool instead (pandoc, or Python's zipfile for .odt and \
+             .docx)."
+                .to_owned(),
+        ),
         _ => None,
     }
 }
+
+/// Where the hints of a run's refusals wait for the agent's next prompt.
+const HINTS_FILE: &str = "refused-hints.json";
 
 impl Denial {
     /// A protected path the command changed, which Kule put back after the
@@ -538,6 +550,7 @@ impl Sandbox {
             }
             sandbox.beside_links = crate::beside::place_links(task, &workspace, &opened)?;
             sandbox.use_task_caches(&sources)?;
+            task.note_caches_made(&sandbox.tmp.join("caches"))?;
         }
         Ok(sandbox)
     }
@@ -1156,7 +1169,61 @@ pub fn record_denials(task: &Task, denials: &[Denial]) -> Result<()> {
         })?;
         writeln!(file, "{line}").at(&path)?;
     }
+    // What the agent should know of them at its next prompt: Kule's own
+    // words only, never a name or path a command chose.
+    let mut hints: Vec<String> = refusal_hints(task)?;
+    for hint in denials.iter().filter_map(|d| d.hint.clone()) {
+        if !hints.contains(&hint) {
+            hints.push(hint);
+        }
+    }
+    if !hints.is_empty() {
+        crate::fsops::write_json(&task.dir().join(HINTS_FILE), &hints)?;
+    }
     Ok(())
+}
+
+fn refusal_hints(task: &Task) -> Result<Vec<String>> {
+    let path = task.dir().join(HINTS_FILE);
+    if !path.is_file() {
+        return Ok(Vec::new());
+    }
+    crate::fsops::read_json(&path)
+}
+
+impl Task {
+    /// What the agent should know at the start of its next run of what the
+    /// sandbox refused its commands and why, once: `None` when no refusal
+    /// had a hint.
+    pub fn take_refusal_note(&self) -> Result<Option<String>> {
+        let hints = refusal_hints(self)?;
+        let path = self.dir().join(HINTS_FILE);
+        if path.is_file() {
+            std::fs::remove_file(&path).at(&path)?;
+        }
+        if hints.is_empty() {
+            return Ok(None);
+        }
+        let mut note =
+            "Kule's sandbox refused some of what your earlier commands in this task tried:"
+                .to_owned();
+        for hint in hints {
+            note.push_str("\n- ");
+            note.push_str(&hint);
+        }
+        Ok(Some(note))
+    }
+
+    /// Everything the agent should know at the start of its next run, once:
+    /// what came in from the folder (see [`Task::take_sync_note`]) and what
+    /// the sandbox refused.
+    pub fn take_agent_notes(&self) -> Result<Option<String>> {
+        let notes: Vec<String> = [self.take_sync_note()?, self.take_refusal_note()?]
+            .into_iter()
+            .flatten()
+            .collect();
+        Ok((!notes.is_empty()).then(|| notes.join("\n\n")))
+    }
 }
 
 /// Every refusal recorded for the task, oldest first.
@@ -2049,6 +2116,21 @@ mod tests {
             parse_denial("Sandbox: Python(4242) deny(1) mach-lookup com.apple.lsd.mapdb\nkule-1-2")
                 .unwrap();
         assert_eq!(other.hint, None);
+    }
+
+    /// LibreOffice (soffice) aborts when the window server is refused, even
+    /// with --headless; the refusal says why, and what works instead.
+    #[test]
+    fn a_refused_window_server_says_windows_do_not_run_in_a_task() {
+        let screen = parse_denial(
+            "Sandbox: soffice(77027) deny(1) mach-lookup com.apple.windowserver.active\nkule-1-2",
+        )
+        .unwrap();
+        let hint = screen.hint.unwrap();
+        assert!(
+            hint.contains("window server") && hint.contains("pandoc"),
+            "{hint}"
+        );
     }
 }
 

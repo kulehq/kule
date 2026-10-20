@@ -76,7 +76,8 @@ pub enum Motion {
 }
 
 /// What is kept: the theme in use (`system`, one of Kule's, or one of
-/// `custom`), the person's own, and the motion.
+/// `custom`), the person's own, the motion, and whether text the person
+/// selects with the mouse is copied.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Themes {
@@ -85,6 +86,61 @@ pub struct Themes {
     pub custom: Vec<Theme>,
     #[serde(default)]
     pub motion: Motion,
+    /// Text selected with the mouse goes to the clipboard at once.
+    #[serde(default = "copied_by_default")]
+    pub copy_on_select: bool,
+    /// The fonts the window uses, and their sizes.
+    #[serde(default)]
+    pub fonts: Fonts,
+}
+
+/// The window's fonts: one for its text, one for code, the agent chat and
+/// terminals. A family is a name the computer has, which the window puts
+/// in front of Kule's own; `None` keeps Kule's.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Fonts {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    /// In pixels, [`TEXT_SIZES`].
+    #[serde(default = "text_size")]
+    pub text_size: u8,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
+    /// In pixels, [`CODE_SIZES`].
+    #[serde(default = "code_size")]
+    pub code_size: u8,
+}
+
+/// The sizes the window's text may take, and Kule's own.
+pub const TEXT_SIZES: std::ops::RangeInclusive<u8> = 11..=20;
+pub const CODE_SIZES: std::ops::RangeInclusive<u8> = 10..=22;
+const TEXT_SIZE: u8 = 14;
+const CODE_SIZE: u8 = 13;
+/// The longest font family name kept.
+const MAX_FAMILY: usize = 64;
+
+fn text_size() -> u8 {
+    TEXT_SIZE
+}
+
+fn code_size() -> u8 {
+    CODE_SIZE
+}
+
+impl Default for Fonts {
+    fn default() -> Fonts {
+        Fonts {
+            text: None,
+            text_size: TEXT_SIZE,
+            code: None,
+            code_size: CODE_SIZE,
+        }
+    }
+}
+
+fn copied_by_default() -> bool {
+    true
 }
 
 impl Default for Themes {
@@ -93,6 +149,8 @@ impl Default for Themes {
             current: "system".to_owned(),
             custom: Vec::new(),
             motion: Motion::System,
+            copy_on_select: true,
+            fonts: Fonts::default(),
         }
     }
 }
@@ -192,6 +250,8 @@ pub(crate) fn checked(themes: &Themes) -> Result<Themes> {
         current: themes.current.clone(),
         custom,
         motion: themes.motion,
+        copy_on_select: themes.copy_on_select,
+        fonts: fonts(&themes.fonts)?,
     })
 }
 
@@ -201,6 +261,43 @@ fn id_ok(id: &str) -> bool {
         && id
             .chars()
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+}
+
+/// `raw` with each family a font name and each size in its range. A family
+/// goes into the window's style as a quoted name, so it holds letters,
+/// digits, spaces and `- _ . & + ' ( )` only: no quote or backslash to end
+/// the name, no `;` or `{}` to start a rule, no `url(` to fetch anything.
+fn fonts(raw: &Fonts) -> Result<Fonts> {
+    let family = |raw: &Option<String>| -> Result<Option<String>> {
+        let Some(name) = raw.as_deref().map(str::trim).filter(|n| !n.is_empty()) else {
+            return Ok(None);
+        };
+        let allowed = |c: char| c.is_alphanumeric() || " -_.&+'()".contains(c);
+        if name.chars().count() > MAX_FAMILY || !name.chars().all(allowed) || name.contains("url(")
+        {
+            return Err(format!(
+                "{name:?} is not a font name Kule takes: up to {MAX_FAMILY} letters, digits, spaces and - _ . & + ' ( )"
+            ));
+        }
+        Ok(Some(name.to_owned()))
+    };
+    let size = |size: u8, range: std::ops::RangeInclusive<u8>, what: &str| -> Result<u8> {
+        if range.contains(&size) {
+            Ok(size)
+        } else {
+            Err(format!(
+                "{what} size is {} to {} pixels",
+                range.start(),
+                range.end()
+            ))
+        }
+    };
+    Ok(Fonts {
+        text: family(&raw.text)?,
+        text_size: size(raw.text_size, TEXT_SIZES, "the text")?,
+        code: family(&raw.code)?,
+        code_size: size(raw.code_size, CODE_SIZES, "the code")?,
+    })
 }
 
 /// A theme's name, trimmed: something to read, not something that can
@@ -265,12 +362,76 @@ mod tests {
                 &[("bg", "#0B1A2A"), ("accent", "#ff5a3c")],
             )],
             motion: Motion::Off,
+            copy_on_select: false,
+            fonts: Fonts {
+                text: Some(" Inter ".into()),
+                text_size: 16,
+                code: Some("JetBrains Mono".into()),
+                code_size: 15,
+            },
         };
         let kept = save(home.path(), &mine).unwrap();
         assert_eq!(kept.custom[0].name, "Harbour");
         assert_eq!(kept.custom[0].colors["bg"], "#0b1a2a");
         assert_eq!(kept.motion, Motion::Off);
+        assert!(!kept.copy_on_select);
+        assert_eq!(kept.fonts.text.as_deref(), Some("Inter"));
+        assert_eq!((kept.fonts.text_size, kept.fonts.code_size), (16, 15));
         assert_eq!(load(home.path()).unwrap(), kept);
+    }
+
+    #[test]
+    fn a_font_is_a_name_and_a_size_in_range_and_nothing_more() {
+        let home = tempfile::TempDir::new().unwrap();
+        let with = |fonts: Fonts| Themes {
+            fonts,
+            ..Themes::default()
+        };
+        let named = |name: &str| Fonts {
+            text: Some(name.into()),
+            ..Fonts::default()
+        };
+        for good in [
+            "Inter",
+            "Fira Code",
+            "Noto Sans CJK JP",
+            "ヒラギノ角ゴシック",
+            "Source Code Pro (Beta)",
+        ] {
+            assert!(save(home.path(), &with(named(good))).is_ok(), "{good}");
+        }
+        // Each would end the quoted name, start a rule, or fetch something.
+        for bad in [
+            "x\"; } body { display: none",
+            "x\\\"",
+            "a;b",
+            "a{b}",
+            "x url(https:",
+            "tab\there",
+            "a/b",
+            &"n".repeat(MAX_FAMILY + 1),
+        ] {
+            assert!(save(home.path(), &with(named(bad))).is_err(), "{bad:?}");
+            let code = Fonts {
+                code: Some(bad.into()),
+                ..Fonts::default()
+            };
+            assert!(save(home.path(), &with(code)).is_err(), "{bad:?}");
+        }
+        for (text_size, code_size) in [(10, 13), (21, 13), (14, 9), (14, 23)] {
+            let sized = Fonts {
+                text_size,
+                code_size,
+                ..Fonts::default()
+            };
+            assert!(
+                save(home.path(), &with(sized)).is_err(),
+                "{text_size} {code_size}"
+            );
+        }
+        // A blank name is no name: Kule's own font.
+        let kept = save(home.path(), &with(named("  "))).unwrap();
+        assert_eq!(kept.fonts.text, None);
     }
 
     #[test]
@@ -282,6 +443,10 @@ mod tests {
         )
         .unwrap();
         assert_eq!(load(home.path()).unwrap().motion, Motion::System);
+        // Nor the copy choice: text selected is copied.
+        assert!(load(home.path()).unwrap().copy_on_select);
+        // Nor fonts: Kule's own, at its sizes.
+        assert_eq!(load(home.path()).unwrap().fonts, Fonts::default());
 
         let chosen = r#"{ "current": "system", "motion": "on" }"#;
         let read: Themes = serde_json::from_str(chosen).unwrap();

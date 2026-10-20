@@ -20,8 +20,77 @@
   since the copy was last brought up to date, and which of those files
   the task changed too.
 
+### Disk space
+
+- The guide says what a task really takes on disk, on macOS and on
+  Linux, and why Finder and `du` show more than that.
+
+### Budgets and limits for a group
+
+- A group has a budget and limits of its own. Its tasks share the budget:
+  over all of their runs, over any 24 hours, or both. Its limits hold each
+  of its tasks where the task sets none of its own, and every task's hold
+  where the group sets none.
+- Every budget over a run holds, its own, its group's and the daily one
+  for every task, and the tightest decides; a refusal names the budget
+  that is spent. A run counts for the group its task was in when it ran.
+- Settings → Budget and Settings → Limits show one scope at a time, picked
+  under *Applies to*: every task, one group or one task. The scope is named
+  in capitals with whom it holds, each choice says where an inherited
+  value comes from, a task's scope lists every budget over its next run
+  and the one that holds, and each change is confirmed with the scope's
+  name. A group's ⋮ menu opens its budget and limits.
+- Moving a task into or out of a group asks first when its limits or group
+  budgets would change, and says how.
+- A notice at 80% and when it is spent, as for a task's budget, now also
+  for a group's budgets and the daily one for every task, each named. A
+  24-hour budget that drops below 80% again is told again when it nears.
+- `kule limits` shows and sets every task's limits, `--group ID` a group's
+  and `--task TASK` a task's, each line naming the scope its value comes
+  from. `kule group budget ID AMOUNT [--daily]` sets a group's budgets,
+  and `kule budget TASK` without an amount lists every budget over the
+  task's next run.
+
+### The window
+
+- The left and right sides grow as far as the window allows, and the
+  bottom panel as high: the main area between them always keeps at least
+  360 pixels across and 160 high. A window made smaller takes the room
+  from the sides first, and gives it back when it grows again.
+- Settings' sections scroll sideways when the window is too narrow for
+  all of them, with a mouse wheel, a trackpad or the arrow keys; a faded
+  edge shows there are more. Panel tabs scroll the same way.
+
 ### Agent runs
 
+- A run that fails before its agent starts (the policy, the proxy, or
+  installing or launching the agent) ends and says why; before, it stayed
+  *at work* with nothing running, and Stop could not end it.
+- Where Kule knows why a refusal keeps a tool from working, Live says so
+  under the run's last line, and the agent hears it at its next prompt,
+  once, in Kule's words only. New: a program that wants the screen
+  (macOS's window server), such as LibreOffice even with `--headless`,
+  cannot run in a task; read or convert such files with a command-line
+  tool instead.
+- The disk measure and limit leave out the package caches as a task
+  starts with them (npm's and cargo's are clones of the person's, which
+  take no room of their own); what a task adds to them still counts.
+
+- Live sets your prompt apart from the agent's answer: the prompt in a
+  block of its own under *You*, the answer under the agent's name.
+- Each of your prompts and each of the agent's messages has a copy
+  button, which copies it as written, Markdown and all.
+- Fonts of your own: Settings → Appearance → Fonts picks one font for
+  the window's text and one for code (the agent chat, terminals, diffs),
+  from the fonts on your computer, each in a size of its own. Mod+= and
+  Mod+- make all text larger or smaller. Profiles carry the fonts; one
+  this computer lacks falls back to Kule's own.
+- Text selected with the mouse in the window or a terminal is copied at
+  once, and a small *Copied* shows by the pointer. Settings → Appearance
+  turns it off; so does a command, which can have a shortcut.
+- Two messages of the agent's no longer run together: where the agent
+  says which message a piece belongs to, as Claude Code's adapter does,
+  each message is a paragraph of its own, in the app and in `kule run`.
 - Live shows what each tool call printed, such as a command's output,
   as it comes: under the call's line, open while it runs or when it
   failed, closed once it went well. Terminal colours and cursor moves are

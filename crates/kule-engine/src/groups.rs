@@ -13,8 +13,10 @@ use serde::{Deserialize, Serialize};
 use crate::error::{Error, IoContext, Result};
 use crate::fsops::{read_json, write_json};
 use crate::labels::{self, TaskColor};
+use crate::limits::TaskLimits;
 use crate::policy::{CAREFUL_POLICY, DEFAULT_POLICY, Policy};
 use crate::task::Task;
+use crate::usage::Money;
 
 /// Where the groups are kept, under Kule's home.
 pub const GROUPS_FILE: &str = "groups.json";
@@ -44,7 +46,7 @@ pub enum GroupPolicy {
     Own,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Group {
     /// Never given to another group, after this one is deleted too.
     pub id: u64,
@@ -56,6 +58,22 @@ pub struct Group {
     /// Folded in the list, its tasks out of sight.
     #[serde(default)]
     pub collapsed: bool,
+    /// What the group's tasks may cost together, all of their runs; `None`
+    /// for no limit. It holds beside each task's and the daily one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub budget: Option<Money>,
+    /// What the group's tasks may cost together in any 24 hours.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub daily_budget: Option<Money>,
+    /// The limits on each of the group's tasks' runs, field by field, in
+    /// place of the ones for every task; what a task sets for itself stands
+    /// over them.
+    #[serde(default, skip_serializing_if = "no_limits")]
+    pub limits: TaskLimits,
+}
+
+fn no_limits(limits: &TaskLimits) -> bool {
+    *limits == TaskLimits::default()
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -127,6 +145,9 @@ pub fn create_group(home: &Path, name: &str, color: Option<TaskColor>) -> Result
         color: Some(color),
         policy: GroupPolicy::Default,
         collapsed: false,
+        budget: None,
+        daily_budget: None,
+        limits: TaskLimits::default(),
     };
     groups.groups.push(group.clone());
     save(home, &groups)?;
@@ -191,6 +212,47 @@ pub fn set_group_policy(
     let group = group.clone();
     save(home, &groups)?;
     Ok(group)
+}
+
+/// Sets what group `id`'s tasks may cost together: `budget` over all of
+/// their runs, `daily` over any 24 hours; each a positive amount in an ISO
+/// 4217 currency, or `None` for no limit.
+pub fn set_group_budget(
+    home: &Path,
+    id: u64,
+    budget: Option<Money>,
+    daily: Option<Money>,
+) -> Result<Group> {
+    for b in budget.iter().chain(daily.iter()) {
+        b.check_budget()?;
+    }
+    let mut groups = load(home)?;
+    let group = find(&mut groups, id)?;
+    group.budget = budget;
+    group.daily_budget = daily;
+    let group = group.clone();
+    save(home, &groups)?;
+    Ok(group)
+}
+
+/// Sets the limits on each of group `id`'s tasks' runs, each value in its
+/// range; see [`Group::limits`].
+pub fn set_group_limits(home: &Path, id: u64, limits: &TaskLimits) -> Result<Group> {
+    limits.check()?;
+    let mut groups = load(home)?;
+    let group = find(&mut groups, id)?;
+    group.limits = *limits;
+    let group = group.clone();
+    save(home, &groups)?;
+    Ok(group)
+}
+
+/// Group `id`, if there is one; `None` for no group, or one deleted since.
+pub(crate) fn group_of(home: &Path, id: Option<u64>) -> Result<Option<Group>> {
+    let Some(id) = id else {
+        return Ok(None);
+    };
+    Ok(load(home)?.groups.into_iter().find(|g| g.id == id))
 }
 
 /// The policy written for group `id`, if one was.

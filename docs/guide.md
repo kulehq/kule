@@ -17,6 +17,7 @@ is about using them.
 - [Asking the agent about a place in a file](#asking-the-agent-about-a-place-in-a-file)
 - [Servers the task runs](#servers-the-task-runs)
 - [Keeping runs in check: budgets, limits and Stop](#keeping-runs-in-check-budgets-limits-and-stop)
+- [Disk space: what a task really takes](#disk-space-what-a-task-really-takes)
 - [Organising tasks](#organising-tasks)
 - [Terminals](#terminals)
 - [Settings, section by section](#settings-section-by-section)
@@ -28,9 +29,11 @@ is about using them.
 ## The idea in one minute
 
 You give Kule a folder: code, notes, documents, photos, data. Kule makes a
-**task**, a copy-on-write copy of it. The copy costs almost no disk space;
-only what changes takes room. An **agent** (Claude Code, Codex, Gemini or
-another one that speaks ACP) works in that copy, inside a sandbox:
+**task**, a copy-on-write copy of it. On macOS, and on Linux with Btrfs or
+XFS, the copy costs almost no disk space; only what changes takes room
+(see [Disk space](#disk-space-what-a-task-really-takes)). An **agent**
+(Claude Code, Codex, Gemini or another one that speaks ACP) works in that
+copy, inside a sandbox:
 
 - it can write only to the copy and its own temporary files;
 - your credentials (`~/.ssh`, `~/.aws`, …) are hidden from it;
@@ -140,6 +143,10 @@ change the same file, Review says where they meet.
 
 Live shows, as they come:
 
+- **Your prompt**, in a block of its own under *You*, and the agent's
+  answer under its name. Each message has a copy button (it shows when
+  the pointer is over the message) that copies it as it was written,
+  Markdown and all.
 - **The agent's answer**, laid out as Markdown. Code blocks are coloured
   like in an editor.
 - **Its thinking**, in a quieter style, when the agent shares it.
@@ -157,6 +164,11 @@ Live shows, as they come:
   stopped, pictures an agent could not take.
 - **The end of the run**: *Done*, *Stopped: …* with the reason, or *The
   run failed: …*, with the number of operations the sandbox refused.
+  Where Kule knows why a refusal keeps a tool from working, it says so
+  under that line: a program that wanted the screen (LibreOffice, even
+  with `--headless`) cannot run in a task, and macOS may report that it
+  quit unexpectedly. The agent is told the same at its next prompt, in
+  Kule's words, once.
 
 While a run goes on:
 
@@ -361,30 +373,68 @@ terminal stays.
 
 ## Keeping runs in check: budgets, limits and Stop
 
+### Three scopes: every task, a group, one task
+
+Budgets and limits can each be set at three scopes. *Settings → Budget*
+and *Settings → Limits* show one scope at a time: pick it under
+**Applies to** (**Every task**, **One group** or **One task**, then which
+one). The card below names the scope in capitals (EVERY TASK, GROUP, THIS
+TASK ONLY), has an edge in its colour (the accent for every task, the
+group's or the task's own colour) and says whom what you set there holds,
+so you always know what you are changing. Each change is confirmed with
+the scope's name ("Group clients: …", "notes only: …"). Under the card,
+*Where budgets are set* and *Groups and tasks with limits of their own*
+list every scope that has something set; click one to open it.
+
+The ⋮ menus open the right scope: *Budget…* and *Limits…* in a task's
+menu open that task, the same items in a group's menu open the group.
+
+Moving a task into or out of a group asks first when its limits or group
+budgets would change, and says which ("Its limits: memory 8 GB → 2 GB").
+
 ### Budgets
 
-*Settings → Budget*, or *Budget…* in a task's ⋮ menu:
+- **Every task**: what all tasks may cost together in any 24 hours.
+- **A group**: what the group's tasks may cost together, over all of their
+  runs, and over any 24 hours; each is optional. A run counts for the group
+  its task was in when it ran, so moving a task out keeps what it spent in
+  the group's account.
+- **One task**: what that task's runs may cost together.
 
-- **Daily budget**: what every task may cost together in any 24 hours.
-- **Each task's budget**: what that task's runs may cost together.
-
-No run starts once a budget is spent, and a run is held to what is left
-(the tighter of the two). The costs are those the agents report:
+Each budget holds: no run starts once one is spent, and a run is held to
+the tightest of what is left. On a task's scope, *What holds its next run*
+lists each budget over it and marks the one that holds. The costs are
+those the agents report:
 
 - Claude Code reports the cost as each turn ends, so a turn can go over
   and the next run is refused.
 - Agents signed in with a subscription may report tokens only. A budget
   does not hold what is not reported.
 
-The header's chip shows what the task spent and what is left. Kule tells
-you at 80% and when a budget is spent.
+The header's chip shows what the task spent and what is left. When the
+window is not in front, a notice tells you at 80% and when a budget is
+spent: the task's own, its group's (all runs, and the last 24 hours) and
+the daily one for every task, each named ("Group clients spent 80% of its
+daily budget"). Budgets already past these when the app starts are not
+told again; a 24-hour budget that drops below 80% as older runs fall out
+of the day is told again when it nears.
 
 ### Limits
 
-*Settings → Limits*, or *Limits…* in a task's ⋮ menu, or a click on the
-measure bar in Live. The top card holds the limits for **every task**.
-Below it each task has a row: open it to set, field by field, **Every
-task's** (the default), **No limit**, or **Its own** value.
+*Settings → Limits*, *Limits…* in a task's or a group's ⋮ menu, or a click
+on the measure bar in Live.
+
+- **Every task**: the limits that hold where a group and a task set none.
+- **A group**: field by field, **From every task** (the default), **No
+  limit**, or **The group's own** value, for each of its tasks.
+- **One task**: field by field, what it inherits (**From group clients**
+  when its group sets that field, else **From every task**), **No limit**,
+  or **Its own** value.
+
+A task's own value stands over its group's, and a group's over every
+task's. Each limit below is one task's, also when a group sets it: a group
+sets the processor limit for each of its tasks, not for all of them
+together.
 
 | Limit | Unit | Over it |
 | --- | --- | --- |
@@ -404,7 +454,9 @@ Some notes on how they count:
 - **One run** counts all of the run's time, including time spent waiting
   for your answers.
 - **Disk** counts only what the task added, so a large folder does not use
-  up its own limit.
+  up its own limit. Nor do the package caches a task starts with (npm's
+  and cargo's start as clones of yours, which take no room of their own);
+  what its commands add to them counts.
 - A run keeps the limits it started with; a change holds from the next run.
 - `kule run` from a terminal is held to the same limits.
 
@@ -416,6 +468,86 @@ When a limit stops a run, Live says which one and what it measured
 
 **Stop** in Live (Mod+Shift+K) stops the run at work whenever you want. See
 [Watching a run](#watching-a-run-live).
+
+## Disk space: what a task really takes
+
+Finder, `du` and disk-usage tools can show Kule's home (`~/.kule`, or
+`KULE_HOME`) as many gigabytes. They count every copy at its full size.
+On macOS most of it is shared with your own files and takes no space of
+its own; on Linux that depends on the filesystem.
+
+A task keeps everything under `<home>/tasks/<id>/`:
+
+| Folder | What it is |
+| --- | --- |
+| `w/<folder name>` | The copy the agent works in. |
+| `base/` | The folder as it was at the last sync, for merging. |
+| `tmp/` | The task's temporary files; `tmp/caches/` holds its own package caches (npm, cargo, pip, Go and others). |
+| `home/` | The home layer: what the task's commands see as your home. |
+| `steps-store/`, `checkpoints/` | What going back to a step and undo need. |
+
+### On macOS
+
+The folder and Kule's home are on APFS, and Kule makes **clones**: real
+files that share their disk blocks with the originals. A clone takes
+space only for what changes in it afterwards. These are clones:
+
+- the copy and `base/`;
+- `tmp/caches/npm` and `tmp/caches/cargo`, which start as clones of your
+  `~/.npm` and `~/.cargo` caches: a task's npm cache shows as large as
+  yours, and takes nothing until the task downloads a package yours does
+  not have;
+- in the home layer, `.config` and the small files at the top of your
+  home (`.zshrc`, `.gitconfig`).
+
+The rest of the home layer is **symbolic links** to your own files and
+folders, which take no space at all.
+
+To see what is really used, look at the free space: `df -h`, or
+System Settings → General → Storage. Cloning a 500 MB file twice, for
+example, makes `du` show 1.5 GB, and the free space does not change.
+
+Two things to know:
+
+- Clones are made only on the same volume. A folder on another disk
+  (an external drive, say) is copied in full, and the caches start empty.
+- A clone keeps its blocks when the original goes. If you delete
+  `~/.npm`, its space comes back once the tasks that cloned it are
+  deleted too.
+
+### On Linux
+
+Linux has no call that clones a folder in one go, so Kule copies file by
+file, and what that costs depends on the filesystem:
+
+- **Btrfs and XFS** (XFS made with reflink support, the default for some
+  years) share blocks the way APFS clones do: the copy takes space only
+  for what changes. `du` counts the shared blocks in full here too; ask
+  the filesystem (`btrfs filesystem du`, or the free space in `df -h`).
+- **ext4**, the default on many distributions, cannot share blocks. The
+  copy is a full copy and takes as much space as the folder, `.git` and
+  `node_modules` included, and `base/` holds a full copy of the folder's
+  files up to 1 MiB (outside `.git`, `node_modules`, `target` and the
+  like). Here `du` tells the truth.
+
+Everywhere on Linux, the package caches in `tmp/caches/` start empty: a
+task's first install downloads again, through Kule's proxy, and keeps
+what it downloads. In the home layer, `.config` and the small files at
+the top of your home are copied (shared where the filesystem allows), and
+the rest are symbolic links.
+
+### What takes space, everywhere
+
+- Files the agent changes or creates in the copy, build output included.
+- Packages a task downloads that are not in its caches yet.
+- Steps and checkpoints: what files held before a step or a commit
+  changed them.
+
+A task's **disk** limit counts only what the task added since it was
+made (see [Limits](#limits)). Deleting a task (the ⋮ menu, or
+`kule rm TASK`) moves it to `<home>/trash`, which Kule empties in the
+background right away and again whenever the daemon starts; then its
+space comes back.
 
 ## Organising tasks
 
@@ -484,10 +616,10 @@ Open Settings with Mod+, or the gear at the bottom left.
     requests to the hosts you name, and only those.
   - Values in the copy's `.env` files that look like secrets are masked
     the same way.
-- **Budget**: the daily budget and each task's (see
-  [Budgets](#budgets)).
-- **Limits**: every task's limits and each task's own (see
-  [Limits](#limits)).
+- **Budget**: every task's daily budget, a group's and a task's, one scope
+  at a time (see [Budgets](#budgets)).
+- **Limits**: every task's limits, a group's and a task's own, one scope at
+  a time (see [Limits](#limits)).
 - **Appearance**: Kule's themes and your own.
   - Kule's themes: System (follows the computer), Light, Dark, Coral,
     Nord, Solarized Light and two high-contrast ones.
@@ -501,6 +633,20 @@ Open Settings with Mod+, or the gear at the bottom left.
     (the default) turns it off when the computer's "reduce motion" is on;
     *On* and *Off* decide for themselves. The command *Turn motion on or
     off* can have a shortcut.
+  - **Fonts**: one for the window's text, one for code (the agent chat,
+    terminals, diffs and the Preview's code), each from the fonts on your
+    computer and in a size of its own: text 11 to 20 px (Kule's is 14),
+    code 10 to 22 px (13). The code list holds the fonts whose letters are
+    all one width; you can type any font's name. *Kule's fonts* puts both
+    back. *Make the text larger* (Mod+=) and *smaller* (Mod+-) change both
+    sizes at once. A font a profile brings that this computer lacks falls
+    back to Kule's own, and the import says so; one removed later is
+    marked here, and the window uses Kule's meanwhile.
+  - **Copying**: text you select with the mouse in the agent chat,
+    Review or a terminal goes to the clipboard at once, and a small
+    *Copied* shows by the pointer. Fields you type in copy as usual. Turn
+    it off here, or with the command *Turn copying selected text on or
+    off*, which can have a shortcut.
 - **Shortcuts**: every command and its keys. Set your own, search them, or
   *Put back every default*.
 - **Extensions**: install, approve, turn on or off and remove extensions
@@ -548,12 +694,14 @@ by name, **Mod+/** lists the shortcuts. Kule's defaults:
 | Roll back (press twice) | Mod+Shift+Backspace |
 | Undo the last commit (press twice) | Mod+Shift+U |
 | Approve / deny the waiting connection | Mod+Shift+Y / Mod+Shift+N |
+| Make the text larger / smaller | Mod+= / Mod+- |
 
 Commands without a default include the task's budget and limits, how long
 the agent waits, groups and group policies, the two policies, themes,
-profile export and import, and the terminal's next, previous, clear and
-close. Combos the system or text editing owns (⌘Q, copy and paste, …) are
-never taken, and in a text field only the shortcuts meant for it fire.
+Kule's fonts again, copying selected text, profile export and import,
+and the terminal's next, previous, clear and close. Combos the system or
+text editing owns (⌘Q, copy and paste, …) are never taken, and in a text
+field only the shortcuts meant for it fire.
 
 The menu bar (File, Edit, View, Task, Help) runs the same commands and
 shows the keys you set.
@@ -580,7 +728,7 @@ The `kule` command does most of what the app does, on the same tasks:
 | --- | --- |
 | `kule new ~/notes` | Make a task. |
 | `kule list` | List tasks, in the app's order. |
-| `kule run TASK --agent claude-code "prompt"` | Give an agent a prompt, held to the task's budget and limits. |
+| `kule run TASK --agent claude-code "prompt"` | Give an agent a prompt, held to its budgets (its own, its group's, every task's) and limits. |
 | `kule exec TASK -- npm test` | Run a command in the sandbox, then show what it changed. |
 | `kule shell TASK` | Your shell in the copy. |
 | `kule status TASK` / `kule steps TASK` | What changed, and the policy's ruling / each tool call's changes. |
@@ -588,13 +736,14 @@ The `kule` command does most of what the app does, on the same tasks:
 | `kule rollback TASK` / `kule undo TASK` | Throw the changes away / take the last commit back. |
 | `kule sync TASK` | Bring what the folder changed meanwhile into the copy. |
 | `kule history TASK` | The signed history, checked. |
-| `kule budget TASK 5` / `kule daily-budget 20` | Budgets (`off` takes one away). |
+| `kule budget TASK 5` / `kule group budget ID 20 [--daily]` / `kule daily-budget 20` | One task's, a group's (all runs, or any 24 hours) and every task's budget (`off` takes one away). `kule budget TASK` lists every budget over the task's next run. |
+| `kule limits [--group ID \| --task TASK] memory=4 gpu=off` | Every task's, a group's or one task's limits; each line says which scope a limit comes from (`none` for no limit, `inherit` for the one above). |
 | `kule name`, `kule color`, `kule group` | Names, colours, groups and group policies. |
 | `kule home TASK diff\|apply\|discard\|undo` | Writes the task made in your home. |
 | `kule secrets add NAME --host HOST` | Keep a secret for a host. |
 | `kule agents …`, `kule ext …`, `kule policy …`, `kule rules` | Agents, extensions, the policy, remembered rules. |
 
-`kule help COMMAND` says more about each. Limits are set in the app.
+`kule help COMMAND` says more about each.
 
 ## What is new
 
@@ -619,6 +768,11 @@ list):
 - **Limits and Stop**: processor, memory, disk, GPU and time limits for
   every task and for each, a measure bar in Live, and a Stop button. →
   [Keeping runs in check](#keeping-runs-in-check-budgets-limits-and-stop)
+- **Group budgets and limits**: a group's tasks share a budget (all runs,
+  and any 24 hours) and take its limits; Settings shows every task, a
+  group or one task at a time, and `kule limits` / `kule group budget` do
+  the same from a terminal. →
+  [Three scopes](#three-scopes-every-task-a-group-one-task)
 - **Extensions**: commands, panels, themes, settings, agent profiles and
   MCP servers from `.kulext` files, each approved as it stands. →
   [docs/extensions.md](extensions.md)

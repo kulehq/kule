@@ -133,7 +133,10 @@ kule undo 1a2b3c4d                   # revert the newest commit; repeat to walk 
 
 - The copy is made with reflinks (APFS clones on macOS, `FICLONE` on Linux),
   so it takes no extra space until files change. Filesystems without
-  reflinks fall back to a plain copy.
+  reflinks (ext4) fall back to a plain copy, which takes the folder's full
+  size. Finder and `du` count clones at their full size; the free space
+  tells what is really used. [Disk space](docs/guide.md#disk-space-what-a-task-really-takes)
+  in the guide says what each part of a task takes on macOS and on Linux.
 - Effects are found by comparing the copy with the workspace, not by
   watching system calls, so the same logic will run on every platform.
 - Commit refuses when the workspace changed underneath (a human edited a file
@@ -355,15 +358,18 @@ consoles and terminals.
   menu (*Group…*) or drag it onto the group; drag it onto *Not in a group*
   to take it out. When the move would change the verdict on any of the
   task's pending changes (a change waiting for you that would pass on its
-  own, say), Kule asks first and lists them. A group's tasks are judged by
+  own, say), or the limits and group budgets that hold its runs, Kule asks
+  first and lists them. A group's tasks are judged by
   the group's policy: the one for
   every task (the default), Kule's balanced or careful one whatever holds
   for the rest, or one you write for the group in *Settings → Policy*,
   checked before it is kept. A repository's refusals and what you told
-  Kule not to ask about again still hold. `kule group` does the same from
-  a terminal (`new`, `put`, `policy`, `rename`, `color`, `delete`).
+  Kule not to ask about again still hold. A group also has a budget its
+  tasks share and limits for each of them (see below). `kule group` does
+  the same from a terminal (`new`, `put`, `policy`, `budget`, `rename`,
+  `color`, `delete`).
 - **Settings**: agents, the policy, remembered rules, secrets, the
-  budgets (the daily one and each task's), the limits on what a run takes,
+  budgets (every task's, a group's and a task's), the limits on what a run takes,
   appearance, shortcuts, extensions and your profile, one section each.
 - **First run**: with no task yet, the window shows which agents can start
   (and what to install for those that cannot), lets you choose the
@@ -489,12 +495,23 @@ the cost as each turn ends, so its turn can go over and the next run is
 the one refused. Codex signed in with ChatGPT reports tokens but no cost,
 Gemini reports neither, and a budget does not hold what is not reported.
 `kule daily-budget 20` (or *Budget* in the app's Settings) caps what
-every task may cost together in any 24 hours, the same
-way; a run is held to the tighter of the two. The app tells you when a
-task has spent 80% of its budget, and when it has spent it all.
+every task may cost together in any 24 hours, the same way. A group's
+tasks can share a budget too, over all of their runs and over any 24
+hours (`kule group budget ID 20 [--daily]`, or a group's ⋮ menu); a run
+counts for the group its task was in when it ran. Every budget over a run
+holds and the tightest decides; a refusal names the one that is spent,
+and `kule budget TASK` lists them all. While its window is elsewhere, the
+app tells you when 80% of a budget is spent, and when all of it is: a
+task's, a group's (all runs, or the last 24 hours) and the daily one. A
+24-hour budget that comes back below 80% as older runs fall out of the
+day is told again when it nears.
 
-*Settings → Limits* (also a task's ⋮ menu) sets what a run may take of
-this computer, for every task and, field by field, for each one:
+*Settings → Limits* (also a task's or a group's ⋮ menu, or `kule limits`)
+sets what a run may take of this computer, for every task and, field by
+field, for each task in a group and for one task; a task's own stand over
+its group's, and a group's over every task's. Settings shows one of the
+three at a time, named with whom it holds, so a change never lands on a
+scope you did not mean:
 
 - **Processor**, in cores: over it the run is slowed down, not stopped.
   Kule pauses and resumes its processes in turn (`SIGSTOP`/`SIGCONT`,

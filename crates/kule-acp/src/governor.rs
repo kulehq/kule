@@ -109,7 +109,6 @@ pub fn govern(task: &Task, plan: Plan, control: RunControl, watch: Watch) -> Joi
     // Measured with or without a limit: what the run takes is shown.
     let disk = Arc::new(AtomicU64::new(u64::MAX));
     measure_disk(task, Arc::clone(&disk), control.clone());
-    let base = task.disk_base().unwrap_or(0);
     std::thread::spawn(move || {
         Governor {
             deadline: plan.deadline(),
@@ -117,7 +116,6 @@ pub fn govern(task: &Task, plan: Plan, control: RunControl, watch: Watch) -> Joi
             control,
             watch,
             disk,
-            base,
             pids: Vec::new(),
             cpu: HashMap::new(),
             reaped: HashMap::new(),
@@ -153,11 +151,15 @@ fn size(bytes: u64) -> String {
 /// Measures what the task's folders take, again and again until the run is
 /// over: as often as a walk through them allows, at most every second.
 fn measure_disk(task: &Task, into: Arc<AtomicU64>, control: RunControl) {
-    let dirs = task.disk_dirs();
+    let task = task.clone();
     std::thread::spawn(move || {
         while !control.is_over() {
             let started = Instant::now();
-            into.store(resources::disk_used(&dirs), Ordering::SeqCst);
+            // Read again each time: the caches made after the run started
+            // (its first, as the agent is launched) are left out too.
+            if let Ok(grown) = task.disk_grown() {
+                into.store(grown, Ordering::SeqCst);
+            }
             let pause = (started.elapsed() * 4).max(Duration::from_secs(1));
             let until = Instant::now() + pause;
             while Instant::now() < until && !control.is_over() {
@@ -172,9 +174,8 @@ struct Governor {
     deadline: Option<(Duration, String)>,
     control: RunControl,
     watch: Watch,
-    /// What the folders take, as last measured; `u64::MAX` until then.
+    /// What the folders grew by, as last measured; `u64::MAX` until then.
     disk: Arc<AtomicU64>,
-    base: u64,
     pids: Vec<i32>,
     /// Each process's processor time as last read.
     cpu: HashMap<i32, Duration>,
@@ -235,7 +236,7 @@ impl Governor {
                 continue;
             }
             let disk = self.disk.load(Ordering::SeqCst);
-            let grown = (disk != u64::MAX).then(|| disk.saturating_sub(self.base));
+            let grown = (disk != u64::MAX).then_some(disk);
             if let (Some(limit), Some(grown)) = (self.plan.disk, grown)
                 && grown > limit
             {

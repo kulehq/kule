@@ -135,7 +135,7 @@ fn try_in(
         let reply: String = events
             .iter()
             .filter_map(|e| match e {
-                Event::Message { text } => Some(text.as_str()),
+                Event::Message { text, .. } => Some(text.as_str()),
                 _ => None,
             })
             .collect();

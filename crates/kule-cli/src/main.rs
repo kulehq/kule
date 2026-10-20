@@ -1,4 +1,5 @@
 mod paint;
+mod scopes;
 
 use std::collections::HashMap;
 use std::io::Write;
@@ -97,6 +98,19 @@ enum GroupCmd {
         /// With `own`: the group's policy, in Cedar.
         #[arg(long, value_name = "PATH")]
         file: Option<PathBuf>,
+    },
+    /// What group ID's tasks may cost together, beside each task's own
+    /// budget and the daily one for every task: over all of their runs, or
+    /// with --daily over any 24 hours. Without AMOUNT, show both and what
+    /// was spent; `off` takes one away.
+    Budget {
+        id: u64,
+        /// An amount like 20 or 7.50, or `off`.
+        amount: Option<String>,
+        /// ISO 4217 [default: USD]
+        currency: Option<String>,
+        #[arg(long)]
+        daily: bool,
     },
     /// Put TASK in group GROUP; without GROUP, take it out of its group.
     Put { task: String, group: Option<u64> },
@@ -321,16 +335,19 @@ enum Cmd {
         agent: String,
         prompt: String,
     },
-    /// Set what the task's agent runs may cost together, as the agents
-    /// report it: none starts once it is spent, and a run whose agent
-    /// reports its cost as it works is stopped when it gets there. Claude
-    /// Code reports it as each turn ends, so a turn may go over and the next
-    /// run is refused. `off` takes it away. Agents that report no cost (one
-    /// signed in with a subscription, say) are not held by it.
+    /// Show or set what this one task's agent runs may cost together, as
+    /// the agents report it: none starts once it is spent, and a run whose
+    /// agent reports its cost as it works is stopped when it gets there.
+    /// Claude Code reports it as each turn ends, so a turn may go over and
+    /// the next run is refused. `off` takes it away. Agents that report no
+    /// cost (one signed in with a subscription, say) are not held by it.
+    /// Without AMOUNT, show every budget over the task's next run: its own,
+    /// its group's (`kule group budget`) and the daily one for every task
+    /// (`kule daily-budget`).
     Budget {
         task: String,
         /// An amount like 5 or 2.50, or `off`.
-        amount: String,
+        amount: Option<String>,
         /// ISO 4217 [default: USD]
         currency: Option<String>,
     },
@@ -377,8 +394,24 @@ enum Cmd {
         #[arg(long, requires = "approve")]
         remember: bool,
     },
-    /// Groups of tasks, each with a name, a colour and the policy its tasks
-    /// are judged by.
+    /// Show or set the limits on agent runs: for EVERY task (the default),
+    /// for EACH task in a group (--group ID), or for ONE task (--task ID).
+    /// Each line says which of the three a limit comes from: a task's own
+    /// stand over its group's, and a group's over every task's. Set with
+    /// FIELD=VALUE: cpu (cores), memory (GB), disk (GB), gpu (on/off), run
+    /// (minutes), task (hours, all of a task's runs), idle (minutes); `none`
+    /// is no limit, and with --group or --task `inherit` takes the one
+    /// above again. A run going on keeps the limits it started with.
+    Limits {
+        #[arg(long, conflicts_with = "task")]
+        group: Option<u64>,
+        #[arg(long)]
+        task: Option<String>,
+        /// FIELD=VALUE, such as memory=4 or cpu=none
+        settings: Vec<String>,
+    },
+    /// Groups of tasks, each with a name, a colour, the policy its tasks
+    /// are judged by, and a budget and limits of their own.
     Group {
         #[command(subcommand)]
         action: Option<GroupCmd>,
@@ -637,24 +670,10 @@ fn run() -> Result<ExitCode> {
             let profile = agents
                 .get(&agent)
                 .ok_or_else(|| anyhow!("{}", agents.refusal(&agent)))?;
-            let limit = task.budget_left()?;
-            if let Some(left) = &limit
-                && left.amount <= 0.0
-            {
-                bail!(
-                    "the task has spent its budget; raise it with `kule budget {} AMOUNT CURRENCY` or turn it off",
-                    task.id()
-                );
-            }
-            let daily = kule_engine::daily_left(&home)?;
-            if let Some(left) = &daily
-                && left.amount <= 0.0
-            {
-                bail!(
-                    "the daily budget is spent: every task together, in the last 24 hours; raise it with `kule daily-budget AMOUNT CURRENCY` or turn it off"
-                );
-            }
-            let limit = Money::tighter(limit, daily);
+            // The tightest of the task's, its group's and the daily budget;
+            // refused, naming it, when one is spent (`kule budget ID` shows
+            // them all).
+            let limit = task.run_budget()?;
             let time_left = task.time_left()?;
             if time_left.is_some_and(|l| l.is_zero()) {
                 bail!(
@@ -665,8 +684,8 @@ fn run() -> Result<ExitCode> {
             let plan = kule_acp::governor::Plan::new(&task.limits_in_force()?, time_left);
             let _at_work = task.agent_at_work()?;
             // What came in from the workspace since the agent's last run,
-            // told once.
-            let prompt = match task.take_sync_note()? {
+            // and what the sandbox refused it and why, told once.
+            let prompt = match task.take_agent_notes()? {
                 Some(note) => format!("{note}\n\n{prompt}"),
                 None => prompt,
             };
@@ -763,17 +782,13 @@ fn run() -> Result<ExitCode> {
             currency,
         } => {
             let task = Task::open(&home, &task)?;
-            let budget = match amount.as_str() {
-                "off" => None,
-                amount => Some(Money {
-                    amount: amount
-                        .parse()
-                        .map_err(|_| anyhow!("{amount}: an amount like 5 or 2.50, or off"))?,
-                    currency: currency.unwrap_or_else(|| "USD".to_owned()),
-                }),
-            };
-            task.set_budget(budget)?;
-            print_spent(&task)?;
+            match amount {
+                Some(amount) => {
+                    task.set_budget(scopes::parse_budget(&amount, currency)?)?;
+                    print_spent(&task)?;
+                }
+                None => scopes::print_task_budgets(&task)?,
+            }
         }
         Cmd::Isolation { accept_weaker } => {
             match accept_weaker.as_deref() {
@@ -964,6 +979,11 @@ fn run() -> Result<ExitCode> {
         Cmd::Agents { action } => agents_cmd(&home, action.unwrap_or(AgentsCmd::List))?,
         Cmd::Ext { action } => ext_cmd(&home, action.unwrap_or(ExtCmd::List))?,
         Cmd::Group { action } => group_cmd(&home, action.unwrap_or(GroupCmd::List))?,
+        Cmd::Limits {
+            group,
+            task,
+            settings,
+        } => scopes::limits_cmd(&home, group, task, &settings)?,
         Cmd::Rules { action } => rules_cmd(&home, action.unwrap_or(RulesCmd::List))?,
         Cmd::Reveal { action } => {
             reveal_cmd(&home, action.unwrap_or(RevealCmd::List { folder: None }))?
@@ -1084,13 +1104,17 @@ async fn print_events(
     #[derive(PartialEq)]
     enum Last {
         Nothing,
-        Answer { line_open: bool },
+        /// `id`: the message it is part of, where the agent says.
+        Answer {
+            line_open: bool,
+            id: Option<String>,
+        },
         Line,
     }
     let mut last = Last::Nothing;
     let line = |text: String, last: &mut Last| {
         match last {
-            Last::Answer { line_open } => {
+            Last::Answer { line_open, .. } => {
                 // The answer's paragraph ends, and a blank line sets it apart.
                 let end = if *line_open { "\n\n" } else { "\n" };
                 spinner.print(if tty { end } else { &end[1..] }, true);
@@ -1109,13 +1133,22 @@ async fn print_events(
             | Event::Tokens { .. }
             | Event::Done { .. }
             | Event::ToolOutput { .. } => {}
-            Event::Message { text } => {
+            Event::Message { text, id } => {
                 if tty && last == Last::Line {
                     spinner.print("\n", true);
                 }
+                // Another of the agent's messages: a paragraph of its own.
+                if let Last::Answer { line_open, id: was } = &last
+                    && *was != id
+                {
+                    spinner.print(if *line_open { "\n\n" } else { "\n" }, true);
+                }
                 let ends = text.ends_with('\n');
                 spinner.print(&text, ends);
-                last = Last::Answer { line_open: !ends };
+                last = Last::Answer {
+                    line_open: !ends,
+                    id,
+                };
             }
             Event::Thought { .. } => spinner.doing("thinking"),
             Event::Note { text } => line(paint::dim(&format!("· {text}")), &mut last),
@@ -1179,15 +1212,19 @@ async fn print_events(
         }
     }
     spinner.stop();
-    if matches!(last, Last::Answer { line_open: true }) {
+    if matches!(
+        last,
+        Last::Answer {
+            line_open: true,
+            ..
+        }
+    ) {
         println!();
     }
     usage
 }
 
-fn money(m: &Money) -> String {
-    format!("{:.2} {}", m.amount, m.currency)
-}
+use scopes::money;
 
 /// What the task's runs used, and what is left of its budget; nothing
 /// before a run reported anything.
@@ -1317,7 +1354,7 @@ fn print_ruling(ruling: &Ruling) {
 fn plain_event(mut event: kule_acp::Event) -> kule_acp::Event {
     use kule_acp::Event;
     match &mut event {
-        Event::Message { text } | Event::Note { text } => *text = paint::plain(text),
+        Event::Message { text, .. } | Event::Note { text } => *text = paint::plain(text),
         Event::ToolCall { title, .. } => *title = paint::plain_line(title),
         Event::ToolDone { title, step, .. } => {
             *title = paint::plain_line(title);
@@ -1603,6 +1640,12 @@ fn group_cmd(home: &Path, action: GroupCmd) -> Result<()> {
                     GroupPolicy::Own => "its own policy",
                 };
                 let mut line = format!("{}  {} · {policy}", group.id, group.name);
+                if let Some(budget) = scopes::group_budget_words(&group) {
+                    line += &format!(" · {budget}");
+                }
+                if group.limits != kule_engine::TaskLimits::default() {
+                    line += &format!(" · limits of its own (kule limits --group {})", group.id);
+                }
                 if let Some(color) = group.color {
                     line += &format!(" ({})", color.name());
                 }
@@ -1665,7 +1708,13 @@ fn group_cmd(home: &Path, action: GroupCmd) -> Result<()> {
             kule_engine::set_group_policy(home, id, policy, text.as_deref())?;
             println!("group {id}'s tasks are judged by it from their next commit and run");
         }
-        GroupCmd::Put { task, group } => Task::open(home, &task)?.set_group(group)?,
+        GroupCmd::Budget {
+            id,
+            amount,
+            currency,
+            daily,
+        } => scopes::group_budget_cmd(home, id, amount, currency, daily)?,
+        GroupCmd::Put { task, group } => scopes::put_in_group(home, &task, group)?,
         GroupCmd::Delete { id } => {
             kule_engine::delete_group(home, id)?;
             println!("group {id} deleted; its tasks are in no group");

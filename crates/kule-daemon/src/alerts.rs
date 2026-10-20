@@ -4,9 +4,9 @@
 
 use std::collections::HashSet;
 
-use kule_engine::Question;
+use kule_engine::{BudgetScope, Money, Question};
 
-use crate::service::TaskView;
+use crate::service::{SharedBudget, TaskView};
 
 /// One thing to tell.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -21,10 +21,13 @@ pub struct Alerts {
     asked: HashSet<u64>,
     /// Each pair of tasks (in order), the file, and what in it.
     met: HashSet<(String, String, String, String)>,
-    /// Each task with how much of its budget it was told it spent (80 or 100).
+    /// Each budget ("task:ID", "group:ID", "group-day:ID", "daily") with how
+    /// much of it it was told was spent (80 or 100).
     spending: HashSet<(String, u8)>,
     /// Meetings that were there before the first task list are not news.
     primed: bool,
+    /// Shared budgets spent before the first look at them are not news.
+    shared_primed: bool,
 }
 
 impl Alerts {
@@ -104,20 +107,10 @@ impl Alerts {
                 continue;
             };
             let spent = view.spent.in_currency(&budget.currency);
-            let level = if spent >= budget.amount {
-                100
-            } else if spent >= budget.amount * 0.8 {
-                80
-            } else {
-                // A budget raised since: told again when it comes near.
-                self.spending.retain(|(task, _)| *task != view.id);
+            let Some(level) = self.news(format!("task:{}", view.id), spent, budget, self.primed)
+            else {
                 continue;
             };
-            let told = !self.spending.insert((view.id.clone(), level));
-            // Told already, or known at start: not news.
-            if told || !self.primed {
-                continue;
-            }
             let amounts = format!("{spent:.2} of {:.2} {}", budget.amount, budget.currency);
             alerts.push(if level == 100 {
                 Alert {
@@ -132,6 +125,86 @@ impl Alerts {
             });
         }
         alerts
+    }
+
+    /// Budgets tasks share, a group's or the daily one for every task, that
+    /// were 80% spent, or all of it, since last told. Those found so at the
+    /// first task list are not news.
+    pub fn shared(&mut self, budgets: &[SharedBudget]) -> Vec<Alert> {
+        let mut alerts = Vec::new();
+        for b in budgets {
+            let key = match &b.scope {
+                BudgetScope::Group { group, .. } => format!("group:{group}"),
+                BudgetScope::GroupDaily { group, .. } => format!("group-day:{group}"),
+                BudgetScope::Daily => "daily".to_owned(),
+                BudgetScope::Task => continue,
+            };
+            let Some(level) = self.news(key, b.spent, &b.budget, self.shared_primed) else {
+                continue;
+            };
+            let amounts = format!(
+                "{:.2} of {:.2} {}",
+                b.spent, b.budget.amount, b.budget.currency
+            );
+            let all = level == 100;
+            alerts.push(match &b.scope {
+                BudgetScope::Group { name, .. } => Alert {
+                    title: if all {
+                        format!("Group {} spent its budget", plain(name))
+                    } else {
+                        format!("Group {} spent 80% of its budget", plain(name))
+                    },
+                    body: if all {
+                        format!("{amounts}, its tasks together; their next runs wait until you raise it.")
+                    } else {
+                        format!("{amounts}, its tasks together.")
+                    },
+                },
+                BudgetScope::GroupDaily { name, .. } => Alert {
+                    title: if all {
+                        format!("Group {} spent its daily budget", plain(name))
+                    } else {
+                        format!("Group {} spent 80% of its daily budget", plain(name))
+                    },
+                    body: if all {
+                        format!("{amounts} in the last 24 hours, its tasks together; their next runs wait until older runs fall out of the 24 hours or you raise it.")
+                    } else {
+                        format!("{amounts} in the last 24 hours, its tasks together.")
+                    },
+                },
+                _ => Alert {
+                    title: if all {
+                        "The daily budget is spent".to_owned()
+                    } else {
+                        "80% of the daily budget is spent".to_owned()
+                    },
+                    body: if all {
+                        format!("{amounts} in the last 24 hours, every task together; no run starts until older runs fall out of the 24 hours or you raise it.")
+                    } else {
+                        format!("{amounts} in the last 24 hours, every task together.")
+                    },
+                },
+            });
+        }
+        self.shared_primed = true;
+        alerts
+    }
+
+    /// The level (80 or 100) budget `key` reached, when it is news: not
+    /// told at that level since it was last below 80%, and not found so at
+    /// start. Below 80% (raised, or a day's runs fallen out of the 24
+    /// hours) it is told again when it comes near.
+    fn news(&mut self, key: String, spent: f64, budget: &Money, primed: bool) -> Option<u8> {
+        let level = if spent >= budget.amount {
+            100
+        } else if spent >= budget.amount * 0.8 {
+            80
+        } else {
+            self.spending.retain(|(k, _)| *k != key);
+            return None;
+        };
+        let told = !self.spending.insert((key, level));
+        (!told && primed).then_some(level)
     }
 }
 
@@ -260,6 +333,86 @@ mod tests {
         };
         assert_eq!(alerts.questions(std::slice::from_ref(&q)).len(), 1);
         assert!(alerts.questions(&[q]).is_empty());
+    }
+
+    #[test]
+    fn a_group_s_budgets_and_the_daily_one_are_told_near_and_past_once_each() {
+        let usd = |amount| Money {
+            amount,
+            currency: "USD".into(),
+        };
+        let group = |spent, day_spent, daily_spent| {
+            let name = "cli\u{202E}ents".to_owned();
+            vec![
+                SharedBudget {
+                    scope: BudgetScope::Group {
+                        group: 1,
+                        name: name.clone(),
+                    },
+                    budget: usd(10.0),
+                    spent,
+                },
+                SharedBudget {
+                    scope: BudgetScope::GroupDaily { group: 1, name },
+                    budget: usd(2.0),
+                    spent: day_spent,
+                },
+                SharedBudget {
+                    scope: BudgetScope::Daily,
+                    budget: usd(5.0),
+                    spent: daily_spent,
+                },
+            ]
+        };
+        let titles =
+            |alerts: Vec<Alert>| -> Vec<String> { alerts.into_iter().map(|a| a.title).collect() };
+        let mut alerts = Alerts::new();
+        // The task list's first look does not prime these: their own does.
+        assert!(alerts.tasks(&[]).is_empty());
+        // Spent before the first look: not news.
+        assert!(alerts.shared(&group(9.0, 0.0, 5.0)).is_empty());
+        assert!(alerts.shared(&group(9.5, 1.0, 5.5)).is_empty());
+
+        // The group's day nears, then is spent; its name shows nothing hidden.
+        assert_eq!(
+            titles(alerts.shared(&group(9.5, 1.7, 5.5))),
+            ["Group clients spent 80% of its daily budget"]
+        );
+        let past = alerts.shared(&group(10.0, 2.0, 5.5));
+        assert_eq!(
+            titles(past.clone()),
+            [
+                "Group clients spent its budget",
+                "Group clients spent its daily budget"
+            ]
+        );
+        assert!(
+            past[0]
+                .body
+                .starts_with("10.00 of 10.00 USD, its tasks together"),
+            "{}",
+            past[0].body
+        );
+        assert!(
+            past[1].body.contains("in the last 24 hours"),
+            "{}",
+            past[1].body
+        );
+        assert!(alerts.shared(&group(10.5, 2.5, 5.5)).is_empty());
+
+        // A day's runs fall out of the 24 hours, then it comes near again.
+        assert!(alerts.shared(&group(10.5, 0.5, 1.0)).is_empty());
+        assert_eq!(
+            titles(alerts.shared(&group(10.5, 0.5, 4.2))),
+            ["80% of the daily budget is spent"]
+        );
+        assert_eq!(
+            titles(alerts.shared(&group(10.5, 1.8, 5.0))),
+            [
+                "Group clients spent 80% of its daily budget",
+                "The daily budget is spent"
+            ]
+        );
     }
 
     #[test]

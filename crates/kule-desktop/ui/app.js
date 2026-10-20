@@ -75,6 +75,117 @@ function toast(message, kind) {
 
 const fail = (e) => toast(String(e), "error");
 
+// --- Clipboard -------------------------------------------------------------
+
+/**
+ * Puts `text` on the clipboard, while the click or key that asked for it
+ * is still going on (WebKit allows it only then); true when it got there.
+ * Where the clipboard API is missing (older WebKitGTK), `fallback` copies
+ * the old way: the selection as it is, or a hidden field holding `text`.
+ */
+function copyText(text, fallback = "field") {
+  const old = () => {
+    if (fallback === "selection") return document.execCommand("copy");
+    const field = h("textarea", { class: "copy-buffer", readonly: true, "aria-hidden": "true", tabindex: "-1" });
+    field.value = text;
+    const focused = document.activeElement;
+    document.body.append(field);
+    field.select();
+    let copied = false;
+    try {
+      copied = document.execCommand("copy");
+    } finally {
+      field.remove();
+      if (focused && focused.focus) focused.focus();
+    }
+    return copied;
+  };
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    return navigator.clipboard.writeText(text).then(
+      () => true,
+      () => old()
+    );
+  }
+  try {
+    return Promise.resolve(old());
+  } catch {
+    return Promise.resolve(false);
+  }
+}
+
+/** A small "Copied" by the pointer, gone in a moment. */
+function copiedAt(x, y) {
+  const tip = h("div", { class: "copied-tip", role: "status" }, "Copied");
+  tip.style.left = `${Math.round(x)}px`;
+  tip.style.top = `${Math.round(y)}px`;
+  document.body.append(tip);
+  setTimeout(() => leave(tip), 900);
+}
+
+/** Whether text the person selects with the mouse is copied at once. */
+const copiesOnSelect = () => appearance.kept.copy_on_select !== false;
+
+/** Copies what the mouse just selected on the page, outside the fields
+ * one types in, and says so by the pointer. */
+function copyOnSelect(e) {
+  if (e.button !== 0 || !copiesOnSelect()) return;
+  // A click on a button or a link leaves an earlier selection standing:
+  // that click is the button's, not a new selection.
+  if (e.target.closest && e.target.closest("input, textarea, select, [contenteditable], button, a, summary, .terminal-view")) return;
+  const selection = window.getSelection();
+  const text = selection ? selection.toString() : "";
+  if (!text.trim()) return;
+  copyText(text, "selection").then((copied) => {
+    if (copied) copiedAt(e.clientX, e.clientY);
+  });
+}
+document.addEventListener("mouseup", copyOnSelect);
+
+/** A button that copies what `text` gives, and says so. */
+function copyButton(text, label) {
+  return h(
+    "button",
+    {
+      class: "copy-button",
+      type: "button",
+      title: label,
+      "aria-label": label,
+      onclick: (e) => {
+        const button = e.currentTarget;
+        copyText(text()).then((copied) => {
+          if (!copied) {
+            toast("Could not reach the clipboard", "error");
+            return;
+          }
+          button.classList.add("copied");
+          const at = button.getBoundingClientRect();
+          copiedAt(at.left + at.width / 2, at.top);
+          setTimeout(() => button.classList.remove("copied"), 1200);
+        });
+      },
+    },
+    copyIcon()
+  );
+}
+
+/** Two sheets, one over the other: the copy mark. */
+function copyIcon() {
+  const ns = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(ns, "svg");
+  svg.setAttribute("viewBox", "0 0 16 16");
+  svg.setAttribute("class", "copy-icon");
+  svg.setAttribute("aria-hidden", "true");
+  const front = document.createElementNS(ns, "rect");
+  for (const [name, value] of [["x", "5.5"], ["y", "5.5"], ["width", "8"], ["height", "8"], ["rx", "1.5"]]) {
+    front.setAttribute(name, value);
+  }
+  // The sheet behind shows only where the front one leaves it.
+  const back = document.createElementNS(ns, "path");
+  back.setAttribute("d", "M10.5 3.5V3A1.5 1.5 0 0 0 9 1.5H4A1.5 1.5 0 0 0 2.5 3v5A1.5 1.5 0 0 0 4 9.5h.5");
+  svg.append(back, front);
+  return svg;
+}
+
 // --- Motion ----------------------------------------------------------------
 
 // Small movements where something changes: what opens, arrives, ends or
@@ -185,14 +296,36 @@ function spotlight(el) {
   setTimeout(() => el.classList.remove("spotlit"), 1600);
 }
 
+/** Fades the edge of a tab row that has more tabs scrolled out that way. */
+function edgeTabs(list) {
+  const end = list.scrollWidth - list.clientWidth;
+  list.classList.toggle("more-before", list.scrollLeft > 1);
+  list.classList.toggle("more-after", list.scrollLeft < end - 1);
+}
+
+/** Brings a newly chosen tab into a row scrolled away from it. */
+const tabsShown = new WeakMap();
+function scrollToTab(list, tab) {
+  if (tabsShown.get(list) === tab) return;
+  tabsShown.set(list, tab);
+  const room = 24;
+  const right = tab.offsetLeft + tab.offsetWidth;
+  let left = null;
+  if (tab.offsetLeft < list.scrollLeft) left = tab.offsetLeft - room;
+  else if (right > list.scrollLeft + list.clientWidth) left = right - list.clientWidth + room;
+  if (left !== null) list.scrollTo({ left, behavior: moving() ? "smooth" : "auto" });
+}
+
 /** The selected tab's line, slid from the tab it was under. */
 function placeTabLines() {
   for (const list of document.querySelectorAll(".tabs, .region-tabs")) {
+    edgeTabs(list);
     const tab = list.querySelector(':scope > .tab[aria-selected="true"]');
     if (!tab || !tab.offsetWidth) {
       list.classList.remove("lined");
       continue;
     }
+    scrollToTab(list, tab);
     const first = !list.classList.contains("lined");
     list.classList.toggle("line-still", first);
     list.style.setProperty("--line-x", `${tab.offsetLeft}px`);
@@ -214,6 +347,25 @@ new MutationObserver((changes) => {
   if (changes.some((c) => c.attributeName === "hidden" || c.target.closest?.(".tabs, .region-tabs"))) lineTabs();
 }).observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ["aria-selected", "hidden"] });
 addEventListener("resize", lineTabs);
+// A mouse wheel turns sideways over a tab row too wide for its place.
+document.addEventListener(
+  "wheel",
+  (e) => {
+    const list = e.target.closest?.(".tabs, .region-tabs");
+    if (!list || e.ctrlKey || Math.abs(e.deltaX) >= Math.abs(e.deltaY)) return;
+    if (list.scrollWidth <= list.clientWidth) return;
+    e.preventDefault();
+    list.scrollLeft += e.deltaMode === WheelEvent.DOM_DELTA_LINE ? e.deltaY * 16 : e.deltaY;
+  },
+  { passive: false },
+);
+document.addEventListener(
+  "scroll",
+  (e) => {
+    if (e.target.matches?.(".tabs, .region-tabs")) edgeTabs(e.target);
+  },
+  true,
+);
 
 function baseName(path) {
   const parts = String(path).split("/").filter(Boolean);
@@ -786,6 +938,8 @@ function groupMenu(group, e) {
     ),
     ...swatches,
     item(`Policy: ${GROUP_POLICIES[group.policy]}…`, () => (closeMenu(), openGroupPolicy(group.id))),
+    item(groupBudgetWords(group) ? `Budget: ${groupBudgetWords(group)}…` : "Budget…", () => (closeMenu(), openGroupBudget(group.id))),
+    item("Limits…", () => (closeMenu(), openGroupLimits(group.id)), { title: ownSummary(group.limits || {}) || "Every task's" }),
     item("Move up", () => (closeMenu(true), moveGroup(group.id, -1)), { disabled: at <= 0 }),
     item("Move down", () => (closeMenu(true), moveGroup(group.id, 1)), { disabled: at === state.groups.length - 1 }),
     remove,
@@ -921,8 +1075,32 @@ async function regroupImpact(task, group, anchor) {
     fail(err);
     return null;
   }
-  if (!impact.changes.length) return impact;
+  if (!impact.changes.length && !heldChanges(impact).length) return impact;
   return (await confirmRegroup(task, group, impact, anchor)) ? impact : null;
+}
+
+/** What moving a task changes of the limits and group budgets that hold
+ * its runs, a line each. */
+function heldChanges(impact) {
+  const lines = [];
+  const now = impact.limits_now;
+  const then = impact.limits_then;
+  const limits = LIMIT_FIELDS.filter((f) => now[f.key] !== then[f.key]).map(
+    (f) => `${f.label.toLowerCase()} ${limitText(f, now[f.key])} → ${limitText(f, then[f.key])}`
+  );
+  if (now.gpu !== then.gpu) limits.push(`GPU ${now.gpu ? "may be used" : "off"} → ${then.gpu ? "may be used" : "off"}`);
+  if (limits.length) lines.push(`Its limits: ${limits.join(", ")}`);
+  const groupBudgets = (list) =>
+    list
+      .filter((b) => b.scope === "group" || b.scope === "group_daily")
+      .map((b) => `${money(b.budget)} ${b.scope === "group" ? "in all" : "a day"} (${b.name})`)
+      .join(", ");
+  const before = groupBudgets(impact.budgets_now);
+  const after = groupBudgets(impact.budgets_then);
+  if (before !== after) {
+    lines.push(after ? `Its group's budgets: ${after}${before ? `, not ${before}` : ""}` : `No group budget holds it any more, not ${before}`);
+  }
+  return lines;
 }
 
 async function applyGroup(task, group, impact) {
@@ -934,6 +1112,8 @@ async function applyGroup(task, group, impact) {
       ? `${where}; it is judged as before`
       : `${where}: ${policyWords(group)} judges its next commit and run, not ${policyWords(groupOf(task))}`;
     if (!impact.same && impact.running) said += "; the agent at work keeps its connections' policy until its run ends";
+    const held = heldChanges(impact);
+    if (held.length) said += `. ${held.join(". ")}`;
     toast(said);
   } catch (err) {
     fail(err);
@@ -964,7 +1144,8 @@ function confirmRegroup(task, group, impact, anchor) {
       lines.push(h("p", { class: "regroup-warn" }, `${plural(asked.length, "change")} refused now would be put to you: ${names(asked)}`));
     if (stricter.length)
       lines.push(h("p", { class: "regroup-note" }, `${plural(stricter.length, "change")} that ${stricter.length === 1 ? "passes" : "pass"} now would wait for you: ${names(stricter)}`));
-    if (impact.running) lines.push(h("p", { class: "muted" }, "The agent at work keeps its connections' policy until its run ends."));
+    for (const line of heldChanges(impact)) lines.push(h("p", { class: "regroup-note" }, line));
+    if (impact.running) lines.push(h("p", { class: "muted" }, "The agent at work keeps its connections' policy and its limits until its run ends."));
     let answered = false;
     const answer = (yes) => {
       if (answered) return;
@@ -978,7 +1159,7 @@ function confirmRegroup(task, group, impact, anchor) {
       "div",
       { class: "menu regroup", id: "task-menu", role: "alertdialog", "aria-label": `Move ${taskName(task)}` },
       h("p", { class: "regroup-title" }, `Move ${taskName(task)} ${group ? `to ${group.name}` : "out of its group"}?`),
-      h("p", { class: "muted" }, `It would be judged by ${policyWords(group)}, not ${policyWords(groupOf(task))}.`),
+      impact.same ? null : h("p", { class: "muted" }, `It would be judged by ${policyWords(group)}, not ${policyWords(groupOf(task))}.`),
       lines,
       h("div", { class: "menu-field-actions" }, keep, move)
     );
@@ -1735,10 +1916,190 @@ async function loadWelcome() {
   });
 }
 
+// --- Budget and limits: one scope at a time --------------------------------
+
+/**
+ * Which budgets and limits Settings changes: every task's, one group's
+ * (`id`) or one task's (`id`). Budget and Limits share it, so a group
+ * picked on one is picked on the other. One scope shows at a time, named in
+ * capitals with whom it holds, so a person always knows what they change.
+ */
+let settingsScope = { kind: "every" };
+
+/** The scope as it stands; one whose group or task is gone falls back to
+ * every task. */
+function currentScope() {
+  const s = settingsScope;
+  if ((s.kind === "group" && !scopeGroup(s)) || (s.kind === "task" && !scopeTask(s))) settingsScope = { kind: "every" };
+  return settingsScope;
+}
+
+const scopeGroup = (s) => state.groups.find((g) => g.id === s.id);
+const scopeTask = (s) => state.tasks.find((t) => t.id === s.id);
+
+/** Shows `next` on the page open now. */
+async function setScope(next) {
+  settingsScope = next;
+  await (state.view === "limits" ? openLimits() : openBudget());
+}
+
+/** Picks a kind of scope: a group or a task picked before, else the open
+ * task's (or its group), else the first. */
+function pickScope(kind) {
+  const s = currentScope();
+  if (s.kind === kind) return;
+  if (kind === "every") return setScope({ kind });
+  if (kind === "group") return setScope({ kind, id: (groupOf(currentTask() || {}) || state.groups[0]).id });
+  return setScope({ kind, id: (currentTask() || state.tasks[0]).id });
+}
+
+/** "Applies to: Every task | One group | One task", and which one. */
+function scopeBar() {
+  const s = currentScope();
+  const choice = (kind, label, none) =>
+    h(
+      "button",
+      {
+        class: "scope-choice",
+        type: "button",
+        "data-key": `scope:${kind}`,
+        "aria-pressed": String(s.kind === kind),
+        disabled: Boolean(none),
+        title: none || null,
+        onclick: () => pickScope(kind),
+      },
+      label
+    );
+  const which = (label, options, onchange) => h("select", { class: "scope-which", "data-key": "scope:which", "aria-label": label, onchange }, options);
+  return h(
+    "div",
+    { class: "scope-bar" },
+    h("span", { class: "scope-bar-label", id: "scope-bar-label" }, "Applies to"),
+    h(
+      "div",
+      { class: "scope-choices", role: "group", "aria-labelledby": "scope-bar-label" },
+      choice("every", "Every task"),
+      choice("group", "One group", !state.groups.length && "No groups yet: make one in the task list"),
+      choice("task", "One task", !state.tasks.length && "No tasks yet")
+    ),
+    s.kind === "group"
+      ? which(
+          "Which group",
+          state.groups.map((g) => h("option", { value: String(g.id), selected: g.id === s.id }, g.name)),
+          (e) => setScope({ kind: "group", id: Number(e.target.value) })
+        )
+      : s.kind === "task"
+        ? which(
+            "Which task",
+            state.tasks.map((t) => h("option", { value: t.id, selected: t.id === s.id }, `${taskName(t)} · ${t.id}`)),
+            (e) => setScope({ kind: "task", id: e.target.value })
+          )
+        : null
+  );
+}
+
+/** The first few of `tasks` by name. */
+function taskNames(tasks) {
+  const shown = tasks.slice(0, 4).map(taskName).join(", ");
+  return tasks.length > 4 ? `${shown} and ${tasks.length - 4} more` : shown;
+}
+
+/**
+ * The scope's card: a word in capitals and an edge in the scope's colour
+ * (the accent for every task, the group's or the task's own), its name, and
+ * whom what is set here holds.
+ */
+function scopeCard(page, ...body) {
+  const s = currentScope();
+  let badge;
+  let name;
+  let reach;
+  let color = null;
+  if (s.kind === "group") {
+    const group = scopeGroup(s);
+    const tasks = state.tasks.filter((t) => t.group === group.id);
+    badge = "Group";
+    name = group.name;
+    color = group.color;
+    const whom = tasks.length ? `its ${plural(tasks.length, "task")} (${taskNames(tasks)})` : "no task yet: put tasks in it from the task list";
+    reach =
+      page === "budget"
+        ? `Holds ${whom}, all of their runs together, beside each task's own budget and the daily one for every task.`
+        : `Holds each of ${whom}, in place of every task's limits. What a task sets for itself stands over these.`;
+  } else if (s.kind === "task") {
+    const task = scopeTask(s);
+    const group = groupOf(task);
+    badge = "This task only";
+    name = `${taskName(task)} · ${task.id}`;
+    // Its own colour only: one taken from its group would read as the group.
+    color = task.color;
+    const where = group ? `In group ${group.name}.` : "In no group.";
+    reach =
+      page === "budget"
+        ? `${where} Holds this task's runs only, beside ${group ? "its group's budgets and " : ""}the daily one for every task. No other task changes.`
+        : `${where} Holds this task's runs only; what it does not set comes from ${group ? "its group, else from " : ""}every task. No other task changes.`;
+  } else {
+    badge = "Every task";
+    name = `All ${plural(state.tasks.length, "task")}`;
+    reach =
+      page === "budget"
+        ? "Holds every task's runs together, in any 24 hours, beside each group's budgets and each task's own."
+        : "Holds each task's runs where its group and the task set none of their own.";
+  }
+  return h(
+    "section",
+    { class: `scope-card scope-${s.kind}${color ? ` color-${color}` : ""}`, "data-key": `scope-card:${s.kind}:${s.id ?? ""}` },
+    h("header", { class: "scope-card-head" }, h("span", { class: "scope-badge" }, badge), h("strong", { class: "scope-name" }, name)),
+    h("p", { class: "scope-reach" }, reach),
+    body
+  );
+}
+
+/** Takes the keyboard and the eye to the scope card just opened. */
+function focusScopeCard() {
+  const card = document.querySelector("#agents-view .scope-card");
+  card?.querySelector("input:not(:disabled), select")?.focus();
+  spotlight(card);
+}
+
+/** A group or a task with something of its own, a click from its scope. */
+function overviewRow(badge, name, words, scope, color) {
+  return h(
+    "li",
+    {},
+    h(
+      "button",
+      {
+        class: `scope-row scope-${scope.kind}${color ? ` color-${color}` : ""}`,
+        type: "button",
+        "data-key": `overview:${scope.kind}:${scope.id ?? ""}`,
+        title: "Show and change it",
+        onclick: () => setScope(scope),
+      },
+      h("span", { class: "scope-badge small" }, badge),
+      h("span", { class: "scope-row-name" }, name),
+      h("span", { class: "muted scope-row-words" }, words)
+    )
+  );
+}
+
+// --- Budget ----------------------------------------------------------------
+
 async function openBudget() {
   state.view = "budget";
   renderSidebar();
   renderTask();
+  const s = currentScope();
+  let daily = null;
+  let spent = null;
+  let budgets = [];
+  try {
+    daily = await call("daily_budget");
+    if (s.kind === "group") spent = (await call("groups_spent"))[s.id] || null;
+    if (s.kind === "task") budgets = await call("task_budgets", { task: s.id });
+  } catch (err) {
+    fail(err);
+  }
   replace(
     $("agents-view"),
     h(
@@ -1748,157 +2109,223 @@ async function openBudget() {
       h(
         "p",
         { class: "muted" },
-        "What every task may cost together in any 24 hours, as the agents report it. No run starts anywhere once it is spent, and a run is held to what is left. Each task can have its own budget too, below; the tighter of the two holds."
+        "What agent runs may cost, as their agents report it. A budget can be set for every task, for a group's tasks together, and for one task: each holds, and the tightest decides. None starts once one is spent. Claude Code reports the cost as each turn ends, so a turn may go over and the next run is refused; an agent that reports it as it works is stopped when it gets there. Agents that report no cost are not held by any."
       )
     ),
-    h(
-      "div",
-      { class: "agent-card daily" },
-      h(
-        "label",
-        { class: "daily-pick", for: "daily-budget" },
-        "Daily budget",
-        h("input", {
-          id: "daily-budget",
-          type: "number",
-          min: 0,
-          step: 1,
-          inputmode: "decimal",
-          placeholder: "none",
-          "aria-describedby": "daily-spent",
-          onchange: setDailyBudget,
-        }),
-        h("span", { id: "daily-currency" }, "USD")
-      ),
-      h("span", { class: "daily-spent", id: "daily-spent", "aria-live": "polite" }),
-      h("span", { class: "muted" }, "Empty for no limit.")
-    ),
-    taskBudgets()
+    scopeBar(),
+    s.kind === "group" ? groupBudget(scopeGroup(s), spent) : s.kind === "task" ? taskBudget(scopeTask(s), budgets) : everyBudget(daily),
+    budgetOverview(daily)
   );
-  await loadDaily();
-  if (focusBudget) {
-    const input = document.querySelector(`#agents-view [data-key="budget:${CSS.escape(focusBudget)}"]`);
-    input?.focus();
-    spotlight(input?.closest("li"));
-    focusBudget = null;
-  }
 }
 
-/** The task whose budget Settings opens on. */
-let focusBudget = null;
-
-/** Opens Settings' Budget on task `id`'s budget. */
+/** Opens Settings' Budget on task `id`'s own. */
 async function openTaskBudget(id) {
-  focusBudget = id;
+  settingsScope = { kind: "task", id };
+  await openBudget();
+  focusScopeCard();
+}
+
+/** Opens Settings' Budget on group `id`'s. */
+async function openGroupBudget(id) {
+  settingsScope = { kind: "group", id };
+  await openBudget();
+  focusScopeCard();
+}
+
+/** An amount field; `save` gets what was typed, "" for none. */
+function budgetInput(key, budget, save, disabled) {
+  const input = h("input", {
+    "data-key": key,
+    type: "number",
+    min: 0,
+    step: 0.5,
+    inputmode: "decimal",
+    placeholder: "none",
+    value: budget ? String(budget.amount) : "",
+    disabled,
+    onchange: () => save(input.value.trim()),
+  });
+  return input;
+}
+
+function budgetField(label, input, currency, after) {
+  return h(
+    "div",
+    { class: "budget-field" },
+    h("label", { class: "budget-pick" }, h("span", { class: "limit-label" }, label), h("span", { class: "task-budget-field" }, input, currency)),
+    after
+  );
+}
+
+/** What was spent, against `budget` when there is one. */
+function spentLine(spent, budget, what) {
+  const cost = spent && spent.cost.length ? spent.cost.map(money).join(" + ") : "nothing reported";
+  const el = h("span", { class: "daily-spent" }, `${what}: ${cost}`);
+  if (!budget) return el;
+  const used = (spent?.cost || []).filter((m) => m.currency === budget.currency).reduce((a, m) => a + m.amount, 0);
+  const rest = Math.max(0, budget.amount - used);
+  el.textContent += ` · ${money({ amount: rest, currency: budget.currency })} left`;
+  if (rest <= 0) el.classList.add("deny");
+  else if (rest < budget.amount * 0.2) el.classList.add("ask");
+  return el;
+}
+
+const amountOf = (text, currency) => (text === "" ? null : { amount: Number(text), currency });
+
+/** Every task's: the daily budget. */
+function everyBudget(daily) {
+  const budget = daily?.budget || null;
+  const currency = budget ? budget.currency : "USD";
+  const input = budgetInput("budget:every", budget, (text) => setDailyBudget(text, currency));
+  return scopeCard(
+    "budget",
+    budgetField("Any 24 hours, every task together", input, currency, spentLine(daily?.spent, budget, "Last 24 h")),
+    h("span", { class: "muted" }, "Empty for no limit.")
+  );
+}
+
+async function setDailyBudget(text, currency) {
+  const budget = amountOf(text, currency);
+  try {
+    await call("set_daily_budget", { budget });
+    toast(budget ? `Every task: all together may spend ${money(budget)} in any 24 hours` : "Every task: no daily budget");
+  } catch (err) {
+    fail(err);
+  }
+  await refresh();
   await openBudget();
 }
 
-/** Each task's own budget, and what its runs spent. */
-function taskBudgets() {
-  const head = h(
-    "header",
-    { class: "agents-head task-budgets-head" },
-    h("h2", {}, "Each task"),
-    h(
-      "p",
-      { class: "muted" },
-      "What a task's runs may cost together, as its agents report it. None starts once it is spent. Claude Code reports the cost as each turn ends, so a turn may go over and the next run is refused; an agent that reports it as it works is stopped when it gets there. Agents that report no cost are not held by it. Empty for no limit."
-    )
+/** A group's: all of its tasks' runs, and any 24 hours. */
+function groupBudget(group, spent) {
+  const total = group.budget || null;
+  const day = group.daily_budget || null;
+  const [totalCurrency, dayCurrency] = [total ? total.currency : "USD", day ? day.currency : "USD"];
+  const save = () => setGroupBudget(group, amountOf(totalIn.value.trim(), totalCurrency), amountOf(dayIn.value.trim(), dayCurrency));
+  const totalIn = budgetInput(`budget:group:${group.id}:total`, total, save);
+  const dayIn = budgetInput(`budget:group:${group.id}:day`, day, save);
+  return scopeCard(
+    "budget",
+    budgetField("All of its tasks' runs together", totalIn, totalCurrency, spentLine(spent?.total, total, "Spent")),
+    budgetField("Any 24 hours, its tasks together", dayIn, dayCurrency, spentLine(spent?.today, day, "Last 24 h")),
+    h("span", { class: "muted" }, "Empty for no limit. A run counts for the group its task was in when it ran, so moving a task out keeps what it spent here.")
   );
-  if (!state.tasks.length) return h("section", { class: "task-budgets" }, head, h("p", { class: "muted" }, "No tasks yet."));
+}
+
+/** A group's budgets in a few words; "" for none. */
+function groupBudgetWords(group) {
+  const words = [];
+  if (group.budget) words.push(`${money(group.budget)} in all`);
+  if (group.daily_budget) words.push(`${money(group.daily_budget)} a day`);
+  return words.join(", ");
+}
+
+async function setGroupBudget(group, budget, daily) {
+  try {
+    const kept = await call("set_group_budget", { group: group.id, budget, daily });
+    const words = groupBudgetWords(kept);
+    toast(`Group ${group.name}: ${words ? `its tasks together may spend ${words}` : "no budget"}`);
+  } catch (err) {
+    fail(err);
+  }
+  await refresh();
+  await openBudget();
+}
+
+/** One task's own, and every budget that holds its next run. */
+function taskBudget(task, budgets) {
+  const own = task.budget || null;
+  const currency = own ? own.currency : "USD";
+  const input = budgetInput("budget:task", own, (text) => setTaskBudget(task, text, currency), task.running);
+  return scopeCard(
+    "budget",
+    budgetField("This task's runs together", input, currency, spentLine(task.spent, own, "Spent")),
+    task.running ? h("p", { class: "muted" }, "An agent is at work: its budget can change once the run ends.") : h("span", { class: "muted" }, "Empty for no budget of its own."),
+    holdsList(budgets)
+  );
+}
+
+async function setTaskBudget(task, text, currency) {
+  const budget = amountOf(text, currency);
+  try {
+    await call("set_budget", { task: task.id, budget });
+    toast(budget ? `${taskName(task)} only: may spend ${money(budget)}` : `${taskName(task)} only: no budget of its own`);
+  } catch (err) {
+    fail(err);
+  }
+  await refresh();
+  await openBudget();
+}
+
+const BUDGET_BADGES = { task: "This task", group: "Group", group_daily: "Group", daily: "Every task" };
+
+function budgetScopeWords(b) {
+  if (b.scope === "task") return "its own, all of its runs";
+  if (b.scope === "group") return `${b.name}, all of its tasks' runs`;
+  if (b.scope === "group_daily") return `${b.name}, any 24 hours`;
+  return "all tasks together, any 24 hours";
+}
+
+/** Every budget over a task's next run, each with its scope; the one that
+ * holds it (the tightest, as the daemon picks it) or a spent one marked. */
+function holdsList(budgets) {
+  const head = h("h3", { class: "scope-holds-head" }, "What holds its next run");
+  if (!budgets.length) return h("div", { class: "scope-holds" }, head, h("p", { class: "muted" }, "No budget: not its own, its group's or every task's."));
+  const spent = budgets.find((b) => b.left.amount <= 0);
+  let tightest = null;
+  for (const b of budgets) {
+    if (!tightest || (b.left.currency === tightest.left.currency && b.left.amount < tightest.left.amount)) tightest = b;
+  }
+  const marked = spent || tightest;
   return h(
-    "section",
-    { class: "task-budgets" },
+    "div",
+    { class: "scope-holds" },
     head,
     h(
       "ul",
-      { class: "task-budget-list" },
-      state.tasks.map((task) => {
-        const spent = task.spent || { runs: 0, tokens: 0, cost: [] };
-        const used = spent.cost.length
-          ? `${spent.cost.map(money).join(" + ")} spent`
-          : spent.tokens
-            ? `${spent.tokens.toLocaleString()} tokens`
-            : "nothing spent yet";
-        const currency = task.budget ? task.budget.currency : "USD";
-        const input = h("input", {
-          id: `budget-${task.id}`,
-          "data-key": `budget:${task.id}`,
-          type: "number",
-          min: 0,
-          step: 0.5,
-          inputmode: "decimal",
-          placeholder: "none",
-          value: task.budget ? String(task.budget.amount) : "",
-          disabled: task.running,
-          onchange: () => setTaskBudget(task, input.value, currency),
-        });
+      { class: "scope-holds-list" },
+      budgets.map((b) => {
+        const kind = b.scope === "daily" ? "every" : b.scope === "task" ? "task" : "group";
+        const color = kind === "group" ? state.groups.find((g) => g.id === b.group)?.color : null;
         return h(
           "li",
-          { class: `task-budget-row${colorOf(task) ? ` color-${colorOf(task)}` : ""}` },
-          h("label", { class: "task-budget-name", for: `budget-${task.id}` }, taskName(task), h("span", { class: "muted" }, ` · ${task.id}`)),
-          h("span", { class: "muted task-budget-spent" }, used),
-          h("span", { class: "task-budget-field" }, input, currency)
+          { class: `scope-hold scope-${kind}${color ? ` color-${color}` : ""}${b === marked ? " holds" : ""}` },
+          h("span", { class: "scope-badge small" }, BUDGET_BADGES[b.scope]),
+          h("span", { class: "scope-row-name" }, budgetScopeWords(b)),
+          h("span", { class: "muted" }, `${money(b.budget)} · ${money({ amount: Math.max(0, b.left.amount), currency: b.left.currency })} left`),
+          b === marked ? h("span", { class: `chip ${spent ? "deny" : "allow"}` }, spent ? "spent: no run starts" : "holds the next run") : null
         );
       })
     )
   );
 }
 
-async function setTaskBudget(task, text, currency) {
-  const value = text.trim();
-  const budget = value === "" ? null : { amount: Number(value), currency };
-  try {
-    await call("set_budget", { task: task.id, budget });
-    toast(budget ? `${taskName(task)} may spend ${money(budget)}` : `${taskName(task)} has no budget of its own`);
-  } catch (err) {
-    fail(err);
+/** Where budgets are set: every task's, each group's and each task's, a
+ * click away. */
+function budgetOverview(daily) {
+  const rows = [];
+  if (daily?.budget) rows.push(overviewRow("Every task", "All tasks together", `${money(daily.budget)} a day`, { kind: "every" }, null));
+  for (const g of state.groups) {
+    const words = groupBudgetWords(g);
+    if (words) rows.push(overviewRow("Group", g.name, words, { kind: "group", id: g.id }, g.color));
   }
-  await refresh();
+  for (const t of state.tasks) {
+    if (t.budget) rows.push(overviewRow("Task", taskName(t), `${money(t.budget)} in all`, { kind: "task", id: t.id }, t.color));
+  }
+  return h(
+    "section",
+    { class: "scope-overview" },
+    h("h3", {}, "Where budgets are set"),
+    rows.length ? h("ul", { class: "scope-overview-list" }, rows) : h("p", { class: "muted" }, "Nowhere yet: no run is held to a budget.")
+  );
 }
 
-/** What every task spent in the last 24 hours, against the daily budget;
- * shown while Settings has Budget open. */
-function renderDaily(daily) {
-  if (!$("daily-budget")) return;
-  const { budget, spent } = daily;
-  if (document.activeElement !== $("daily-budget")) {
-    $("daily-budget").value = budget ? String(budget.amount) : "";
-  }
-  $("daily-currency").textContent = budget ? budget.currency : "USD";
-  const el = $("daily-spent");
-  el.className = "daily-spent";
-  const cost = spent.cost.length ? spent.cost.map(money).join(" + ") : "nothing reported";
-  if (!budget) {
-    el.textContent = `Last 24 h: ${cost}`;
-    return;
-  }
-  const used = spent.cost.filter((m) => m.currency === budget.currency).reduce((a, m) => a + m.amount, 0);
-  const rest = Math.max(0, budget.amount - used);
-  el.textContent = `Last 24 h: ${cost} · ${money({ amount: rest, currency: budget.currency })} left`;
-  if (rest <= 0) el.classList.add("deny");
-  else if (rest < budget.amount * 0.2) el.classList.add("ask");
-}
-
+/** Settings' Budget again with what was spent since, unless a field in it
+ * is being typed in. */
 async function loadDaily() {
   if (state.view !== "budget") return;
-  try {
-    renderDaily(await call("daily_budget"));
-  } catch (err) {
-    fail(err);
-  }
-}
-
-async function setDailyBudget() {
-  const text = $("daily-budget").value.trim();
-  const currency = $("daily-currency").textContent || "USD";
-  const budget = text === "" ? null : { amount: Number(text), currency };
-  try {
-    renderDaily(await call("set_daily_budget", { budget }));
-  } catch (err) {
-    fail(err);
-    await loadDaily();
-  }
+  if ($("agents-view").contains(document.activeElement) && document.activeElement.matches("input")) return;
+  await openBudget();
 }
 
 // --- Limits ----------------------------------------------------------------
@@ -1982,12 +2409,18 @@ function limitsSummary(limits) {
   return set.length ? set.join(" · ") : "no limits";
 }
 
-/** The task whose limits Settings opens on. */
-let focusLimits = null;
-
+/** Opens Settings' Limits on task `id`'s own. */
 async function openTaskLimits(id) {
-  focusLimits = id;
+  settingsScope = { kind: "task", id };
   await openLimits();
+  focusScopeCard();
+}
+
+/** Opens Settings' Limits on group `id`'s. */
+async function openGroupLimits(id) {
+  settingsScope = { kind: "group", id };
+  await openLimits();
+  focusScopeCard();
 }
 
 async function openLimits() {
@@ -2000,6 +2433,7 @@ async function openLimits() {
   } catch (err) {
     fail(err);
   }
+  const s = currentScope();
   replace(
     $("agents-view"),
     h(
@@ -2009,63 +2443,60 @@ async function openLimits() {
       h(
         "p",
         { class: "muted" },
-        "What each run may take of this computer. Over the processor limit a run is slowed down; over memory, disk or time it is stopped, and Live says why. These hold for every task that sets none of its own, below. A run going on keeps the limits it started with."
+        "What each run may take of this computer. Over the processor limit a run is slowed down; over memory, disk or time it is stopped, and Live says why. Limits can be set for every task, for each task in a group, and for one task: a task's own stand over its group's, and a group's over every task's. A run going on keeps the limits it started with."
       )
     ),
+    scopeBar(),
+    s.kind === "group" ? groupLimits(scopeGroup(s), every) : s.kind === "task" ? taskLimitsCard(scopeTask(s), every) : everyLimits(every),
+    limitsOverview()
+  );
+}
+
+/** Every task's limits: the ones that hold where a group and a task set
+ * none of their own. */
+function everyLimits(every) {
+  return scopeCard(
+    "limits",
     h(
       "div",
-      { class: "agent-card limits-card" },
-      h(
-        "div",
-        { class: "limits-grid" },
-        LIMIT_FIELDS.map((f) =>
-          h(
-            "label",
-            { class: "limit-field", title: f.help },
-            h("span", { class: "limit-label" }, f.label),
-            h(
-              "span",
-              { class: "limit-value" },
-              h("input", {
-                id: `limit-${f.key}`,
-                "data-key": `limit:${f.key}`,
-                type: "number",
-                min: 0,
-                step: f.step,
-                inputmode: "decimal",
-                placeholder: "none",
-                value: every[f.key] != null ? String(f.from(every[f.key])) : "",
-                onchange: setEveryLimits,
-              }),
-              f.unit
-            )
-          )
-        ),
+      { class: "limits-grid" },
+      LIMIT_FIELDS.map((f) =>
         h(
           "label",
-          { class: "limit-field", title: "Whether the run's programs may use the GPU (Metal on macOS; /dev/dri and NVIDIA's devices on Linux). Only on or off: no system lets a share of it be set." },
-          h("span", { class: "limit-label" }, "GPU"),
+          { class: "limit-field", title: f.help },
+          h("span", { class: "limit-label" }, f.label),
           h(
             "span",
             { class: "limit-value" },
-            h("input", { id: "limit-gpu", "data-key": "limit:gpu", type: "checkbox", checked: every.gpu !== false, onchange: setEveryLimits }),
-            "may be used"
+            h("input", {
+              id: `limit-${f.key}`,
+              "data-key": `limit:${f.key}`,
+              type: "number",
+              min: 0,
+              step: f.step,
+              inputmode: "decimal",
+              placeholder: "none",
+              value: every[f.key] != null ? String(f.from(every[f.key])) : "",
+              onchange: setEveryLimits,
+            }),
+            f.unit
           )
         )
       ),
-      h("span", { class: "muted" }, "Empty for no limit.")
+      h(
+        "label",
+        { class: "limit-field", title: "Whether the run's programs may use the GPU (Metal on macOS; /dev/dri and NVIDIA's devices on Linux). Only on or off: no system lets a share of it be set." },
+        h("span", { class: "limit-label" }, "GPU"),
+        h(
+          "span",
+          { class: "limit-value" },
+          h("input", { id: "limit-gpu", "data-key": "limit:gpu", type: "checkbox", checked: every.gpu !== false, onchange: setEveryLimits }),
+          "may be used"
+        )
+      )
     ),
-    taskLimits(every)
+    h("span", { class: "muted" }, "Empty for no limit.")
   );
-  if (focusLimits) {
-    const row = document.querySelector(`#agents-view [data-task="${CSS.escape(focusLimits)}"]`);
-    if (row) {
-      row.open = true;
-      row.querySelector("summary")?.focus();
-      spotlight(row);
-    }
-    focusLimits = null;
-  }
 }
 
 async function setEveryLimits() {
@@ -2084,31 +2515,38 @@ async function setEveryLimits() {
   if (state.view === "limits") await openLimits();
 }
 
-/** Each task's own limits, field by field: every task's, none, or its own. */
-function taskLimits(every) {
-  const head = h(
-    "header",
-    { class: "agents-head task-budgets-head" },
-    h("h2", {}, "Each task"),
-    h("p", { class: "muted" }, "A task can set any limit for itself, or have none; the rest are every task's.")
-  );
-  if (!state.tasks.length) return h("section", { class: "task-budgets" }, head, h("p", { class: "muted" }, "No tasks yet."));
-  return h(
-    "section",
-    { class: "task-budgets" },
-    head,
-    h("ul", { class: "task-budget-list" }, state.tasks.map((task) => taskLimitsRow(task, every)))
-  );
+/** `base` with what `own` sets in its place (a value, or null for none). */
+function layered(base, own) {
+  const out = { ...base };
+  for (const [key, value] of Object.entries(own || {})) {
+    if (!(key === "gpu" && value == null)) out[key] = value;
+  }
+  return out;
 }
 
-function taskLimitsRow(task, every) {
-  const own = task.own_limits || {};
-  const used = task.time_used_secs ? `runs took ${durationText(task.time_used_secs)}` : "no runs yet";
+/** What a group or a task sets for itself, said in a line. */
+function ownSummary(own) {
+  const set = LIMIT_FIELDS.filter((f) => Object.prototype.hasOwnProperty.call(own, f.key)).map(
+    (f) => `${f.label.toLowerCase()} ${own[f.key] === null ? "no limit" : limitText(f, own[f.key])}`
+  );
+  if (own.gpu === false) set.push("no GPU");
+  if (own.gpu === true) set.push("GPU may be used");
+  return set.join(" · ");
+}
+
+/**
+ * The limits a group or a task sets for itself, field by field: the one
+ * above (`inherited`, said as `from(key)`), no limit, or its own. Each
+ * option names where its value comes from, so a person sees whose limit
+ * they keep or replace.
+ */
+function ownLimitsGrid(prefix, own, inherited, from, ownWord, save) {
+  const grid = h("div", { class: "limits-grid" });
   const fields = LIMIT_FIELDS.map((f) => {
     const set = Object.prototype.hasOwnProperty.call(own, f.key);
-    const choice = !set ? "every" : own[f.key] === null ? "none" : "own";
+    const choice = !set ? "inherit" : own[f.key] === null ? "none" : "own";
     const input = h("input", {
-      "data-key": `limit:${task.id}:${f.key}:value`,
+      "data-key": `${prefix}:${f.key}:value`,
       "aria-label": `${f.label}, ${f.unit}`,
       type: "number",
       min: 0,
@@ -2116,55 +2554,97 @@ function taskLimitsRow(task, every) {
       inputmode: "decimal",
       value: choice === "own" ? String(f.from(own[f.key])) : "",
       disabled: choice !== "own",
-      onchange: () => setTaskLimits(task),
+      onchange: () => save(grid),
     });
     const select = h(
       "select",
       {
-        "data-key": `limit:${task.id}:${f.key}`,
+        "data-key": `${prefix}:${f.key}`,
         "data-field": f.key,
         "aria-label": f.label,
         onchange: () => {
           input.disabled = select.value !== "own";
           if (select.value === "own") input.focus();
-          else setTaskLimits(task);
+          else save(grid);
         },
       },
-      h("option", { value: "every", selected: choice === "every" }, `Every task's (${limitText(f, every[f.key])})`),
+      h("option", { value: "inherit", selected: choice === "inherit" }, `${from(f.key)}: ${inherited[f.key] == null ? "no limit" : limitText(f, inherited[f.key])}`),
       h("option", { value: "none", selected: choice === "none" }, "No limit"),
-      h("option", { value: "own", selected: choice === "own" }, "Its own")
+      h("option", { value: "own", selected: choice === "own" }, ownWord)
     );
     select.input = input;
     return h(
       "label",
-      { class: "limit-field", title: f.help },
+      { class: `limit-field${choice === "inherit" ? " inherited" : ""}`, title: f.help },
       h("span", { class: "limit-label" }, f.label),
       h("span", { class: "limit-value" }, select, input, f.unit)
     );
   });
-  const gpuChoice = own.gpu === undefined || own.gpu === null ? "every" : own.gpu ? "yes" : "no";
+  const gpuChoice = own.gpu === undefined || own.gpu === null ? "inherit" : own.gpu ? "yes" : "no";
   const gpu = h(
     "select",
-    { "data-key": `limit:${task.id}:gpu`, "data-field": "gpu", "aria-label": "GPU", onchange: () => setTaskLimits(task) },
-    h("option", { value: "every", selected: gpuChoice === "every" }, `Every task's (${every.gpu === false ? "off" : "may be used"})`),
+    { "data-key": `${prefix}:gpu`, "data-field": "gpu", "aria-label": "GPU", onchange: () => save(grid) },
+    h("option", { value: "inherit", selected: gpuChoice === "inherit" }, `${from("gpu")}: ${inherited.gpu === false ? "off" : "may be used"}`),
     h("option", { value: "yes", selected: gpuChoice === "yes" }, "May be used"),
     h("option", { value: "no", selected: gpuChoice === "no" }, "Off")
   );
-  return h(
-    "li",
-    { class: `task-budget-row task-limits-row${colorOf(task) ? ` color-${colorOf(task)}` : ""}` },
-    h(
-      "details",
-      { "data-task": task.id },
-      h(
-        "summary",
-        { "data-key": `limits:${task.id}` },
-        h("span", { class: "task-budget-name" }, taskName(task), h("span", { class: "muted" }, ` · ${task.id}`)),
-        h("span", { class: "muted task-budget-spent" }, `${limitsSummary(task.limits || {})} · ${used}`)
-      ),
-      h("div", { class: "limits-grid" }, fields, h("label", { class: "limit-field" }, h("span", { class: "limit-label" }, "GPU"), h("span", { class: "limit-value" }, gpu)))
-    )
+  grid.append(
+    ...fields,
+    h("label", { class: `limit-field${gpuChoice === "inherit" ? " inherited" : ""}` }, h("span", { class: "limit-label" }, "GPU"), h("span", { class: "limit-value" }, gpu))
   );
+  return grid;
+}
+
+/** What `grid` sets, field by field; `null` while a field chosen as its
+ * own waits for a value. */
+function readOwnLimits(grid) {
+  const limits = {};
+  for (const select of grid.querySelectorAll("select[data-field]")) {
+    const key = select.dataset.field;
+    if (key === "gpu") {
+      if (select.value !== "inherit") limits.gpu = select.value === "yes";
+      continue;
+    }
+    const f = LIMIT_FIELDS.find((x) => x.key === key);
+    if (select.value === "none") limits[key] = null;
+    else if (select.value === "own") {
+      const text = select.input.value.trim();
+      if (text === "") return null;
+      limits[key] = f.to(Number(text));
+    }
+  }
+  return limits;
+}
+
+/** A group's limits: for each of its tasks, in place of every task's. */
+function groupLimits(group, every) {
+  const grid = ownLimitsGrid(`limit:group:${group.id}`, group.limits || {}, every, () => "From every task", "The group's own", (g) => setGroupLimits(group, g, every));
+  return scopeCard("limits", grid);
+}
+
+async function setGroupLimits(group, grid, every) {
+  const limits = readOwnLimits(grid);
+  if (!limits) return;
+  try {
+    await call("set_group_limits", { group: group.id, limits });
+    toast(`Group ${group.name}: each of its tasks: ${limitsSummary(layered(every, limits))}`);
+  } catch (err) {
+    fail(err);
+  }
+  await refresh();
+  if (state.view === "limits") await openLimits();
+}
+
+/** One task's own limits; what it does not set comes from its group, else
+ * from every task, and each choice says which. */
+function taskLimitsCard(task, every) {
+  const group = groupOf(task);
+  const groupOwn = group?.limits || {};
+  const fromGroup = (key) => Boolean(group) && Object.prototype.hasOwnProperty.call(groupOwn, key) && !(key === "gpu" && groupOwn.gpu == null);
+  const from = (key) => (fromGroup(key) ? `From group ${group.name}` : "From every task");
+  const grid = ownLimitsGrid(`limit:task:${task.id}`, task.own_limits || {}, layered(every, groupOwn), from, "Its own", (g) => setTaskLimits(task, g));
+  const used = task.time_used_secs ? `Its runs took ${durationText(task.time_used_secs)}.` : "No runs yet.";
+  return scopeCard("limits", grid, h("p", { class: "muted scope-in-force" }, `${used} In force for its next run: ${limitsSummary(task.limits || {})}.`));
 }
 
 /** Seconds as "1 h 20 min". */
@@ -2174,35 +2654,37 @@ function durationText(secs) {
   return `${Math.floor(minutes / 60)} h${minutes % 60 ? ` ${minutes % 60} min` : ""}`;
 }
 
-async function setTaskLimits(task) {
-  const row = document.querySelector(`#agents-view [data-task="${CSS.escape(task.id)}"]`);
-  if (!row) return;
-  const limits = {};
-  for (const select of row.querySelectorAll("select[data-field]")) {
-    const key = select.dataset.field;
-    if (key === "gpu") {
-      if (select.value !== "every") limits.gpu = select.value === "yes";
-      continue;
-    }
-    const f = LIMIT_FIELDS.find((x) => x.key === key);
-    if (select.value === "none") limits[key] = null;
-    else if (select.value === "own") {
-      const text = select.input.value.trim();
-      if (text === "") return; // Waits for a value.
-      limits[key] = f.to(Number(text));
-    }
-  }
+async function setTaskLimits(task, grid) {
+  const limits = readOwnLimits(grid);
+  if (!limits) return;
   try {
     const view = await call("set_task_limits", { task: task.id, limits });
-    toast(`${taskName(task)}: ${limitsSummary(view.limits)}`);
+    toast(`${taskName(task)} only: ${limitsSummary(view.limits)}`);
   } catch (err) {
     fail(err);
   }
   await refresh();
-  if (state.view === "limits") {
-    focusLimits = task.id;
-    await openLimits();
+  if (state.view === "limits") await openLimits();
+}
+
+/** Where limits of their own are set: each group and task that sets any,
+ * a click away. */
+function limitsOverview() {
+  const rows = [];
+  for (const g of state.groups) {
+    const words = ownSummary(g.limits || {});
+    if (words) rows.push(overviewRow("Group", g.name, words, { kind: "group", id: g.id }, g.color));
   }
+  for (const t of state.tasks) {
+    const words = ownSummary(t.own_limits || {});
+    if (words) rows.push(overviewRow("Task", taskName(t), words, { kind: "task", id: t.id }, t.color));
+  }
+  return h(
+    "section",
+    { class: "scope-overview" },
+    h("h3", {}, "Groups and tasks with limits of their own"),
+    rows.length ? h("ul", { class: "scope-overview-list" }, rows) : h("p", { class: "muted" }, "None: every task's limits hold every run.")
+  );
 }
 
 /** Task id → what its run at work takes now. */
@@ -2598,12 +3080,14 @@ function streamItem(item) {
     case "prompt":
       return h(
         "div",
-        { class: "msg prompt" },
+        { class: "msg prompt", role: "group", "aria-label": "You wrote" },
+        h("div", { class: "msg-head" }, h("span", { class: "msg-who" }, "You"), copyButton(() => item.text, "Copy your prompt")),
         item.refs && item.refs.length ? h("div", { class: "prompt-refs" }, ...item.refs.map((r) => placeChip(r))) : null,
-        item.text
+        h("div", { class: "prompt-text" }, item.text)
       );
     case "message":
-      return h("div", { class: "msg md" }, ...markdown(item.text));
+      // The button copies the message as the agent wrote it, Markdown and all.
+      return h("div", { class: "msg md" }, copyButton(() => item.text, "Copy the agent's message"), ...markdown(item.text));
     case "thought":
       return h("div", { class: "msg thought" }, item.text);
     case "tool": {
@@ -2641,7 +3125,12 @@ function streamItem(item) {
         "div",
         { class: `event finished ${item.error ? "error" : item.stopped ? "" : "done"}` },
         h("span", { class: "event-mark" }, item.error ? "!" : item.stopped ? "■" : checkMark()),
-        h("span", {}, item.text)
+        h(
+          "span",
+          {},
+          item.text,
+          (item.hints || []).map((hint) => h("span", { class: "event-hint" }, hint))
+        )
       );
     default:
       return null;
@@ -2662,7 +3151,19 @@ function renderStream(id) {
     );
   } else {
     // What came in while the person watched arrives; the rest stands.
-    replace(stream, ...items.map((item) => arriving(streamItem(item), item)));
+    // The agent's part of each turn starts under its name, apart from the
+    // person's prompt above it.
+    const shown = [];
+    let agent = null;
+    for (const item of items) {
+      if (item.kind === "prompt") agent = item.agent || "Agent";
+      else if (agent && ["message", "thought", "tool"].includes(item.kind)) {
+        shown.push(arriving(h("div", { class: "msg-who agent" }, agent), item));
+        agent = null;
+      }
+      shown.push(arriving(streamItem(item), item));
+    }
+    replace(stream, ...shown);
   }
   if (stick) stream.scrollTop = stream.scrollHeight;
 }
@@ -2688,8 +3189,10 @@ function absorb(id, event) {
   switch (event.type) {
     case "message":
     case "thought":
-      if (last && last.kind === event.type) last.text += event.text;
-      else items.push({ kind: event.type, text: event.text });
+      // Pieces of one message run on; another message starts its own
+      // paragraph, where the agent says which message a piece is part of.
+      if (last && last.kind === event.type && (last.id ?? null) === (event.id ?? null)) last.text += event.text;
+      else items.push({ kind: event.type, id: event.id ?? null, text: event.text });
       break;
     case "tool_call":
       items.push({ kind: "tool", id: event.id, title: event.title, done: false });
@@ -2737,7 +3240,7 @@ function stripAnsi(text) {
 /** Folds one run event into the task's stream. */
 function fold(task, event) {
   if (event.type === "prompt") {
-    streamOf(task).push({ kind: "prompt", text: event.text, refs: event.refs || [] });
+    streamOf(task).push({ kind: "prompt", text: event.text, agent: event.agent, refs: event.refs || [] });
   } else if (event.type === "agent") {
     absorb(task, event.event);
   } else if (event.type === "preparing") {
@@ -2753,6 +3256,8 @@ function fold(task, event) {
       // A person's own stop is no failure; a limit's is.
       error: Boolean(event.error) && event.error !== "stopped: you stopped the run",
       stopped,
+      // Why a refusal keeps a tool from working, in Kule's words, once each.
+      hints: [...new Set(event.denials.map((d) => d.hint).filter(Boolean))],
       text: stopped
         ? `Stopped: ${event.error.slice("stopped: ".length)}. Review what it changed before it reaches the folder${refused}.`
         : event.error
@@ -4482,7 +4987,14 @@ const PANELS = {
 
 const REGION_NAMES = { left: "the left side", main: "the main area", right: "the right side", bottom: "the bottom panel" };
 
-const SIZE_LIMITS = { left: [180, 640], right: [220, 760], bottom: [120, 900] };
+/** The narrowest (or for the bottom, lowest) each region gets. The largest
+ * is whatever leaves the middle CENTER_MIN, so the sides can grow as far as
+ * the window lets them without the main area disappearing between them. */
+const SIZE_MIN = { left: 180, right: 220, bottom: 120 };
+const CENTER_MIN = { width: 360, height: 160 };
+const SPLIT_SIZE = 5;
+/** The daemon refuses a kept size above this (layout.rs, MAX_SIZE). */
+const SIZE_MAX = 4000;
 
 /** The layout's format; one kept in an older one gives way to Kule's own. */
 const LAYOUT_VERSION = 2;
@@ -4658,20 +5170,57 @@ function terminalTabs(name) {
   return items;
 }
 
+/** Whether the main area keeps its height: it gives it to the bottom panel
+ * while it is hidden; Settings and the empty window still have it. */
+const mainHeld = () => layout.regions.main.open || SETTINGS.includes(state.view) || !currentTask();
+
+/**
+ * The sizes the regions show at now. A window too small for every kept size
+ * takes the difference from the sides (each in proportion to what it has
+ * above its least) so the middle keeps CENTER_MIN; the kept sizes stay as
+ * they are and come back when the window grows again.
+ */
+function shownSizes() {
+  const width = $("workbench").clientWidth;
+  const height = $("workbench").querySelector(".center").clientHeight;
+  const open = (n) => layout.regions[n].open;
+  const sides = ["left", "right"].filter(open);
+  const shown = { left: 0, right: 0, bottom: 0 };
+  for (const n of sides) shown[n] = layout.regions[n].size;
+  const room = width - sides.length * SPLIT_SIZE - CENTER_MIN.width;
+  const over = shown.left + shown.right - room;
+  if (width && over > 0) {
+    const spare = sides.reduce((sum, n) => sum + Math.max(0, shown[n] - SIZE_MIN[n]), 0);
+    for (const n of sides) {
+      const own = Math.max(0, shown[n] - SIZE_MIN[n]);
+      shown[n] -= spare > over ? (over * own) / spare : own;
+    }
+  }
+  if (open("bottom")) {
+    const room = height - SPLIT_SIZE - CENTER_MIN.height;
+    shown.bottom = height && mainHeld() ? Math.max(SIZE_MIN.bottom, Math.min(layout.regions.bottom.size, room)) : layout.regions.bottom.size;
+  }
+  for (const n of Object.keys(shown)) shown[n] = Math.round(shown[n]);
+  return shown;
+}
+
+/** Sizes the sides and the bottom to what the window has room for now. */
+function sizeRegions() {
+  const workbench = $("workbench");
+  const shown = shownSizes();
+  workbench.style.gridTemplateColumns = `${shown.left}px ${layout.regions.left.open ? SPLIT_SIZE : 0}px minmax(0, 1fr) ${layout.regions.right.open ? SPLIT_SIZE : 0}px ${shown.right}px`;
+  const held = mainHeld();
+  workbench.querySelector(".center").style.gridTemplateRows = held
+    ? `minmax(0, 1fr) ${layout.regions.bottom.open ? SPLIT_SIZE : 0}px ${shown.bottom}px`
+    : "auto 0px minmax(0, 1fr)";
+  $("main-area").classList.toggle("collapsed", !held);
+}
+
 /** Puts every panel in its region, shows the one in front, sizes the
  * regions and says which are open. */
 function renderLayout() {
-  const workbench = $("workbench");
-  const side = (n) => (layout.regions[n].open ? layout.regions[n].size : 0);
-  workbench.style.gridTemplateColumns = `${side("left")}px ${layout.regions.left.open ? 5 : 0}px minmax(0, 1fr) ${layout.regions.right.open ? 5 : 0}px ${side("right")}px`;
+  sizeRegions();
   const task = currentTask();
-  // The main area gives its height to the bottom panel while it is hidden;
-  // Settings and the empty window still have it.
-  const mainHeld = layout.regions.main.open || SETTINGS.includes(state.view) || !task;
-  workbench.querySelector(".center").style.gridTemplateRows = mainHeld
-    ? `minmax(0, 1fr) ${layout.regions.bottom.open ? 5 : 0}px ${side("bottom")}px`
-    : "auto 0px minmax(0, 1fr)";
-  $("main-area").classList.toggle("collapsed", !mainHeld);
   for (const [name, r] of Object.entries(layout.regions)) {
     const el = $(`region-${name}`);
     const hideMain = name === "main" && (SETTINGS.includes(state.view) || !task);
@@ -4931,16 +5480,31 @@ function splitStart(e) {
   const name = e.currentTarget.dataset.split;
   if (e.button !== 0) return;
   e.preventDefault();
-  Object.assign(splitDrag, { name, start: name === "bottom" ? e.clientY : e.clientX, size: layout.regions[name].size, pointer: e.pointerId });
+  Object.assign(splitDrag, { name, start: name === "bottom" ? e.clientY : e.clientX, size: shownSizes()[name], pointer: e.pointerId });
   e.currentTarget.setPointerCapture(e.pointerId);
   document.body.classList.add(name === "bottom" ? "resizing-v" : "resizing-h");
 }
 
+/** Sets a region's size, as far as the middle keeps CENTER_MIN. A side
+ * shown smaller than kept (the window is small) is kept as shown, or the
+ * two sides would take turns shrinking each other. */
 function resize(name, size) {
-  const [min, max] = SIZE_LIMITS[name];
-  layout.regions[name].size = Math.round(Math.max(min, Math.min(max, size)));
-  renderLayout();
+  const shown = shownSizes();
+  let max = SIZE_MAX;
+  if (name === "bottom") {
+    if (mainHeld()) max = $("workbench").querySelector(".center").clientHeight - SPLIT_SIZE - CENTER_MIN.height;
+  } else {
+    const other = name === "left" ? "right" : "left";
+    const splits = layout.regions[other].open ? 2 : 1;
+    if (layout.regions[other].open) layout.regions[other].size = shown[other];
+    max = $("workbench").clientWidth - splits * SPLIT_SIZE - CENTER_MIN.width - shown[other];
+  }
+  layout.regions[name].size = Math.round(Math.max(SIZE_MIN[name], Math.min(max, SIZE_MAX, size)));
+  sizeRegions();
 }
+
+// A window made smaller takes room from the sides before the middle.
+new ResizeObserver(() => sizeRegions()).observe($("workbench"));
 
 function splitMove(e) {
   if (!splitDrag.name || e.pointerId !== splitDrag.pointer) return;
@@ -4965,7 +5529,7 @@ function splitKey(e) {
   const shrink = { left: "ArrowLeft", right: "ArrowRight", bottom: "ArrowDown" }[name];
   if (e.key !== grow && e.key !== shrink) return;
   e.preventDefault();
-  resize(name, layout.regions[name].size + (e.key === grow ? 16 : -16));
+  resize(name, shownSizes()[name] + (e.key === grow ? 16 : -16));
   keepLayout();
 }
 
@@ -5212,7 +5776,7 @@ async function newTerminal(taskId = state.current) {
   $("terminal-host").append(el);
   const term = new Terminal({
     fontFamily: getComputedStyle(document.documentElement).getPropertyValue("--mono").trim() || "monospace",
-    fontSize: 13,
+    fontSize: fontsKept().code_size,
     lineHeight: 1.25,
     fontWeightBold: "600",
     cursorBlink: true,
@@ -5242,6 +5806,13 @@ async function newTerminal(taskId = state.current) {
     keepLayout();
   }
   term.open(el);
+  // What the mouse selects in the terminal is copied too, as a terminal
+  // that copies on select does.
+  el.addEventListener("mouseup", (e) => {
+    if (e.button !== 0 || !copiesOnSelect() || !term.hasSelection()) return;
+    const text = term.getSelection();
+    if (text.trim()) copyText(text).then((copied) => copied && copiedAt(e.clientX, e.clientY));
+  });
   renderTerminals(taskId);
   fit.fit();
   term.onData((data) => {
@@ -5439,7 +6010,165 @@ async function loadThemes() {
   }
   if (!appearance.editing) applyTheme(currentTheme());
   applyMotion(appearance.kept.motion);
+  applyFonts(appearance.kept.fonts);
   retheme();
+}
+
+// --- Fonts -----------------------------------------------------------------
+
+// The window's text and its code (the agent chat, terminals, diffs) each
+// take a font the person picks from those on the computer, in front of
+// Kule's own, and a size. Sizes scale every font size in the stylesheet
+// (see --text-scale there).
+
+/** Kule's own sizes, and the sizes a person may pick (the daemon's). */
+const FONT_SIZES = { text: [14, 11, 20], code: [13, 10, 22] };
+/** Kule's own font stacks, as the stylesheet has them. */
+const KULE_FONTS = {
+  text: getComputedStyle(document.documentElement).getPropertyValue("--sans").trim(),
+  code: getComputedStyle(document.documentElement).getPropertyValue("--mono").trim(),
+};
+
+const fontsKept = () => ({ text: null, text_size: 14, code: null, code_size: 13, ...(appearance.kept.fonts || {}) });
+
+/** `family` first, Kule's stack behind it for what it lacks. */
+function fontStack(family, kule) {
+  return family ? `"${family.replace(/["\\]/g, "")}", ${kule}` : kule;
+}
+
+function applyFonts(fonts) {
+  const f = { ...fontsKept(), ...(fonts || {}) };
+  const root = document.documentElement.style;
+  root.setProperty("--sans", fontStack(f.text, KULE_FONTS.text));
+  root.setProperty("--mono", fontStack(f.code, KULE_FONTS.code));
+  root.setProperty("--text-scale", String(f.text_size / FONT_SIZES.text[0]));
+  root.setProperty("--code-scale", String(f.code_size / FONT_SIZES.code[0]));
+  for (const t of terminals.values()) {
+    for (const e of t.list) {
+      e.term.options.fontFamily = fontStack(f.code, KULE_FONTS.code);
+      e.term.options.fontSize = f.code_size;
+      if (!e.el.hidden) e.fit.fit();
+    }
+  }
+}
+
+function keepFonts(change) {
+  return keepThemes({ fonts: { ...fontsKept(), ...change } });
+}
+
+/** Text and code one size larger (`step` 1) or smaller (-1), both. */
+function stepFonts(step) {
+  const f = fontsKept();
+  const clamp = (n, [, low, high]) => Math.min(high, Math.max(low, n));
+  const next = { text_size: clamp(f.text_size + step, FONT_SIZES.text), code_size: clamp(f.code_size + step, FONT_SIZES.code) };
+  if (next.text_size === f.text_size && next.code_size === f.code_size) {
+    toast(step > 0 ? "The text is as large as it goes" : "The text is as small as it goes");
+    return;
+  }
+  keepFonts(next).then((kept) => kept && toast(`Text ${next.text_size} px · code ${next.code_size} px`));
+}
+
+function resetFonts() {
+  keepFonts({ text: null, text_size: FONT_SIZES.text[0], code: null, code_size: FONT_SIZES.code[0] }).then(
+    (kept) => kept && toast("Kule's fonts again")
+  );
+}
+
+/** The computer's font families, asked once; and which of them give
+ * every letter the same width, for code. */
+const systemFonts = { all: null, mono: null, loading: null };
+
+function loadSystemFonts() {
+  if (!systemFonts.loading) {
+    systemFonts.loading = call("system_fonts")
+      .then((all) => {
+        systemFonts.all = all;
+        systemFonts.mono = all.filter(monospaced);
+      })
+      .catch((err) => {
+        systemFonts.all = [];
+        systemFonts.mono = [];
+        fail(err);
+      });
+  }
+  return systemFonts.loading;
+}
+
+const fontCanvas = document.createElement("canvas").getContext("2d");
+
+/** Whether `family` draws a narrow and a wide letter alike, as fonts for
+ * code do; a family the computer lacks falls back to a serif, which does
+ * not. */
+function monospaced(family) {
+  const width = (text) => {
+    fontCanvas.font = `20px "${family.replace(/["\\]/g, "")}", serif`;
+    return fontCanvas.measureText(text).width;
+  };
+  return Math.abs(width("iiiiiiiiii") - width("WWWWWWWWWW")) < 0.5;
+}
+
+/** Settings → Appearance: the two fonts, their sizes, and how they look. */
+function fontsSection() {
+  const f = fontsKept();
+  if (!systemFonts.all) loadSystemFonts().then(() => renderAppearance());
+  const row = (part, title, note, choices) => {
+    const [kule, low, high] = FONT_SIZES[part];
+    const listId = `fonts-${part}`;
+    const family = h("input", {
+      type: "text",
+      id: `font-${part}`,
+      "data-key": `font-${part}`,
+      list: listId,
+      value: f[part] || "",
+      placeholder: `Kule's (${part === "text" ? "the system's" : "the system's monospace"})`,
+      spellcheck: "false",
+      autocomplete: "off",
+      "aria-label": `${title}: font`,
+      onchange: (e) => keepFonts({ [part]: e.currentTarget.value.trim() || null }),
+    });
+    const size = h(
+      "select",
+      { "data-key": `font-${part}-size`, "aria-label": `${title}: size`, onchange: (e) => keepFonts({ [`${part}_size`]: Number(e.currentTarget.value) }) },
+      Array.from({ length: high - low + 1 }, (_, i) => low + i).map((n) =>
+        h("option", { value: String(n), selected: n === f[`${part}_size`] }, n === kule ? `${n} px (Kule's)` : `${n} px`)
+      )
+    );
+    const sample = h(
+      "p",
+      { class: `font-sample ${part}` },
+      part === "text" ? "Review the changes before they reach the folder." : "fn main() { let x = 0O1lI; } // 0123456789"
+    );
+    // A font taken away since it was picked: the window already falls
+    // back to Kule's, and says why.
+    const lacking =
+      f[part] && systemFonts.all && systemFonts.all.length && !systemFonts.all.some((n) => n.toLowerCase() === f[part].toLowerCase());
+    return h(
+      "div",
+      { class: "font-row" },
+      h("label", { class: "font-title", for: `font-${part}` }, title),
+      h("span", { class: "muted font-note" }, note),
+      h("div", { class: "font-pick" }, family, size),
+      lacking ? h("span", { class: "font-note held-mark" }, `${f[part]} is not on this computer; Kule's own font is used.`) : null,
+      h("datalist", { id: listId }, (choices || []).map((name) => h("option", { value: name }))),
+      sample
+    );
+  };
+  return h(
+    "section",
+    { class: "key-group", "aria-label": "Fonts" },
+    h("h3", {}, "Fonts"),
+    row("text", "Text", "Menus, Review, Settings and the rest of the window.", systemFonts.all),
+    row("code", "Code", "The agent chat, terminals, diffs and the Preview's code; fonts whose letters are all one width.", systemFonts.mono),
+    systemFonts.all && systemFonts.all.length === 0
+      ? h("p", { class: "muted" }, "Kule could not list this computer's fonts; type a font's name.")
+      : null,
+    h(
+      "div",
+      { class: "agent-actions" },
+      h("button", { class: "button ghost", type: "button", "data-key": "fonts-reset", onclick: resetFonts }, "Kule's fonts"),
+      h("span", { class: "muted" }, "Larger and smaller with the commands Make the text larger / smaller.")
+    )
+  );
 }
 
 /** Keeps what `next` changes of the themes and the motion; the rest as it is. */
@@ -5453,6 +6182,7 @@ async function keepThemes(next) {
   } finally {
     if (!appearance.editing) applyTheme(currentTheme());
     applyMotion(appearance.kept.motion);
+    applyFonts(appearance.kept.fonts);
     retheme();
     renderAppearance();
   }
@@ -5717,6 +6447,7 @@ function renderAppearance() {
       ? h("section", { class: "key-group", "aria-label": "From extensions" }, h("h3", {}, "From extensions"), h("div", { class: "theme-grid", role: "radiogroup", "aria-label": "Themes from extensions" }, EXT.themes.map(themeCard)))
       : null,
     appearance.editing ? null : h("div", { class: "agent-actions" }, h("span", { class: "muted" }, `In use: ${current.name}`), ...actions),
+    appearance.editing ? null : fontsSection(),
     appearance.editing
       ? null
       : h(
@@ -5744,8 +6475,38 @@ function renderAppearance() {
               )
             )
           )
+        ),
+    appearance.editing
+      ? null
+      : h(
+          "section",
+          { class: "key-group", "aria-label": "Copying" },
+          h("h3", {}, "Copying"),
+          h(
+            "label",
+            { class: "check", for: "copy-on-select" },
+            h("input", {
+              type: "checkbox",
+              id: "copy-on-select",
+              "data-key": "copy-on-select",
+              checked: copiesOnSelect(),
+              onchange: (e) => setCopyOnSelect(e.currentTarget.checked),
+            }),
+            h("span", {}, "Copy text when you select it with the mouse"),
+            h("span", { class: "muted" }, " · in the agent chat, Review and the terminal; fields you type in copy as usual")
+          )
         )
   );
+}
+
+function setCopyOnSelect(on) {
+  return keepThemes({ copy_on_select: on });
+}
+
+/** Turns copying on select off when it is on, on when it is off. */
+function toggleCopyOnSelect() {
+  const next = !copiesOnSelect();
+  setCopyOnSelect(next).then((kept) => kept && toast(next ? "Selected text is copied" : "Selected text is no longer copied"));
 }
 
 // --- Profile ---------------------------------------------------------------
@@ -5755,7 +6516,7 @@ function renderAppearance() {
 // a policy of their own never go.
 
 const PROFILE_PARTS = [
-  ["appearance", "Appearance", "The theme in use, your own themes and the motion"],
+  ["appearance", "Appearance", "The theme in use, your own themes, the motion, copying and fonts"],
   ["shortcuts", "Shortcuts", "The shortcuts you set yourself"],
   ["policy", "Policy", "Kule's balanced or careful policy"],
   ["budget", "Daily budget", "What every task may cost together in a day"],
@@ -6185,6 +6946,8 @@ const COMMANDS = [
   },
   { id: "task.budget", title: "Set the task's budget", group: "Task", keys: "", run: () => withTask((t) => openTaskBudget(t.id)) },
   { id: "task.limits", title: "Set the task's limits: processor, memory, disk, GPU, time", group: "Task", keys: "", run: () => withTask((t) => openTaskLimits(t.id)) },
+  { id: "group.budget", title: "Set the budget of the task's group", group: "Task", keys: "", run: () => withTask((t) => (groupOf(t) ? openGroupBudget(t.group) : toast(`${taskName(t)} is in no group`))) },
+  { id: "group.limits", title: "Set the limits of the task's group", group: "Task", keys: "", run: () => withTask((t) => (groupOf(t) ? openGroupLimits(t.group) : toast(`${taskName(t)} is in no group`))) },
   {
     id: "task.stop", title: "Stop the agent at work", group: "Task", keys: "Mod+Shift+K", inFields: true,
     run: () => withTask((t) => (t.running ? stopRun(t) : toast("No agent is at work here"))),
@@ -6224,6 +6987,10 @@ const COMMANDS = [
 
   { id: "theme.next", title: "Next theme", group: "Appearance", keys: "", inFields: true, run: () => nextTheme() },
   { id: "motion.toggle", title: "Turn motion on or off", group: "Appearance", keys: "", inFields: true, run: () => toggleMotion() },
+  { id: "copy.on-select", title: "Turn copying selected text on or off", group: "Appearance", keys: "", inFields: true, run: () => toggleCopyOnSelect() },
+  { id: "text.larger", title: "Make the text larger", group: "Appearance", keys: "Mod+=", inFields: true, run: () => stepFonts(1) },
+  { id: "text.smaller", title: "Make the text smaller", group: "Appearance", keys: "Mod+-", inFields: true, run: () => stepFonts(-1) },
+  { id: "text.reset", title: "Use Kule's fonts and sizes again", group: "Appearance", keys: "", inFields: true, run: () => resetFonts() },
   { id: "theme.new", title: "New theme from the one in use…", group: "Appearance", keys: "", run: () => newThemeFrom(currentTheme()) },
   { id: "theme.import", title: "Import a theme…", group: "Appearance", keys: "", run: () => importTheme() },
   { id: "theme.export", title: "Export the theme in use…", group: "Appearance", keys: "", run: () => exportTheme(currentTheme()) },

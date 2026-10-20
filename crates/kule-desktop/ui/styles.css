@@ -17,6 +17,12 @@
   --deny-soft: #fbe2e2;
   --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  /* The person's text sizes against Kule's (14px text, 13px code), set
+     from Settings → Appearance. Every font size here is written as
+     calc(Npx * var(--text-scale)), or --code-scale where the text is in
+     --mono, so it follows them. */
+  --text-scale: 1;
+  --code-scale: 1;
   --radius: 8px;
   /* The colours a person can mark a task with. */
   --tag-red: #dc2626;
@@ -110,7 +116,7 @@ body {
   grid-template-rows: var(--titlebar) minmax(0, 1fr);
   background: var(--bg);
   color: var(--text);
-  font: 14px/1.45 var(--sans);
+  font: calc(14px * var(--text-scale))/1.45 var(--sans);
   -webkit-font-smoothing: antialiased;
 }
 
@@ -156,14 +162,14 @@ p {
 
 .brand-name {
   font-weight: 650;
-  font-size: 16px;
+  font-size: calc(16px * var(--text-scale));
   letter-spacing: 0.01em;
 }
 
 .nav-title {
   margin: 0 4px 6px;
   color: var(--faint);
-  font-size: 11px;
+  font-size: calc(11px * var(--text-scale));
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -217,7 +223,7 @@ p {
   grid-column: 1 / -1;
   overflow: hidden;
   color: var(--faint);
-  font: 12px var(--mono);
+  font: calc(12px * var(--code-scale)) var(--mono);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -274,7 +280,7 @@ p {
 
 .task-row .chip {
   padding-block: 0;
-  font-size: 11px;
+  font-size: calc(11px * var(--text-scale));
 }
 
 .task-more {
@@ -286,7 +292,7 @@ p {
   border-radius: 5px;
   background: transparent;
   color: var(--faint);
-  font: 600 16px/1 var(--sans);
+  font: 600 calc(16px * var(--text-scale))/1 var(--sans);
   cursor: pointer;
 }
 
@@ -366,7 +372,7 @@ body.dragging-task {
   border-radius: 5px;
   background: transparent;
   color: var(--faint);
-  font: 500 16px/1 var(--sans);
+  font: 500 calc(16px * var(--text-scale))/1 var(--sans);
   cursor: pointer;
 }
 
@@ -433,7 +439,7 @@ body.dragging-task {
 .group-chevron {
   width: 10px;
   color: var(--faint);
-  font-size: 10px;
+  font-size: calc(10px * var(--text-scale));
 }
 
 .group-icon {
@@ -456,7 +462,7 @@ body.dragging-task {
   border-radius: 999px;
   background: var(--sunken);
   color: var(--muted);
-  font-size: 10px;
+  font-size: calc(10px * var(--text-scale));
   font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -470,7 +476,7 @@ body.dragging-task {
   border-radius: 999px;
   background: color-mix(in srgb, var(--group) 18%, transparent);
   color: var(--muted);
-  font-size: 11px;
+  font-size: calc(11px * var(--text-scale));
   font-weight: 600;
   text-align: center;
 }
@@ -485,7 +491,7 @@ body.dragging-task {
   list-style: none;
   margin: 0;
   padding: 6px 10px 8px;
-  font-size: 12px;
+  font-size: calc(12px * var(--text-scale));
 }
 
 /* Tasks in no group, once there are groups: a head that takes a dropped
@@ -501,7 +507,7 @@ body.dragging-task {
   padding: 4px 6px;
   border: 1px dashed transparent;
   color: var(--faint);
-  font-size: 11px;
+  font-size: calc(11px * var(--text-scale));
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -536,7 +542,7 @@ body.dragging-task .loose-head {
 
 .regroup p {
   margin: 0 0 6px;
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--text-scale));
 }
 
 .regroup-warn {
@@ -554,7 +560,7 @@ body.dragging-task .loose-head {
   max-width: 240px;
   margin: 2px 8px 6px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: calc(12px * var(--text-scale));
 }
 
 .menu-dot {
@@ -616,14 +622,14 @@ body.dragging-task .loose-head {
   border-radius: 6px;
   background: var(--sunken);
   color: var(--text);
-  font: 12px/1.5 var(--mono);
+  font: calc(12px * var(--code-scale))/1.5 var(--mono);
   resize: vertical;
 }
 
 .group-policy-error {
   margin: 6px 0 0;
   color: var(--deny);
-  font: 12px/1.4 var(--mono);
+  font: calc(12px * var(--code-scale))/1.4 var(--mono);
   white-space: pre-wrap;
 }
 
@@ -707,7 +713,7 @@ select:focus-visible {
   border-radius: 999px;
   background: var(--sunken);
   color: var(--muted);
-  font-size: 12px;
+  font-size: calc(12px * var(--text-scale));
   font-weight: 550;
   white-space: nowrap;
 }
@@ -777,7 +783,7 @@ select:focus-visible {
 }
 
 .empty-state h1 {
-  font-size: 22px;
+  font-size: calc(22px * var(--text-scale));
   font-weight: 650;
 }
 
@@ -804,14 +810,14 @@ select:focus-visible {
 }
 
 .task-title h1 {
-  font-size: 18px;
+  font-size: calc(18px * var(--text-scale));
   font-weight: 650;
 }
 
 .path {
   overflow: hidden;
   color: var(--faint);
-  font: 12px var(--mono);
+  font: calc(12px * var(--code-scale)) var(--mono);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -854,7 +860,7 @@ select:focus-visible {
   border-radius: 999px;
   background: var(--ask-soft);
   color: var(--ask);
-  font-size: 11px;
+  font-size: calc(11px * var(--text-scale));
   text-align: center;
 }
 
@@ -891,7 +897,7 @@ select:focus-visible {
 
 .button .shortcut {
   margin-left: 8px;
-  font: 11px var(--sans);
+  font: calc(11px * var(--text-scale)) var(--sans);
   opacity: 0.75;
 }
 
@@ -915,7 +921,7 @@ select:focus-visible {
 
 .msg.md .md-h {
   margin-top: 12px;
-  font-size: 14px;
+  font-size: calc(14px * var(--text-scale));
   font-weight: 600;
 }
 
@@ -933,7 +939,7 @@ select:focus-visible {
   padding: 1px 4px;
   border-radius: 4px;
   background: var(--sunken);
-  font: 12px var(--mono);
+  font: calc(12px * var(--code-scale)) var(--mono);
 }
 
 .msg.md pre {
@@ -962,7 +968,7 @@ select:focus-visible {
 
 .msg.md .md-url {
   color: var(--faint);
-  font-size: 12px;
+  font-size: calc(12px * var(--text-scale));
 }
 
 .md-table {
@@ -972,7 +978,7 @@ select:focus-visible {
 
 .md-table table {
   border-collapse: collapse;
-  font-size: 13px;
+  font-size: calc(13px * var(--text-scale));
 }
 
 .md-table th,
@@ -999,6 +1005,116 @@ select:focus-visible {
   background: var(--accent-soft);
 }
 
+/* Copying: a button on each message, shown while the pointer is over it
+   or it has the keyboard, and a small "Copied" where it happened. */
+.msg.prompt,
+.msg.md {
+  position: relative;
+}
+
+.msg-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.copy-button {
+  display: inline-flex;
+  padding: 3px;
+  align-items: center;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+  opacity: 0;
+}
+
+/* Room at the right for the button, so it covers none of the text. */
+.msg.md {
+  padding-right: 26px;
+}
+
+.msg.md > .copy-button {
+  position: absolute;
+  top: -2px;
+  right: 0;
+  margin: 0;
+}
+
+.msg:hover .copy-button,
+.copy-button:focus-visible,
+.copy-button.copied {
+  opacity: 1;
+}
+
+.copy-button:hover {
+  background: var(--border);
+  color: var(--text);
+}
+
+.copy-button.copied {
+  color: var(--ok);
+}
+
+.copy-icon {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.3;
+}
+
+.copied-tip {
+  position: fixed;
+  z-index: 1000;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: var(--text);
+  color: var(--bg);
+  font: 600 calc(11px * var(--text-scale))/1.5 var(--sans);
+  pointer-events: none;
+  transform: translate(-50%, calc(-100% - 8px));
+}
+
+.copied-tip.leaving {
+  opacity: 0;
+  transition: opacity var(--move) ease;
+}
+
+/* The field a copy goes through where the clipboard API is missing. */
+.copy-buffer {
+  position: fixed;
+  top: 0;
+  left: -9999px;
+  opacity: 0;
+}
+
+/* Who wrote what follows: "You" on a prompt, the agent's name over its
+   answer. */
+.msg-who {
+  color: var(--muted);
+  font: 600 calc(11px * var(--text-scale))/1.4 var(--sans);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.msg-who.agent {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.msg-who.agent::before {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--muted);
+  content: "";
+}
+
 .msg.thought {
   color: var(--faint);
   font-style: italic;
@@ -1012,7 +1128,7 @@ select:focus-visible {
   align-items: baseline;
   gap: 8px;
   color: var(--muted);
-  font-size: 13px;
+  font-size: calc(13px * var(--text-scale));
 }
 
 /* A tool call with what it showed: the call's line opens its output. */
@@ -1032,7 +1148,7 @@ select:focus-visible {
 .tool-output > summary .event::after {
   content: "▸";
   color: var(--faint);
-  font-size: 10px;
+  font-size: calc(10px * var(--text-scale));
 }
 
 .tool-output[open] > summary .event::after {
@@ -1053,7 +1169,7 @@ select:focus-visible {
   border-radius: 6px;
   background: var(--sunken);
   color: var(--text);
-  font: 12px/1.45 var(--mono);
+  font: calc(12px * var(--code-scale))/1.45 var(--mono);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
@@ -1076,7 +1192,7 @@ select:focus-visible {
 .event-files {
   color: var(--faint);
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: calc(12px * var(--code-scale));
 }
 
 .event.finished {
@@ -1087,6 +1203,13 @@ select:focus-visible {
 
 .event.error {
   color: var(--deny);
+}
+
+/* Why a refusal kept a tool from working, under the run's last line. */
+.event-hint {
+  display: block;
+  margin-top: 4px;
+  color: var(--ask);
 }
 
 .questions {
@@ -1117,7 +1240,7 @@ select:focus-visible {
 }
 
 .question-text .muted {
-  font-size: 13px;
+  font-size: calc(13px * var(--text-scale));
 }
 
 .countdown {
@@ -1228,12 +1351,12 @@ select:focus-visible {
 
 .holding li {
   overflow-wrap: anywhere;
-  font-size: 13px;
+  font-size: calc(13px * var(--text-scale));
 }
 
 .rules {
   color: var(--muted);
-  font: 12px var(--mono);
+  font: calc(12px * var(--code-scale)) var(--mono);
 }
 
 .review-actions {
@@ -1253,7 +1376,7 @@ select:focus-visible {
 .group-title {
   margin: 14px 0 6px;
   color: var(--faint);
-  font-size: 11px;
+  font-size: calc(11px * var(--text-scale));
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -1263,7 +1386,7 @@ select:focus-visible {
   margin: 0;
   padding: 0;
   list-style: none;
-  font: 13px/1.7 var(--mono);
+  font: calc(13px * var(--code-scale))/1.7 var(--mono);
 }
 
 .files li {
@@ -1274,14 +1397,14 @@ select:focus-visible {
 
 .files li.entity {
   padding-left: 22px;
-  font-size: 12px;
+  font-size: calc(12px * var(--text-scale));
 }
 
 .entity-kind,
 .entity-note {
   color: var(--muted);
   font-family: var(--sans);
-  font-size: 12px;
+  font-size: calc(12px * var(--text-scale));
 }
 
 .show-picture {
@@ -1290,7 +1413,7 @@ select:focus-visible {
   border-radius: 4px;
   background: transparent;
   color: var(--accent);
-  font: 12px var(--sans);
+  font: calc(12px * var(--text-scale)) var(--sans);
   cursor: pointer;
 }
 
@@ -1301,7 +1424,7 @@ select:focus-visible {
 
 .picture {
   margin: 0;
-  font: 12px var(--sans);
+  font: calc(12px * var(--text-scale)) var(--sans);
   color: var(--muted);
 }
 
@@ -1356,13 +1479,13 @@ select:focus-visible {
   align-items: center;
   gap: 6px;
   color: var(--muted);
-  font-size: 13px;
+  font-size: calc(13px * var(--text-scale));
 }
 
 .held-mark {
   color: var(--ask);
   font-family: var(--sans);
-  font-size: 12px;
+  font-size: calc(12px * var(--text-scale));
 }
 
 .muted {
@@ -1427,13 +1550,13 @@ select:focus-visible {
 
 .step-back {
   padding: 2px 8px;
-  font-size: 12px;
+  font-size: calc(12px * var(--text-scale));
 }
 
 .entry-body {
   grid-column: 2 / -1;
   color: var(--muted);
-  font: 12px/1.6 var(--mono);
+  font: calc(12px * var(--code-scale))/1.6 var(--mono);
   overflow-wrap: anywhere;
 }
 
@@ -1481,7 +1604,7 @@ select:focus-visible {
 .check.remember {
   display: inline-flex;
   margin: 0 0 0 8px;
-  font-size: 12px;
+  font-size: calc(12px * var(--text-scale));
 }
 
 .remember-note {
@@ -1509,7 +1632,7 @@ select:focus-visible {
 }
 
 .agents-head h1 {
-  font-size: 20px;
+  font-size: calc(20px * var(--text-scale));
   font-weight: 650;
 }
 
@@ -1546,14 +1669,14 @@ select:focus-visible {
 .agent-editor h2,
 .agent-registry h2 {
   margin-right: 4px;
-  font-size: 15px;
+  font-size: calc(15px * var(--text-scale));
   font-weight: 600;
 }
 
 .agent-held {
   margin: 0 0 8px;
   color: var(--ask);
-  font-size: 13px;
+  font-size: calc(13px * var(--text-scale));
 }
 
 .agent-opens {
@@ -1561,7 +1684,7 @@ select:focus-visible {
   grid-template-columns: max-content 1fr;
   gap: 4px 16px;
   margin: 0 0 12px;
-  font-size: 13px;
+  font-size: calc(13px * var(--text-scale));
 }
 
 .agent-opens dt {
@@ -1571,7 +1694,7 @@ select:focus-visible {
 .agent-opens dd {
   margin: 0;
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: calc(12px * var(--code-scale));
   overflow-wrap: anywhere;
 }
 
@@ -1589,7 +1712,7 @@ select:focus-visible {
 }
 
 .agent-field-label {
-  font-size: 13px;
+  font-size: calc(13px * var(--text-scale));
   font-weight: 550;
 }
 
@@ -1602,12 +1725,12 @@ select:focus-visible {
   border-radius: 6px;
   background: var(--bg);
   color: var(--text);
-  font: 12px var(--mono);
+  font: calc(12px * var(--code-scale)) var(--mono);
 }
 
 .agent-field-hint {
   color: var(--faint);
-  font-size: 12px;
+  font-size: calc(12px * var(--text-scale));
 }
 
 .agent-trial {
@@ -1617,7 +1740,7 @@ select:focus-visible {
   margin-top: 12px;
   padding-top: 12px;
   border-top: 1px solid var(--border);
-  font-size: 13px;
+  font-size: calc(13px * var(--text-scale));
 }
 
 .agent-trial pre {
@@ -1626,7 +1749,7 @@ select:focus-visible {
   overflow: auto;
   border-radius: 6px;
   background: var(--sunken);
-  font: 11px var(--mono);
+  font: calc(11px * var(--code-scale)) var(--mono);
   white-space: pre-wrap;
 }
 
@@ -1651,7 +1774,7 @@ select:focus-visible {
   gap: 2px 12px;
   padding: 8px 0;
   border-bottom: 1px solid var(--border);
-  font-size: 13px;
+  font-size: calc(13px * var(--text-scale));
 }
 
 .registry-list li > :not(button) {
@@ -1672,7 +1795,7 @@ select:focus-visible {
   margin: 0 0 12px;
   padding-left: 18px;
   color: var(--ask);
-  font-size: 13px;
+  font-size: calc(13px * var(--text-scale));
 }
 
 .agent-pick input {
@@ -1681,7 +1804,7 @@ select:focus-visible {
 
 .home-note {
   margin: 0 0 6px;
-  font-size: 12px;
+  font-size: calc(12px * var(--text-scale));
 }
 
 .home-change {
@@ -1710,7 +1833,7 @@ select:focus-visible {
   border: 1px solid var(--border);
   border-radius: 6px;
   background: var(--sunken);
-  font: 12px/1.6 var(--mono);
+  font: calc(12px * var(--code-scale))/1.6 var(--mono);
   white-space: pre;
 }
 
@@ -1737,7 +1860,7 @@ select:focus-visible {
   align-items: center;
   gap: 10px;
   margin-top: 8px;
-  font-size: 12px;
+  font-size: calc(12px * var(--text-scale));
 }
 
 /* A task's right-click menu. */
@@ -1833,7 +1956,7 @@ select:focus-visible {
 
 .menu-field-label {
   color: var(--muted);
-  font-size: 12px;
+  font-size: calc(12px * var(--text-scale));
 }
 
 .menu-field input {
@@ -1864,20 +1987,60 @@ select:focus-visible {
 
 .settings-head {
   padding: 18px 0 0;
+  border-bottom: 1px solid var(--border);
 }
 
 .settings-head h1 {
   margin: 0 24px 10px;
-  font-size: 20px;
+  font-size: calc(20px * var(--text-scale));
   font-weight: 650;
 }
 
+/* Too narrow for every section: the tabs scroll sideways (wheel, trackpad or
+   arrow keys), and a faded edge says more are that way. */
 .settings-head .tabs {
   padding: 0 14px;
+  border-bottom: 0;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+}
+
+.settings-head .tab {
+  flex: none;
+  white-space: nowrap;
+}
+
+.settings-head .tab:focus-visible {
+  outline-offset: -2px;
+}
+
+/* Older WebKitGTK knows neither scrollbar-width nor an unprefixed mask. */
+.settings-head .tabs::-webkit-scrollbar,
+.region-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.tabs.more-before,
+.region-tabs.more-before {
+  -webkit-mask-image: linear-gradient(to right, transparent, #000 32px);
+  mask-image: linear-gradient(to right, transparent, #000 32px);
+}
+
+.tabs.more-after,
+.region-tabs.more-after {
+  -webkit-mask-image: linear-gradient(to left, transparent, #000 32px);
+  mask-image: linear-gradient(to left, transparent, #000 32px);
+}
+
+.tabs.more-before.more-after,
+.region-tabs.more-before.more-after {
+  -webkit-mask-image: linear-gradient(to right, transparent, #000 32px, #000 calc(100% - 32px), transparent);
+  mask-image: linear-gradient(to right, transparent, #000 32px, #000 calc(100% - 32px), transparent);
 }
 
 .agents-head h2 {
-  font-size: 17px;
+  font-size: calc(17px * var(--text-scale));
   font-weight: 650;
 }
 
@@ -1888,32 +2051,6 @@ select:focus-visible {
   stroke: currentColor;
   stroke-width: 1.2;
   stroke-linejoin: round;
-}
-
-.daily {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 6px;
-  max-width: 420px;
-}
-
-.daily-pick {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-weight: 550;
-}
-
-.daily-pick input {
-  width: 7em;
-  min-height: 30px;
-  padding: 0 6px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--surface);
-  color: var(--text);
-  font: inherit;
 }
 
 .daily-spent {
@@ -1962,17 +2099,17 @@ select:focus-visible {
   background: var(--accent-soft);
   color: var(--accent);
   content: counter(step);
-  font-size: 12px;
+  font-size: calc(12px * var(--text-scale));
   font-weight: 650;
 }
 
 .setup-step h2 {
-  font-size: 15px;
+  font-size: calc(15px * var(--text-scale));
   font-weight: 600;
 }
 
 .setup-step p {
-  font-size: 13px;
+  font-size: calc(13px * var(--text-scale));
 }
 
 .setup-agents {
@@ -1992,7 +2129,7 @@ select:focus-visible {
 }
 
 .setup-agent .muted {
-  font-size: 13px;
+  font-size: calc(13px * var(--text-scale));
 }
 
 /* Kule's two policies, as a choice. */
@@ -2031,7 +2168,7 @@ select:focus-visible {
 .policy-text {
   grid-column: 2;
   color: var(--muted);
-  font-size: 13px;
+  font-size: calc(13px * var(--text-scale));
 }
 
 /* The command palette: every command, found by name. */
@@ -2064,7 +2201,7 @@ select:focus-visible {
   border-bottom: 1px solid var(--border);
   background: transparent;
   color: var(--text);
-  font: 16px var(--sans);
+  font: calc(16px * var(--text-scale)) var(--sans);
   outline: none;
 }
 
@@ -2091,7 +2228,7 @@ select:focus-visible {
 
 .palette-group {
   color: var(--faint);
-  font-size: 12px;
+  font-size: calc(12px * var(--text-scale));
 }
 
 .palette-keys,
@@ -2101,7 +2238,7 @@ select:focus-visible {
   border-radius: 5px;
   background: var(--sunken);
   color: var(--muted);
-  font: 12px var(--mono);
+  font: calc(12px * var(--code-scale)) var(--mono);
   white-space: nowrap;
 }
 
@@ -2119,7 +2256,7 @@ select:focus-visible {
 .key-group h3 {
   margin: 0;
   color: var(--faint);
-  font-size: 11px;
+  font-size: calc(11px * var(--text-scale));
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -2158,7 +2295,7 @@ select:focus-visible {
 
 .key-wait {
   color: var(--accent);
-  font-size: 13px;
+  font-size: calc(13px * var(--text-scale));
 }
 
 .key-actions {
@@ -2210,7 +2347,7 @@ select:focus-visible {
 
 .theme-kind {
   color: var(--faint);
-  font-size: 12px;
+  font-size: calc(12px * var(--text-scale));
 }
 
 .swatch-preview {
@@ -2263,7 +2400,7 @@ select:focus-visible {
   grid-template-columns: auto 1fr auto;
   align-items: center;
   gap: 8px;
-  font-size: 13px;
+  font-size: calc(13px * var(--text-scale));
 }
 
 .theme-part input[type="color"] {
@@ -2282,14 +2419,14 @@ select:focus-visible {
   border-radius: 5px;
   background: var(--bg);
   color: var(--text);
-  font: 12px var(--mono);
+  font: calc(12px * var(--code-scale)) var(--mono);
 }
 
 .theme-warnings {
   margin: 0;
   padding-left: 18px;
   color: var(--ask);
-  font-size: 13px;
+  font-size: calc(13px * var(--text-scale));
 }
 
 .theme-warnings .ok {
@@ -2322,7 +2459,7 @@ select:focus-visible {
 
 .profile-block h3 {
   margin: 0;
-  font-size: 15px;
+  font-size: calc(15px * var(--text-scale));
 }
 
 .profile-parts {
@@ -2335,7 +2472,7 @@ select:focus-visible {
   grid-template-columns: auto 9em minmax(0, 1fr);
   align-items: baseline;
   gap: 10px;
-  font-size: 14px;
+  font-size: calc(14px * var(--text-scale));
 }
 
 .profile-part input {
@@ -2368,7 +2505,7 @@ select:focus-visible {
   max-width: 50%;
   overflow: hidden;
   color: var(--muted);
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--text-scale));
   font-weight: 550;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2569,7 +2706,7 @@ select:focus-visible {
   border-radius: 6px;
   background: transparent;
   color: var(--faint);
-  font: 15px/1 var(--sans);
+  font: calc(15px * var(--text-scale))/1 var(--sans);
   cursor: pointer;
 }
 
@@ -2626,7 +2763,7 @@ select:focus-visible {
   border-radius: 4px;
   background: none;
   color: var(--muted);
-  font-size: 14px;
+  font-size: calc(14px * var(--text-scale));
   opacity: 0.55;
   cursor: pointer;
 }
@@ -2647,7 +2784,7 @@ select:focus-visible {
   border-radius: 6px;
   background: transparent;
   color: var(--muted);
-  font: 17px/1 var(--sans);
+  font: calc(17px * var(--text-scale))/1 var(--sans);
   cursor: pointer;
 }
 
@@ -2782,7 +2919,7 @@ body.dragging-panel * {
   border-radius: 5px;
   background: transparent;
   color: var(--text);
-  font: 13px var(--sans);
+  font: calc(13px * var(--text-scale)) var(--sans);
   text-align: left;
   cursor: pointer;
 }
@@ -2802,7 +2939,7 @@ body.dragging-panel * {
 
 .file-icon {
   color: var(--faint);
-  font-size: 11px;
+  font-size: calc(11px * var(--text-scale));
 }
 
 .file-glyph {
@@ -2933,7 +3070,7 @@ body.dragging-panel * {
 }
 
 .file-mark {
-  font: 12px var(--mono);
+  font: calc(12px * var(--code-scale)) var(--mono);
 }
 
 .file-mark.dot {
@@ -2941,7 +3078,7 @@ body.dragging-panel * {
 }
 
 .file-cut {
-  font-size: 12px;
+  font-size: calc(12px * var(--text-scale));
 }
 
 /* Preview: a file of the copy, large, as what it is. */
@@ -2968,19 +3105,19 @@ body.dragging-panel * {
 .preview-path {
   min-width: 0;
   color: var(--text);
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--text-scale));
 }
 
 .preview-meta {
   color: var(--faint);
-  font-size: 12px;
+  font-size: calc(12px * var(--text-scale));
   white-space: nowrap;
 }
 
 .preview-change {
   padding: 1px 8px;
   border-radius: 999px;
-  font-size: 11px;
+  font-size: calc(11px * var(--text-scale));
   font-weight: 600;
 }
 
@@ -3015,7 +3152,7 @@ body.dragging-panel * {
   border: 0;
   background: transparent;
   color: var(--muted);
-  font: 12px var(--sans);
+  font: calc(12px * var(--text-scale)) var(--sans);
   cursor: pointer;
 }
 
@@ -3056,7 +3193,7 @@ body.dragging-panel * {
   padding: 8px 14px;
   border-top: 1px solid var(--border);
   color: var(--muted);
-  font-size: 12px;
+  font-size: calc(12px * var(--text-scale));
 }
 
 .preview-head + .preview-note {
@@ -3067,7 +3204,7 @@ body.dragging-panel * {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
   align-content: start;
-  font: 12.5px/1.6 var(--mono);
+  font: calc(12.5px * var(--code-scale))/1.6 var(--mono);
   tab-size: 4;
 }
 
@@ -3120,10 +3257,10 @@ body.dragging-panel * {
   margin-top: 0;
 }
 
-.preview-md h3 { font-size: 22px; }
-.preview-md h4 { font-size: 18px; }
-.preview-md h5 { font-size: 15px; }
-.preview-md h6 { font-size: 14px; }
+.preview-md h3 { font-size: calc(22px * var(--text-scale)); }
+.preview-md h4 { font-size: calc(18px * var(--text-scale)); }
+.preview-md h5 { font-size: calc(15px * var(--text-scale)); }
+.preview-md h6 { font-size: calc(14px * var(--text-scale)); }
 
 .preview-md ul,
 .preview-md ol {
@@ -3139,7 +3276,7 @@ body.dragging-panel * {
   padding: 1px 4px;
   border-radius: 4px;
   background: var(--sunken);
-  font: 12.5px var(--mono);
+  font: calc(12.5px * var(--code-scale)) var(--mono);
 }
 
 .preview-md pre {
@@ -3169,7 +3306,7 @@ body.dragging-panel * {
 
 .preview-md .md-url {
   color: var(--faint);
-  font-size: 12px;
+  font-size: calc(12px * var(--text-scale));
 }
 
 /* Servers working in the copy, each opening in the browser. */
@@ -3185,7 +3322,7 @@ body.dragging-panel * {
   border-radius: 999px;
   background: var(--ok-soft);
   color: var(--ok);
-  font: 600 11.5px var(--mono);
+  font: 600 calc(11.5px * var(--code-scale)) var(--mono);
   cursor: pointer;
 }
 
@@ -3224,7 +3361,7 @@ body.dragging-panel * {
   border-radius: 999px;
   background: var(--accent);
   color: var(--accent-text);
-  font: 600 12px var(--sans);
+  font: 600 calc(12px * var(--text-scale)) var(--sans);
   box-shadow: 0 4px 14px -6px rgba(0, 0, 0, 0.45);
   cursor: pointer;
 }
@@ -3246,7 +3383,7 @@ body.dragging-panel * {
   border-radius: 10px;
   background: var(--surface);
   box-shadow: 0 14px 34px -12px rgba(0, 0, 0, 0.5);
-  font: 13px var(--sans);
+  font: calc(13px * var(--text-scale)) var(--sans);
   white-space: normal;
 }
 
@@ -3255,7 +3392,7 @@ body.dragging-panel * {
   align-items: center;
   gap: 6px;
   color: var(--accent);
-  font: 12px var(--mono);
+  font: calc(12px * var(--code-scale)) var(--mono);
 }
 
 .preview-bubble-quote {
@@ -3275,7 +3412,7 @@ body.dragging-panel * {
   border-radius: 7px;
   background: var(--bg);
   color: var(--text);
-  font: 13px var(--sans);
+  font: calc(13px * var(--text-scale)) var(--sans);
   resize: vertical;
 }
 
@@ -3294,7 +3431,7 @@ body.dragging-panel * {
 .preview-bubble-hint {
   margin-left: auto;
   color: var(--faint);
-  font-size: 11px;
+  font-size: calc(11px * var(--text-scale));
 }
 
 .preview-grid {
@@ -3338,7 +3475,7 @@ body.dragging-panel * {
   border-radius: 6px;
   background: var(--accent-soft);
   color: var(--text);
-  font: 11.5px var(--mono);
+  font: calc(11.5px * var(--code-scale)) var(--mono);
   white-space: nowrap;
 }
 
@@ -3348,7 +3485,7 @@ body.dragging-panel * {
 
 .chip-mark {
   color: var(--accent);
-  font: 600 11px var(--sans);
+  font: 600 calc(11px * var(--text-scale)) var(--sans);
 }
 
 .place-chip-remove {
@@ -3357,7 +3494,7 @@ body.dragging-panel * {
   border-radius: 4px;
   background: none;
   color: var(--muted);
-  font-size: 13px;
+  font-size: calc(13px * var(--text-scale));
   line-height: 1;
   cursor: pointer;
 }
@@ -3416,7 +3553,7 @@ body.dragging-panel * {
   padding: 6px 14px;
   border-bottom: 1px solid var(--border);
   color: var(--muted);
-  font: 12px var(--mono);
+  font: calc(12px * var(--code-scale)) var(--mono);
 }
 
 .preview-fx-cell {
@@ -3435,7 +3572,7 @@ body.dragging-panel * {
 .preview-grid {
   border-collapse: separate;
   border-spacing: 0;
-  font: 12px var(--mono);
+  font: calc(12px * var(--code-scale)) var(--mono);
   font-variant-numeric: tabular-nums;
 }
 
@@ -3512,7 +3649,7 @@ body.dragging-panel * {
   border-radius: 0 0 6px 6px;
   background: transparent;
   color: var(--muted);
-  font: 12px var(--sans);
+  font: calc(12px * var(--text-scale)) var(--sans);
   white-space: nowrap;
   cursor: pointer;
 }
@@ -3608,7 +3745,7 @@ body.dragging-panel * {
   border-radius: 6px;
   background: var(--bg);
   color: var(--text);
-  font: 12px var(--mono);
+  font: calc(12px * var(--code-scale)) var(--mono);
 }
 
 .terminal-find input.missing {
@@ -3656,7 +3793,7 @@ body.dragging-panel * {
   border-radius: 999px;
   background: var(--ask-soft);
   color: var(--ask);
-  font-size: 11px;
+  font-size: calc(11px * var(--text-scale));
   opacity: 0.85;
   white-space: nowrap;
 }
@@ -3665,7 +3802,7 @@ body.dragging-panel * {
    conversation fills it, and the prompt is a command line at the bottom. */
 #panel-live {
   background: var(--sunken);
-  font: 13px/1.55 var(--mono);
+  font: calc(13px * var(--code-scale))/1.55 var(--mono);
 }
 
 #panel-live .stream {
@@ -3677,29 +3814,38 @@ body.dragging-panel * {
   max-width: 100ch;
 }
 
+/* The person's prompt stands apart from the agent's answer: a tinted
+   block with an accent edge, under "You"; each turn after the first
+   starts with some room above it. */
 #panel-live .msg.prompt {
-  align-self: flex-start;
-  padding: 0;
-  border: 0;
-  background: none;
+  align-self: stretch;
+  padding: 8px 12px 9px;
+  border-left: 3px solid var(--accent);
+  border-radius: 0 var(--radius) var(--radius) 0;
+  background: var(--accent-soft);
   color: var(--text);
-  font-weight: 600;
 }
 
-#panel-live .msg.prompt::before {
-  margin-right: 8px;
+#panel-live .msg.prompt:not(:first-child) {
+  margin-top: 14px;
+}
+
+#panel-live .msg.prompt .msg-head {
+  margin-bottom: 4px;
+}
+
+#panel-live .msg.prompt .msg-who {
   color: var(--accent);
-  content: "›";
 }
 
 #panel-live .msg.md .md-h {
-  font-size: 13px;
+  font-size: calc(13px * var(--text-scale));
 }
 
 #panel-live .msg.md code,
 #panel-live .msg.md pre {
   background: var(--bg);
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--text-scale));
 }
 
 #panel-live .stream-empty {
@@ -3726,7 +3872,7 @@ body.dragging-panel * {
 
 .prompt-mark {
   color: var(--accent);
-  font: 600 14px/1.55 var(--mono);
+  font: 600 calc(14px * var(--code-scale))/1.55 var(--mono);
   user-select: none;
 }
 
@@ -3738,7 +3884,7 @@ body.dragging-panel * {
   border-radius: 0;
   background: transparent;
   color: var(--text);
-  font: 13px/1.55 var(--mono);
+  font: calc(13px * var(--code-scale))/1.55 var(--mono);
   outline: none;
   overflow-y: hidden;
 }
@@ -3757,7 +3903,7 @@ body.dragging-panel * {
   border-radius: 6px;
   background: transparent;
   color: var(--accent);
-  font: 600 12px/1.6 var(--mono);
+  font: 600 calc(12px * var(--code-scale))/1.6 var(--mono);
   cursor: pointer;
 }
 
@@ -3779,7 +3925,7 @@ body.dragging-panel * {
 
 .run-button .shortcut {
   margin-left: 0;
-  font: 11px var(--mono);
+  font: calc(11px * var(--code-scale)) var(--mono);
   opacity: 0.8;
 }
 
@@ -3792,7 +3938,7 @@ body.dragging-panel * {
   border-top: 1px solid var(--border);
   background: var(--surface);
   color: var(--faint);
-  font: 11.5px var(--mono);
+  font: calc(11.5px * var(--code-scale)) var(--mono);
 }
 
 #panel-live .agent-pick {
@@ -3809,7 +3955,7 @@ body.dragging-panel * {
   border-radius: 0;
   background: transparent;
   color: var(--muted);
-  font: 11.5px var(--mono);
+  font: calc(11.5px * var(--code-scale)) var(--mono);
 }
 
 #panel-live .agent-pick input {
@@ -3819,7 +3965,7 @@ body.dragging-panel * {
 #panel-live .hint {
   margin-left: auto;
   color: var(--faint);
-  font-size: 11.5px;
+  font-size: calc(11.5px * var(--text-scale));
 }
 
 /* Review's and Timeline's sections as tabs side by side. */
@@ -3842,7 +3988,7 @@ body.dragging-panel * {
   background: none;
   color: var(--muted);
   font: inherit;
-  font-size: 11px;
+  font-size: calc(11px * var(--text-scale));
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -3869,7 +4015,7 @@ body.dragging-panel * {
   border-radius: 999px;
   background: var(--surface-2, var(--border));
   color: var(--muted);
-  font-size: 10px;
+  font-size: calc(10px * var(--text-scale));
   letter-spacing: 0;
   text-align: center;
 }
@@ -3878,41 +4024,230 @@ body.dragging-panel * {
   margin-top: 0;
 }
 
-/* Settings > Budget: each task's own. */
-.task-budgets {
-  margin-top: 28px;
+/* Settings > Budget and Limits: one scope at a time. Every task, a group
+   and one task each have a word in capitals and an edge of their own: the
+   accent for every task, the group's or the task's colour for the others. */
+.scope-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin: 4px 0 14px;
 }
 
-.task-budget-list {
+.scope-bar-label {
+  color: var(--muted);
+  font-weight: 550;
+}
+
+.scope-choices {
+  display: inline-flex;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.scope-choice {
+  min-height: 30px;
+  padding: 0 14px;
+  border: 0;
+  border-left: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--muted);
+  font: inherit;
+  font-weight: 550;
+  cursor: pointer;
+}
+
+.scope-choice:first-child {
+  border-left: 0;
+}
+
+.scope-choice:hover:not(:disabled) {
+  color: var(--text);
+}
+
+.scope-choice[aria-pressed="true"] {
+  background: var(--accent);
+  color: var(--accent-text);
+}
+
+.scope-choice:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.scope-choice:focus-visible,
+.scope-row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.scope-which {
+  min-width: 0;
+  max-width: 100%;
+  min-height: 30px;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+}
+
+.scope-card {
+  --scope-edge: var(--muted);
+  display: flex;
+  max-width: 760px;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--scope-edge);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.scope-card.scope-every {
+  --scope-edge: var(--accent);
+}
+
+.scope-card[class*="color-"] {
+  --scope-edge: var(--tag);
+}
+
+.scope-card-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.scope-badge {
+  flex: none;
+  padding: 1px 6px;
+  border: 1px solid var(--scope-edge, var(--muted));
+  border-radius: 4px;
+  color: var(--text);
+  font-size: calc(11px * var(--text-scale));
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.scope-badge.small {
+  padding: 1px 5px;
+  font-size: calc(10px * var(--text-scale));
+}
+
+.scope-name {
+  overflow: hidden;
+  min-width: 0;
+  font-size: calc(15px * var(--text-scale));
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.scope-reach {
+  margin: 0;
+  color: var(--muted);
+}
+
+.budget-field {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 14px;
+}
+
+.budget-pick {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+}
+
+.limit-field.inherited select {
+  color: var(--muted);
+}
+
+.scope-in-force {
+  margin: 0;
+}
+
+.scope-holds-head,
+.scope-overview h3 {
+  margin: 0 0 6px;
+  font-size: calc(13px * var(--text-scale));
+  font-weight: 650;
+}
+
+.scope-holds-list,
+.scope-overview-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
   margin: 0;
   padding: 0;
   list-style: none;
 }
 
-.task-budget-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
+.scope-hold,
+.scope-row {
+  --scope-edge: var(--muted);
+  display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 14px;
-  padding: 8px 12px;
+  gap: 4px 10px;
+  min-width: 0;
+  padding: 6px 10px;
   border: 1px solid var(--border);
-  border-radius: 8px;
-  margin-bottom: 6px;
+  border-radius: 6px;
 }
 
-.task-budget-row[class*="color-"] {
-  border-left: 4px solid var(--tag);
+.scope-hold.holds {
+  border-color: var(--accent);
 }
 
-.task-budget-name {
+.scope-row {
+  width: 100%;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.scope-row:hover {
+  background: var(--sunken);
+}
+
+.scope-row.scope-every,
+.scope-hold.scope-every {
+  --scope-edge: var(--accent);
+}
+
+.scope-row[class*="color-"],
+.scope-hold[class*="color-"] {
+  --scope-edge: var(--tag);
+}
+
+.scope-row-name {
   overflow: hidden;
+  min-width: 0;
   font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.task-budget-spent {
-  font: 12px var(--mono);
+.scope-row-words {
+  min-width: 0;
+}
+
+.scope-overview {
+  max-width: 760px;
+  margin-top: 24px;
 }
 
 .task-budget-field {
@@ -3950,7 +4285,7 @@ body.dragging-panel * {
   border-bottom: 1px solid var(--border);
   background: var(--sunken);
   color: var(--muted);
-  font-size: 12px;
+  font-size: calc(12px * var(--text-scale));
 }
 
 .ext-frame {
@@ -3988,7 +4323,7 @@ body.dragging-panel * {
 }
 
 .ext-digest {
-  font: 12px var(--mono);
+  font: calc(12px * var(--code-scale)) var(--mono);
 }
 
 .ext-settings {
@@ -4002,7 +4337,7 @@ body.dragging-panel * {
 
 .ext-settings h3 {
   margin: 0;
-  font-size: 13px;
+  font-size: calc(13px * var(--text-scale));
 }
 
 .ext-field {
@@ -4014,12 +4349,12 @@ body.dragging-panel * {
 
 .ext-field .muted {
   grid-column: 2;
-  font-size: 12px;
+  font-size: calc(12px * var(--text-scale));
 }
 
 .ext-notes h3 {
   margin: 12px 0 4px;
-  font-size: 13px;
+  font-size: calc(13px * var(--text-scale));
 }
 
 .ext-notes-about {
@@ -4044,7 +4379,7 @@ body.dragging-panel * {
 }
 
 .ext-mcp-command {
-  font: 12px var(--mono);
+  font: calc(12px * var(--code-scale)) var(--mono);
   overflow-wrap: anywhere;
 }
 
@@ -4069,7 +4404,7 @@ body.dragging-panel * {
   overflow: auto;
   border-radius: var(--radius);
   background: var(--sunken);
-  font: 12px var(--mono);
+  font: calc(12px * var(--code-scale)) var(--mono);
   list-style: none;
 }
 
@@ -4086,10 +4421,6 @@ body.dragging-panel * {
 }
 
 /* Settings > Limits. */
-.limits-card {
-  max-width: 760px;
-}
-
 .limits-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
@@ -4139,22 +4470,6 @@ body.dragging-panel * {
   opacity: 0.5;
 }
 
-.task-limits-row {
-  display: block;
-}
-
-.task-limits-row summary {
-  display: grid;
-  grid-template-columns: minmax(8em, 1fr) minmax(0, 2fr);
-  align-items: center;
-  gap: 14px;
-  cursor: pointer;
-}
-
-.task-limits-row details[open] summary {
-  margin-bottom: 10px;
-}
-
 /* Live: stopping a run, and what it takes. */
 .stop-button {
   border-color: var(--deny);
@@ -4172,7 +4487,7 @@ body.dragging-panel * {
   border: 0;
   background: transparent;
   color: var(--muted);
-  font: 11.5px var(--mono);
+  font: calc(11.5px * var(--code-scale)) var(--mono);
   cursor: pointer;
 }
 
@@ -4187,10 +4502,6 @@ body.dragging-panel * {
 .run-measure.slowed::after {
   content: " · slowed";
   color: var(--ask);
-}
-
-.task-limits-row summary .task-budget-spent {
-  text-align: right;
 }
 
 /* Motion: small movements where something changes, what opens, arrives,
@@ -4483,7 +4794,7 @@ body.dragging-panel * {
   background: var(--ask-soft);
   color: var(--ask);
   font: inherit;
-  font-size: 12px;
+  font-size: calc(12px * var(--text-scale));
   cursor: pointer;
 }
 
@@ -4496,7 +4807,7 @@ body.dragging-panel * {
 .beside-chip {
   border: 0;
   font: inherit;
-  font-size: 12px;
+  font-size: calc(12px * var(--text-scale));
   cursor: pointer;
 }
 
@@ -4519,7 +4830,7 @@ body.dragging-panel * {
 
 .isolation h3 {
   color: var(--ask);
-  font-size: 14px;
+  font-size: calc(14px * var(--text-scale));
 }
 
 .isolation ul {
@@ -4541,5 +4852,61 @@ body.dragging-panel * {
   border-radius: var(--radius);
   background: var(--ask-soft);
   color: var(--ask);
-  font-size: 13px;
+  font-size: calc(13px * var(--text-scale));
+}
+
+/* Settings → Appearance → Fonts: a font and its size per row, and a line
+   in that font. */
+.font-row {
+  display: grid;
+  gap: 4px;
+  padding: 8px 0;
+}
+
+.font-title {
+  font-weight: 600;
+}
+
+.font-note {
+  font-size: calc(12px * var(--text-scale));
+}
+
+.font-pick {
+  display: flex;
+  max-width: 520px;
+  gap: 8px;
+}
+
+.font-pick input,
+.font-pick select {
+  min-height: 30px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+}
+
+.font-pick input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.font-pick input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.font-sample {
+  margin: 2px 0 0;
+  color: var(--muted);
+}
+
+.font-sample.text {
+  font-family: var(--sans);
+}
+
+.font-sample.code {
+  font: calc(13px * var(--code-scale)) var(--mono);
 }

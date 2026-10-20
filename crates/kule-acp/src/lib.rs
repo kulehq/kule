@@ -49,9 +49,19 @@ pub use profile::{AGENTS_FILE, Agents, Launch, Listed, Origin, Profile, parse_pr
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Event {
     /// A piece of the agent's answer.
-    Message { text: String },
+    Message {
+        text: String,
+        /// The message it belongs to, where the agent says: a piece with
+        /// another id starts a new message.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+    },
     /// A piece of the agent's reasoning.
-    Thought { text: String },
+    Thought {
+        text: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+    },
     /// The agent started a tool call.
     ToolCall { id: String, title: String },
     /// A tool call ended; `step` is what it changed in the copy. Calls that
@@ -695,12 +705,14 @@ impl Watcher {
         match update {
             SessionUpdate::AgentMessageChunk(chunk) => {
                 if let Some(text) = text_of(&chunk.content) {
-                    self.send(Event::Message { text });
+                    let id = chunk.message_id.map(|m| m.to_string());
+                    self.send(Event::Message { text, id });
                 }
             }
             SessionUpdate::AgentThoughtChunk(chunk) => {
                 if let Some(text) = text_of(&chunk.content) {
-                    self.send(Event::Thought { text });
+                    let id = chunk.message_id.map(|m| m.to_string());
+                    self.send(Event::Thought { text, id });
                 }
             }
             SessionUpdate::ToolCall(call) => {
@@ -871,6 +883,7 @@ impl Watcher {
             }),
             Err(e) => self.send(Event::Message {
                 text: format!("\n[kule: could not record the step: {e}]\n"),
+                id: None,
             }),
         }
     }

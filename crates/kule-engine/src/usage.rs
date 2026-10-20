@@ -70,6 +70,16 @@ pub struct RunUsage {
     /// How long the run took, start to end.
     #[serde(default)]
     pub duration_secs: u64,
+    /// The group the task was in when the run was recorded, `Some(None)`
+    /// for none, so a group's budget keeps what its tasks spent after one
+    /// moves out. Absent in runs recorded before Kule kept it: those count
+    /// for the group the task is in now.
+    #[serde(
+        default,
+        deserialize_with = "crate::limits::set",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub group: Option<Option<u64>>,
 }
 
 /// What a task's runs used together.
@@ -119,10 +129,15 @@ impl Task {
         self.dir().join("usage.jsonl")
     }
 
-    /// Adds one run's usage to the task's.
+    /// Adds one run's usage to the task's, with the group the task is in
+    /// now unless the usage names one.
     pub fn record_usage(&self, usage: &RunUsage) -> Result<()> {
         let path = self.usage_path();
-        let mut line = serde_json::to_vec(usage).map_err(|source| Error::State {
+        let mut usage = usage.clone();
+        if usage.group.is_none() {
+            usage.group = Some(self.group()?);
+        }
+        let mut line = serde_json::to_vec(&usage).map_err(|source| Error::State {
             path: path.clone(),
             source,
         })?;
@@ -171,6 +186,147 @@ impl Task {
             currency: budget.currency,
         }))
     }
+
+    /// Every budget the task's next run is held to, with what is left of
+    /// each: its own, its group's (all its runs, and the last 24 hours') and
+    /// the daily one for every task. Each holds; the tightest decides.
+    pub fn budgets(&self) -> Result<Vec<BudgetLeft>> {
+        self.budgets_in(self.group()?)
+    }
+
+    /// As [`Task::budgets`], were the task in group `group`.
+    pub fn budgets_in(&self, group: Option<u64>) -> Result<Vec<BudgetLeft>> {
+        let home = self.home();
+        let mut out = Vec::new();
+        if let Some(budget) = self.budget()? {
+            let spent = self.spent()?.in_currency(&budget.currency);
+            out.push(BudgetLeft::new(BudgetScope::Task, budget, spent));
+        }
+        if let Some(group) = crate::groups::group_of(&home, group)?
+            && (group.budget.is_some() || group.daily_budget.is_some())
+        {
+            let spent = groups_spent(&home)?.remove(&group.id).unwrap_or_default();
+            if let Some(budget) = group.budget {
+                let used = spent.total.in_currency(&budget.currency);
+                let scope = BudgetScope::Group {
+                    group: group.id,
+                    name: group.name.clone(),
+                };
+                out.push(BudgetLeft::new(scope, budget, used));
+            }
+            if let Some(budget) = group.daily_budget {
+                let used = spent.today.in_currency(&budget.currency);
+                let scope = BudgetScope::GroupDaily {
+                    group: group.id,
+                    name: group.name,
+                };
+                out.push(BudgetLeft::new(scope, budget, used));
+            }
+        }
+        if let Some(budget) = daily_budget(&home)? {
+            let used = spent_today(&home)?.in_currency(&budget.currency);
+            out.push(BudgetLeft::new(BudgetScope::Daily, budget, used));
+        }
+        Ok(out)
+    }
+
+    /// What the task's next run may cost: the tightest of [`Task::budgets`],
+    /// `None` without any. Refused, naming the budget, when one is spent.
+    pub fn run_budget(&self) -> Result<Option<Money>> {
+        let mut limit = None;
+        for budget in self.budgets()? {
+            if budget.left.amount <= 0.0 {
+                return Err(Error::Invalid(budget.spent_reason(self.id())));
+            }
+            limit = Money::tighter(limit, Some(budget.left));
+        }
+        Ok(limit)
+    }
+}
+
+/// Where a budget over a run is set.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "scope", rename_all = "snake_case")]
+pub enum BudgetScope {
+    /// The task's own: all of its runs together.
+    Task,
+    /// Its group's: all of the group's tasks' runs together.
+    Group { group: u64, name: String },
+    /// Its group's for a day: the group's tasks' runs started in the last
+    /// 24 hours.
+    GroupDaily { group: u64, name: String },
+    /// Every task's runs started in the last 24 hours.
+    Daily,
+}
+
+/// A budget over a run, and what is left of it: zero or less when spent.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BudgetLeft {
+    #[serde(flatten)]
+    pub scope: BudgetScope,
+    pub budget: Money,
+    pub left: Money,
+}
+
+impl BudgetLeft {
+    fn new(scope: BudgetScope, budget: Money, spent: f64) -> BudgetLeft {
+        let left = Money {
+            amount: budget.amount - spent,
+            currency: budget.currency.clone(),
+        };
+        BudgetLeft {
+            scope,
+            budget,
+            left,
+        }
+    }
+
+    /// Why task `task` cannot run while this budget is spent.
+    fn spent_reason(&self, task: &str) -> String {
+        match &self.scope {
+            BudgetScope::Task => format!(
+                "task {task} has spent its budget; raise it or turn it off to run again"
+            ),
+            BudgetScope::Group { name, .. } => format!(
+                "group {name:?} has spent its budget: its tasks together; raise it or turn it off to run again"
+            ),
+            BudgetScope::GroupDaily { name, .. } => format!(
+                "group {name:?}'s daily budget is spent: its tasks together, in the last 24 hours; raise it or turn it off to run again"
+            ),
+            BudgetScope::Daily => "the daily budget is spent: every task together, in the last 24 hours; raise it or turn it off to run again".to_owned(),
+        }
+    }
+}
+
+/// What a group's tasks spent: all of their runs, and those started in the
+/// last 24 hours.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct GroupSpent {
+    pub total: Spent,
+    pub today: Spent,
+}
+
+/// What each group's tasks spent, by group id. A run counts for the group
+/// its task was in when it was recorded, or, recorded before Kule kept
+/// that, for the group the task is in now.
+pub fn groups_spent(home: &Path) -> Result<std::collections::BTreeMap<u64, GroupSpent>> {
+    let since = now_unix().saturating_sub(DAY_SECS);
+    let mut spent = std::collections::BTreeMap::<u64, GroupSpent>::new();
+    for info in Task::list(home)? {
+        let task = Task::open(home, &info.id)?;
+        let now_in = task.group()?;
+        for run in task.usage()? {
+            let Some(group) = run.group.unwrap_or(now_in) else {
+                continue;
+            };
+            let entry = spent.entry(group).or_default();
+            if run.started_unix >= since {
+                entry.today.add(run.clone());
+            }
+            entry.total.add(run);
+        }
+    }
+    Ok(spent)
 }
 
 #[cfg(test)]
@@ -221,6 +377,47 @@ mod tests {
         assert_eq!(task.approval_timeout().unwrap().as_secs(), 120);
         task.set_budget(None).unwrap();
         assert_eq!(task.approval_timeout().unwrap().as_secs(), 120);
+    }
+
+    #[test]
+    fn a_run_is_kept_with_its_group_and_older_runs_count_for_the_group_now() {
+        let (home, ws) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+        let task = Task::create(home.path(), ws.path()).unwrap();
+        let group = crate::groups::create_group(home.path(), "g", None).unwrap();
+        // Recorded before Kule kept a run's group: no `group` in the line.
+        std::fs::write(
+            task.usage_path(),
+            "{\"agent\":\"a\",\"started_unix\":1,\"cost\":{\"amount\":1.0,\"currency\":\"USD\"}}\n",
+        )
+        .unwrap();
+        task.record_usage(&RunUsage {
+            agent: "a".into(),
+            cost: usd(2.0),
+            ..RunUsage::default()
+        })
+        .unwrap();
+        task.set_group(Some(group.id)).unwrap();
+        task.record_usage(&RunUsage {
+            agent: "a".into(),
+            cost: usd(4.0),
+            ..RunUsage::default()
+        })
+        .unwrap();
+        let groups = |kept: &[Option<Option<u64>>]| {
+            assert_eq!(
+                task.usage()
+                    .unwrap()
+                    .iter()
+                    .map(|r| r.group)
+                    .collect::<Vec<_>>(),
+                kept
+            );
+        };
+        groups(&[None, Some(None), Some(Some(group.id))]);
+        // The old run counts for the group the task is in now; the one
+        // recorded in no group does not.
+        let spent = groups_spent(home.path()).unwrap();
+        assert!((spent[&group.id].total.in_currency("USD") - 5.0).abs() < 1e-9);
     }
 
     #[test]

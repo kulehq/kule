@@ -3513,6 +3513,8 @@ dependencies = [
  "kule-ext",
  "libc",
  "objc2",
+ "objc2-core-foundation",
+ "objc2-core-text",
  "portable-pty",
  "serde",
  "serde_json",

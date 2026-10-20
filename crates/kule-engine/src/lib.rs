@@ -73,7 +73,8 @@ pub use error::{Error, Result};
 pub use git::{Carried, CarriedEntry, GitState, GitSummary, RefChange};
 pub use groups::{
     GROUP_POLICY_DIR, GROUPS_FILE, Group, GroupPolicy, MAX_GROUP_POLICY, MAX_GROUPS, create_group,
-    delete_group, group_policy_text, groups, set_group_order, set_group_policy, update_group,
+    delete_group, group_policy_text, groups, set_group_budget, set_group_limits, set_group_order,
+    set_group_policy, update_group,
 };
 pub use history::{Entry as HistoryEntry, Event as HistoryEvent};
 pub use home::{HomeApplied, HomeChange};
@@ -107,4 +108,7 @@ pub use steps::{Step, StepChange};
 pub use sync::{Behind, Synced};
 pub use task::{AgentAtWork, Task, TaskInfo};
 pub use textdiff::{DiffSkip, Hunk, Line, LineKind, TextDiff};
-pub use usage::{Money, RunUsage, Spent, daily_budget, daily_left, set_daily_budget, spent_today};
+pub use usage::{
+    BudgetLeft, BudgetScope, GroupSpent, Money, RunUsage, Spent, daily_budget, daily_left,
+    groups_spent, set_daily_budget, spent_today,
+};

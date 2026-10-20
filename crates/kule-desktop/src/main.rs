@@ -8,6 +8,7 @@ mod ext_call;
 mod ext_net;
 mod ext_serve;
 mod extensions;
+mod fonts;
 mod menu;
 mod pty;
 mod shell_path;
@@ -24,7 +25,7 @@ use kule_daemon::themes::{ThemeFile, Themes};
 use kule_daemon::{
     AgentProfile, Alert, Alerts, Call, Client, Commit, DailyBudget, Hello, IsolationView, Limits,
     Money, Notice, PROTOCOL, PolicyChoice, Question, Result, Review, RunEvent, Sequenced,
-    TaskChange, TaskColor, TaskLimits, TaskView, Timeline, default_home,
+    SharedBudget, TaskChange, TaskColor, TaskLimits, TaskView, Timeline, default_home,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -574,9 +575,21 @@ fn import_profile(app: AppHandle, kule: K<'_>) -> Result<Option<PickedProfile>> 
     Ok(Some(PickedProfile { text, file }))
 }
 
+/// Applies a profile; a font it names that this computer lacks falls back
+/// to Kule's own, and the lines say so.
 #[tauri::command(async)]
 fn apply_profile(kule: K<'_>, text: String, parts: Vec<Part>) -> Result<Vec<String>> {
-    kule.call(Call::ApplyProfile { text, parts })
+    let appearance = parts.contains(&Part::Appearance);
+    let mut said: Vec<String> = kule.call(Call::ApplyProfile { text, parts })?;
+    if appearance {
+        let mut themes: Themes = kule.call(Call::Themes)?;
+        let missing = fonts::without_missing(&mut themes.fonts, &fonts::system_fonts());
+        if !missing.is_empty() {
+            let _: Themes = kule.call(Call::SetThemes { themes })?;
+            said.extend(missing);
+        }
+    }
+    Ok(said)
 }
 
 #[tauri::command(async)]
@@ -730,6 +743,35 @@ fn set_task_limits(kule: K<'_>, task: String, limits: TaskLimits) -> Result<Task
 }
 
 #[tauri::command(async)]
+fn set_group_limits(kule: K<'_>, group: u64, limits: TaskLimits) -> Result<kule_daemon::Group> {
+    kule.call(Call::SetGroupLimits { group, limits })
+}
+
+#[tauri::command(async)]
+fn set_group_budget(
+    kule: K<'_>,
+    group: u64,
+    budget: Option<Money>,
+    daily: Option<Money>,
+) -> Result<kule_daemon::Group> {
+    kule.call(Call::SetGroupBudget {
+        group,
+        budget,
+        daily,
+    })
+}
+
+#[tauri::command(async)]
+fn groups_spent(kule: K<'_>) -> Result<std::collections::BTreeMap<u64, kule_daemon::GroupSpent>> {
+    kule.call(Call::GroupsSpent)
+}
+
+#[tauri::command(async)]
+fn task_budgets(kule: K<'_>, task: String) -> Result<Vec<kule_daemon::BudgetLeft>> {
+    kule.call(Call::TaskBudgets { task })
+}
+
+#[tauri::command(async)]
 fn stop_run(kule: K<'_>, task: String) -> Result<()> {
     kule.call(Call::StopRun { task })
 }
@@ -805,6 +847,9 @@ fn relay(app: AppHandle, home: &Path) {
             if let Ok(views) = kule.client.call::<Vec<TaskView>>(Call::Tasks) {
                 tell(&app, alerts.tasks(&views));
             }
+            if let Ok(shared) = kule.client.call::<Vec<SharedBudget>>(Call::SharedBudgets) {
+                tell(&app, alerts.shared(&shared));
+            }
             let _ = kule.client.subscribe(|notice| match notice {
                 Notice::Run { task, seq, event } => {
                     if let RunEvent::Finished { error, .. } = &event {
@@ -819,6 +864,11 @@ fn relay(app: AppHandle, home: &Path) {
                 Notice::Tasks => {
                     if let Ok(views) = kule.client.call::<Vec<TaskView>>(Call::Tasks) {
                         tell(&app, alerts.tasks(&views));
+                    }
+                    // A group's budgets and the daily one: what its tasks spent
+                    // came with this notice.
+                    if let Ok(shared) = kule.client.call::<Vec<SharedBudget>>(Call::SharedBudgets) {
+                        tell(&app, alerts.shared(&shared));
                     }
                     let _ = app.emit("tasks", ());
                 }
@@ -946,6 +996,7 @@ fn main() {
             commit,
             rollback,
             sync_task,
+            fonts::system_fonts,
             undo,
             back_to_step,
             fork_task,
@@ -1013,6 +1064,10 @@ fn main() {
             limits,
             set_limits,
             set_task_limits,
+            set_group_limits,
+            set_group_budget,
+            groups_spent,
+            task_budgets,
             stop_run,
             start_run,
             stream,

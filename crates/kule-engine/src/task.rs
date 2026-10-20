@@ -88,6 +88,11 @@ struct Settings {
     /// when the task was made: disk limits count from there.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     disk_base: Option<u64>,
+    /// What the task's package caches took when they were made: clones of
+    /// the person's, which take no room of their own where the filesystem
+    /// clones (APFS), and nothing the task added. Disk limits leave it out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    caches_made: Option<u64>,
 }
 
 fn is_default(limits: &TaskLimits) -> bool {
@@ -1072,6 +1077,7 @@ impl Task {
                 group: None,
                 limits: TaskLimits::default(),
                 disk_base: None,
+                caches_made: None,
             });
         }
         read_json(&path)
@@ -1098,6 +1104,28 @@ impl Task {
             return Ok(base);
         }
         self.mark_disk_base()
+    }
+
+    /// What the task's folders grew by since it was made, the caches as
+    /// they were made left out: what a disk limit holds.
+    pub fn disk_grown(&self) -> Result<u64> {
+        let used = crate::resources::disk_used(&self.disk_dirs());
+        let base = self.disk_base()?;
+        let made = self.settings()?.caches_made.unwrap_or(0);
+        Ok(used.saturating_sub(base).saturating_sub(made))
+    }
+
+    /// Notes, once, what the caches at `caches` take as they were made, so
+    /// a disk limit counts only what the task adds to them. A task whose
+    /// caches were made before Kule kept this has them counted as they are
+    /// when first seen here.
+    pub(crate) fn note_caches_made(&self, caches: &Path) -> Result<()> {
+        let mut settings = self.settings()?;
+        if settings.caches_made.is_some() {
+            return Ok(());
+        }
+        settings.caches_made = Some(crate::resources::disk_used(&[caches.to_owned()]));
+        write_json(&self.dir.join("settings.json"), &settings)
     }
 
     fn mark_disk_base(&self) -> Result<u64> {

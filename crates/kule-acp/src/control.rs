@@ -129,7 +129,10 @@ impl RunControl {
         self.0.started.elapsed()
     }
 
-    pub(crate) fn finish(&self) {
+    /// The run is over: whatever governs it stops. A run marks this itself
+    /// when it returns; a caller whose run failed before it started marks
+    /// it too.
+    pub fn finish(&self) {
         self.0.over.store(true, Ordering::SeqCst);
     }
 

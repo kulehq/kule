@@ -31,6 +31,9 @@ tauri-plugin-notification = "2.4.0"
 [target.'cfg(target_os = "macos")'.dependencies]
 # To turn WebRTC off in the window (see extensions::no_webrtc).
 objc2 = "0.6.5"
+# The font families installed, for Settings → Appearance (see fonts.rs).
+objc2-core-foundation = { version = "0.3.2", default-features = false, features = ["std", "CFArray", "CFString"] }
+objc2-core-text = { version = "0.3.2", default-features = false, features = ["std", "CTFontManager"] }
 
 [dev-dependencies]
 tempfile.workspace = true

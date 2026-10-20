@@ -107,7 +107,7 @@ pub struct TaskLimits {
 }
 
 /// A field that is present, `null` included, is set.
-fn set<'de, T, D>(d: D) -> std::result::Result<Option<Option<T>>, D::Error>
+pub(crate) fn set<'de, T, D>(d: D) -> std::result::Result<Option<Option<T>>, D::Error>
 where
     T: Deserialize<'de>,
     D: Deserializer<'de>,
@@ -194,10 +194,19 @@ pub fn set_limits(home: &Path, limits: &Limits) -> Result<()> {
 }
 
 impl Task {
-    /// The limits in force for the task's runs: its own, and the home's
-    /// where it sets none.
+    /// The limits in force for the task's runs, field by field: its own,
+    /// else its group's, else the home's.
     pub fn limits_in_force(&self) -> Result<Limits> {
-        Ok(limits(&self.home())?.with(&self.limits()?))
+        self.limits_in_force_in(self.group()?)
+    }
+
+    /// As [`Task::limits_in_force`], were the task in group `group`.
+    pub fn limits_in_force_in(&self, group: Option<u64>) -> Result<Limits> {
+        let home = self.home();
+        let group = crate::groups::group_of(&home, group)?
+            .map(|g| g.limits)
+            .unwrap_or_default();
+        Ok(limits(&home)?.with(&group).with(&self.limits()?))
     }
 
     /// How long the task's runs took together, as recorded.
@@ -276,6 +285,73 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(task.limits().unwrap().cpu_percent, Some(Some(50)));
+    }
+
+    #[test]
+    fn a_group_s_limits_stand_between_every_task_s_and_a_task_s_own() {
+        let (home, ws) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+        let h = home.path();
+        let task = Task::create(h, ws.path()).unwrap();
+        let group = crate::groups::create_group(h, "heavy", None).unwrap();
+        set_limits(
+            h,
+            &Limits {
+                cpu_percent: Some(200),
+                memory_mb: Some(4096),
+                run_minutes: Some(30),
+                ..Limits::default()
+            },
+        )
+        .unwrap();
+        crate::groups::set_group_limits(
+            h,
+            group.id,
+            &TaskLimits {
+                cpu_percent: Some(None),
+                memory_mb: Some(Some(2048)),
+                disk_mb: Some(Some(10)),
+                gpu: Some(false),
+                ..TaskLimits::default()
+            },
+        )
+        .unwrap();
+        task.set_limits(&TaskLimits {
+            memory_mb: Some(Some(1024)),
+            ..TaskLimits::default()
+        })
+        .unwrap();
+        let fields = |l: Limits| (l.cpu_percent, l.memory_mb, l.disk_mb, l.gpu, l.run_minutes);
+
+        // In no group: the home's, and its own.
+        assert_eq!(
+            fields(task.limits_in_force().unwrap()),
+            (Some(200), Some(1024), None, true, Some(30))
+        );
+        // As it would be in the group, before it is.
+        let in_group = (None, Some(1024), Some(10), false, Some(30));
+        assert_eq!(
+            fields(task.limits_in_force_in(Some(group.id)).unwrap()),
+            in_group
+        );
+        // In it: the group's over the home's, its own over the group's.
+        task.set_group(Some(group.id)).unwrap();
+        assert_eq!(fields(task.limits_in_force().unwrap()), in_group);
+
+        // A group's limit out of its range is refused, and the old ones kept.
+        let wrong = TaskLimits {
+            memory_mb: Some(Some(1)),
+            ..TaskLimits::default()
+        };
+        assert!(crate::groups::set_group_limits(h, group.id, &wrong).is_err());
+        assert!(crate::groups::set_group_limits(h, group.id + 1, &TaskLimits::default()).is_err());
+        assert_eq!(fields(task.limits_in_force().unwrap()), in_group);
+
+        // A group deleted takes its limits with it.
+        crate::groups::delete_group(h, group.id).unwrap();
+        assert_eq!(
+            fields(task.limits_in_force().unwrap()),
+            (Some(200), Some(1024), None, true, Some(30))
+        );
     }
 
     #[test]

@@ -10,7 +10,7 @@ use serde_json::Value;
 
 /// Changes whenever a call, a result or a notice changes shape; a client
 /// and a daemon that disagree on it cannot talk.
-pub const PROTOCOL: u32 = 30;
+pub const PROTOCOL: u32 = 31;
 
 /// What a daemon says about itself.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -269,6 +269,28 @@ pub enum Call {
     SetTaskLimits {
         task: String,
         limits: kule_engine::TaskLimits,
+    },
+    /// The limits on each of a group's tasks' runs, field by field, where a
+    /// task sets none of its own.
+    SetGroupLimits {
+        group: u64,
+        limits: kule_engine::TaskLimits,
+    },
+    /// What a group's tasks may cost together: `budget` over all of their
+    /// runs, `daily` over any 24 hours; `None` for no limit.
+    SetGroupBudget {
+        group: u64,
+        budget: Option<kule_engine::Money>,
+        daily: Option<kule_engine::Money>,
+    },
+    /// What each group's tasks spent, by group id.
+    GroupsSpent,
+    /// Every budget tasks share that is set, a group's or the daily one,
+    /// with what was spent against it.
+    SharedBudgets,
+    /// Every budget a task's next run is held to, with what is left of each.
+    TaskBudgets {
+        task: String,
     },
     /// What every task may spend together in 24 hours, and what they did.
     DailyBudget,

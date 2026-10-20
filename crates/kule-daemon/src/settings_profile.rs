@@ -185,6 +185,8 @@ pub fn apply(home: &Path, text: &str, parts: &[Part]) -> Result<Vec<String>> {
                 }
                 mine.current = current;
                 mine.motion = theirs.motion;
+                mine.copy_on_select = theirs.copy_on_select;
+                mine.fonts = theirs.fonts.clone();
                 let kept = themes::save(home, &mine)?;
                 said.push(format!(
                     "Appearance: {} theme(s) of yours now, {} in use",
@@ -287,6 +289,12 @@ login = [".local/share/opencode/auth.json"]
                     colors: [("bg".to_owned(), "#0b1a2a".to_owned())].into(),
                 }],
                 motion: themes::Motion::Off,
+                copy_on_select: false,
+                fonts: themes::Fonts {
+                    code: Some("Menlo".into()),
+                    code_size: 16,
+                    ..themes::Fonts::default()
+                },
             },
         )
         .unwrap();
@@ -361,6 +369,11 @@ login = [".local/share/opencode/auth.json"]
         assert_eq!(
             themes::load(two.path()).unwrap().motion,
             themes::Motion::Off
+        );
+        assert!(!themes::load(two.path()).unwrap().copy_on_select);
+        assert_eq!(
+            themes::load(two.path()).unwrap().fonts.code.as_deref(),
+            Some("Menlo")
         );
         assert_eq!(
             kule_engine::policy_choice(two.path()).unwrap(),
