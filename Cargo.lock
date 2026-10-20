@@ -3508,7 +3508,7 @@ dependencies = [
 name = "kule-desktop"
 version = "0.2.0-preview.1"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "kule-daemon",
  "kule-ext",
  "libc",
@@ -3530,7 +3530,7 @@ dependencies = [
 name = "kule-engine"
 version = "0.2.0-preview.1"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "blake3",
  "cc",
  "cedar-policy",
@@ -3592,7 +3592,7 @@ dependencies = [
 name = "kule-view"
 version = "0.2.0-preview.1"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "imagesize",
  "quick-xml",
  "serde",

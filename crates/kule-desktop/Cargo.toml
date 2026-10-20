@@ -16,7 +16,7 @@ path = "src/main.rs"
 tauri-build = { version = "2.7.3", features = [] }
 
 [dependencies]
-base64 = "0.22.1"
+base64 = "0.23.1"
 kule-daemon = { version = "0.2.0-preview.1", path = "../kule-daemon" }
 kule-ext = { version = "0.2.0-preview.1", path = "../kule-ext" }
 ureq = "3.4.2"
