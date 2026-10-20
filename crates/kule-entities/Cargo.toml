@@ -10,7 +10,7 @@ rust-version.workspace = true
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true
-similar = "2.7.0"
+similar = "3.2.0"
 toml = "1.1.8"
 tree-sitter = "0.27.1"
 tree-sitter-c-sharp = "0.23.5"
