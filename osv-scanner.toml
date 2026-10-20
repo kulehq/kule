@@ -1,7 +1,8 @@
 # What osv-scanner may report and the release gate accepts
 # (scripts/release-gate.sh deps): the advisories deny.toml ignores, for the
 # same reasons, and one cargo-deny leaves out as it reports only the
-# workspace's own crates as unsound. Revisit with deny.toml's.
+# workspace's own crates as unsound. Revisit with deny.toml's. Last, what
+# the docs site's build (website/package-lock.json) may report.
 
 [[IgnoredVulns]]
 id = "RUSTSEC-2024-0429"
@@ -22,3 +23,7 @@ reason = "zbus_names: D-Bus names of zbus, through keyring's Secret Service and 
 [[IgnoredVulns]]
 id = "RUSTSEC-2026-0372"
 reason = "zvariant_derive: macros of zvariant, through keyring's Secret Service and notify-rust on Linux"
+
+[[IgnoredVulns]]
+id = "GHSA-vfj7-8cjw-p6xm"
+reason = "braces 3.0.3: stack exhaustion on deeply nested glob patterns, no patched version; only in the docs site's build (Docusaurus, webpack), whose patterns come from its own config; nothing of it ships in Kule or the published pages"

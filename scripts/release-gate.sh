@@ -64,7 +64,9 @@ workflows() {
 
 deps() {
   need osv-scanner "$OSV_SCANNER" "go install github.com/google/osv-scanner/v2/cmd/osv-scanner@v$OSV_SCANNER"
-  osv-scanner scan source --recursive --experimental-exclude target .
+  # One config for every lockfile, the docs site's (website/) included;
+  # what npm installed beside it is not scanned.
+  osv-scanner scan source --config osv-scanner.toml --recursive --experimental-exclude target --experimental-exclude node_modules .
   say "deps: ok"
 }
 
