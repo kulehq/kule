@@ -189,6 +189,13 @@ Report a vulnerability privately as [SECURITY.md](SECURITY.md) says. The
 security model is described in
 [Security](https://kulehq.github.io/kule/docs/security).
 
+## Sponsors
+
+Kule is built by one person, in the open. If it keeps your folders safe,
+you can help it go on through
+[GitHub Sponsors](https://github.com/sponsors/selcukgural): monthly or once.
+Sponsors who choose it are listed here.
+
 ## License
 
 [Apache-2.0](LICENSE)
