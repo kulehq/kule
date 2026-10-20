@@ -136,6 +136,14 @@
   it. Kule still sees how the command ended, its code or its signal, and
   the signals sent to it reach it. Where the computer cannot give this,
   it is one more piece of isolation you accept going without.
+- On Linux each command has System V shared memory, message queues and
+  semaphores of its own (an IPC namespace), and a host name of its own (a
+  UTS namespace). Where the computer cannot give this, it is one more
+  piece of isolation you accept going without.
+- pnpm keeps its store in the task's caches with every version: through
+  `PNPM_HOME` up to pnpm 10 and `pnpm_config_store_dir` from pnpm 11.
+  `npm_config_store_dir` is no longer set, so npm 11 no longer warns about
+  it on every command.
 - On Linux a command makes terminals of its own (a devpts instance in its
   mount namespace), as `script`, `expect` and test runners need; none of
   your terminals is there to open.

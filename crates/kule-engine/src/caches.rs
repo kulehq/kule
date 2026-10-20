@@ -42,9 +42,13 @@ const PLAIN: &[(&str, &str)] = &[
     ("GOCACHE", "go-build"),
     ("GOMODCACHE", "go-mod"),
     ("YARN_CACHE_FOLDER", "yarn"),
-    ("npm_config_store_dir", "pnpm"),
     ("NUGET_PACKAGES", "nuget"),
 ];
+
+/// pnpm's home, under the task's tmp: up to pnpm 10 its store is the
+/// `store` folder there. pnpm 11 reads the store from its own variable, and
+/// no longer from `npm_config_store_dir`, which npm 11 warns about.
+const PNPM: &str = "pnpm";
 
 /// What cargo needs from its home besides the caches: settings, never
 /// `credentials.toml`.
@@ -84,6 +88,11 @@ pub(crate) fn prepare(tmp: &Path, sources: &Sources) -> Result<Vec<(String, OsSt
         std::fs::create_dir_all(&path).at(&path)?;
         env.push(((*var).to_owned(), path.into_os_string()));
     }
+    let pnpm = root.join(PNPM);
+    let store = pnpm.join("store");
+    std::fs::create_dir_all(&store).at(&store)?;
+    env.push(("PNPM_HOME".to_owned(), pnpm.into_os_string()));
+    env.push(("pnpm_config_store_dir".to_owned(), store.into_os_string()));
     // NuGet still finds what the person has: read-only, as a fallback.
     let nuget = sources.home.join(".nuget/packages");
     if nuget.is_dir() {
@@ -196,9 +205,13 @@ mod tests {
             "npm_config_cache",
             "XDG_CACHE_HOME",
             "GOCACHE",
+            "PNPM_HOME",
+            "pnpm_config_store_dir",
         ] {
             assert!(env.iter().any(|(n, _)| n == name), "{name}");
         }
+        // npm warns about every variable of its prefix it does not know.
+        assert!(!env.iter().any(|(n, _)| n == "npm_config_store_dir"));
     }
 
     #[test]
