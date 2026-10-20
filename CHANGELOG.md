@@ -14,6 +14,16 @@ The first preview release will be `0.2.0-preview.1`.
 - The README is a shorter, task-first introduction: what Kule does, a
   quick start from source, the commands at a glance and how to develop it.
 
+### Releases
+
+- A version with `-` (`0.2.0-preview.1`) is drafted as a GitHub
+  pre-release, never shown as the latest one.
+- Publishing a release can also put it on npm (`@kulehq/kule`, a pointer
+  to the releases, under the `preview` dist-tag for a pre-release) and on
+  crates.io, each once a repository variable turns it on. Both use trusted
+  publishing in the `release` environment, so no registry token is kept,
+  and the crates are built in a job that can mint no token.
+
 ### Writes in your home
 
 - `kule home TASK diff|apply|discard` takes a path however it is typed:

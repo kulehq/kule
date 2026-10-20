@@ -295,8 +295,14 @@ jobs:
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: dist/*
+      # A version with `-` (0.2.0-preview.1) is a pre-release: GitHub never
+      # shows it as the latest one.
       - name: Draft release
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
-        run: gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft --verify-tag --title "Kule ${TAG#v}" --notes-file notes.md dist/*
+        run: |
+          pre=
+          case "$TAG" in *-*) pre=--prerelease ;; esac
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft $pre --verify-tag \
+            --title "Kule ${TAG#v}" --notes-file notes.md dist/*

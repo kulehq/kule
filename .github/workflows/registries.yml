@@ -1,0 +1,132 @@
+name: registries
+
+# When a maintainer publishes a release (the release workflow only drafts
+# it), this puts the same version on npm and crates.io. Each registry is off
+# until its repository variable says `true`:
+#
+#   PUBLISH_NPM     @kulehq/kule on npm (npm/: a pointer to the releases)
+#   PUBLISH_CRATES  the workspace's crates on crates.io (`cargo install kule`)
+#
+# No registry token is kept anywhere. Both use trusted publishing: the
+# registry trusts this repository's `registries.yml` in the `release`
+# environment, which waits for a maintainer's approval, and hands out a
+# token that lives for one job. Set it up once on each registry:
+#
+#   npm        package settings → Trusted publisher → GitHub Actions:
+#              kulehq/kule, workflow registries.yml, environment release
+#   crates.io  each crate's settings → Trusted Publishing → GitHub:
+#              kulehq/kule, workflow registries.yml, environment release
+#
+# A pre-release (a version with `-`, like 0.2.0-preview.1) goes to npm under
+# the `preview` dist-tag, so `npm install @kulehq/kule` keeps the last
+# stable one.
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.release.tag_name }}
+          persist-credentials: false
+      - name: The tag names the version in Cargo.toml
+        id: version
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)
+          case "$TAG" in
+            "v$version") ;;
+            *) echo "the tag $TAG does not name Cargo.toml's version $version"; exit 1 ;;
+          esac
+          case "$version" in
+            *-*) prerelease=true ;;
+            *) prerelease=false ;;
+          esac
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
+
+  npm:
+    if: vars.PUBLISH_NPM == 'true'
+    needs: version
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: release
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.release.tag_name }}
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          # npm 11.5.1 or later, for trusted publishing.
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+      - name: Publish, with provenance
+        working-directory: npm
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          PRERELEASE: ${{ needs.version.outputs.prerelease }}
+        run: |
+          npm --version
+          npm version --no-git-tag-version --allow-same-version --ignore-scripts "$VERSION"
+          tag=latest
+          [ "$PRERELEASE" = "true" ] && tag=preview
+          npm publish --provenance --access public --tag "$tag" --ignore-scripts
+
+  # Packages and builds what would go up, as crates.io would. Building runs
+  # every dependency's build scripts, so this job can mint no token. A crate
+  # that still needs a git dependency, or says `publish = false`, stops here.
+  crates-check:
+    if: vars.PUBLISH_CRATES == 'true'
+    needs: version
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.release.tag_name }}
+          persist-credentials: false
+      - name: Rust toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+      - name: Package and build the workspace, without uploading
+        run: cargo publish --workspace --exclude kule-desktop --locked --dry-run
+
+  # Uploads what crates-check built, from the same tag. It builds nothing
+  # (`--no-verify`), so no dependency's code runs while the token exists.
+  crates:
+    needs: crates-check
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: release
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.release.tag_name }}
+          persist-credentials: false
+      - name: Rust toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+      - uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18 # v1.0.5
+        id: auth
+      - name: Publish, in dependency order
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+        run: cargo publish --workspace --exclude kule-desktop --locked --no-verify
