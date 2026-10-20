@@ -22,6 +22,12 @@
 //! init) passes signals on to the command and reaps what is orphaned. Each
 //! exits as the command did.
 //!
+//! System V shared memory, message queues and semaphores belong to an IPC
+//! namespace, out of Landlock's reach: any process of the person's could
+//! have made them, and a command in theirs could attach to one and read or
+//! change it. Every command gets an IPC namespace of its own (and a UTS one,
+//! so a host name it sets is its own), whatever else it needs.
+//!
 //! The namespaces need an unprivileged user namespace, which some systems
 //! refuse (Ubuntu 24.04 by default, through AppArmor). There the command
 //! runs without them, under Landlock's port rules alone, and protected
@@ -43,6 +49,13 @@ const ST_RELATIME: libc::c_ulong = 0x1000;
 pub(crate) fn available() -> bool {
     static AVAILABLE: OnceLock<bool> = OnceLock::new();
     *AVAILABLE.get_or_init(|| probe(Net::Own(None), &[]))
+}
+
+/// Whether this system lets an unprivileged process have System V IPC (and
+/// a host name) of its own; asked once, by trying.
+pub(crate) fn ipc_available() -> bool {
+    static AVAILABLE: OnceLock<bool> = OnceLock::new();
+    *AVAILABLE.get_or_init(|| probe(Net::Shared, &[]))
 }
 
 /// Whether this system lets an unprivileged process mount a path read-only
@@ -124,7 +137,8 @@ struct ReadOnly {
 /// What the command needs, between fork and exec, to move into its own
 /// namespaces; made before the fork, since nothing may be allocated after.
 pub(crate) struct Isolation {
-    /// The namespaces to make: `CLONE_NEWUSER` and those it allows.
+    /// The namespaces to make: `CLONE_NEWUSER` and those it allows, always
+    /// with `CLONE_NEWIPC` and `CLONE_NEWUTS`.
     namespaces: libc::c_int,
     uid_map: Vec<u8>,
     gid_map: Vec<u8>,
@@ -158,7 +172,8 @@ impl Isolation {
     pub(crate) fn new(net: Net, read_only: &[PathBuf]) -> io::Result<Isolation> {
         // SAFETY: getuid and getgid cannot fail.
         let (uid, gid) = unsafe { (libc::getuid(), libc::getgid()) };
-        let mut namespaces = libc::CLONE_NEWUSER;
+        // System V IPC and the host name are always the command's own.
+        let mut namespaces = libc::CLONE_NEWUSER | libc::CLONE_NEWIPC | libc::CLONE_NEWUTS;
         let port = match net {
             Net::Shared => None,
             Net::Own(port) => {

@@ -1895,6 +1895,54 @@ fn a_command_sees_and_signals_only_its_own_processes() {
     assert!(alive, "the command ended a process of the person's");
 }
 
+/// System V shared memory and queues of the person's are not in the
+/// command's reach: it has an IPC namespace of its own, and lists none of
+/// them.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_command_reaches_no_shared_memory_of_the_persons() {
+    if !kule_engine::isolates_network() {
+        eprintln!("skipped: this computer gives a command no namespaces of its own");
+        return;
+    }
+    let s = Setup::new();
+    // SAFETY: plain System V calls; both objects are removed below.
+    let (shm, queue) = unsafe {
+        (
+            libc::shmget(libc::IPC_PRIVATE, 4096, libc::IPC_CREAT | 0o600),
+            libc::msgget(libc::IPC_PRIVATE, libc::IPC_CREAT | 0o600),
+        )
+    };
+    assert!(
+        shm >= 0 && queue >= 0,
+        "{}",
+        std::io::Error::last_os_error()
+    );
+    let outside = fs::read_link("/proc/self/ns/ipc").unwrap();
+    // /proc/sysvipc lists every segment and queue of the namespace.
+    let out = sh(
+        &s.sandbox(),
+        "readlink /proc/self/ns/ipc; tail -n +2 /proc/sysvipc/shm /proc/sysvipc/msg",
+    );
+    // SAFETY: as above.
+    unsafe {
+        libc::shmctl(shm, libc::IPC_RMID, std::ptr::null_mut());
+        libc::msgctl(queue, libc::IPC_RMID, std::ptr::null_mut());
+    }
+    assert!(ok(&out), "{out:?}");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let mut lines = stdout.lines();
+    assert_ne!(
+        lines.next(),
+        Some(outside.to_string_lossy().as_ref()),
+        "the command shares the person's IPC namespace"
+    );
+    let listed: Vec<&str> = lines
+        .filter(|l| !l.is_empty() && !l.starts_with("==>"))
+        .collect();
+    assert!(listed.is_empty(), "the command sees: {listed:?}");
+}
+
 /// Kule sees the command end as it ended, with its code or by its signal;
 /// a signal sent to the process Kule started reaches the command; and Kule
 /// learns at once that the command started, not when it ends.

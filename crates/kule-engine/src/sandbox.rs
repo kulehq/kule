@@ -1538,7 +1538,8 @@ impl Sandbox {
             && !in_tmp
             && crate::namespace::mounts_available();
         let own_pids = crate::namespace::pids_available();
-        if matches!(net, Net::Own(_))
+        if crate::namespace::ipc_available()
+            || matches!(net, Net::Own(_))
             || !read_only.is_empty()
             || !masked.is_empty()
             || !covered.is_empty()
