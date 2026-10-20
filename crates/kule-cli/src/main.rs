@@ -1468,13 +1468,50 @@ fn print_home(task: &Task) -> Result<()> {
     Ok(())
 }
 
+/// A path in the person's home as `kule home` lists it (`.zshrc`), from
+/// what they typed: `'~/.zshrc'`, `.zshrc`, or the `/Users/me/.zshrc` a
+/// shell makes of an unquoted `~/.zshrc`. Anything that is not plainly
+/// inside the home (another absolute path, `..`) is refused.
+fn home_relative(typed: &str, person: &Path) -> Result<String> {
+    let tilde = typed.strip_prefix("~/").or((typed == "~").then_some(""));
+    let trimmed = typed.trim_end_matches('/');
+    let rest = match tilde {
+        Some(rest) => PathBuf::from(rest.trim_end_matches('/')),
+        None if Path::new(trimmed).is_absolute() => Path::new(trimmed)
+            .strip_prefix(person)
+            .map(Path::to_path_buf)
+            .map_err(|_| {
+                anyhow!(
+                    "{} is not in your home ({})",
+                    paint::plain_line(typed),
+                    paint::plain_line(&person.display().to_string())
+                )
+            })?,
+        None => PathBuf::from(trimmed),
+    };
+    if rest.as_os_str().is_empty()
+        || !rest
+            .components()
+            .all(|c| matches!(c, std::path::Component::Normal(_)))
+    {
+        bail!(
+            "name a path inside your home, as listed, like ~/.zshrc (not {})",
+            paint::plain_line(typed)
+        );
+    }
+    rest.to_str()
+        .map(str::to_owned)
+        .ok_or_else(|| anyhow!("{} is not valid UTF-8", paint::plain_line(typed)))
+}
+
 fn home_cmd(home: &Path, task: &str, action: HomeCmd) -> Result<()> {
     let task = Task::open(home, task)?;
+    let person = person_home()?;
     let pick = |paths: Vec<String>, all: bool| -> Result<Vec<String>> {
         let paths: Vec<String> = paths
-            .into_iter()
-            .map(|p| p.trim_start_matches("~/").trim_end_matches('/').to_owned())
-            .collect();
+            .iter()
+            .map(|p| home_relative(p, &person))
+            .collect::<Result<_>>()?;
         if all {
             return Ok(task.home_changes()?.into_iter().map(|c| c.path).collect());
         }
@@ -1507,9 +1544,9 @@ fn home_cmd(home: &Path, task: &str, action: HomeCmd) -> Result<()> {
             println!("discarded {} changes", gone.len());
         }
         HomeCmd::Diff { path } => {
-            let path = path.trim_start_matches("~/").trim_end_matches('/');
-            let shown = paint::plain_line(path);
-            match task.home_diff(path)? {
+            let path = home_relative(&path, &person)?;
+            let shown = paint::plain_line(&path);
+            match task.home_diff(&path)? {
                 TextDiff::Skipped { reason } => println!(
                     "~/{shown}: {}",
                     match reason {
