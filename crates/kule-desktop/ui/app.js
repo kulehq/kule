@@ -568,6 +568,8 @@ function taskMenu(task, list, e) {
       "aria-keyshortcuts": "Alt+ArrowDown",
     }),
     item("Open terminal", () => (closeMenu(), openTerminal(task))),
+    item(`Show the copy in ${FILE_MANAGER}`, () => (closeMenu(), showOutside(task.id, ""))),
+    ...editorItems(task, item),
     item(busy ? "Bring in the folder's changes (agent at work)" : "Bring in the folder's changes", () => (closeMenu(), bringIn(task.id)), {
       disabled: busy,
       title: "What the folder changed since the copy was made or last brought up to date; files the task changed too are merged",
@@ -591,6 +593,21 @@ function taskMenu(task, list, e) {
     items.slice(swatches.length + 4)
   );
   showMenu(menu, items, opener, e);
+}
+
+/** One item per editor this computer has, the one picked first; opening
+ * the copy in another picks it. */
+function editorItems(task, item) {
+  const chosen = chosenEditor();
+  if (!chosen) return [item("Open the copy in an editor (none found)", null, { disabled: true, title: "Kule opens the copy in VS Code, Cursor or Zed" })];
+  const others = outside.editors.found.filter((f) => f.id !== chosen.id);
+  return [chosen, ...others].map((editor) =>
+    item(`Open the copy in ${editor.name}`, () => {
+      closeMenu();
+      if (editor !== chosen) pickEditor(editor.id);
+      openInEditor(task, editor);
+    })
+  );
 }
 
 /** The colour swatches of a task's or a group's menu; `chosen` hears the
@@ -5612,12 +5629,225 @@ async function loadFiles(id) {
     const review = await call("review", { task: id, includeIgnored: false });
     files.changes = new Map(review.effects.effects.filter((e) => !inGit(e.path)).map((e) => [e.path, e.change]));
     for (const dir of files.open) files.listings.set(dir, await call("list_dir", { task: id, path: dir }));
+    // Read now: a path is copied while the click is going on.
+    files.root = await call("file_location", { task: id, path: "" });
   } catch (err) {
     fail(err);
     return;
   }
   if (token !== files.token || id !== state.current) return;
   renderFiles();
+}
+
+// --- Outside Kule ------------------------------------------------------------
+
+// A file of the copy opened with its app, shown in the file manager, its
+// path copied; the copy opened in an editor. The daemon decides what may
+// be opened: documents, pictures, sound and video that are what their
+// name says, while no agent is at work.
+
+const FILE_MANAGER = PLATFORM === "mac" ? "Finder" : PLATFORM === "windows" ? "Explorer" : "Files";
+
+const outside = {
+  /** The kinds of file, by name, that open with their app. */
+  kinds: new Set(),
+  /** The editors this computer has, the one picked, the ones told about. */
+  editors: { found: [], choice: { chosen: null, told: [] } },
+};
+
+async function loadOutside() {
+  try {
+    outside.kinds = new Set(await call("openable_kinds"));
+    outside.editors = await call("editors");
+  } catch (err) {
+    fail(err);
+  }
+}
+
+const extOf = (path) => {
+  const name = baseName(path);
+  const dot = name.lastIndexOf(".");
+  return dot > 0 ? name.slice(dot + 1).toLowerCase() : "";
+};
+
+/** Why `path` does not open with its app now; null when it does. */
+function cannotOpen(path, task) {
+  if (!outside.kinds.has(extOf(path))) return "Kule opens documents, pictures, sound and video with their app, not this kind of file: it would run outside the sandbox";
+  if (task?.running) return "Waits until the agent's turn is over";
+  return null;
+}
+
+async function openWithApp(taskId, path) {
+  try {
+    await call("open_file", { task: taskId, path });
+  } catch (err) {
+    fail(err);
+  }
+}
+
+async function showOutside(taskId, path) {
+  try {
+    await call("show_file", { task: taskId, path });
+  } catch (err) {
+    fail(err);
+  }
+}
+
+/** Copies where `path` is on disk; within the click, so from what Files read. */
+function copyLocation(path, e) {
+  if (!files.root) return;
+  copyText(path ? `${files.root}/${path}` : files.root).then((ok) => {
+    if (ok && e && e.clientX) copiedAt(e.clientX, e.clientY);
+    else toast(ok ? "Copied the path" : "Could not copy the path", ok ? undefined : "error");
+  });
+}
+
+/** The editor the copy opens in: the one picked, else the first found. */
+function chosenEditor() {
+  const { found, choice } = outside.editors;
+  return found.find((f) => f.id === choice.chosen) || found[0] || null;
+}
+
+/** Opens the task's copy in `editor` ({id, name}); the first time for that
+ * editor, after a note on what an editor runs by itself from a folder. */
+async function openInEditor(task, editor = chosenEditor()) {
+  if (!editor) {
+    toast("No editor Kule knows was found: VS Code, Cursor or Zed", "error");
+    return;
+  }
+  const go = async () => {
+    try {
+      await call("open_in_editor", { task: task.id, editor: editor.id });
+    } catch (err) {
+      fail(err);
+    }
+  };
+  if (outside.editors.choice.told.includes(editor.id)) return go();
+  editorNote(editor, go);
+}
+
+async function pickEditor(id) {
+  const choice = { ...outside.editors.choice, chosen: id };
+  try {
+    outside.editors.choice = await call("set_editors", { choice });
+  } catch (err) {
+    fail(err);
+  }
+}
+
+/** The note shown before a copy first opens in `editor`. */
+function editorNote(editor, go) {
+  const again = h("input", { type: "checkbox", id: "editor-note-again" });
+  const close = () => dialog.remove();
+  const open = h(
+    "button",
+    {
+      class: "button",
+      type: "button",
+      "data-key": "editor-note-open",
+      onclick: async () => {
+        close();
+        if (again.checked) {
+          const choice = { ...outside.editors.choice, told: [...outside.editors.choice.told, editor.id] };
+          try {
+            outside.editors.choice = await call("set_editors", { choice });
+          } catch (err) {
+            fail(err);
+          }
+        }
+        await go();
+      },
+    },
+    `Open in ${editor.name}`
+  );
+  const cancel = h("button", { class: "button ghost", type: "button", onclick: close }, "Cancel");
+  const dialog = h(
+    "div",
+    { class: "palette-backdrop", onpointerdown: (e) => e.target === e.currentTarget && close() },
+    h(
+      "div",
+      { class: "editor-note", role: "dialog", "aria-modal": "true", "aria-labelledby": "editor-note-title" },
+      h("h2", { id: "editor-note-title" }, `Open the task's copy in ${editor.name}`),
+      h(
+        "p",
+        {},
+        "The agent wrote files in this copy. An editor can run code from a folder by itself: its tasks and settings, the extensions it recommends, git hooks. That would run outside the sandbox."
+      ),
+      h("p", { class: "editor-note-tip" }, EDITOR_TIPS[editor.id] || EDITOR_TIPS.other),
+      h(
+        "ul",
+        {},
+        h("li", {}, "What you change there shows in Review; commit or roll it back as usual."),
+        h("li", {}, "While the agent is at work, change nothing there: you would both write the same files.")
+      ),
+      h("label", { class: "editor-note-again", for: "editor-note-again" }, again, `Don't tell me again for ${editor.name}`),
+      h("div", { class: "editor-note-actions" }, cancel, open)
+    )
+  );
+  // Keyboard stays in the note until it closes.
+  const stops = [again, cancel, open];
+  dialog.addEventListener("keydown", (k) => {
+    if (k.key === "Escape") {
+      k.preventDefault();
+      close();
+    } else if (k.key === "Tab") {
+      k.preventDefault();
+      const at = stops.indexOf(document.activeElement);
+      stops[(at + (k.shiftKey ? -1 : 1) + stops.length) % stops.length].focus();
+    }
+  });
+  document.body.append(dialog);
+  open.focus();
+}
+
+/** What to answer when the editor asks, or what to do when it does not. */
+const EDITOR_TIPS = {
+  vscode:
+    "When VS Code asks whether you trust the authors of the files in this folder, answer no. It opens in Restricted Mode: you can read and edit, and nothing runs by itself.",
+  cursor:
+    "Cursor does not ask whether you trust a folder unless Workspace Trust is on in its settings (security.workspace.trust.enabled). Turn it on and answer no, or look at what the agent wrote in Review first.",
+  other: "Look at what the agent wrote, in Review, before you open the copy.",
+};
+
+/** A file's or folder's menu in Files: open it with its app, show it in the
+ * file manager, copy where it is. */
+function fileMenu(path, entry, e) {
+  e.preventDefault();
+  closeMenu();
+  const task = (state.tasks || []).find((t) => t.id === files.task);
+  const item = (label, action, attrs) =>
+    h("button", { class: "menu-item", type: "button", role: "menuitem", onclick: action, ...attrs }, label);
+  const isFile = entry.kind === "file";
+  const why = isFile ? cannotOpen(path, task) : null;
+  const items = [
+    ...(isFile
+      ? [item("Open with its app", () => (closeMenu(true), openWithApp(files.task, path)), { disabled: Boolean(why), title: why || undefined })]
+      : []),
+    item(`Show in ${FILE_MANAGER}`, () => (closeMenu(true), showOutside(files.task, path))),
+    item("Copy path", (ev) => (copyLocation(path, ev), closeMenu(true))),
+  ];
+  const menu = h("div", { class: "menu", id: "task-menu", role: "menu", "aria-label": baseName(path) }, ...items);
+  showMenu(menu, items, e.currentTarget, e);
+  labelMenuKeys(menu, { "Open with its app": "file.open", [`Show in ${FILE_MANAGER}`]: "file.show", "Copy path": "file.copy-path" });
+  // The first item that works has the focus, not a disabled one.
+  (items.find((i) => !i.disabled) || items[0]).focus();
+}
+
+/** Puts each command's shortcut beside the menu item that does the same. */
+function labelMenuKeys(menu, byLabel) {
+  for (const button of menu.querySelectorAll(".menu-item")) {
+    const id = byLabel[button.textContent];
+    const combo = id && bindingOf(commandById(id));
+    if (!combo) continue;
+    button.setAttribute("aria-keyshortcuts", ariaCombo(combo));
+    button.append(h("span", { class: "menu-keys" }, formatCombo(combo)));
+  }
+}
+
+/** The file picked in Files or shown in the Preview, for the commands. */
+function pickedFile() {
+  if (files.task === state.current && files.selected) return files.selected;
+  return preview.task === state.current ? preview.path : null;
 }
 
 /** What changed at or under `path`, for a directory's mark. */
@@ -5657,6 +5887,9 @@ function fileRows(dir, depth) {
           "aria-level": depth + 1,
           style: `padding-left:${8 + depth * 14}px`,
           onclick: () => (isDir ? toggleDir(path) : entry.kind === "link" ? toast(`${path} is a link; Files does not follow links`) : openFile(path, change)),
+          // A link is not followed out of the copy, and what was deleted
+          // is not there to open.
+          oncontextmenu: entry.gone || entry.kind === "link" ? undefined : (e) => fileMenu(path, entry, e),
         },
         h("span", { class: "file-icon", "aria-hidden": "true" }, isDir ? (open ? "▾" : "▸") : entry.kind === "link" ? "↪" : ""),
         fileGlyph(entry.name, isDir, open),
@@ -6959,6 +7192,26 @@ const COMMANDS = [
     run: () => withTask((t) => (t.running ? toast("Waits until the agent's turn is over") : bringIn(t.id))),
   },
   { id: "task.delete", title: "Delete the task (press twice)", group: "Tasks", keys: "Mod+Backspace", run: () => withTask((t) => deleteByKey(t)) },
+  { id: "task.show-copy", title: `Show the task's copy in ${FILE_MANAGER}`, group: "Tasks", keys: "", run: () => withTask((t) => showOutside(t.id, "")) },
+  { id: "task.editor", title: "Open the task's copy in your editor", group: "Tasks", keys: "Mod+Shift+O", run: () => withTask((t) => openInEditor(t)) },
+  {
+    id: "file.open", title: "Open the picked file with its app", group: "Files", keys: "Mod+O",
+    run: () =>
+      withTask((t) => {
+        const path = pickedFile();
+        const why = path ? cannotOpen(path, t) : "Pick a file in Files first";
+        if (why) toast(why, "error");
+        else openWithApp(t.id, path);
+      }),
+  },
+  {
+    id: "file.show", title: `Show the picked file in ${FILE_MANAGER}`, group: "Files", keys: "Mod+Alt+R",
+    run: () => withTask((t) => showOutside(t.id, pickedFile() || "")),
+  },
+  {
+    id: "file.copy-path", title: "Copy where the picked file is on disk", group: "Files", keys: "Mod+Alt+C",
+    run: () => withTask(() => copyLocation(pickedFile() || "")),
+  },
   ...[null, ...COLORS].map((color) => ({
     id: `task.color.${color || "none"}`,
     title: color ? `Colour the task ${COLOR_NAMES[color].toLowerCase()}` : "Take the task's colour away",
@@ -7093,6 +7346,7 @@ function labelControls() {
   label($("new-task"), "task.new", "New task");
   label($("new-group"), "group.new", "New group: tasks in it can have a policy of their own");
   label($("open-settings"), "app.settings", "Settings");
+  label($("files-show"), "task.show-copy", `Show the copy in ${FILE_MANAGER}`);
   label($("toggle-left"), "layout.left", "Show or hide the left side");
   label($("toggle-main"), "layout.main", "Show or hide the main area");
   label($("toggle-bottom"), "layout.bottom", "Show or hide the bottom panel");
@@ -7516,6 +7770,8 @@ async function start() {
   document.addEventListener("pointercancel", panelDragEnd);
   for (const n of ["left", "main", "bottom", "right"]) $(`toggle-${n}`).addEventListener("click", () => toggleRegion(n));
   $("files-tree").addEventListener("keydown", filesKey);
+  $("files-show").addEventListener("click", () => withTask((t) => showOutside(t.id, "")));
+  loadOutside();
   // Extensions first: the kept layout places their panels and the kept
   // theme may be one of theirs.
   const extensionsLoaded = loadExtensions().then(() => loadLayout());

@@ -10,7 +10,7 @@ use serde_json::Value;
 
 /// Changes whenever a call, a result or a notice changes shape; a client
 /// and a daemon that disagree on it cannot talk.
-pub const PROTOCOL: u32 = 31;
+pub const PROTOCOL: u32 = 32;
 
 /// What a daemon says about itself.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -237,6 +237,26 @@ pub enum Call {
     View {
         task: String,
         path: String,
+    },
+    /// Where a file or directory of the task's copy is on disk (the copy
+    /// when `path` is empty), to show it in the file manager or copy it.
+    Locate {
+        task: String,
+        path: String,
+    },
+    /// Where a file of the task's copy is on disk, for the person's own
+    /// app to open: only a document, picture, sound or video that is what
+    /// its name says, while no agent is at work in the task.
+    Openable {
+        task: String,
+        path: String,
+    },
+    /// The editor the person opens a task's copy in, and the editors they
+    /// were told about.
+    Editors,
+    /// Keeps these; returns them as kept.
+    SetEditors {
+        choice: crate::editors::EditorChoice,
     },
     /// The theme in use and the person's own themes.
     Themes,

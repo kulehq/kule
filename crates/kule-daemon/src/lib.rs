@@ -4,6 +4,7 @@
 
 mod alerts;
 mod client;
+pub mod editors;
 pub mod extensions;
 pub mod files;
 pub mod layout;

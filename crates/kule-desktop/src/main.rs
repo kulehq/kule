@@ -10,6 +10,7 @@ mod ext_serve;
 mod extensions;
 mod fonts;
 mod menu;
+mod opener;
 mod pty;
 mod shell_path;
 mod terminal;
@@ -18,6 +19,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use kule_daemon::editors::EditorChoice;
 use kule_daemon::layout::Layout;
 use kule_daemon::settings_profile::{Part, ProfileFile};
 use kule_daemon::shortcuts::Shortcuts;
@@ -617,6 +619,55 @@ fn view_file(kule: K<'_>, task: String, path: String) -> Result<serde_json::Valu
     kule.call(Call::View { task, path })
 }
 
+/// Opens a file of the copy with its app, when the daemon lets it (see
+/// `Call::Openable`).
+#[tauri::command(async)]
+fn open_file(kule: K<'_>, task: String, path: String) -> Result<()> {
+    let at: PathBuf = kule.call(Call::Openable { task, path })?;
+    opener::open_with_app(&at)
+}
+
+/// Shows a file or folder of the copy, or the copy itself (`path` empty),
+/// in the file manager.
+#[tauri::command(async)]
+fn show_file(kule: K<'_>, task: String, path: String) -> Result<()> {
+    let at: PathBuf = kule.call(Call::Locate { task, path })?;
+    opener::show(&at)
+}
+
+/// Where a file or folder of the copy is on disk, to copy.
+#[tauri::command(async)]
+fn file_location(kule: K<'_>, task: String, path: String) -> Result<PathBuf> {
+    kule.call(Call::Locate { task, path })
+}
+
+/// The kinds of file, by name, Kule opens with their app.
+#[tauri::command]
+fn openable_kinds() -> Vec<&'static str> {
+    kule_daemon::files::openable_kinds()
+}
+
+/// The editors this computer has, the one picked and the ones the person
+/// was told about.
+#[tauri::command(async)]
+fn editors(kule: K<'_>) -> Result<serde_json::Value> {
+    let choice: EditorChoice = kule.call(Call::Editors)?;
+    Ok(serde_json::json!({ "found": opener::found(), "choice": choice }))
+}
+
+#[tauri::command(async)]
+fn set_editors(kule: K<'_>, choice: EditorChoice) -> Result<EditorChoice> {
+    kule.call(Call::SetEditors { choice })
+}
+
+/// Opens the task's copy in an editor this computer has. Refused, as the
+/// terminal is, when what the task ran changed what git would run there.
+#[tauri::command(async)]
+fn open_in_editor(kule: K<'_>, task: String, editor: String) -> Result<()> {
+    let copy: PathBuf = kule.call(Call::TerminalDir { task })?;
+    opener::open_in(&editor, &copy)
+}
+
 /// Puts the person's shortcuts next to the menu's items: command id →
 /// accelerator (`CmdOrCtrl+Shift+K`).
 #[tauri::command]
@@ -1048,6 +1099,13 @@ fn main() {
             list_dir,
             read_file,
             view_file,
+            open_file,
+            show_file,
+            file_location,
+            openable_kinds,
+            editors,
+            set_editors,
+            open_in_editor,
             export_profile,
             import_profile,
             apply_profile,

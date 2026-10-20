@@ -184,6 +184,11 @@ function previewHead(v) {
           "Ask about it"
         )
       : null,
+    // What the Preview shows only in part (a Word file's text, an Excel
+    // file's saved values) is seen whole in its own app.
+    v && (v.kind === "document" || v.kind === "table") && preview.change !== "deleted" && outside.kinds.has(extOf(preview.path))
+      ? openWithAppButton("button ghost")
+      : null,
     h(
       "button",
       {
@@ -222,9 +227,41 @@ function previewBody(v) {
         "div",
         { class: "preview-body preview-other" },
         h("p", {}, `${sizeText(v.size)}, ${v.reason}.`),
-        h("p", { class: "muted" }, "The Preview shows text, Markdown, CSV, Excel and Word files, and PNG, JPEG, GIF or WebP pictures.")
+        h("p", { class: "muted" }, "The Preview shows text, Markdown, CSV, Excel and Word files, and PNG, JPEG, GIF or WebP pictures."),
+        // A PDF, a film, a slide deck: its own app shows it.
+        preview.change !== "deleted"
+          ? h(
+              "div",
+              { class: "preview-outside" },
+              outside.kinds.has(extOf(preview.path)) ? openWithAppButton("button") : null,
+              h(
+                "button",
+                { class: "button ghost", type: "button", "data-key": "preview-show", onclick: () => showOutside(preview.task, preview.path) },
+                `Show in ${FILE_MANAGER}`
+              )
+            )
+          : null
       );
   }
+}
+
+/** Opens the file in the Preview with its app; waits while the agent is at
+ * work, as the daemon does. */
+function openWithAppButton(cls) {
+  const task = (state.tasks || []).find((t) => t.id === preview.task);
+  const why = cannotOpen(preview.path, task);
+  return h(
+    "button",
+    {
+      class: cls,
+      type: "button",
+      "data-key": "preview-open",
+      disabled: Boolean(why),
+      title: why || "Open it with the app your computer opens it with",
+      onclick: () => openWithApp(preview.task, preview.path),
+    },
+    "Open with its app"
+  );
 }
 
 /** Text with its line numbers beside it, coloured as `language`. */

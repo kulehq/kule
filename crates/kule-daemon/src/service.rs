@@ -1333,6 +1333,14 @@ impl Service {
         Ok(self.open(id)?.copy())
     }
 
+    /// File `path` of the copy for the person's own app to open (see
+    /// [`crate::files::openable`]), only while no agent is at work: an
+    /// agent could otherwise swap it for a link to a script between the
+    /// check and the open.
+    pub fn openable(&self, id: &str, path: &str) -> Result<PathBuf> {
+        crate::files::openable(&self.idle(id)?.copy(), path)
+    }
+
     /// The copy, for the person's own terminal (see `Task::terminal_dir`).
     pub fn terminal_dir(&self, id: &str) -> Result<PathBuf> {
         self.open(id)?.terminal_dir().map_err(text)
@@ -2442,6 +2450,8 @@ mod tests {
         let s = Setup::new();
         let (id, copy) = s.task();
         fs::write(copy.join("b.txt"), "b\n").unwrap();
+        fs::write(copy.join("summary.pdf"), "%PDF-1.7\n").unwrap();
+        assert!(s.app.openable(&id, "summary.pdf").is_ok());
         s.app
             .running
             .lock()
@@ -2456,6 +2466,9 @@ mod tests {
             s.app.sync(&id).map(|_| ()),
             s.app.remove(&id),
             s.app.start_run(&id, "claude-code", "hi", Vec::new()),
+            // The agent could swap the file for a link between the check
+            // and the open.
+            s.app.openable(&id, "summary.pdf").map(|_| ()),
         ] {
             assert!(refused.unwrap_err().contains("at work"));
         }

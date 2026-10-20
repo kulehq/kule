@@ -310,6 +310,41 @@ Click a file to open it in **Preview** (Mod+4), as it is now in the copy:
 The colours follow the theme in use. Files and Preview never follow a link
 or leave the copy.
 
+### Outside Kule
+
+Right-click a file or folder in Files, or use the commands:
+
+| | Mac | Linux |
+| --- | --- | --- |
+| **Open with its app** (the picked file) | ⌘O | Ctrl+O |
+| **Show in Finder / Files** (the picked file, or the copy) | ⌥⌘R | Ctrl+Alt+R |
+| **Copy path** (where it is on disk) | ⌥⌘C | Ctrl+Alt+C |
+| **Open the copy in your editor** (task's ⋮ menu) | ⇧⌘O | Ctrl+Shift+O |
+
+Where the Preview does not show a file (a PDF, a film, a slide deck), it
+offers *Open with its app* and *Show in Finder*; above a Word or Excel
+file, which it shows only in part, *Open with its app* is there too. The
+button at the top of Files shows the whole copy.
+
+- **Open with its app** opens documents, pictures, sound and video: PDF,
+  Word, Excel, PowerPoint, OpenDocument, Pages, Numbers, Keynote, EPUB,
+  RTF, CSV, plain text, the common picture, sound and video kinds. Never a
+  program, a script, a web page or SVG, a link file or an Office file with
+  macros: the agent wrote them, and they would run on your computer,
+  outside the sandbox. A file must also be what its name says: a script
+  named `notes.pdf` is not opened. It waits while the agent is at work.
+- **Show in Finder** points at the file in its folder and never opens it,
+  so a folder named like an app is not started.
+- **Open the copy in your editor**: VS Code, Cursor or Zed, the ones your
+  computer has; the menu lists each, the one you used last first. The
+  first time for each, Kule says what an editor runs by itself from a
+  folder (tasks, settings, recommended extensions, git hooks) and how to
+  keep it from doing so: in VS Code answer *no* when it asks whether you
+  trust the authors (Restricted Mode); Cursor does not ask unless
+  Workspace Trust is on in its settings. Refused, as the terminal is,
+  while the task changed the copy's git config or hooks. What you change
+  there shows in Review like the agent's work.
+
 ## Asking the agent about a place in a file
 
 In Preview, point at what you mean instead of describing it:

@@ -1956,6 +1956,17 @@ h3.agent-card-head {
   cursor: pointer;
 }
 
+.menu-item:has(.menu-keys) {
+  display: flex;
+  gap: 24px;
+}
+
+.menu-keys {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: calc(12px * var(--text-scale));
+}
+
 .menu-item:hover:not(:disabled),
 .menu-item:focus-visible {
   background: var(--sunken);
@@ -2968,6 +2979,46 @@ body.dragging-panel * {
   overflow: hidden;
 }
 
+.files-head {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 8px 2px 12px;
+}
+
+.files-head-title {
+  flex: 1;
+  min-width: 0;
+  color: var(--muted);
+  font-size: calc(11px * var(--text-scale));
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.files-show {
+  display: grid;
+  width: 26px;
+  height: 26px;
+  flex: none;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--sunken);
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.files-show:hover {
+  color: var(--text);
+}
+
+.files-show:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
 .files-tree {
   display: flex;
   min-height: 80px;
@@ -3254,6 +3305,65 @@ body.dragging-panel * {
   gap: 10px;
   padding: 24px;
   color: var(--muted);
+}
+
+.preview-outside {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+/* The note before the copy first opens in an editor. */
+.editor-note {
+  display: flex;
+  width: min(540px, 100%);
+  flex-direction: column;
+  gap: 12px;
+  padding: 22px 24px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  box-shadow: 0 18px 48px rgb(0 0 0 / 0.3);
+  font-size: calc(14px * var(--text-scale));
+  line-height: 1.5;
+}
+
+.editor-note h2 {
+  font-size: calc(16px * var(--text-scale));
+  font-weight: 650;
+}
+
+.editor-note p,
+.editor-note ul {
+  margin: 0;
+}
+
+.editor-note ul {
+  padding-left: 20px;
+  color: var(--muted);
+  font-size: calc(13px * var(--text-scale));
+}
+
+.editor-note-tip {
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--accent-soft);
+  font-size: calc(13px * var(--text-scale));
+}
+
+.editor-note-again {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: calc(13px * var(--text-scale));
+}
+
+.editor-note-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 .preview-note {

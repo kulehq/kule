@@ -218,6 +218,117 @@ pub fn view(root: &Path, rel: &str) -> Result<kule_view::View> {
     Ok(kule_view::view(rel, bytes, size))
 }
 
+/// How a kind of file starts.
+#[derive(Clone, Copy)]
+enum Starts {
+    With(&'static [&'static [u8]]),
+    /// `ftyp` and the like, four bytes in (MP4, QuickTime, HEIC).
+    BoxAt4(&'static [&'static [u8]]),
+    /// A RIFF file of this form.
+    Riff(&'static [u8]),
+    /// Text in any 8-bit encoding (a CSV Excel saved), not a script.
+    Text,
+}
+
+const ZIP: Starts = Starts::With(&[b"PK\x03\x04"]);
+const ISO_BOX: Starts = Starts::BoxAt4(&[b"ftyp", b"moov", b"wide", b"mdat", b"free"]);
+
+/// What the person's own app may open from the copy, by name, and how such
+/// a file starts: documents, pictures, sound and video. Never a program, a
+/// script, a page a browser would run, a document with macros or a link
+/// to elsewhere: those would run on the computer, outside the sandbox, and
+/// the agent wrote them.
+const OPENABLE: &[(&str, Starts)] = &[
+    ("pdf", Starts::With(&[b"%PDF-"])),
+    ("png", Starts::With(&[b"\x89PNG\r\n\x1a\n"])),
+    ("jpg", Starts::With(&[b"\xff\xd8\xff"])),
+    ("jpeg", Starts::With(&[b"\xff\xd8\xff"])),
+    ("gif", Starts::With(&[b"GIF87a", b"GIF89a"])),
+    ("webp", Starts::Riff(b"WEBP")),
+    ("heic", ISO_BOX),
+    ("heif", ISO_BOX),
+    ("tif", Starts::With(&[b"II*\0", b"MM\0*"])),
+    ("tiff", Starts::With(&[b"II*\0", b"MM\0*"])),
+    ("bmp", Starts::With(&[b"BM"])),
+    (
+        "mp3",
+        Starts::With(&[b"ID3", b"\xff\xfb", b"\xff\xf3", b"\xff\xf2"]),
+    ),
+    ("m4a", ISO_BOX),
+    ("wav", Starts::Riff(b"WAVE")),
+    ("flac", Starts::With(&[b"fLaC"])),
+    ("ogg", Starts::With(&[b"OggS"])),
+    ("opus", Starts::With(&[b"OggS"])),
+    ("mp4", ISO_BOX),
+    ("m4v", ISO_BOX),
+    ("mov", ISO_BOX),
+    ("avi", Starts::Riff(b"AVI ")),
+    ("webm", Starts::With(&[b"\x1a\x45\xdf\xa3"])),
+    ("mkv", Starts::With(&[b"\x1a\x45\xdf\xa3"])),
+    ("docx", ZIP),
+    ("xlsx", ZIP),
+    ("pptx", ZIP),
+    ("odt", ZIP),
+    ("ods", ZIP),
+    ("odp", ZIP),
+    ("pages", ZIP),
+    ("numbers", ZIP),
+    ("key", ZIP),
+    ("epub", ZIP),
+    ("rtf", Starts::With(&[b"{\\rtf"])),
+    ("csv", Starts::Text),
+    ("txt", Starts::Text),
+];
+
+/// The names, without the dot, of the files [`openable`] lets through.
+pub fn openable_kinds() -> Vec<&'static str> {
+    OPENABLE.iter().map(|(ext, _)| *ext).collect()
+}
+
+fn starts_as(bytes: &[u8], starts: Starts) -> bool {
+    match starts {
+        Starts::With(heads) => heads.iter().any(|h| bytes.starts_with(h)),
+        Starts::BoxAt4(boxes) => bytes.len() >= 8 && boxes.contains(&&bytes[4..8]),
+        Starts::Riff(form) => {
+            bytes.starts_with(b"RIFF") && bytes.len() >= 12 && &bytes[8..12] == form
+        }
+        Starts::Text => !bytes.contains(&0) && !bytes.starts_with(b"#!"),
+    }
+}
+
+/// File `rel` of the copy at `root`, for the person's own app to open:
+/// reached without a link, a single-named regular file, of a kind in
+/// [`OPENABLE`] by its name, and starting as that kind does, so a script
+/// named `notes.pdf` is not handed to whatever opens it. Its path on disk.
+pub fn openable(root: &Path, rel: &str) -> Result<PathBuf> {
+    let ext = Path::new(rel)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_ascii_lowercase)
+        .unwrap_or_default();
+    let Some(&(_, starts)) = OPENABLE.iter().find(|(kind, _)| *kind == ext) else {
+        return Err(format!(
+            "{rel}: Kule opens documents, pictures, sound and video with their app, not this kind of file; it would run outside the sandbox"
+        ));
+    };
+    let (bytes, _) = read_start(root, rel, 8192)?;
+    if !starts_as(&bytes, starts) {
+        return Err(format!(
+            "{rel}: it is not the .{ext} file its name says, so Kule does not open it"
+        ));
+    }
+    Ok(root.join(rel))
+}
+
+/// File or directory `rel` of the copy at `root` (the copy itself when
+/// empty), reached without a link: its path on disk, to show where it is.
+pub fn located(root: &Path, rel: &str) -> Result<PathBuf> {
+    if rel.is_empty() {
+        return Ok(root.to_path_buf());
+    }
+    inside(root, rel)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -288,6 +399,102 @@ mod tests {
             assert!(call.is_some(), "{what} was read");
         }
         std::fs::remove_file(&beside).unwrap();
+    }
+
+    #[test]
+    fn only_documents_pictures_sound_and_video_are_opened_with_their_app() {
+        let (copy, outside) = (
+            tempfile::TempDir::new().unwrap(),
+            tempfile::TempDir::new().unwrap(),
+        );
+        let root = copy.path();
+        std::fs::create_dir_all(root.join("invoices")).unwrap();
+        std::fs::write(root.join("invoices/summary.pdf"), b"%PDF-1.7\n...").unwrap();
+        std::fs::write(root.join("Photo.JPG"), b"\xff\xd8\xff\xe0rest").unwrap();
+        std::fs::write(root.join("march.xlsx"), b"PK\x03\x04rest").unwrap();
+        std::fs::write(root.join("clip.mov"), b"\0\0\0\x14ftypqt  ").unwrap();
+        std::fs::write(root.join("song.wav"), b"RIFF\x24\0\0\0WAVEfmt ").unwrap();
+        std::fs::write(root.join("prices.csv"), b"name;price\nk\xe4se;3\n").unwrap();
+        for ok in [
+            "invoices/summary.pdf",
+            "Photo.JPG",
+            "march.xlsx",
+            "clip.mov",
+            "song.wav",
+            "prices.csv",
+        ] {
+            assert_eq!(openable(root, ok).unwrap(), root.join(ok), "{ok}");
+        }
+
+        // What would run: a script, a program, a page, a link file, macros;
+        // and a script named as a document.
+        std::fs::write(root.join("rename.command"), "#!/bin/sh\nrm -rf ~\n").unwrap();
+        std::fs::write(root.join("run.sh"), "#!/bin/sh\n").unwrap();
+        std::fs::write(root.join("page.html"), "<script>1</script>").unwrap();
+        std::fs::write(root.join("logo.svg"), "<svg><script>1</script></svg>").unwrap();
+        std::fs::write(root.join("site.webloc"), "<plist/>").unwrap();
+        std::fs::write(root.join("macro.xlsm"), b"PK\x03\x04rest").unwrap();
+        std::fs::write(root.join("notes.pdf"), "#!/bin/sh\nrm -rf ~\n").unwrap();
+        std::fs::write(root.join("notes.txt"), "#!/bin/sh\nrm -rf ~\n").unwrap();
+        std::fs::write(root.join("noname"), b"%PDF-1.7").unwrap();
+        std::fs::create_dir_all(root.join("Tool.app/Contents")).unwrap();
+        std::fs::create_dir_all(root.join("Slides.key")).unwrap();
+        // Through a link, or a link itself, even to a real document.
+        std::fs::write(outside.path().join("real.pdf"), b"%PDF-1.7").unwrap();
+        std::os::unix::fs::symlink(outside.path(), root.join("away")).unwrap();
+        std::os::unix::fs::symlink(outside.path().join("real.pdf"), root.join("linked.pdf"))
+            .unwrap();
+        std::os::unix::fs::symlink(root.join("run.sh"), root.join("inner.pdf")).unwrap();
+        std::fs::hard_link(outside.path().join("real.pdf"), root.join("second.pdf")).unwrap();
+        for refused in [
+            "rename.command",
+            "run.sh",
+            "page.html",
+            "logo.svg",
+            "site.webloc",
+            "macro.xlsm",
+            "notes.pdf",
+            "notes.txt",
+            "noname",
+            "Tool.app",
+            "Slides.key",
+            "away/real.pdf",
+            "linked.pdf",
+            "inner.pdf",
+            "second.pdf",
+            "../real.pdf",
+            "",
+        ] {
+            assert!(
+                openable(root, refused).is_err(),
+                "{refused} was let through"
+            );
+        }
+        let why = openable(root, "notes.pdf").unwrap_err();
+        assert!(why.contains("not the .pdf file its name says"), "{why}");
+        let why = openable(root, "rename.command").unwrap_err();
+        assert!(why.contains("outside the sandbox"), "{why}");
+    }
+
+    #[test]
+    fn what_is_shown_where_it_is_stays_in_the_copy() {
+        let (copy, outside) = (
+            tempfile::TempDir::new().unwrap(),
+            tempfile::TempDir::new().unwrap(),
+        );
+        let root = copy.path();
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join("src/main.rs"), "fn main() {}\n").unwrap();
+        std::os::unix::fs::symlink(outside.path(), root.join("away")).unwrap();
+        assert_eq!(located(root, "").unwrap(), root);
+        assert_eq!(located(root, "src").unwrap(), root.join("src"));
+        assert_eq!(
+            located(root, "src/main.rs").unwrap(),
+            root.join("src/main.rs")
+        );
+        for refused in ["away", "away/x", "../x", "/etc/hosts", "missing.txt"] {
+            assert!(located(root, refused).is_err(), "{refused} was located");
+        }
     }
 
     /// A second name for a file outside the copy, and a FIFO left where a

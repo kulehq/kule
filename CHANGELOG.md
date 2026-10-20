@@ -20,6 +20,21 @@
   since the copy was last brought up to date, and which of those files
   the task changed too.
 
+### Outside Kule
+
+- A file of the copy opens with its app: right-click it in Files, ⌘O, or
+  *Open with its app* where the Preview does not show it (a PDF, a film)
+  or shows it in part (Word, Excel). Only documents, pictures, sound and
+  video that are what their name says, and only while no agent is at
+  work; never a program, a script, a web page or a file with macros.
+- *Show in Finder* (Files on Linux) points at a file, a folder or the
+  whole copy without opening it; *Copy path* copies where it is on disk.
+- The task's menu opens the copy in VS Code, Cursor or Zed, the ones the
+  computer has, refused like the terminal while the task changed the
+  copy's git config or hooks. The first time for each editor, Kule says
+  what an editor runs by itself from a folder and how to keep it from
+  doing so.
+
 ### Disk space
 
 - The guide says what a task really takes on disk, on macOS and on
