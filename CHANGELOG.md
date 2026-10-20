@@ -34,6 +34,13 @@
   copy's git config or hooks. The first time for each editor, Kule says
   what an editor runs by itself from a folder and how to keep it from
   doing so.
+- `kule open TASK FILE` opens a file of the copy with its app, held to the
+  same kinds and checks (`--dry-run` checks it and prints where it is).
+  `kule path TASK FILE` prints where a file of the copy is, and `kule
+  path` says on stderr when git in the copy would run what the task
+  changed.
+- Opening a file with its app also waits while an agent `kule run`
+  started is at work.
 
 ### Disk space
 

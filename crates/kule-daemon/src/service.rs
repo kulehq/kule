@@ -1334,11 +1334,17 @@ impl Service {
     }
 
     /// File `path` of the copy for the person's own app to open (see
-    /// [`crate::files::openable`]), only while no agent is at work: an
-    /// agent could otherwise swap it for a link to a script between the
-    /// check and the open.
+    /// [`crate::files::openable`]), only while no agent is at work, here or
+    /// started by `kule`: an agent could otherwise swap it for a link to a
+    /// script between the check and the open.
     pub fn openable(&self, id: &str, path: &str) -> Result<PathBuf> {
-        crate::files::openable(&self.idle(id)?.copy(), path)
+        let task = self.idle(id)?;
+        if let Some(pid) = task.agent_pid() {
+            return Err(format!(
+                "an agent is at work in task {id} (process {pid}); wait until it is done"
+            ));
+        }
+        crate::files::openable(&task.copy(), path)
     }
 
     /// The copy, for the person's own terminal (see `Task::terminal_dir`).
@@ -2479,6 +2485,16 @@ mod tests {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove(&id);
+        // An agent `kule run` started, which the daemon does not run.
+        let at_work = s.app.open(&id).unwrap().agent_at_work().unwrap();
+        assert!(
+            s.app
+                .openable(&id, "summary.pdf")
+                .unwrap_err()
+                .contains("at work")
+        );
+        drop(at_work);
+        assert!(s.app.openable(&id, "summary.pdf").is_ok());
         s.app.remove(&id).unwrap();
         assert!(s.app.tasks().unwrap().is_empty());
     }

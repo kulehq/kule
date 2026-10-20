@@ -345,6 +345,9 @@ button at the top of Files shows the whole copy.
   while the task changed the copy's git config or hooks. What you change
   there shows in Review like the agent's work.
 
+From a terminal, `kule open TASK FILE` opens a file the same way, and
+`kule path TASK [FILE]` prints where the copy or a file in it is.
+
 ## Asking the agent about a place in a file
 
 In Preview, point at what you mean instead of describing it:
@@ -766,6 +769,8 @@ The `kule` command does most of what the app does, on the same tasks:
 | `kule run TASK --agent claude-code "prompt"` | Give an agent a prompt, held to its budgets (its own, its group's, every task's) and limits. |
 | `kule exec TASK -- npm test` | Run a command in the sandbox, then show what it changed. |
 | `kule shell TASK` | Your shell in the copy. |
+| `kule path TASK [FILE]` | Where the copy, or a file in it, is on disk: `cd "$(kule path TASK)"`, `code "$(kule path TASK)"`. Warns when git there would run what the task changed. |
+| `kule open TASK FILE` | Open a file of the copy with its app, as *Open with its app* does (`--dry-run` checks it and prints where it is). |
 | `kule status TASK` / `kule steps TASK` | What changed, and the policy's ruling / each tool call's changes. |
 | `kule commit TASK [--approve]` | Commit; `--approve` for changes that wait for you. |
 | `kule rollback TASK` / `kule undo TASK` | Throw the changes away / take the last commit back. |

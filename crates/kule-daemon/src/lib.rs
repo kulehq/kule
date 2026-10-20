@@ -8,6 +8,7 @@ pub mod editors;
 pub mod extensions;
 pub mod files;
 pub mod layout;
+pub mod outside;
 mod protocol;
 mod server;
 mod service;

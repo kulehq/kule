@@ -624,7 +624,7 @@ fn view_file(kule: K<'_>, task: String, path: String) -> Result<serde_json::Valu
 #[tauri::command(async)]
 fn open_file(kule: K<'_>, task: String, path: String) -> Result<()> {
     let at: PathBuf = kule.call(Call::Openable { task, path })?;
-    opener::open_with_app(&at)
+    kule_daemon::outside::open_with_app(&at)
 }
 
 /// Shows a file or folder of the copy, or the copy itself (`path` empty),
@@ -632,7 +632,7 @@ fn open_file(kule: K<'_>, task: String, path: String) -> Result<()> {
 #[tauri::command(async)]
 fn show_file(kule: K<'_>, task: String, path: String) -> Result<()> {
     let at: PathBuf = kule.call(Call::Locate { task, path })?;
-    opener::show(&at)
+    kule_daemon::outside::show(&at)
 }
 
 /// Where a file or folder of the copy is on disk, to copy.

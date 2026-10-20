@@ -283,8 +283,23 @@ enum Cmd {
     /// Open your shell in the task's copy, outside the sandbox. What you
     /// change there is reviewed and committed like the agent's work.
     Shell { task: String },
-    /// Print the path of a task's copy.
-    Path { task: String },
+    /// Print where a task's copy is on disk, or FILE in it (a file or
+    /// folder, never through a link): `cd "$(kule path TASK)"`. Says on
+    /// stderr when git there would run what the task changed, as `kule
+    /// shell` refuses to open then.
+    Path { task: String, file: Option<String> },
+    /// Open FILE of the task's copy with its app. Only documents, pictures,
+    /// sound and video (PDF, Word, Excel, PNG, MP4, …) that are what their
+    /// name says, reached without a link, while no agent is at work: never
+    /// a program, a script, a web page or a file with macros, which would
+    /// run outside the sandbox.
+    Open {
+        task: String,
+        file: String,
+        /// Check the file and print where it is, without opening it.
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Run a command inside the task's copy, in the sandbox, then show what
     /// it changed. The sandbox lets it write only to the copy, the task's
     /// TMPDIR and package caches, and hides credentials (~/.ssh, ~/.aws, …),
@@ -568,7 +583,36 @@ fn run() -> Result<ExitCode> {
                 None => ExitCode::FAILURE,
             });
         }
-        Cmd::Path { task } => println!("{}", Task::open(&home, &task)?.copy().display()),
+        Cmd::Path { task, file } => {
+            let task = Task::open(&home, &task)?;
+            // Printed all the same: the path alone runs nothing, and a
+            // script reading it would otherwise get nothing.
+            if let Err(e) = task.terminal_dir() {
+                eprintln!("kule: careful in there: {e}");
+            }
+            let at = kule_daemon::files::located(&task.copy(), file.as_deref().unwrap_or(""))
+                .map_err(|e| anyhow!(e))?;
+            println!("{}", at.display());
+        }
+        Cmd::Open {
+            task,
+            file,
+            dry_run,
+        } => {
+            let task = Task::open(&home, &task)?;
+            if let Some(pid) = task.agent_pid() {
+                bail!(
+                    "an agent is at work in task {} (process {pid}); wait until it is done",
+                    task.id()
+                );
+            }
+            let at = kule_daemon::files::openable(&task.copy(), &file).map_err(|e| anyhow!(e))?;
+            if dry_run {
+                println!("{}", at.display());
+            } else {
+                kule_daemon::outside::open_with_app(&at).map_err(|e| anyhow!(e))?;
+            }
+        }
         Cmd::Exec {
             task,
             allow_write,
