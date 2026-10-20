@@ -92,7 +92,40 @@ count() {
   grep -o '"RuleID"' "$1" | wc -l | tr -d ' '
 }
 
+# timed <seconds> <command...>: runs the command, its output as it is. One
+# still running after <seconds> is stopped and fails the gate, after what
+# it waits on is shown on stderr: the processes, and on macOS a sample of
+# each kule process, on fd 3 when it is open (the gate's own stderr, which
+# a command's redirect does not reach). A gate never hangs, here or in CI.
+timed() {
+  perl -e '
+    my $to = 3;
+    open(my $diag, ">&=", 3) or do { open($diag, ">&", \*STDERR); $to = 2 };
+    $diag->autoflush(1);
+    my $secs = shift;
+    my $pid = fork() // die "fork: $!";
+    if ($pid == 0) { exec { $ARGV[0] } @ARGV or die "exec $ARGV[0]: $!" }
+    local $SIG{ALRM} = sub {
+      print $diag "timed out after ${secs}s: @ARGV\n";
+      system("ps -axo pid,ppid,stat,etime,command >&$to");
+      if (-x "/usr/bin/sample") {
+        for my $p (split /\s+/, `pgrep -f "kule"`) {
+          next if $p == $$ || $p !~ /^\d+$/;
+          system("/usr/bin/sample $p 2 -mayDie 2>/dev/null | head -80 >&$to");
+        }
+      }
+      kill "TERM", $pid; sleep 2; kill "KILL", $pid;
+      exit 124;
+    };
+    alarm $secs;
+    waitpid($pid, 0);
+    exit($? >> 8);
+  ' "$@"
+}
+
 canary() {
+  # The gate's stderr, for what timed shows when a command hangs.
+  exec 3>&2
   need betterleaks "$BETTERLEAKS" "go install github.com/betterleaks/betterleaks@v$BETTERLEAKS"
   kule=${KULE:-target/debug/kule}
   [ -x "$kule" ] || fail "no kule at $kule: cargo build -p kule, or set KULE"
@@ -139,7 +172,8 @@ keywords = ["kulecanary"]
 paths = ['''/tasks/[0-9a-f]+/base/''']
 EOF
   scan() { # <name> <path> [config]: writes $work/<name>.json
-    (cd "$work" && betterleaks dir "$2" ${3:+--config "$3"} --no-banner --no-color \
+    say "canary: scanning $1"
+    (cd "$work" && timed 600 betterleaks dir "$2" ${3:+--config "$3"} --no-banner --no-color \
       --redact --report-format json --report-path "$work/$1.json" --exit-code 0 \
       --log-level error)
   }
@@ -154,14 +188,16 @@ EOF
   # A command in a task reads every env file and its whole environment
   # into the copy.
   export KULE_HOME="$home"
-  task=$("$kule" new "$ws" | sed -n 's/^task \([0-9a-f]*\) .*/\1/p')
+  say "canary: kule new"
+  task=$(timed 300 "$kule" new "$ws" | sed -n 's/^task \([0-9a-f]*\) .*/\1/p')
   [ -n "$task" ] || fail "kule new made no task"
-  copy=$("$kule" path "$task")
+  copy=$(timed 60 "$kule" path "$task")
   base=$home/tasks/$task/base
   [ -f "$base/.env" ] || fail "no task base at $base"
+  say "canary: kule exec"
   # $1 is the base, expanded by the command's shell.
   # shellcheck disable=SC2016
-  "$kule" exec "$task" --no-network -- sh -c \
+  timed 300 "$kule" exec "$task" --no-network -- sh -c \
     'env > gate-env.txt; cat .env config/.env.local > gate-seen.txt; cat "$1/.env" >> gate-seen.txt 2>/dev/null && echo "base read" > gate-base.txt; true' \
     gate "$base" >/dev/null 2>&1
   [ -s "$copy/gate-seen.txt" ] || fail "the command in the task wrote nothing"
