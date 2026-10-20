@@ -113,21 +113,68 @@ jobs:
           cargo build --release --locked -p kule
           mkdir -p crates/kule-desktop/binaries
           cp target/release/kule crates/kule-desktop/binaries/kule-x86_64-unknown-linux-gnu
+      # A pre-release (0.2.0-preview.1) must sort before its release in
+      # each package manager, which neither reads SemVer's `-` that way:
+      # the .rpm is 0.2.0 with release 0.preview.1 (Fedora's way), the .deb
+      # 0.2.0~preview.1. A release is its version in both.
+      - name: Versions the package managers read
+        id: pkg
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)
+          base=${version%%-*}
+          case "$version" in
+            *-*)
+              pre=${version#*-}
+              case "$pre" in *[!A-Za-z0-9.]*) echo "pre-release $pre: only letters, digits and dots"; exit 1 ;; esac
+              echo "config={\"version\":\"$base\",\"bundle\":{\"linux\":{\"rpm\":{\"release\":\"0.$pre\"}}}}" >> "$GITHUB_OUTPUT"
+              echo "deb=$base~$pre" >> "$GITHUB_OUTPUT"
+              echo "rpm=$base-0.$pre" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "config={}" >> "$GITHUB_OUTPUT"
+              echo "deb=$version" >> "$GITHUB_OUTPUT"
+              echo "rpm=$version-1" >> "$GITHUB_OUTPUT"
+              ;;
+          esac
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "base=$base" >> "$GITHUB_OUTPUT"
       - name: Build the .deb and the .rpm
         working-directory: crates/kule-desktop
-        run: cargo tauri build --bundles deb,rpm --config tauri.release.conf.json
-      - name: Install each where it belongs
+        env:
+          PACKAGE_CONFIG: ${{ steps.pkg.outputs.config }}
+        run: cargo tauri build --bundles deb,rpm --config tauri.release.conf.json --config "$PACKAGE_CONFIG"
+      - name: Name them, and give the .deb its version
+        env:
+          VERSION: ${{ steps.pkg.outputs.version }}
+          BASE: ${{ steps.pkg.outputs.base }}
+          DEB_VERSION: ${{ steps.pkg.outputs.deb }}
         run: |
+          set -eu
           mkdir dist
-          cp target/release/bundle/deb/*.deb target/release/bundle/rpm/*.rpm dist/
+          deb=$(ls target/release/bundle/deb/*.deb)
+          rpm=$(ls target/release/bundle/rpm/*.rpm)
+          work="$RUNNER_TEMP/deb"
+          dpkg-deb -R "$deb" "$work"
+          sed -i "s/^Version: .*/Version: $DEB_VERSION/" "$work/DEBIAN/control"
+          dpkg-deb --build --root-owner-group "$work" "dist/Kule_${VERSION}_amd64.deb"
+          cp "$rpm" "dist/Kule-${VERSION}.x86_64.rpm"
+          test "$(dpkg-deb -f "dist/Kule_${VERSION}_amd64.deb" Version)" = "$DEB_VERSION"
+          if [ "$VERSION" != "$BASE" ]; then
+            dpkg --compare-versions "$DEB_VERSION" lt "$BASE"
+          fi
+      - name: Install each where it belongs
+        env:
+          RPM_VERSION: ${{ steps.pkg.outputs.rpm }}
+        run: |
           # Ubuntu, from the .deb.
           sudo apt-get install -y ./dist/*.deb
           kule --version
           test -x /usr/bin/kule-desktop
           # Fedora, from the .rpm, with the libraries it names.
-          docker run --rm -v "$PWD/dist:/dist:ro" \
+          docker run --rm -e RPM_VERSION -v "$PWD/dist:/dist:ro" \
             fedora@sha256:99e203b80b1c3d8f7e161ec10a68fd02b081ef83a3963553e513c82846b97814 \
-            sh -c 'dnf install -y -q /dist/*.rpm && kule --version && test -x /usr/bin/kule-desktop'
+            sh -c 'set -e; test "$(rpm -qp --qf "%{VERSION}-%{RELEASE}" /dist/*.rpm)" = "$RPM_VERSION"
+                   dnf install -y -q /dist/*.rpm && kule --version && test -x /usr/bin/kule-desktop'
           version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)
           tar -C target/release -czf "dist/kule-$version-linux-x86_64.tar.gz" kule
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

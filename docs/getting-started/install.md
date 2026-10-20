@@ -111,7 +111,7 @@ Once a release is published, each one carries these files:
 | --- | --- |
 | `Kule_<version>_universal.dmg` | macOS 13 or later, Apple silicon and Intel in one app. The `kule` command is inside the app. |
 | `Kule_<version>_amd64.deb` | Debian and Ubuntu: puts `kule-desktop` and `kule` in `/usr/bin`. |
-| `Kule-<version>-1.x86_64.rpm` | Fedora: the same, as an RPM. |
+| `Kule-<version>.x86_64.rpm` | Fedora: the same, as an RPM. |
 | `kule-<version>-linux-x86_64.tar.gz` | The `kule` command alone, for Linux x86_64. |
 | `kule-<version>.cdx.json`, `kule-desktop-<version>.cdx.json` | A CycloneDX SBOM of the CLI and of the app: every crate they are built from. |
 | `SHA256SUMS` | The checksum of every file above. |
@@ -166,7 +166,7 @@ cask that installs the app and links the command.
 # Debian, Ubuntu
 sudo apt-get install ./Kule_<version>_amd64.deb
 # Fedora
-sudo dnf install ./Kule-<version>-1.x86_64.rpm
+sudo dnf install ./Kule-<version>.x86_64.rpm
 ```
 
 Both put `kule-desktop` and `kule` in `/usr/bin`. For the command line

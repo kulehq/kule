@@ -113,7 +113,7 @@ Bir sürüm yayımlandığında her biri şu dosyaları içerir:
 | --- | --- |
 | `Kule_<version>_universal.dmg` | macOS 13 ya da sonrası; Apple silicon ve Intel tek bir uygulamada. `kule` komutu uygulamanın içindedir. |
 | `Kule_<version>_amd64.deb` | Debian ve Ubuntu: `kule-desktop` ve `kule`'yi `/usr/bin`'e koyar. |
-| `Kule-<version>-1.x86_64.rpm` | Fedora: aynısı, RPM olarak. |
+| `Kule-<version>.x86_64.rpm` | Fedora: aynısı, RPM olarak. |
 | `kule-<version>-linux-x86_64.tar.gz` | Linux x86_64 için yalnızca `kule` komutu. |
 | `kule-<version>.cdx.json`, `kule-desktop-<version>.cdx.json` | CLI'ın ve uygulamanın CycloneDX SBOM'u: derlendikleri her crate. |
 | `SHA256SUMS` | Yukarıdaki her dosyanın sağlama toplamı. |
@@ -170,7 +170,7 @@ komutu bağlayan bir Homebrew cask'ı olan `kule.rb`'yi de içerir.
 # Debian, Ubuntu
 sudo apt-get install ./Kule_<version>_amd64.deb
 # Fedora
-sudo dnf install ./Kule-<version>-1.x86_64.rpm
+sudo dnf install ./Kule-<version>.x86_64.rpm
 ```
 
 İkisi de `kule-desktop` ve `kule`'yi `/usr/bin`'e koyar. Yalnızca komut
