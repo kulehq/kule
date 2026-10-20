@@ -75,6 +75,11 @@ jobs:
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo test --workspace --locked
+      # Go for betterleaks below: the macOS runner image no longer has it.
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.25.12"
+          cache: false
       - name: Canary secrets stay out of a task (scripts/release-gate.sh)
         run: |
           go install github.com/betterleaks/betterleaks@v1.9.0
