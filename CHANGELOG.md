@@ -26,6 +26,9 @@ alone for each system. Expect changes from one preview to the next.
 - Commands run in Seatbelt on macOS and Landlock (with a network namespace
   of their own) on Linux: they write only to the copy, credentials are
   hidden, and the network goes through the task's proxy.
+- Kule's home is hidden from a task's commands, but for the task's own
+  copy and tmp: the one the task is in, and `~/.kule` too when the task's
+  is another (`--home`, `KULE_HOME`).
 - A Cedar policy decides what passes, what waits for you and what never
   passes. Choose Kule's balanced or careful one, or write your own; a
   repository can add refusals. What you approve can be remembered.

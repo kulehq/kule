@@ -173,6 +173,9 @@ fn histories_browsers_and_credentials_in_the_home_are_hidden() {
         "Library/Application Support/Code/User/globalStorage/state.vscdb",
         // The person's own files (see the tests further down).
         "Documents/taxes.pdf",
+        // Kule's default home, while this task's is another one.
+        ".kule/tasks/0badc0de/w/app/notes.md",
+        ".kule/history.key",
     ];
     for path in hidden.iter().chain(&["notes/plain.txt"]) {
         let full = home.path().join(path);
@@ -196,6 +199,33 @@ fn histories_browsers_and_credentials_in_the_home_are_hidden() {
         &format!("cat '{}'", sources.home.join("notes/plain.txt").display()),
     );
     assert!(ok(&out), "{out:?}");
+}
+
+/// Kule's home where it is by default is the task's own as most people use
+/// it: the task works in its copy there, and another task's stays hidden.
+#[test]
+fn a_task_in_the_default_home_works_in_its_copy() {
+    let person = TempDir::new_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
+    let person = fs::canonicalize(person.path()).unwrap();
+    let kule_home = person.join(".kule");
+    let (ws, other_ws) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+    fs::write(ws.path().join("a.txt"), "a\n").unwrap();
+    fs::write(other_ws.path().join("b.txt"), "b\n").unwrap();
+    let task = Task::create(&kule_home, ws.path()).unwrap();
+    let other = Task::create(&kule_home, other_ws.path()).unwrap();
+    let sources = CacheSources {
+        home: person.clone(),
+        cargo_home: person.join(".cargo"),
+    };
+    let sandbox = Sandbox::for_task_with(&task, Some(sources)).unwrap();
+    let out = sh(&sandbox, "cat a.txt && echo more >> a.txt && cat a.txt");
+    assert!(ok(&out), "{out:?}");
+    assert_eq!(text(&out), "a\na\nmore");
+    let out = sh(
+        &sandbox,
+        &format!("cat '{}'", other.copy().join("b.txt").display()),
+    );
+    assert!(!ok(&out), "another task's copy was readable");
 }
 
 /// Linux: a task's commands have a /tmp of their own, so tasks cannot leave

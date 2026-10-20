@@ -535,6 +535,15 @@ impl Sandbox {
             for secret in HIDDEN_IN_HOME {
                 sandbox.hide(&sources.home.join(secret))?;
             }
+            // Kule's home where it is by default, when this task's is another
+            // one (`--home`, KULE_HOME): its tasks, logs and keys are no more
+            // this task's business than the ones beside it. The task's own
+            // home is hidden already, with its copy and tmp let through.
+            let default_home = real_or_planned(&sources.home.join(".kule"))?;
+            let own_home = real_or_planned(&task.home())?;
+            if !own_home.starts_with(&default_home) && !default_home.starts_with(&own_home) {
+                sandbox.hide(&default_home)?;
+            }
             sandbox.hide_personal(&sources.home, &tools_from_env())?;
             // The projects beside the workspace the person opened for its
             // tasks; checked again here, so one that changed stays closed.
