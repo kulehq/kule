@@ -138,9 +138,12 @@ canary() {
   mkdir -p "$ws/config" "$home"
 
   # Canaries no real secret can match, and an AWS key pair in AWS's form,
-  # for the scanner's own rules.
-  aws_id=AKIA$(LC_ALL=C tr -dc 'A-Z2-7' </dev/urandom | head -c 16)
-  aws_secret=$(LC_ALL=C tr -dc 'A-Za-z0-9/+' </dev/urandom | head -c 40)
+  # for the scanner's own rules. The random bytes are counted out first:
+  # where SIGPIPE is ignored (GitHub Actions), macOS's tr reading
+  # /dev/urandom whole never stops once head has what it wants.
+  aws_id=AKIA$(head -c 4096 /dev/urandom | LC_ALL=C tr -dc 'A-Z2-7' | head -c 16)
+  aws_secret=$(head -c 4096 /dev/urandom | LC_ALL=C tr -dc 'A-Za-z0-9/+' | head -c 40)
+  [ ${#aws_id} = 20 ] && [ ${#aws_secret} = 40 ] || fail "could not make the AWS canaries"
   cat >"$ws/.env" <<EOF
 KULE_CANARY_TOKEN=KULECANARY$(random_hex)
 DATABASE_URL=postgres://app:KULECANARY$(random_hex)@db.internal/app
