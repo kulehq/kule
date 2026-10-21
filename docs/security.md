@@ -100,8 +100,20 @@ on Linux: the workflows through actionlint and zizmor, the lockfiles
 through osv-scanner (accepted advisories in `osv-scanner.toml`, as in
 `deny.toml`), the built binary through `cargo audit bin` (built with
 cargo-auditable), and canary secrets planted in a workspace's env files,
-which must be masked in a task and found nowhere but the workspace. Each
-tool runs at a pinned version, and none sends what it scans anywhere.
+which must be masked in a task and found nowhere but the workspace. It
+runs [sandbox-probe](https://github.com/controlplaneio/sandbox-probe) in a
+task, through the proxy and with no network, against a home holding
+something at every path Kule hides: nothing there, nor Kule's own key, the
+task's base or a project beside the workspace, may be read; the workspace
+and the home may not be written, no host reached, no secret in the
+environment seen. The same scan outside the task must find each of them
+first, so a clean result means something. And it installs, builds and
+tests real projects in a task (ripgrep from crates.io, commander from npm)
+with a home holding a token and settings: the workspace stays as it was,
+the token stays masked, and a host the policy does not name is refused.
+Each tool runs at a pinned version, and none sends what it scans anywhere.
 After the release is built, `scripts/release-gate.sh attest <tag>`
 verifies every asset's provenance against the release workflow and the
-tag. CI runs the workflow and canary checks on every change.
+tag. CI runs the workflow, canary, probe and project checks on every
+change, and the release workflow runs the probe and project checks on the
+binaries it is about to publish.

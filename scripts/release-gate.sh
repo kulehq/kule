@@ -2,7 +2,7 @@
 # The checks to pass before a release, besides CI: run from the repository
 # root, on macOS and on Linux.
 #
-#   scripts/release-gate.sh [workflows|deps|binary|canary|all]
+#   scripts/release-gate.sh [workflows|deps|binary|canary|probe|project|all]
 #   scripts/release-gate.sh attest <tag>     after the release is built
 #
 # workflows  actionlint and zizmor over .github/workflows
@@ -14,13 +14,24 @@
 #            home for them: there must be none, and every planted value must
 #            have its placeholder in the copy. A scan of the workspace itself
 #            must find each one first, so an empty result means something.
+# probe      runs sandbox-probe in a Kule task, through the proxy and with
+#            no network, against a home holding something at every path
+#            Kule hides: none may be read there, nor Kule's own key, the
+#            task's base or a project beside the workspace; the workspace
+#            may not be written, the network not reached, no secret in the
+#            environment seen. The same scan outside the task must find
+#            each of them first.
+# project    installs, builds and tests real projects in a Kule task, from
+#            the registries the policy lets through (ripgrep from
+#            crates.io, commander from npm), with a home that holds tokens
+#            and settings; the workspace stays as it was, the token is
+#            masked, and a host the policy does not name is refused.
 # attest     verifies every asset of a release against its provenance, held
 #            to the release workflow and the tag
 #
 # Every tool runs at the version pinned below and refuses another; none
 # sends what it scans anywhere (betterleaks validates nothing unless told
-# to). Not covered here, and still part of the gate: sandbox-probe and a
-# real project's install, build and test under `kule exec`.
+# to; sandbox-probe asks google.com whether it can get out).
 set -eu
 
 ACTIONLINT=1.7.12
@@ -29,6 +40,11 @@ OSV_SCANNER=2.6.0
 BETTERLEAKS=1.9.0
 CARGO_AUDITABLE=0.7.7
 CARGO_AUDIT=0.22.2
+SANDBOX_PROBE=6.19.1
+# The real projects, each at a commit: ripgrep 15.2.0 and commander
+# 15.0.0. Their lockfiles name nothing but crates.io and npm.
+RIPGREP=e89fff89ac9af12e8d4ce9d5fd07beb408ca730f
+COMMANDER=ba6d13ddb4243e5913367734f8c159089ffe7834
 REPO=kulehq/kule
 
 say() { printf '%s\n' "$*"; }
@@ -123,16 +139,30 @@ timed() {
   ' "$@"
 }
 
+# find_kule: $kule, the binary under test, by its full path.
+find_kule() {
+  kule=${KULE:-target/debug/kule}
+  [ -x "$kule" ] || fail "no kule at $kule: cargo build -p kule, or set KULE"
+  kule=$(cd "$(dirname "$kule")" && pwd)/$(basename "$kule")
+}
+
+# scratch [dir]: $work, a new directory in <dir> (TMPDIR by default),
+# removed when the gate ends. KEEP=1 keeps it, with the reports and the
+# tasks, to look at.
+scratched=
+scratch() {
+  work=$(mktemp -d "${1:-${TMPDIR:-/tmp}}/kule-gate.XXXXXX")
+  scratched="$scratched $work"
+  # shellcheck disable=SC2086
+  [ -n "${KEEP:-}" ] || trap 'rm -rf $scratched' EXIT INT TERM
+}
+
 canary() {
   # The gate's stderr, for what timed shows when a command hangs.
   exec 3>&2
   need betterleaks "$BETTERLEAKS" "go install github.com/betterleaks/betterleaks@v$BETTERLEAKS"
-  kule=${KULE:-target/debug/kule}
-  [ -x "$kule" ] || fail "no kule at $kule: cargo build -p kule, or set KULE"
-  kule=$(cd "$(dirname "$kule")" && pwd)/$(basename "$kule")
-  work=$(mktemp -d "${TMPDIR:-/tmp}/kule-gate.XXXXXX")
-  # KEEP=1 keeps the reports and the task to look at.
-  [ -n "${KEEP:-}" ] || trap 'rm -rf "$work"' EXIT INT TERM
+  find_kule
+  scratch
   ws=$work/workspace
   home=$work/home
   mkdir -p "$ws/config" "$home"
@@ -225,6 +255,280 @@ EOF
   say "canary: ok ($planted values planted, each masked, none found outside the workspace)"
 }
 
+# hidden_paths: what Kule hides from every command under the home
+# directory (HIDDEN_IN_HOME and PERSONAL_IN_HOME), relative, one a line,
+# read from the source: a path added there is checked here with it.
+hidden_paths() {
+  sed -n '/^pub const HIDDEN_IN_HOME/,/^];/p;/^pub const PERSONAL_IN_HOME/,/^];/p' \
+    crates/kule-engine/src/sandbox.rs | sed -n 's/^ *"\(.*\)",$/\1/p'
+}
+
+# is_file <path>: whether what stands at <path> is a file (`.netrc`,
+# `.m2/settings.xml`) rather than a folder (`.ssh`), by its name.
+is_file() {
+  b=${1##*/}
+  b=${b#.}
+  case $b in
+    *.* | *history | netrc | npmrc | pypirc | git-credentials | vault-token | pgpass | \
+      lesshst | viminfo | databrickscfg | token | credentials | hub) return 0 ;;
+  esac
+  return 1
+}
+
+# block <path> <label> [file] [op]: an entry of sandbox-probe's
+# expectations in $config: nothing at <path> may be read or written in the
+# task (only <op>, when given), nor <file> in it. What the scan outside
+# the task must find first goes to $expected, as `<op> <label>`.
+block() {
+  {
+    printf '    - path: "%s"\n      label: "%s"\n      severity: critical\n' "$1" "$2"
+    printf '      reason: kept from every command\n'
+    [ -z "${3:-}" ] || printf '      check_files: [%s]\n' "$3"
+    [ -z "${4:-}" ] || printf '      check_ops: [%s]\n' "$4"
+  } >>"$config"
+  if [ -n "${4:-}" ]; then
+    printf '%s %s\n' "$4" "$2"
+  elif [ -n "${3:-}" ]; then
+    printf 'open %s/%s\n' "$2" "$3"
+  else
+    printf 'open %s\n' "$2"
+  fi >>"$expected"
+}
+
+# finding <report> <type>: the values of the findings of <type>, as JSON.
+finding() {
+  jq -c --arg t "$2" '[.findings[] | select(.findingType == $t) | .value]' "$1"
+}
+
+probe() {
+  exec 3>&2
+  need sandbox-probe "$SANDBOX_PROBE" "go install github.com/controlplaneio/sandbox-probe/v6@v$SANDBOX_PROBE"
+  command -v jq >/dev/null 2>&1 || fail "jq is not installed"
+  find_kule
+  # Not in /tmp: commands may write there, and on Linux a task may have a
+  # /tmp of its own, which would hide what is planted for the wrong reason.
+  scratch "$HOME"
+  case $(cd "$work" && pwd -P) in
+    /tmp/* | /private/tmp/*) fail "the probe's scratch is in /tmp: $work" ;;
+  esac
+  home=$work/home
+  ws=$home/code/app
+  mkdir -p "$ws" "$home/code/beside" "$home/.config/tool"
+
+  # Something at every path Kule hides, each with something to read.
+  hidden_paths >"$work/hidden.txt"
+  held=$(wc -l <"$work/hidden.txt" | tr -d ' ')
+  [ "$held" -ge 50 ] || fail "read $held hidden paths from crates/kule-engine/src/sandbox.rs: its lists moved"
+  # These stay on the list, whatever else changes on it.
+  for rel in .ssh .aws .gnupg .kube .docker .netrc .config/gh Library/Keychains Documents; do
+    grep -qxF "$rel" "$work/hidden.txt" || fail "Kule no longer hides ~/$rel"
+  done
+  while IFS= read -r rel; do
+    if is_file "$rel"; then
+      mkdir -p "$home/$(dirname "$rel")"
+      printf 'decoy\n' >"$home/$rel"
+    else
+      mkdir -p "$home/$rel"
+      printf 'decoy\n' >"$home/$rel/decoy"
+    fi
+  done <"$work/hidden.txt"
+  # A tool's settings with a token: Kule masks it in the task's home and
+  # hides the real file.
+  printf 'API_TOKEN=KULECANARY%s\n' "$(random_hex)" >"$home/.config/tool/.env"
+  printf 'decoy\n' >"$home/code/beside/decoy"
+  printf 'probe workspace\n' >"$ws/README.md"
+  cp "$(command -v sandbox-probe)" "$ws/sandbox-probe"
+  git -C "$ws" init -q
+  git -C "$ws" add README.md
+  git -C "$ws" -c user.name=gate -c user.email=gate@localhost commit -qm workspace
+
+  # Secrets in the environment the task starts from: a GitHub token and
+  # an AWS key, in their forms.
+  GITHUB_TOKEN=ghp_$(head -c 4096 /dev/urandom | LC_ALL=C tr -dc 'A-Za-z0-9' | head -c 36)
+  AWS_SECRET_ACCESS_KEY=$(head -c 4096 /dev/urandom | LC_ALL=C tr -dc 'A-Za-z0-9/+' | head -c 40)
+  export GITHUB_TOKEN AWS_SECRET_ACCESS_KEY
+  export HOME="$home" KULE_HOME="$work/kule"
+  say "probe: kule new"
+  task=$(timed 300 "$kule" new "$ws" | sed -n 's/^task \([0-9a-f]*\) .*/\1/p')
+  [ -n "$task" ] || fail "kule new made no task"
+  copy=$(timed 60 "$kule" path "$task")
+  # A first command makes the task's home and seals the token there.
+  timed 300 "$kule" exec "$task" --no-network -- true >/dev/null 2>&1 || fail "a command did not run in the task"
+  for f in "$KULE_HOME/secrets.key" "$KULE_HOME/tasks/$task/secrets.json"; do
+    [ -f "$f" ] || fail "nothing sealed the token: no $f"
+  done
+
+  config=$copy/probe.yaml
+  expected=$work/expected.txt
+  : >"$expected"
+  printf 'custom_paths:\n  must_block:\n' >"$config"
+  while IFS= read -r rel; do
+    if is_file "$rel"; then block "$home/$rel" "$rel"; else block "$home/$rel" "$rel" decoy; fi
+  done <"$work/hidden.txt"
+  block "$home/.config/tool/.env" "masked .config/tool/.env"
+  block "$home/code/beside" "a project beside the workspace" decoy
+  block "$ws" "the workspace" "" write
+  block "$home" "the home itself (the task writes in its own layer)" "" write
+  block "$work" "what is beside the home" "" write
+  block "$KULE_HOME/tasks/$task/base" "the task's base" README.md
+  block "$KULE_HOME/tasks/$task/secrets.json" "the task's sealed values"
+  block "$KULE_HOME/secrets.key" "the key that seals them"
+  cat >>"$config" <<EOF
+  must_readwrite:
+    - path: "$copy"
+      label: the task's copy
+      severity: critical
+      reason: the command works there
+EOF
+
+  # Outside the task, each is there to find.
+  say "probe: scanning outside the task"
+  (cd "$work" && timed 600 "$copy/sandbox-probe" scan --config "$config" --output_path "$work/outside.json") \
+    >"$work/outside.log" 2>&1 || true
+  [ -s "$work/outside.json" ] || fail "the scan outside the task wrote no report: $work/outside.log"
+  jq -r '.findings[] | select(.findingType == "custom_path_violation") | .value | "\(.op) \(.label)"' \
+    "$work/outside.json" | sort -u >"$work/outside.seen"
+  missing=$(grep -vxFf "$work/outside.seen" "$expected" || true)
+  [ -z "$missing" ] || fail "outside the task, the scan could not reach: $missing"
+  finding "$work/outside.json" env_secret_detection | grep -q '"GITHUB_TOKEN"' ||
+    fail "outside the task, the scan did not see GITHUB_TOKEN"
+  [ "$(finding "$work/outside.json" external_host_connectivity | jq 'flatten | length')" -gt 0 ] ||
+    fail "outside the task, the scan reached no host: an empty result in it would mean nothing"
+
+  for net in proxy none; do
+    flag=
+    [ "$net" = proxy ] || flag=--no-network
+    say "probe: scanning in the task (network: $net)"
+    status=0
+    # shellcheck disable=SC2086
+    timed 600 "$kule" exec "$task" $flag -- ./sandbox-probe scan --config probe.yaml \
+      --output_path "in-$net.json" >"$work/in-$net.log" 2>&1 || status=$?
+    report=$copy/in-$net.json
+    [ -s "$report" ] || fail "the scan in the task wrote no report: $work/in-$net.log"
+    cp "$report" "$work/"
+    reached=$(jq -r '.findings[] | select(.findingType == "custom_path_violation") | .value.message' "$report")
+    [ -z "$reached" ] || fail "in the task (network: $net): $reached"
+    [ "$status" = 0 ] || fail "sandbox-probe failed in the task (network: $net): $work/in-$net.log"
+    for t in external_host_connectivity external_host_dns_resolution; do
+      [ "$(finding "$report" "$t")" = '[[]]' ] || fail "in the task (network: $net), $t: $(finding "$report" "$t")"
+    done
+    [ "$(finding "$report" env_secret_detection)" = '[]' ] ||
+      fail "in the task, secrets in the environment: $(finding "$report" env_secret_detection)"
+    case $(uname) in
+      Darwin) want=seatbelt ;;
+      *) want=landlock ;;
+    esac
+    finding "$report" sandbox_detection | grep -q "$want" ||
+      fail "in the task, no $want: $(finding "$report" sandbox_detection)"
+    if [ "$net" = proxy ]; then
+      finding "$report" proxy_detection | grep -q '"https_proxy":"http://127.0.0.1:' ||
+        fail "in the task, the network does not go through Kule's proxy"
+    fi
+  done
+  say "probe: ok ($(wc -l <"$expected" | tr -d ' ') paths found outside the task, none reached in it; no host, no secret in the environment)"
+}
+
+# fetch <name> <url> <commit>: the project at that commit, as a workspace
+# in the gate's home.
+fetch() {
+  dir=$HOME/code/$1
+  mkdir -p "$dir"
+  git -C "$dir" init -q
+  timed 300 git -C "$dir" fetch -q --depth 1 "$2" "$3"
+  git -C "$dir" -c advice.detachedHead=false checkout -q FETCH_HEAD
+  [ "$(git -C "$dir" rev-parse HEAD)" = "$3" ] || fail "$1 is not at $3"
+}
+
+# build <name> <script>: runs the script in a task on the project, its
+# network through the task's proxy, its output in $work/<name>.log. The
+# workspace stays as it was, and nothing gets out but to the registries.
+build() {
+  dir=$HOME/code/$1
+  task=$(timed 300 "$kule" new "$dir" | sed -n 's/^task \([0-9a-f]*\) .*/\1/p')
+  [ -n "$task" ] || fail "kule new made no task for $1"
+  say "project: $1, in task $task"
+  timed 2400 "$kule" exec "$task" -- sh -c "$2" >"$work/$1.log" 2>&1 || {
+    tail -40 "$work/$1.log" >&2
+    fail "$1 did not install, build and test in the task: $work/$1.log"
+  }
+  [ -z "$(git -C "$dir" status --porcelain --ignored)" ] || fail "the task changed $1's workspace"
+  out=$(grep '^net: ' "$work/$1.log" | grep -v '(package-registries)$' | grep -v ' refused' || true)
+  [ -z "$out" ] || fail "$1 reached a host the policy does not name: $out"
+}
+
+project() {
+  exec 3>&2
+  find_kule
+  for tool in git cargo node npm curl; do
+    command -v "$tool" >/dev/null 2>&1 || fail "$tool is not installed"
+  done
+  node -e 'const [a, b] = process.versions.node.split(".").map(Number); process.exit(a > 22 || (a === 22 && b >= 12) ? 0 : 1)' ||
+    fail "commander $COMMANDER needs Node 22.12 or newer"
+  scratch
+  home=$work/home
+  mkdir -p "$home/.config/tool" "$home/code"
+  # A home as people have it: a tool's settings with a token, switches
+  # and a number whose keys look like secrets, and a startup file.
+  token=KULECANARY$(random_hex)
+  cat >"$home/.config/tool/.env" <<EOF
+API_TOKEN=$token
+TOOL_ALLOW_PRIVATE_NETWORKS=false
+TOOL_AUTH_ENABLED=true
+MAX_TOKENS=4096
+EOF
+  printf 'export TOOL_PRIVATE_MODE=false\n' >"$home/.zshrc"
+  # The toolchains stay where they are; the home is the gate's.
+  if [ -z "${RUSTUP_HOME:-}" ] && [ -d "$HOME/.rustup" ]; then
+    export RUSTUP_HOME="$HOME/.rustup"
+  fi
+  export HOME="$home" KULE_HOME="$work/kule"
+  fetch ripgrep https://github.com/BurntSushi/ripgrep.git "$RIPGREP"
+  fetch commander https://github.com/tj/commander.js.git "$COMMANDER"
+
+  # Every crate comes from crates.io in the task: its cargo home is new.
+  # shellcheck disable=SC2016
+  build ripgrep 'export CARGO_HOME="$TMPDIR/cargo-home"
+    cargo fetch --locked && cargo build --locked --offline && cargo test --locked --offline --workspace'
+  ! grep -q '^test result: FAILED' "$work/ripgrep.log" || fail "ripgrep's tests failed: $work/ripgrep.log"
+  passed=$(sed -n 's/^test result: ok\. \([0-9]*\) passed.*/\1/p' "$work/ripgrep.log" | awk '{ s += $1 } END { print s + 0 }')
+  [ "$passed" -ge 400 ] || fail "ripgrep: $passed tests passed, 400 or more run: $work/ripgrep.log"
+  fetched=$(grep -c '^ *Downloaded ' "$work/ripgrep.log" || true)
+  [ "$fetched" -ge 30 ] || fail "ripgrep: $fetched crates downloaded in the task, 30 or more expected"
+  say "project: ripgrep ok ($fetched crates from crates.io, $passed tests passed)"
+
+  # shellcheck disable=SC2016
+  build commander 'export npm_config_cache="$TMPDIR/npm-cache"
+    npm ci --no-audit --no-fund && npm test'
+  added=$(sed -n 's/^added \([0-9]*\) packages.*/\1/p' "$work/commander.log")
+  passed=$(sed -n 's/^[^ ]* pass \([0-9]*\)$/\1/p' "$work/commander.log" | tail -1)
+  failed=$(sed -n 's/^[^ ]* fail \([0-9]*\)$/\1/p' "$work/commander.log" | tail -1)
+  [ "${added:-0}" -ge 100 ] || fail "commander: ${added:-no} packages installed from npm: $work/commander.log"
+  if [ "${failed:-}" != 0 ] || [ "${passed:-0}" -lt 1300 ]; then
+    fail "commander: ${passed:-no} tests passed, ${failed:-?} failed: $work/commander.log"
+  fi
+  say "project: commander ok ($added packages from npm, $passed tests passed)"
+
+  # The token is masked in the tasks' homes and the settings beside it are
+  # as they were; its value is nowhere in Kule's home, sealed but there.
+  for layer in "$KULE_HOME"/tasks/*/home; do
+    env=$layer/.config/tool/.env
+    grep -q '^API_TOKEN=kule_secret_' "$env" || fail "the token is not masked in $env"
+    for line in TOOL_ALLOW_PRIVATE_NETWORKS=false TOOL_AUTH_ENABLED=true MAX_TOKENS=4096; do
+      grep -qx "$line" "$env" || fail "$line was changed in $env"
+    done
+  done
+  ! grep -rqF -D skip -- "$token" "$KULE_HOME" || fail "the token is in Kule's home"
+
+  # A host the policy does not name is refused, from the same task.
+  if timed 120 "$kule" exec "$task" -- curl -sS -o /dev/null --max-time 20 https://example.com \
+    >"$work/refused.log" 2>&1; then
+    fail "a command in the task reached example.com"
+  fi
+  grep -q '^net: example.com:443 .*refused' "$work/refused.log" ||
+    fail "Kule's proxy did not say it refused example.com: $work/refused.log"
+  say "project: ok (installed, built and tested in tasks; token masked; example.com refused)"
+}
+
 attest() {
   tag=${1:?attest needs the release tag, as v0.2.0}
   command -v gh >/dev/null 2>&1 || fail "gh is not installed"
@@ -247,7 +551,10 @@ case "${1:-all}" in
   deps) deps ;;
   binary) binary ;;
   canary) canary ;;
+  probe) probe ;;
+  project) project ;;
   attest) shift; attest "$@" ;;
-  all) workflows; deps; binary; canary ;;
+  # Each check that sets HOME or KULE_HOME in a shell of its own.
+  all) workflows; deps; binary; (canary); (probe); (project) ;;
   *) fail "unknown check: $1" ;;
 esac
