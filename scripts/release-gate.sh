@@ -275,25 +275,35 @@ is_file() {
   return 1
 }
 
-# block <path> <label> [file] [op]: an entry of sandbox-probe's
-# expectations in $config: nothing at <path> may be read or written in the
-# task (only <op>, when given), nor <file> in it. What the scan outside
-# the task must find first goes to $expected, as `<op> <label>`.
+# block <path> <label> [file]: an entry of sandbox-probe's expectations
+# in $config: nothing at <path> may be read or written in the task, nor
+# <file> in the folder at <path>, which goes to $folders for the writes
+# below. What the scan outside the task must find first goes to
+# $expected, as `open <label>`.
 block() {
   {
     printf '    - path: "%s"\n      label: "%s"\n      severity: critical\n' "$1" "$2"
     printf '      reason: kept from every command\n'
-    [ -z "${3:-}" ] || printf '      check_files: [%s]\n' "$3"
-    [ -z "${4:-}" ] || printf '      check_ops: [%s]\n' "$4"
+    if [ -n "${3:-}" ]; then
+      printf '      check_files: [%s]\n' "$3"
+      [ -z "$folder_ops" ] || printf '      check_ops: [%s]\n' "$folder_ops"
+    fi
   } >>"$config"
-  if [ -n "${4:-}" ]; then
-    printf '%s %s\n' "$4" "$2"
-  elif [ -n "${3:-}" ]; then
+  if [ -n "${3:-}" ]; then
     printf 'open %s/%s\n' "$2" "$3"
+    printf '%s\n' "$1" >>"$folders"
   else
     printf 'open %s\n' "$2"
   fi >>"$expected"
 }
+
+# writes <folders> <out>: each of the folders a file could be made in,
+# one a line, to <out>. Run in a task and outside it.
+# shellcheck disable=SC2016
+WRITES='while IFS= read -r d; do
+  if (: >"$d/kule-gate-write") 2>/dev/null; then printf "%s\n" "$d"; fi
+done <"$1" >"$2"'
+
 
 # finding <report> <type>: the values of the findings of <type>, as JSON.
 finding() {
@@ -360,19 +370,31 @@ probe() {
 
   config=$copy/probe.yaml
   expected=$work/expected.txt
+  folders=$copy/folders.txt
   : >"$expected"
+  : >"$folders"
+  # Whether a folder may be written, sandbox-probe asks access(2), which
+  # Landlock does not answer: on Linux the writes below say it.
+  case $(uname) in
+    Darwin) folder_ops= ;;
+    *) folder_ops='readdir, open' ;;
+  esac
   printf 'custom_paths:\n  must_block:\n' >"$config"
   while IFS= read -r rel; do
     if is_file "$rel"; then block "$home/$rel" "$rel"; else block "$home/$rel" "$rel" decoy; fi
   done <"$work/hidden.txt"
   block "$home/.config/tool/.env" "masked .config/tool/.env"
   block "$home/code/beside" "a project beside the workspace" decoy
-  block "$ws" "the workspace" "" write
-  block "$home" "the home itself (the task writes in its own layer)" "" write
-  block "$work" "what is beside the home" "" write
   block "$KULE_HOME/tasks/$task/base" "the task's base" README.md
   block "$KULE_HOME/tasks/$task/secrets.json" "the task's sealed values"
   block "$KULE_HOME/secrets.key" "the key that seals them"
+  # Folders a command may not make a file in, though they are no secret:
+  # the workspace, the home (the task writes in its own layer), Kule's
+  # home and the task's own folder (beside its copy and tmp), and what is
+  # beside the home.
+  for dir in "$ws" "$home" "$KULE_HOME" "$KULE_HOME/tasks/$task" "$work"; do
+    printf '%s\n' "$dir" >>"$folders"
+  done
   cat >>"$config" <<EOF
   must_readwrite:
     - path: "$copy"
@@ -425,7 +447,19 @@ EOF
         fail "in the task, the network does not go through Kule's proxy"
     fi
   done
-  say "probe: ok ($(wc -l <"$expected" | tr -d ' ') paths found outside the task, none reached in it; no host, no secret in the environment)"
+
+  # A file made in each folder: none in the task, every one outside it.
+  printf '%s\n' "$WRITES" >"$copy/writes.sh"
+  say "probe: writing in the task"
+  timed 300 "$kule" exec "$task" -- sh writes.sh folders.txt wrote.txt >"$work/writes.log" 2>&1 ||
+    fail "the writes did not run in the task: $work/writes.log"
+  [ -f "$copy/wrote.txt" ] || fail "the writes in the task said nothing: $work/writes.log"
+  [ ! -s "$copy/wrote.txt" ] || fail "in the task, a file was made in: $(cat "$copy/wrote.txt")"
+  sh "$copy/writes.sh" "$folders" "$work/wrote-outside.txt"
+  while IFS= read -r dir; do rm -f "$dir/kule-gate-write"; done <"$folders"
+  missing=$(grep -vxFf "$work/wrote-outside.txt" "$folders" || true)
+  [ -z "$missing" ] || fail "outside the task, no file could be made in: $missing"
+  say "probe: ok ($(wc -l <"$expected" | tr -d ' ') paths and $(wc -l <"$folders" | tr -d ' ') folders found outside the task, none reached in it; no host, no secret in the environment)"
 }
 
 # fetch <name> <url> <commit>: the project at that commit, as a workspace
