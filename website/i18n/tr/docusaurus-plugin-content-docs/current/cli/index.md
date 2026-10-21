@@ -108,7 +108,8 @@ TASK=$(kule new ~/code/app | awk '{print $2}')
 | --- | --- |
 | [`kule run`](run.md) | Bir ajana (Claude Code, Codex, Gemini, …) bir prompt verir; ajan kopyada, sandbox içinde çalışır. |
 | [`kule exec`](exec.md) | Kopyada, sandbox içinde tek bir komut çalıştırır, sonra neyi değiştirdiğini gösterir. |
-| [`kule shell`](shell.md) | Kopyada, sandbox dışında kendi kabuğunuzu açar. |
+| [`kule shell`](shell.md) | Kopyada, sandbox içinde (ya da `--outside` ile sandbox dışında) kendi kabuğunuzu açar. |
+| [`kule closed`](closed.md) | Uygulamanın kopyayı açtığı terminal uygulamalarını ve editörleri kapattığınızı Kule'ye söyler; böylece ajanlar görevde yeniden çalışabilir. |
 | [`kule path`](path.md) | Kopyanın ya da içindeki bir dosyanın diskte nerede olduğunu yazdırır. |
 | [`kule open`](open.md) | Kopyadaki bir belgeyi, resmi ya da videoyu kendi uygulamasıyla açar. |
 

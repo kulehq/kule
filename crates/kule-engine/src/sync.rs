@@ -122,6 +122,7 @@ impl Task {
     pub fn sync(&self) -> Result<Synced> {
         let _lock = self.lock()?;
         self.workspace_must_exist()?;
+        self.no_terminal_open("sync")?;
         crate::Sandbox::end_all(self)?;
         let mut baseline = self.load_baseline()?;
         let plan = self.plan_sync(&baseline, true)?;

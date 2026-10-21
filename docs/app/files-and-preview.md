@@ -78,19 +78,25 @@ an app is not started.
 ### Open the copy in your editor
 
 VS Code, Cursor or Zed, the ones your computer has. The menu lists each, the
-one you used last first. The first time for each editor, Kule says what an
-editor runs by itself from a folder (tasks, settings, recommended
-extensions, git hooks) and how to keep it from doing so:
+one you used last first. The editor runs outside the sandbox, as you.
 
-- in **VS Code**, answer *no* when it asks whether you trust the authors
-  (Restricted Mode);
-- **Cursor** does not ask unless Workspace Trust is on in its settings.
+- It is refused, as *Open in terminal app* is, while an agent is at work in
+  the task, and while the task changed what would run there by itself: git
+  config or hooks, a toolchain pin, an editor's settings and tasks.
+- While the copy holds changes not committed, Kule lists the changed files
+  and asks first, every time. An editor runs things by itself from a folder
+  (tasks, settings, recommended extensions, git hooks), so look at the
+  changes in Review first if you can, and keep the editor from running
+  them:
+  - in **VS Code**, answer *no* when it asks whether you trust the authors
+    (Restricted Mode);
+  - **Cursor** does not ask unless Workspace Trust is on in its settings.
+- Kule remembers that it opened the copy in that editor. Before the next run
+  in the task, it asks you to close it, since it cannot see the editor
+  close. See [Terminals and servers](terminals-and-servers.md#outside-the-sandbox)
+  and [`kule closed`](../cli/closed.md).
 
-It is refused, as the terminal is, while an agent is at work in the task,
-and while the task changed what would run there by itself: git config or
-hooks, a toolchain pin, an editor's settings and tasks. What you change in
-the editor shows in Review like the
-agent's work.
+What you change in the editor shows in Review like the agent's work.
 
 ## Asking the agent about a place in a file
 

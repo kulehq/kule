@@ -84,20 +84,29 @@ uygulama gibi adlandırılmış bir klasör başlatılmaz.
 ### Kopyayı editörünüzde açmak {#open-the-copy-in-your-editor}
 
 VS Code, Cursor ya da Zed; bilgisayarınızda hangileri varsa. Menü her
-birini listeler, en son kullandığınız en üstte olur. Her editör için ilk
-seferde Kule, bir editörün bir klasörden kendiliğinden neleri çalıştırdığını
-(task'lar, ayarlar, önerilen eklentiler, git hook'ları) ve bunu nasıl
-engelleyeceğinizi söyler:
+birini listeler, en son kullandığınız en üstte olur. Editör sandbox'ın
+dışında, sizin kimliğinizle çalışır.
 
-- **VS Code**'da, yazarlara güvenip güvenmediğinizi sorduğunda *no* deyin
-  (Restricted Mode);
-- **Cursor**, ayarlarında Workspace Trust açık değilse sormaz.
+- Görevde bir ajan çalışırken ve görev orada kendiliğinden çalışacak bir
+  şeyi (git config'i ya da hook'ları, bir sürüm dosyasını, bir editörün
+  ayarlarını ve görevlerini) değiştirdiği sürece, *Open in terminal app*'te
+  olduğu gibi reddedilir.
+- Kopyada commit edilmemiş değişiklikler varken Kule değişen dosyaları
+  listeler ve her seferinde önce sorar. Bir editör bir klasörden
+  kendiliğinden bazı şeyler çalıştırır (task'lar, ayarlar, önerilen
+  eklentiler, git hook'ları); bu yüzden elinizden gelirse önce
+  değişikliklere Review'da bakın ve editörün onları çalıştırmasını
+  engelleyin:
+  - **VS Code**'da, yazarlara güvenip güvenmediğinizi sorduğunda *no* deyin
+    (Restricted Mode);
+  - **Cursor**, ayarlarında Workspace Trust açık değilse sormaz.
+- Kule kopyayı o editörde açtığını hatırlar. Editörün kapandığını
+  göremediği için görevdeki bir sonraki çalıştırmadan önce onu kapatmanızı
+  ister. Bkz.
+  [Terminaller ve sunucular](terminals-and-servers.md#outside-the-sandbox)
+  ve [`kule closed`](../cli/closed.md).
 
-Görevde bir ajan çalışırken ve görev orada kendiliğinden çalışacak bir
-şeyi (git config'i ya da hook'ları, bir sürüm dosyasını, bir editörün
-ayarlarını ve görevlerini) değiştirdiği sürece bu işlem, terminalde olduğu
-gibi reddedilir. Editörde değiştirdikleriniz,
-ajanın işi gibi Review'da görünür.
+Editörde değiştirdikleriniz, ajanın işi gibi Review'da görünür.
 
 ## Ajana bir dosyadaki bir yeri sormak {#asking-the-agent-about-a-place-in-a-file}
 

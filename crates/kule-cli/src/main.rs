@@ -1,4 +1,5 @@
 mod paint;
+mod relay;
 mod scopes;
 
 use std::collections::HashMap;
@@ -280,9 +281,26 @@ enum Cmd {
     /// Mark the task with a colour (red, orange, yellow, green, teal, blue,
     /// purple, pink); without COLOR, take it away.
     Color { task: String, color: Option<String> },
-    /// Open your shell in the task's copy, outside the sandbox. What you
-    /// change there is reviewed and committed like the agent's work.
-    Shell { task: String },
+    /// Open your shell in the task's copy, in the task's sandbox, as `kule
+    /// exec` runs a command. What you change there is reviewed and committed
+    /// like the agent's work. While it is open, no agent starts work in the
+    /// task, and commit, sync and applying home changes wait.
+    Shell {
+        task: String,
+        /// Outside the sandbox instead, as yourself. Refused while what the
+        /// task changed would run there by itself (git config and hooks,
+        /// toolchain pins, editor tasks); while the copy holds changes not
+        /// committed, they are shown and you are asked first.
+        #[arg(long)]
+        outside: bool,
+        /// With --outside: open without asking; the changes are still shown.
+        #[arg(long, requires = "outside")]
+        yes: bool,
+    },
+    /// Tell Kule you closed the terminal apps and editors the app opened the
+    /// task's copy in, outside the sandbox: agents may work in the task
+    /// again.
+    Closed { task: String },
     /// Print where a task's copy is on disk, or FILE in it (a file or
     /// folder, never through a link): `cd "$(kule path TASK)"`. Says on
     /// stderr when git there would run what the task changed, as `kule
@@ -563,9 +581,69 @@ fn run() -> Result<ExitCode> {
             let color = color.as_deref().map(TaskColor::parse).transpose()?;
             Task::open(&home, &task)?.set_color(color)?;
         }
-        Cmd::Shell { task } => {
+        Cmd::Shell {
+            task,
+            outside: false,
+            ..
+        } => {
             let task = Task::open(&home, &task)?;
+            let shell = std::env::var("SHELL")
+                .ok()
+                .filter(|s| Path::new(s).is_absolute())
+                .unwrap_or_else(|| "/bin/sh".to_owned());
+            eprintln!(
+                "kule: in task {}'s copy, in its sandbox; exit to come back",
+                task.id()
+            );
+            let logged_before = connections(&task)?.len();
+            let (code, denials) = relay::run(&home, task.id(), &shell)?;
+            print_set(&task, &task.effects()?);
+            print_connections(&connections(&task)?[logged_before..]);
+            print_home(&task)?;
+            print_denials(&denials);
+            return Ok(match code {
+                Some(0) => ExitCode::SUCCESS,
+                Some(code) => ExitCode::from(code.clamp(1, 255) as u8),
+                None => ExitCode::FAILURE,
+            });
+        }
+        Cmd::Shell {
+            task,
+            outside: true,
+            yes,
+        } => {
+            let task = Task::open(&home, &task)?;
+            // Marked before the checks, so no run starts between them and
+            // the shell.
+            let _open = task.terminal_opened()?;
             let dir = task.terminal_dir()?;
+            let changed: Vec<String> = task.effects()?.files().map(|e| e.path.clone()).collect();
+            if !changed.is_empty() {
+                eprintln!(
+                    "kule: the copy holds changes not committed, which your shell, its prompt and the tools you run there may run as you, outside the sandbox:"
+                );
+                for path in changed.iter().take(20) {
+                    eprintln!("  {}", paint::plain_line(path));
+                }
+                if changed.len() > 20 {
+                    eprintln!(
+                        "  … and {} more (`kule status {}`)",
+                        changed.len() - 20,
+                        task.id()
+                    );
+                }
+                if !yes {
+                    if !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+                        bail!("review them first, or pass --yes to open your shell there anyway");
+                    }
+                    eprint!("kule: open your shell there outside the sandbox? [y/N] ");
+                    let mut answer = String::new();
+                    std::io::stdin().read_line(&mut answer)?;
+                    if !matches!(answer.trim(), "y" | "Y" | "yes") {
+                        bail!("not opened");
+                    }
+                }
+            }
             let shell = std::env::var_os("SHELL").unwrap_or_else(|| "/bin/sh".into());
             eprintln!(
                 "kule: in task {}'s copy, outside the sandbox; exit to come back",
@@ -582,6 +660,9 @@ fn run() -> Result<ExitCode> {
                 Some(code) => ExitCode::from(code.clamp(1, 255) as u8),
                 None => ExitCode::FAILURE,
             });
+        }
+        Cmd::Closed { task } => {
+            Task::open(&home, &task)?.forget_outside()?;
         }
         Cmd::Path { task, file } => {
             let task = Task::open(&home, &task)?;

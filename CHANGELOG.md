@@ -34,6 +34,21 @@
 - What Kule writes in a task's temporary folder (the proxy's certificate,
   the loopback hooks, the package caches) goes through folders it opens
   without following a link, and replaces whatever stands at the name.
+- The window's terminals and `kule shell` run your shell in the task's
+  sandbox, as `kule exec` runs a command, on a terminal of their own:
+  what you run there, and what your prompt runs by itself, reaches only
+  what the agent's commands reach. `kule shell --outside` opens your
+  shell outside the sandbox, as before.
+- While a terminal is open on a task, no agent starts work there, and
+  commit, sync and applying home changes wait until you close it, rather
+  than ending what runs in it.
+- *Open in terminal app*, *Open the copy in your editor* and `kule shell
+  --outside` show the changes not committed yet and ask before they open
+  the copy outside the sandbox, each time. Kule remembers what it opened
+  the copy in, and before the task's next run asks you to close it
+  (`kule closed TASK` from a terminal).
+- The desktop app no longer depends on `portable-pty`; its terminals use
+  the system's pseudo-terminals directly.
 
 ### Fixes
 

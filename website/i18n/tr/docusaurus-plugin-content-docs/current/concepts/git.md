@@ -60,9 +60,12 @@ sizi bekler, çünkü TLS içinde bir push bir fetch'ten ayırt edilemez.
 
 ## Kendiliğinden çalışanlar terminalinizi de korur {#what-runs-by-itself-protects-your-terminal-too}
 
-Görevde bir ajan çalışırken ve görev orada sandbox'ın dışında kendiliğinden
-çalışacak bir şeyi değiştirmişken Kule, kopyada **bir terminal açmayı** (ve
-`kule shell`'i) reddeder ve kopyayı bir editörde açmayı da reddeder:
+Görevin terminali ve [`kule shell`](../cli/shell.md), ajan gibi görevin
+sandbox'ında çalışır. Kopyayı sandbox'ın **dışında** açmak ise farklıdır:
+*Open in terminal app*, *Open the copy in your editor* ve
+`kule shell --outside` sizin kimliğinizle çalışır. Görevde bir ajan
+çalışırken ve görev orada sandbox'ın dışında kendiliğinden çalışacak bir
+şeyi değiştirmişken Kule bunları reddeder:
 
 - kopyanın git config'i ya da hook'ları; isteminizdeki (prompt) `git status`
   bunları çalıştırırdı. `.git` içinde git'in veri olarak tutmadığı her şey
@@ -78,6 +81,10 @@ Görevde bir ajan çalışırken ve görev orada sandbox'ın dışında kendili�
 
 `kule path` stderr'e bir uyarı yazar. Önce inceleyip commit edin ya da
 değişiklikleri atın (roll back).
+
+Kopyada commit edilmemiş başka değişiklikler varken Kule, kopyayı sandbox'ın
+dışında açmadan önce bunları listeler ve sorar. Bkz.
+[Terminaller ve sunucular](../app/terminals-and-servers.md#outside-the-sandbox).
 
 ## Worktree'ler
 

@@ -64,7 +64,7 @@ const sidebars = {
         {
           type: 'category',
           label: 'Working in a task',
-          items: ['cli/run', 'cli/exec', 'cli/shell', 'cli/path', 'cli/open'],
+          items: ['cli/run', 'cli/exec', 'cli/shell', 'cli/closed', 'cli/path', 'cli/open'],
         },
         {
           type: 'category',

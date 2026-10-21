@@ -259,7 +259,38 @@ gibi bir sürüm dosyasını, `.envrc`'yi ya da bir editörün ayarlarını. Ya 
 görevde bir ajan çalışıyor: işi bitene kadar bekleyin.
 
 **Çözüm:** değişikliği Review'da (ya da `kule status` ile) inceleyin,
-sonra commit edin ya da atın.
+sonra commit edin ya da atın. Bu tür değişiklikler yalnızca kopyayı
+sandbox'ın dışında açanları durdurur (*Open in terminal app*, *Open the
+copy in your editor*, `kule shell --outside`); görevin terminali ve
+`kule shell` sandbox'ta çalışır ve yine de açılır.
+
+### Commit, sync ya da bir çalıştırma bir terminali bekliyor
+
+**Belirti:** "a terminal is open on task …'s copy (held by process …);
+close it first, then commit" (ya da *then sync*, *then apply its home
+changes*, *then start work*).
+
+**Neden:** görevde bir terminal açık: uygulamanın **Terminal** panelindeki
+bir sekme ya da `kule shell`. Kule orada çalışanı sonlandırmaz; böylece
+kaydetmediğiniz hiçbir şey kaybolmaz.
+
+**Çözüm:** terminalin sekmesini kapatın ya da içinde `exit` yazın, sonra
+yeniden deneyin.
+
+### Kopyayı bir uygulamada açtıktan sonra çalıştırma reddediliyor
+
+**Belirti:** uygulama bir çalıştırmadan önce *Close … first* diye soruyor
+ya da `kule run` ve `kule exec` "Kule opened task …'s copy in … outside the
+sandbox; … Close it, then say so: in the app, or with `kule closed …`"
+diyor.
+
+**Neden:** *Open in terminal app* ya da *Open the copy in your editor*
+kopyayı sandbox'ın dışında açtı ve Kule o uygulamanın kapandığını
+göremiyor.
+
+**Çözüm:** terminal uygulamasını ya da editörü kapatın, sonra uygulamada
+*I closed it, start the run*'ı seçin ya da
+[`kule closed TASK`](cli/closed.md) çalıştırın.
 
 ### Ekrana ihtiyaç duyan bir program başarısız oluyor (LibreOffice ve diğerleri)
 

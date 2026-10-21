@@ -7,8 +7,9 @@ description: What a command or agent in a task can and cannot do - where it may 
 # The sandbox
 
 Every command a task runs, whether you start it with
-[`kule exec`](../cli/exec.md) or an agent runs it, runs inside the
-operating system's sandbox:
+[`kule exec`](../cli/exec.md) or in the task's
+[terminal](../app/terminals-and-servers.md), or an agent runs it, runs
+inside the operating system's sandbox:
 
 - **macOS**: Seatbelt, the system's own sandbox.
 - **Linux**: Landlock, seccomp and namespaces.

@@ -60,7 +60,7 @@ Pencerenin dört **bölgesi** vardır: sol, ana, sağ ve alt. Her bölge
 | **Timeline** | Commit'ler, adımlar, ağ bağlantıları ve sandbox'ın reddettiği işlemler. Bkz. [Timeline](timeline.md). | Ana |
 | **Preview** | Kopyadaki tek bir dosya, büyük gösterilir. Bkz. [Files ve Preview](files-and-preview.md). | Ana |
 | **Agent** (Live) | Ajanla konuşma ve istem (prompt) satırı. Bkz. [Live](live.md). | Alt |
-| **Terminal** | Kopyada açtığınız kendi kabuklarınız, her biri bir sekme. Bkz. [Terminaller ve sunucular](terminals-and-servers.md). | Alt |
+| **Terminal** | Kopyada, görevin sandbox'ında açtığınız kendi kabuklarınız, her biri bir sekme. Bkz. [Terminaller ve sunucular](terminals-and-servers.md). | Alt |
 
 Sağ bölge varsayılan olarak boştur ve gizlidir. Varsayılan olarak ajan
 sohbeti ve terminaller alt bölgeyi yan yana paylaşır:
@@ -132,9 +132,9 @@ Ana alanın üstünde, açık görevin başlığı şunları gösterir:
 - **Tasks**, tüm görevleri ve grupları listeler. Başlığın yanındaki **+**
   bir [grup](../concepts/groups.md) oluşturur.
 - Her görevin bir **⋮ menüsü** vardır (Mod+. ya da sağ tık): *Rename…*,
-  bir renk, *Group…*, *Budget…*, *Limits…*, *Open terminal*, *Open the copy
-  in an editor*, *Bring in the folder's changes*, *Fork task*, *Move
-  up*/*Move down* ve *Delete task*. Çalışan bir ajanı rahatsız edecek
+  bir renk, *Group…*, *Budget…*, *Limits…*, *Open in terminal app*, *Open
+  the copy in an editor*, *Bring in the folder's changes*, *Fork task*,
+  *Move up*/*Move down* ve *Delete task*. Çalışan bir ajanı rahatsız edecek
   öğeler *(agent at work)* der ve bekler.
 - Bir grubun ⋮ menüsünde *Rename…*, bir renk, *Budget…*, *Limits…*, *Move
   up*/*Move down* ve *Delete group* bulunur (grubun görevleri kalır, hiçbir

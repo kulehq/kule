@@ -101,7 +101,8 @@ TASK=$(kule new ~/code/app | awk '{print $2}')
 | --- | --- |
 | [`kule run`](run.md) | Give an agent (Claude Code, Codex, Gemini, …) a prompt; it works in the copy, in the sandbox. |
 | [`kule exec`](exec.md) | Run one command in the copy, in the sandbox, then show what it changed. |
-| [`kule shell`](shell.md) | Open your own shell in the copy, outside the sandbox. |
+| [`kule shell`](shell.md) | Open your own shell in the copy, in the sandbox (or outside it, with `--outside`). |
+| [`kule closed`](closed.md) | Tell Kule you closed the terminal apps and editors the app opened the copy in, so agents may work in the task again. |
 | [`kule path`](path.md) | Print where the copy, or a file in it, is on disk. |
 | [`kule open`](open.md) | Open a document, picture or video of the copy with its app. |
 

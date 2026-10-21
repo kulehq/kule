@@ -55,8 +55,9 @@ dışarıda bıraktığı yollar (derleme çıktısı, önbellekler, `.env`),
 `--include-ignored` vermediğiniz sürece kopyada kalır. Politika bunları da
 değerlendirir.
 
-Görevde bir ajan ya da bir `kule exec` komutu çalışırken `kule commit`
-reddedilir.
+Görevde bir ajan ya da bir `kule exec` komutu çalışırken ve görevde bir
+terminal (uygulamanınki ya da [kule shell](shell.md)) açıkken
+`kule commit` reddedilir.
 
 ## Argümanlar
 
@@ -153,6 +154,7 @@ hint: roll back, or rerun the task on the current workspace
 | `kule: workspace <path> is gone …` | Gerçek klasör taşındı ya da silindi; commit'in yazacağı bir yer yok. |
 | `kule: <path> changed since it was reviewed; nothing was committed` | Bir ayar dosyası inceleme ile commit arasında değişti. `kule status`'a tekrar bakın. |
 | `kule: task <id> is busy: another kule command holds its lock` | Diğer komutun bitmesini bekleyin. |
+| `kule: a terminal is open on task <id>'s copy (held by process <pid>); close it first, then commit` | Görevin terminalini kapatın (uygulamadaki sekmeyi ya da `kule shell`'den `exit` ile çıkın), sonra commit edin. Kule orada çalışanı sonlandırmaz; böylece kaydedilmemiş hiçbir şey kaybolmaz. |
 
 ## Uygulamada
 

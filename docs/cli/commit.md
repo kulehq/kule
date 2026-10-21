@@ -54,7 +54,8 @@ or key, the commit is refused as a conflict and nothing is written. See
 `--include-ignored`. The policy judges them too.
 
 `kule commit` is refused while an agent or a `kule exec` command is at work
-in the task.
+in the task, and while a terminal is open on it (the app's, or
+[kule shell](shell.md)).
 
 ## Arguments
 
@@ -151,6 +152,7 @@ hint: roll back, or rerun the task on the current workspace
 | `kule: workspace <path> is gone …` | The real folder was moved or deleted; a commit has nowhere to go. |
 | `kule: <path> changed since it was reviewed; nothing was committed` | A settings file changed between the review and the commit. Check `kule status` again. |
 | `kule: task <id> is busy: another kule command holds its lock` | Wait for the other command. |
+| `kule: a terminal is open on task <id>'s copy (held by process <pid>); close it first, then commit` | Close the task's terminal (the app's tab, or `exit` in `kule shell`), then commit. Kule does not end what runs there, so nothing unsaved is lost. |
 
 ## In the app
 

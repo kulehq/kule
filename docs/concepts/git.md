@@ -60,10 +60,12 @@ for you, because inside TLS a push cannot be told apart from a fetch.
 
 ## What runs by itself protects your terminal too
 
-Kule **refuses to open a terminal** in the copy (and `kule shell`), and
-refuses to open the copy in an editor, while an agent is at work in the
-task, and while the task has changed something that would run there by
-itself, outside the sandbox:
+The task's terminal and [`kule shell`](../cli/shell.md) run in the task's
+sandbox, like the agent. Opening the copy **outside** the sandbox is
+different: *Open in terminal app*, *Open the copy in your editor* and
+`kule shell --outside` run as you. Kule refuses them while an agent is at
+work in the task, and while the task has changed something that would run
+there by itself, outside the sandbox:
 
 - the copy's git config or hooks, which your prompt's `git status` would
   run. Anything in `.git` that git does not keep as data (objects, refs,
@@ -77,6 +79,10 @@ itself, outside the sandbox:
   (`.vscode/`), which a prompt or an editor reads when it opens the folder.
 
 `kule path` warns on stderr. Review and commit or roll them back first.
+
+While the copy holds other changes not committed, Kule lists them and asks
+before it opens the copy outside the sandbox. See
+[Terminals and servers](../app/terminals-and-servers.md#outside-the-sandbox).
 
 ## Worktrees
 

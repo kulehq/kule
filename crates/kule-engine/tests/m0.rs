@@ -969,3 +969,59 @@ fn a_task_opens_only_by_the_id_it_was_made_with() {
     fs::copy(&file, other.join("task.json")).unwrap();
     assert!(Task::open(home.path(), "abc123").is_err());
 }
+
+/// A terminal Kule opened on the copy holds off an agent's work, commit and
+/// sync, which would end what runs in it; a mark left by a process that
+/// died does not. While an agent is at work, no terminal opens.
+#[test]
+fn an_open_terminal_holds_off_work_commit_and_sync() {
+    let s = Setup::new();
+    write(&s.copy().join("a.txt"), "one\n");
+    let open = s.task.terminal_opened().unwrap();
+    let held = |r: Result<(), Error>, doing: &str| match r {
+        Err(Error::Invalid(m)) => {
+            assert!(m.contains("terminal is open") && m.contains(doing), "{m}")
+        }
+        other => panic!("expected a refusal, got {other:?}"),
+    };
+    held(s.task.agent_at_work().map(|_| ()), "start work");
+    held(s.task.commit().map(|_| ()), "commit");
+    held(s.task.sync().map(|_| ()), "sync");
+    assert_eq!(s.task.terminals_open(), [std::process::id()]);
+    drop(open);
+    assert!(s.task.terminals_open().is_empty());
+    assert!(s.task.commit().unwrap().is_some());
+
+    let marks = s.task.copy().ancestors().nth(2).unwrap().join("terminals");
+    fs::write(marks.join("999999-1"), "999999\n").unwrap();
+    assert!(s.task.terminals_open().is_empty());
+    let at_work = s.task.agent_at_work().unwrap();
+    let e = s.task.terminal_opened().map(|_| ()).unwrap_err();
+    assert!(e.to_string().contains("agent is at work"), "{e}");
+    drop(at_work);
+    assert!(s.task.terminal_opened().is_ok());
+}
+
+/// Kule cannot see a terminal app or an editor it opened the copy in close:
+/// no agent starts work in the task until the person says it is closed.
+#[test]
+fn work_waits_until_what_was_opened_outside_is_closed() {
+    let s = Setup::new();
+    s.task.opened_outside("VS Code").unwrap();
+    s.task.opened_outside("Terminal").unwrap();
+    s.task.opened_outside("VS Code").unwrap();
+    let opened: Vec<String> = s
+        .task
+        .outside()
+        .unwrap()
+        .into_iter()
+        .map(|o| o.what)
+        .collect();
+    assert_eq!(opened, ["VS Code", "Terminal"]);
+    let e = s.task.agent_at_work().map(|_| ()).unwrap_err().to_string();
+    assert!(e.contains("VS Code and Terminal"), "{e}");
+    assert!(e.contains(&format!("kule closed {}", s.task.id())), "{e}");
+    s.task.forget_outside().unwrap();
+    assert!(s.task.outside().unwrap().is_empty());
+    assert!(s.task.agent_at_work().is_ok());
+}

@@ -603,3 +603,18 @@ fn a_search_path_in_a_startup_file_is_kept_as_it_is() {
     s.task.apply_home(&[".zshrc".to_owned()]).unwrap();
     assert_eq!(s.real(".zshrc"), format!("{zshrc}export B=2\n"));
 }
+
+/// What the home layer holds is not applied while a terminal Kule opened
+/// is open on the copy: applying would end what runs there.
+#[test]
+fn home_changes_wait_while_a_terminal_is_open() {
+    let s = Setup::new();
+    s.run(SCRIPT);
+    let open = s.task.terminal_opened().unwrap();
+    let e = s.task.apply_home(&[".newrc".into()]).unwrap_err();
+    assert!(e.to_string().contains("terminal is open"), "{e}");
+    assert_eq!(s.real(".newrc"), "");
+    drop(open);
+    s.task.apply_home(&[".newrc".into()]).unwrap();
+    assert_eq!(s.real(".newrc"), "hi\n");
+}

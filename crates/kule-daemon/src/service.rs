@@ -21,6 +21,23 @@ use serde::{Deserialize, Serialize};
 /// Errors reach clients as text.
 pub type Result<T> = std::result::Result<T, String>;
 
+/// The most changed files a question before opening the copy outside the
+/// sandbox names.
+const MAX_SHOWN: usize = 20;
+
+/// What opening a task's copy outside the sandbox comes to (see
+/// `Call::OpenOutside`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+pub enum Outside {
+    /// Open it: the copy.
+    Open { dir: PathBuf },
+    /// The copy holds changes not committed, which a terminal or an editor
+    /// there may run: these first (`more` besides), and open only once the
+    /// person says so.
+    Ask { changed: Vec<String>, more: usize },
+}
+
 fn text(e: Error) -> String {
     match e {
         Error::Conflict(paths) => format!(
@@ -1347,11 +1364,44 @@ impl Service {
         crate::files::openable(&task.copy(), path)
     }
 
-    /// The copy, for the person's own terminal or editor (see
-    /// `Task::terminal_dir`), only while no agent is at work here: one
-    /// could change what runs there right after the check.
-    pub fn terminal_dir(&self, id: &str) -> Result<PathBuf> {
-        self.idle(id)?.terminal_dir().map_err(text)
+    /// The copy, to open in `what` outside the sandbox (see
+    /// `Call::OpenOutside`), only while no agent is at work here: one could
+    /// change what runs there right after the check. Noted before it is
+    /// handed out, and no agent starts work in the task until the person
+    /// says `what` is closed.
+    pub fn open_outside(&self, id: &str, what: &str, confirmed: bool) -> Result<Outside> {
+        if what.is_empty() || what.chars().count() > 64 || what.chars().any(char::is_control) {
+            return Err("name what the copy opens in, in a few words".to_owned());
+        }
+        let task = self.idle(id)?;
+        let dir = task.terminal_dir().map_err(text)?;
+        if !confirmed {
+            let effects = task.effects().map_err(text)?;
+            let changed: Vec<String> = effects.files().map(|e| e.path.clone()).collect();
+            if !changed.is_empty() {
+                return Ok(Outside::Ask {
+                    more: changed.len().saturating_sub(MAX_SHOWN),
+                    changed: changed.into_iter().take(MAX_SHOWN).collect(),
+                });
+            }
+        }
+        task.opened_outside(what).map_err(text)?;
+        // A run that started meanwhile finds the note; one already at work
+        // did not.
+        self.idle(id)?.terminal_dir().map_err(text)?;
+        Ok(Outside::Open { dir })
+    }
+
+    /// What Kule opened the task's copy in outside the sandbox, which may
+    /// still be open.
+    pub fn outside_opened(&self, id: &str) -> Result<Vec<kule_engine::OpenedOutside>> {
+        self.open(id)?.outside().map_err(text)
+    }
+
+    /// The person closed what Kule opened the task's copy in outside the
+    /// sandbox.
+    pub fn forget_outside(&self, id: &str) -> Result<()> {
+        self.open(id)?.forget_outside().map_err(text)
     }
 
     /// Deletes the task and its copy; the workspace is not touched.
@@ -2508,20 +2558,80 @@ mod tests {
     fn no_terminal_while_a_run_is_starting_or_at_work() {
         let s = Setup::new();
         let (id, _) = s.task();
-        assert!(s.app.terminal_dir(&id).is_ok());
+        let opens = |s: &Setup| s.app.open_outside(&id, "Terminal", true);
+        assert!(opens(&s).is_ok());
+        s.app.open(&id).unwrap().forget_outside().unwrap();
         s.app
             .running
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .insert(id.clone());
-        let e = s.app.terminal_dir(&id).unwrap_err();
+        let e = opens(&s).unwrap_err();
         assert!(e.contains("at work"), "{e}");
+        assert!(s.app.open(&id).unwrap().outside().unwrap().is_empty());
         s.app
             .running
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove(&id);
-        assert!(s.app.terminal_dir(&id).is_ok());
+        assert!(opens(&s).is_ok());
+    }
+
+    /// The copy opens in a terminal app or an editor while it holds changes
+    /// not committed only once the person saw them; once opened, no run
+    /// starts until the person says it is closed. A terminal open on the
+    /// copy holds runs off too.
+    #[test]
+    fn the_copy_opens_outside_only_once_its_changes_were_seen() {
+        let s = Setup::new();
+        let (id, copy) = s.task();
+        std::fs::write(copy.join("b.txt"), "b\n").unwrap();
+        assert_eq!(
+            s.app.open_outside(&id, "VS Code", false).unwrap(),
+            Outside::Ask {
+                changed: vec!["b.txt".to_owned()],
+                more: 0
+            }
+        );
+        let task = s.app.open(&id).unwrap();
+        assert!(task.outside().unwrap().is_empty());
+        for bad in ["", "VS\nCode", &"x".repeat(65)] {
+            assert!(s.app.open_outside(&id, bad, true).is_err());
+        }
+        assert!(matches!(
+            s.app.open_outside(&id, "VS Code", true).unwrap(),
+            Outside::Open { .. }
+        ));
+        let not_running = |s: &Setup| {
+            !s.app
+                .running
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .contains(&id)
+        };
+        let e = s
+            .app
+            .start_run(&id, "claude-code", "hi", Vec::new())
+            .unwrap_err();
+        assert!(e.contains("VS Code") && e.contains("kule closed"), "{e}");
+        assert!(not_running(&s));
+        task.forget_outside().unwrap();
+
+        let open = task.terminal_opened().unwrap();
+        let e = s
+            .app
+            .start_run(&id, "claude-code", "hi", Vec::new())
+            .unwrap_err();
+        assert!(e.contains("terminal is open"), "{e}");
+        assert!(not_running(&s));
+        drop(open);
+
+        // Nothing changed: nothing to see first.
+        s.app.rollback(&id).unwrap();
+        assert!(matches!(
+            s.app.open_outside(&id, "Terminal", false).unwrap(),
+            Outside::Open { .. }
+        ));
     }
 
     #[test]

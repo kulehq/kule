@@ -181,6 +181,7 @@ the changes wait for review again
 | `kule: ~/.bashrc has no change waiting` | Nothing the task wrote is waiting there; `kule home TASK` lists what is. |
 | `nothing to apply at those paths` | The paths have no waiting change; check `kule home TASK`. |
 | `kule: nothing applied from this task's home to undo` | There is no apply to take back. |
+| `kule: a terminal is open on task <id>'s copy …; close it first, then apply its home changes` | Close the task's terminal (the app's tab, or `exit` in `kule shell`), then apply. |
 
 ## In the app
 

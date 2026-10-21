@@ -7,7 +7,8 @@ description: Bir görevdeki komutun ya da ajanın neleri yapabildiği ve yapamad
 # Sandbox
 
 Bir görevin çalıştırdığı her komut, ister [`kule exec`](../cli/exec.md) ile
-siz başlatın ister bir ajan çalıştırsın, işletim sisteminin sandbox'ı
+ya da görevin [terminalinde](../app/terminals-and-servers.md) siz başlatın
+ister bir ajan çalıştırsın, işletim sisteminin sandbox'ı
 (yalıtılmış ortamı) içinde çalışır:
 
 - **macOS**: sistemin kendi sandbox'ı olan Seatbelt.

@@ -41,8 +41,9 @@ görevin kopyasından beri değişti) altında listeler.
 sonraki gibi baştan başlar ve ajan bir sonraki turunun başında neyin
 geldiğini öğrenir.
 
-Bir ajan çalışırken sync reddedilir; görevin sandbox'ında hâlâ çalışan
-programlar önce durdurulur.
+Bir ajan çalışırken ve görevde bir terminal (uygulamanınki ya da
+[kule shell](shell.md)) açıkken sync reddedilir; görevin sandbox'ında hâlâ
+çalışan programlar önce durdurulur.
 
 Birleştirmenin nasıl çalıştığı için bkz.
 [Sync ve birleştirme](../concepts/sync-and-merging.md).
@@ -112,6 +113,7 @@ hint: commit or roll back the task's changes there first, or leave the copy as i
 | --- | --- |
 | `kule: the folder and the task both changed: <paths>; nothing was brought in` | İki taraf da aynı fonksiyonu, bölümü ya da anahtarı değiştirdi. Önce görevin oradaki değişikliğini commit edin ya da atın; ya da kopyayı olduğu gibi bırakıp çakışmayı commit sırasında çözün. |
 | `kule: an agent is at work in task <id> …` | Çalıştırmanın bitmesini bekleyin. |
+| `kule: a terminal is open on task <id>'s copy …; close it first, then sync` | Görevin terminalini kapatın (uygulamadaki sekmeyi ya da `kule shell`'den `exit` ile çıkın), sonra sync yapın. |
 
 ## Uygulamada
 

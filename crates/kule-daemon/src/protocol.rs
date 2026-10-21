@@ -10,7 +10,7 @@ use serde_json::Value;
 
 /// Changes whenever a call, a result or a notice changes shape; a client
 /// and a daemon that disagree on it cannot talk.
-pub const PROTOCOL: u32 = 32;
+pub const PROTOCOL: u32 = 33;
 
 /// What a daemon says about itself.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -100,9 +100,25 @@ pub enum Call {
     CopyOf {
         task: String,
     },
-    /// The copy, for the person's terminal; refused while the copy's git
-    /// config or hooks hold changes (see `Task::terminal_dir`).
-    TerminalDir {
+    /// The copy, to open in `what` (a terminal app, an editor) outside the
+    /// sandbox: refused while what the task changed would run there by
+    /// itself (see `Task::terminal_dir`); while the copy holds changes not
+    /// committed, only once `confirmed` after the person saw them. Kule
+    /// notes it opened (see `Task::opened_outside`).
+    OpenOutside {
+        task: String,
+        what: String,
+        #[serde(default)]
+        confirmed: bool,
+    },
+    /// What Kule opened the task's copy in outside the sandbox, which may
+    /// still be open.
+    OutsideOpened {
+        task: String,
+    },
+    /// The person closed what Kule opened the task's copy in outside the
+    /// sandbox: agents may work in the task again.
+    ForgetOutside {
         task: String,
     },
     StartRun {

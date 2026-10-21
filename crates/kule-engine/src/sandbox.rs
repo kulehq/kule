@@ -385,9 +385,17 @@ pub struct Sandbox {
     /// find its processes by.
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     task: String,
+    /// What this sandbox alone carries beside the task's mark (macOS), to
+    /// find its own processes by (see [`Sandbox::end_own`]).
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    own: String,
     /// The person accepted running with what this computer gives, where it
     /// gives less than Kule means to (see [`crate::isolation_gaps`]).
     accept_weaker: bool,
+    /// The terminal Kule made for the command, which it may drive as its
+    /// own (macOS; see [`Sandbox::terminal_command`]).
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    terminal: Option<PathBuf>,
 }
 
 /// The service name no service has that a task's sandboxes, and only
@@ -494,8 +502,10 @@ impl Sandbox {
             file_size: None,
             tag: format!("kule-{}-{nanos:x}", task.id()),
             task: task.id().to_owned(),
+            own: format!("{nanos:x}"),
             // A choice that cannot be read is no choice.
             accept_weaker: crate::isolation::isolation(&task.home()).is_ok_and(|i| i.accept_weaker),
+            terminal: None,
         })
     }
 
@@ -887,14 +897,16 @@ impl Sandbox {
     /// ended, or an error when they keep coming. A process of the person's
     /// own, outside the sandbox, is never one of them.
     pub fn end_strays(&self) -> Result<usize> {
+        self.end_found(|| self.strays())
+    }
+
+    /// Ends what `find` finds until a look finds none (see
+    /// [`Sandbox::end_strays`]).
+    fn end_found(&self, find: impl Fn() -> Vec<i32>) -> Result<usize> {
         let mut ended = std::collections::HashSet::new();
         for _ in 0..STRAY_LOOKS {
             // One already sent SIGKILL may still be there, on its way out.
-            let found: Vec<i32> = self
-                .strays()
-                .into_iter()
-                .filter(|p| !ended.contains(p))
-                .collect();
+            let found: Vec<i32> = find().into_iter().filter(|p| !ended.contains(p)).collect();
             if found.is_empty() {
                 return Ok(ended.len());
             }
@@ -918,6 +930,24 @@ impl Sandbox {
         sandbox.end_strays()
     }
 
+    /// Ends what still runs in this sandbox alone, not in the task's
+    /// others: what a terminal's shell left behind once it ended, while
+    /// the task's other terminals go on. On macOS such a process could
+    /// otherwise reach the terminal device the shell had, once the system
+    /// gives it to another of the person's terminals. Elsewhere a command
+    /// reaches none of the person's terminals, and what it leaves is ended
+    /// with its PID namespace, or with the task (see
+    /// [`Sandbox::end_strays`]).
+    pub fn end_own(&self) -> Result<usize> {
+        #[cfg(target_os = "macos")]
+        {
+            let mark = format!("{}.{}", task_mark(&self.task), self.own);
+            self.end_found(|| self.marked(&mark))
+        }
+        #[cfg(not(target_os = "macos"))]
+        Ok(0)
+    }
+
     /// macOS knows which processes a task's sandboxes hold: those whose
     /// sandbox lets them look up the task's mark, which only its own do,
     /// and refuses them a name beside it that only Kule's profile refuses.
@@ -925,6 +955,13 @@ impl Sandbox {
     /// too, but not that refusal.
     #[cfg(target_os = "macos")]
     fn strays(&self) -> Vec<i32> {
+        self.marked(&task_mark(&self.task))
+    }
+
+    /// The processes whose sandbox lets them look up `mark`, a name beside
+    /// the task's that only Kule's profiles allow (see [`Sandbox::strays`]).
+    #[cfg(target_os = "macos")]
+    fn marked(&self, mark: &str) -> Vec<i32> {
         unsafe extern "C" {
             fn sandbox_check(
                 pid: libc::pid_t,
@@ -937,7 +974,7 @@ impl Sandbox {
         const FILTER_GLOBAL_NAME: libc::c_int = 2;
         const NO_REPORT: libc::c_int = 0x4000_0000;
         let (Ok(mark), Ok(decoy)) = (
-            std::ffi::CString::new(task_mark(&self.task)),
+            std::ffi::CString::new(mark),
             std::ffi::CString::new(format!("{}.decoy", task_mark(&self.task))),
         ) else {
             return Vec::new();
@@ -1123,6 +1160,96 @@ impl Sandbox {
         }
         Ok(command)
     }
+
+    /// [`Sandbox::command`] on `terminal`, a pseudo-terminal Kule made for
+    /// the person (its follower end): the command reads and writes it, and
+    /// it is the controlling terminal of the command's own session, so a
+    /// shell there has job control and Ctrl-C reaches what it runs. It is
+    /// no terminal of the person's other sessions, and the command still
+    /// reaches none of those.
+    pub fn terminal_command(
+        &self,
+        program: &str,
+        args: &[String],
+        terminal: std::os::fd::BorrowedFd<'_>,
+    ) -> Result<Command> {
+        use std::os::unix::process::CommandExt;
+
+        let mut on_terminal = self.clone();
+        on_terminal.terminal = Some(terminal_path(terminal)?);
+        let mut command = on_terminal.command(program, args)?;
+        let io = |what: &str| {
+            terminal
+                .try_clone_to_owned()
+                .map(std::process::Stdio::from)
+                .map_err(|e| Error::Invalid(format!("the terminal's {what}: {e}")))
+        };
+        command
+            .stdin(io("input")?)
+            .stdout(io("output")?)
+            .stderr(io("errors")?);
+        // Last, in the process that goes on to the command: under a PID
+        // namespace of its own that is two forks below the session Kule's
+        // child made, so it makes its own.
+        // SAFETY: getsid, getpid, setsid and ioctl are async-signal-safe
+        // and touch nothing but the child between fork and exec.
+        unsafe {
+            command.pre_exec(|| {
+                if libc::getsid(0) != libc::getpid() && libc::setsid() == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                if libc::ioctl(0, libc::TIOCSCTTY as _, 0) == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        Ok(command)
+    }
+}
+
+/// The device of `terminal`, a pseudo-terminal's follower end: on macOS
+/// the one name the profile opens to the command beside its own, checked
+/// to be that very device.
+#[cfg(target_os = "macos")]
+fn terminal_path(terminal: std::os::fd::BorrowedFd<'_>) -> Result<PathBuf> {
+    use std::os::fd::AsRawFd;
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::MetadataExt;
+
+    let mut name = [0 as libc::c_char; 128];
+    // SAFETY: ttyname_r writes at most `name.len()` bytes into `name`.
+    let named = unsafe { libc::ttyname_r(terminal.as_raw_fd(), name.as_mut_ptr(), name.len()) };
+    if named != 0 {
+        return Err(Error::Invalid(
+            "a command's terminal must be a terminal".into(),
+        ));
+    }
+    // SAFETY: ttyname_r ended the name with a NUL inside the buffer.
+    let name = unsafe { std::ffi::CStr::from_ptr(name.as_ptr()) };
+    let path = PathBuf::from(std::ffi::OsStr::from_bytes(name.to_bytes()));
+    let pty = path
+        .to_str()
+        .and_then(|p| p.strip_prefix("/dev/ttys"))
+        .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()));
+    let held = std::fs::File::from(terminal.try_clone_to_owned().at(&path)?)
+        .metadata()
+        .at(&path)?;
+    let named = std::fs::metadata(&path).at(&path)?;
+    if !pty || held.rdev() != named.rdev() {
+        return Err(Error::Invalid(format!(
+            "{} is not a pseudo-terminal Kule can give a command",
+            path.display()
+        )));
+    }
+    Ok(path)
+}
+
+/// Landlock judges a descriptor by how it was opened, before the command
+/// was restricted: the terminal needs no rule of its own.
+#[cfg(not(target_os = "macos"))]
+fn terminal_path(_terminal: std::os::fd::BorrowedFd<'_>) -> Result<PathBuf> {
+    Ok(PathBuf::new())
 }
 
 /// Whether a sandbox with [`Network::Proxy`] or [`Network::Deny`] keeps
@@ -1335,8 +1462,9 @@ impl Sandbox {
         // A task's id is hex; anything else would not reach the profile.
         let mark = if self.task.chars().all(|c| c.is_ascii_alphanumeric()) {
             format!(
-                "(allow mach-lookup (global-name \"{}\"))\n",
-                task_mark(&self.task)
+                "(allow mach-lookup (global-name \"{task}\") (global-name \"{task}.{}\"))\n",
+                self.own,
+                task = task_mark(&self.task)
             )
         } else {
             String::new()
@@ -1382,6 +1510,10 @@ impl Sandbox {
              (allow file-read* file-write* file-ioctl\n  \
                (require-all (regex #\"^/dev/ttys[0-9]+$\") (extension \"com.apple.sandbox.pty\")))\n"
         ));
+        if let Some(terminal) = &self.terminal {
+            text.push_str("(allow file-read* file-write* file-ioctl (literal (param \"PTY\")))\n");
+            params.push(("PTY".to_owned(), terminal.as_path()));
+        }
         // What the system's services would do for it outside the sandbox:
         // open apps and documents, drive other apps, write other programs'
         // settings, read or fill the pasteboard, ask for privacy grants,
