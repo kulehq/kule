@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Security
+
+- A secret you keep is masked wherever it is in the settings files Kule
+  masks (the copy's `.env` files, and `.zshrc`, `.profile`, `~/.env` and
+  the like in the home layer): inside a longer value, in an alias, a
+  command or a comment, as it is or as a URL or JSON writes it. Secrets
+  kept for other folders are masked too, under placeholders no host
+  fills, since the home is the same for every folder. A commit or an
+  apply puts such a line back only where it is as Kule masked it, and no
+  more times than the file held it.
+
 ### Fixes
 
 - A setting that is only a switch (`true`, `false`, `yes`, `no`, `on`,

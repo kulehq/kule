@@ -4,11 +4,13 @@
 use std::fs;
 use std::path::Path;
 
-use kule_engine::{CacheSources, Change, HomeChange, Kind, LineKind, Sandbox, Task, TextDiff};
+use kule_engine::{
+    CacheSources, Change, HomeChange, Kind, LineKind, Sandbox, Task, TextDiff, add_secret,
+};
 use tempfile::TempDir;
 
 struct Setup {
-    _home: TempDir,
+    home: TempDir,
     _ws: TempDir,
     person: TempDir,
     task: Task,
@@ -39,7 +41,7 @@ impl Setup {
         fs::write(ws.path().join("a.txt"), "a\n").unwrap();
         let task = Task::create(home.path(), ws.path()).unwrap();
         Setup {
-            _home: home,
+            home,
             _ws: ws,
             person,
             task,
@@ -505,4 +507,55 @@ fn a_token_in_a_shell_startup_file_is_masked_in_the_layer() {
     let layer = fs::read_to_string(s.task.home_layer().join(".zshrc")).unwrap();
     assert!(!layer.contains(token), "{layer}");
     assert!(!layer.contains("export B=2"), "{layer}");
+}
+
+/// A kept secret inside a line of a startup file (an alias, a command) is
+/// masked in the layer, and so is one kept for another folder: the home is
+/// the same for every folder. An apply puts the lines back as they were.
+#[test]
+fn a_kept_secret_inside_a_startup_line_is_masked_and_applied_back() {
+    let s = Setup::new();
+    let other = TempDir::new().unwrap();
+    add_secret(
+        s.home.path(),
+        "SHOP_KEY",
+        "shop-Kept-4821",
+        &["api.shop.example".into()],
+        None,
+    )
+    .unwrap();
+    add_secret(
+        s.home.path(),
+        "OTHER_KEY",
+        "other-Folder-9",
+        &["api.other.example".into()],
+        Some(other.path()),
+    )
+    .unwrap();
+    let p = s.person.path();
+    let zshrc = "export A=1\n\
+                 alias shop='curl -H \"x-key: shop-Kept-4821\" https://api.shop.example'\n\
+                 echo other-Folder-9 >/dev/null\n";
+    fs::write(p.join(".zshrc"), zshrc).unwrap();
+
+    let seen = s.run("cat \"$HOME/.zshrc\"");
+    assert!(
+        !seen.contains("shop-Kept-4821") && !seen.contains("other-Folder-9"),
+        "{seen}"
+    );
+    assert!(
+        seen.contains("alias shop='curl -H \"x-key: kule_secret_"),
+        "{seen}"
+    );
+    assert!(s.task.home_changes().unwrap().is_empty());
+
+    s.run("echo 'export B=2' >> \"$HOME/.zshrc\"");
+    let diff = format!("{:?}", s.task.home_diff(".zshrc").unwrap());
+    assert!(!diff.contains("Removed"), "{diff}");
+    assert!(
+        !diff.contains("shop-Kept-4821") && !diff.contains("other-Folder-9"),
+        "{diff}"
+    );
+    s.task.apply_home(&[".zshrc".to_owned()]).unwrap();
+    assert_eq!(s.real(".zshrc"), format!("{zshrc}export B=2\n"));
 }
