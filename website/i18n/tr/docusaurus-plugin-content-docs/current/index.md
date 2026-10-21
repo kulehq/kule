@@ -25,9 +25,10 @@ karar verirsiniz.
 
 :::note Kule bir önizleme (preview) sürümüdür
 
-Kule **macOS ve Linux**'ta çalışır. Windows desteği planlanıyor. İlk ön
-sürüm `0.2.0-preview.1` olacak; o yayımlanana kadar
-[Kule'yi kaynak koddan derlersiniz](getting-started/install.md).
+Kule **macOS ve Linux**'ta çalışır. Windows desteği planlanıyor. En son
+ön sürüm
+[`0.2.0-preview.2`](https://github.com/kulehq/kule/releases/tag/v0.2.0-preview.2):
+[indirin ya da Kule'yi kaynak koddan derleyin](getting-started/install.md).
 
 :::
 

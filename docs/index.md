@@ -23,9 +23,10 @@ a copy, inside a sandbox, and you decide what comes back.
 
 :::note Kule is a preview
 
-Kule runs on **macOS and Linux**. Windows is planned. The first pre-release
-will be `0.2.0-preview.1`; until it is published, you
-[build Kule from source](getting-started/install.md).
+Kule runs on **macOS and Linux**. Windows is planned. The latest
+pre-release is
+[`0.2.0-preview.2`](https://github.com/kulehq/kule/releases/tag/v0.2.0-preview.2):
+[download it or build Kule from source](getting-started/install.md).
 
 :::
 

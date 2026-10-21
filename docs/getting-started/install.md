@@ -24,7 +24,7 @@ line, only the app, or both.
 :::note A preview
 
 Kule is a **preview**: expect changes from one preview to the next. The
-first pre-release, [`0.2.0-preview.1`](https://github.com/kulehq/kule/releases/tag/v0.2.0-preview.1), is on the releases page:
+latest pre-release, [`0.2.0-preview.2`](https://github.com/kulehq/kule/releases/tag/v0.2.0-preview.2), is on the releases page:
 [download it](#download-a-preview-release), or
 [build from source](#build-from-source).
 
@@ -217,7 +217,7 @@ kule --version
 ```
 
 ```text
-kule 0.2.0-preview.1
+kule 0.2.0-preview.2
 ```
 
 (The number is the version you built or downloaded.)
