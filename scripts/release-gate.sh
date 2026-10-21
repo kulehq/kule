@@ -2,13 +2,22 @@
 # The checks to pass before a release, besides CI: run from the repository
 # root, on macOS and on Linux.
 #
+# Where each runs on Linux: workflows and deps read the same files on
+# every system, and CI runs them on Linux for every change (its workflows
+# and deny jobs). canary, probe and project run in CI on macOS and Linux;
+# probe, project and binary also run in the release workflow, on the very
+# binaries it is about to publish. attest runs anywhere, after the
+# release.
+#
 #   scripts/release-gate.sh [workflows|deps|binary|canary|probe|project|all]
 #   scripts/release-gate.sh attest <tag>     after the release is built
 #
 # workflows  actionlint and zizmor over .github/workflows
 # deps       osv-scanner over the lockfiles (cargo-deny is CI's)
-# binary     builds kule with its dependency tree inside (cargo-auditable)
-#            and checks that binary with `cargo audit bin`
+# binary     checks the crates inside kule against the advisories with
+#            `cargo audit bin`: the binary KULE names (each slice of a macOS
+#            universal one), or one built here; either must carry its
+#            dependency tree (cargo-auditable), as the release builds do
 # canary     plants canary secrets in a workspace's .env files, runs a
 #            command in a Kule task, and scans the task's copy and Kule's
 #            home for them: there must be none, and every planted value must
@@ -30,8 +39,10 @@
 #            to the release workflow and the tag
 #
 # Every tool runs at the version pinned below and refuses another; none
-# sends what it scans anywhere (betterleaks validates nothing unless told
-# to; sandbox-probe asks google.com whether it can get out).
+# sends a file it scans anywhere (betterleaks validates nothing unless
+# told to; sandbox-probe asks google.com whether it can get out;
+# osv-scanner asks osv.dev about the package names and versions in the
+# lockfiles).
 set -eu
 
 ACTIONLINT=1.7.12
@@ -86,15 +97,45 @@ deps() {
   say "deps: ok"
 }
 
-binary() {
-  need cargo-auditable "$CARGO_AUDITABLE" "cargo install --locked cargo-auditable --version $CARGO_AUDITABLE"
-  need cargo-audit "$CARGO_AUDIT" "cargo install --locked cargo-audit --version $CARGO_AUDIT"
-  dir=${CARGO_TARGET_DIR:-target}/release-gate
-  cargo auditable build --locked --release -p kule --target-dir "$dir"
+# audit <binary>: the crates inside it against the advisories. It must
+# carry its dependency tree (cargo-auditable): of any other binary, cargo
+# audit reads the few crates it can find, passes it, and only warns.
+audit() {
   # The advisories accepted, with their reasons, in osv-scanner.toml.
   ignored=$(sed -n 's/^id = "\(RUSTSEC-[0-9-]*\)"$/--ignore \1/p' osv-scanner.toml)
   # shellcheck disable=SC2086
-  cargo audit --deny warnings $ignored bin "$dir/release/kule"
+  out=$(cargo audit --deny warnings $ignored bin "$1" 2>&1) || {
+    say "$out"
+    fail "$1 has crates with advisories"
+  }
+  say "$out"
+  printf '%s\n' "$out" | grep -q "Found 'cargo auditable' data in" ||
+    fail "$1 carries no dependency tree: build it with cargo auditable"
+}
+
+binary() {
+  need cargo-audit "$CARGO_AUDIT" "cargo install --locked cargo-audit --version $CARGO_AUDIT"
+  if [ -n "${KULE:-}" ]; then
+    # The binary a release built. A macOS universal one is audited slice
+    # by slice: cargo audit reads no dependency tree from it whole.
+    find_kule
+    archs=$(lipo -archs "$kule" 2>/dev/null || true)
+    case "$archs" in
+    *" "*)
+      scratch
+      for arch in $archs; do
+        lipo -thin "$arch" -output "$work/kule-$arch" "$kule"
+        audit "$work/kule-$arch"
+      done
+      ;;
+    *) audit "$kule" ;;
+    esac
+  else
+    need cargo-auditable "$CARGO_AUDITABLE" "cargo install --locked cargo-auditable --version $CARGO_AUDITABLE"
+    dir=${CARGO_TARGET_DIR:-target}/release-gate
+    cargo auditable build --locked --release -p kule --target-dir "$dir"
+    audit "$dir/release/kule"
+  fi
   say "binary: ok"
 }
 

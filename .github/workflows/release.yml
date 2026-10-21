@@ -48,12 +48,16 @@ jobs:
         run: |
           rustup toolchain install
           rustup target add aarch64-apple-darwin x86_64-apple-darwin
-      - name: Tauri CLI
-        run: cargo install tauri-cli --version "$TAURI_CLI_VERSION" --locked
+      - name: Tauri CLI, and cargo-auditable at the version the gate pins
+        run: |
+          cargo install tauri-cli --version "$TAURI_CLI_VERSION" --locked
+          cargo install cargo-auditable --version "$(sed -n 's/^CARGO_AUDITABLE=//p' scripts/release-gate.sh)" --locked
+      # Each with its dependency tree inside (cargo-auditable), which the
+      # gate audits and anyone can read back.
       - name: The kule CLI for both architectures, as one binary
         run: |
-          cargo build --release --locked -p kule --target aarch64-apple-darwin
-          cargo build --release --locked -p kule --target x86_64-apple-darwin
+          cargo auditable build --release --locked -p kule --target aarch64-apple-darwin
+          cargo auditable build --release --locked -p kule --target x86_64-apple-darwin
           # Tauri builds each architecture apart, then the universal app:
           # each build looks for the CLI of its own.
           bin=crates/kule-desktop/binaries
@@ -101,11 +105,13 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev
-      - name: Tauri CLI
-        run: cargo install tauri-cli --version "$TAURI_CLI_VERSION" --locked
-      - name: The kule CLI
+      - name: Tauri CLI, and cargo-auditable at the version the gate pins
         run: |
-          cargo build --release --locked -p kule
+          cargo install tauri-cli --version "$TAURI_CLI_VERSION" --locked
+          cargo install cargo-auditable --version "$(sed -n 's/^CARGO_AUDITABLE=//p' scripts/release-gate.sh)" --locked
+      - name: The kule CLI, with its dependency tree inside (cargo-auditable)
+        run: |
+          cargo auditable build --release --locked -p kule
           mkdir -p crates/kule-desktop/binaries
           cp target/release/kule crates/kule-desktop/binaries/kule-x86_64-unknown-linux-gnu
       # A pre-release (0.2.0-preview.1) must sort before its release in
@@ -208,10 +214,11 @@ jobs:
           path: dist/
           if-no-files-found: error
 
-  # The kule CLI as it is about to be published, on each platform: what a
-  # command in a task can reach, under sandbox-probe, and real projects
-  # installed, built and tested in a task (scripts/release-gate.sh). It
-  # runs their code and the probe's in the sandbox, holding nothing.
+  # The kule CLI as it is about to be published, on each platform: the
+  # crates inside it against the advisories, what a command in a task can
+  # reach, under sandbox-probe, and real projects installed, built and
+  # tested in a task (scripts/release-gate.sh). It runs their code and the
+  # probe's in the sandbox, holding nothing.
   gate:
     needs: [macos, linux]
     strategy:
@@ -242,6 +249,12 @@ jobs:
           mkdir -p "$RUNNER_TEMP/kule"
           tar -C "$RUNNER_TEMP/kule" -xzf "dist/kule-$version-$ARCHIVE.tar.gz" kule
           "$RUNNER_TEMP/kule/kule" --version
+      - name: Rust toolchain (rust-toolchain.toml), for cargo-audit
+        run: rustup toolchain install
+      - name: The crates inside it, against the advisories
+        run: |
+          cargo install cargo-audit --version "$(sed -n 's/^CARGO_AUDIT=//p' scripts/release-gate.sh)" --locked
+          KULE="$RUNNER_TEMP/kule/kule" scripts/release-gate.sh binary
       - name: Unprivileged user namespaces (the sandbox's own network)
         if: runner.os == 'Linux'
         run: |
