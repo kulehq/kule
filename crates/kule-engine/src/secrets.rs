@@ -900,6 +900,13 @@ impl Vault {
         forms.into_iter().collect()
     }
 
+    /// Whether a value it holds is in `text`.
+    pub(crate) fn inside(&self, text: &str) -> bool {
+        self.values()
+            .iter()
+            .any(|v| !v.is_empty() && text.contains(v.as_str()))
+    }
+
     /// `text`, the settings file at `path`, with each placeholder put back
     /// to its value where Kule put it: in this file, as the value of the
     /// same setting, or in a line just as Kule masked it, no more times
@@ -1083,6 +1090,25 @@ pub(crate) fn is_env_file(path: &str) -> bool {
             || name.ends_with(".env"))
 }
 
+/// Words in a setting's key that name a secret.
+const SECRET_WORDS: &[&str] = &[
+    "KEY",
+    "SECRET",
+    "TOKEN",
+    "PASSWORD",
+    "PASSWD",
+    "PASS",
+    "PWD",
+    "AUTH",
+    "CREDENTIAL",
+    "PRIVATE",
+    "SIGNATURE",
+    "DSN",
+    "SALT",
+    "COOKIE",
+    "SESSION",
+];
+
 /// Whether the setting `key=value` looks like a secret: by its name (a key,
 /// a token, a password, a connection string with a password in it), or by
 /// a value that looks like one.
@@ -1104,25 +1130,14 @@ pub(crate) fn looks_secret(key: &str, value: &str) -> bool {
             .iter()
             .any(|w| key.contains(w));
     }
-    const SECRET_WORDS: &[&str] = &[
-        "KEY",
-        "SECRET",
-        "TOKEN",
-        "PASSWORD",
-        "PASSWD",
-        "PASS",
-        "PWD",
-        "AUTH",
-        "CREDENTIAL",
-        "PRIVATE",
-        "SIGNATURE",
-        "DSN",
-        "SALT",
-        "COOKIE",
-        "SESSION",
-    ];
     if SECRET_WORDS.iter().any(|w| key.contains(w)) {
         return true;
+    }
+    // A search path or a folder under a key that names one
+    // (`PATH="$HOME/.cargo/bin:$PATH"`): masked, a shell that reads it
+    // finds none of its tools.
+    if is_path_setting(&key, value) {
+        return false;
     }
     // A URL with a password in it: `postgres://user:pass@host/db`.
     if let Some((_, rest)) = value.split_once("://")
@@ -1131,7 +1146,11 @@ pub(crate) fn looks_secret(key: &str, value: &str) -> bool {
     {
         return true;
     }
-    // A long run of mixed characters with no spaces: what tokens look like.
+    token_shaped(value)
+}
+
+/// A long run of mixed characters with no spaces: what tokens look like.
+fn token_shaped(value: &str) -> bool {
     let classes = [
         value.chars().any(|c| c.is_ascii_lowercase()),
         value.chars().any(|c| c.is_ascii_uppercase()),
@@ -1142,6 +1161,65 @@ pub(crate) fn looks_secret(key: &str, value: &str) -> bool {
     .filter(|b| **b)
     .count();
     value.len() >= 20 && !value.contains(char::is_whitespace) && classes >= 3
+}
+
+/// Whether `key=value` is a search path or a folder, under a key that names
+/// one and no secret. Both are asked, as a token may start with `/`
+/// (base64 does) but is not kept under `PATH`.
+fn is_path_setting(key: &str, value: &str) -> bool {
+    let key = key.to_ascii_uppercase();
+    !SECRET_WORDS.iter().any(|w| key.contains(w)) && names_path(&key) && is_path_list(value)
+}
+
+/// Whether `key` (upper case) names a search path or a folder: `PATH`,
+/// `GOPATH`, `JAVA_HOME`, `NVM_DIR`, `XDG_DATA_DIRS`, `GOROOT`,
+/// `HOMEBREW_PREFIX`.
+fn names_path(key: &str) -> bool {
+    ["PATH", "HOME", "DIR", "DIRS", "ROOT", "PREFIX"]
+        .iter()
+        .any(|end| key.ends_with(end))
+}
+
+/// Whether `value` is a path, or paths joined by `:`, each starting with
+/// `/`, `~/`, `./`, `../` or a variable (`$HOME`, `${HOME}`), made of the
+/// characters paths are, and with no part that looks like a token. A
+/// command (`$(…)`), an empty part or anything else is no path.
+fn is_path_list(value: &str) -> bool {
+    value.split(':').all(|part| {
+        let rest = if let Some(r) = part.strip_prefix("${") {
+            match r.split_once('}') {
+                Some((name, r)) if is_name(name) => r,
+                _ => return false,
+            }
+        } else if let Some(r) = part.strip_prefix('$') {
+            let end = r
+                .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+                .unwrap_or(r.len());
+            if !is_name(&r[..end]) {
+                return false;
+            }
+            &r[end..]
+        } else if let Some(r) = part.strip_prefix("..") {
+            r
+        } else if let Some(r) = part.strip_prefix(['~', '.']) {
+            r
+        } else if part.starts_with('/') {
+            part
+        } else {
+            return false;
+        };
+        (rest.is_empty() || rest.starts_with('/'))
+            && rest
+                .chars()
+                .all(|c| c.is_alphanumeric() || matches!(c, '/' | '.' | '_' | '-' | '+' | '@'))
+            && !rest.split('/').any(token_shaped)
+    })
+}
+
+/// A shell variable's name: `HOME`, `_x1`.
+fn is_name(name: &str) -> bool {
+    name.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
 /// `text`, the content of a settings file, with the value of each
@@ -1346,7 +1424,9 @@ fn mask_lines(path: &str, text: &str, task: &mut TaskSecrets, vault: &Vault) -> 
 fn mask_settings(path: &str, text: &str, task: &mut TaskSecrets, vault: &Vault) -> Result<String> {
     mask_env(text, |key, value| {
         let kept = vault.placeholder_for_value(value);
-        if kept.is_none() && !looks_secret(key, value) {
+        // A search path is kept as it is, unless a kept secret is in it.
+        let held_path = is_path_setting(key, value) && vault.inside(value);
+        if kept.is_none() && !looks_secret(key, value) && !held_path {
             return Ok(None);
         }
         if value.starts_with(PLACEHOLDER_PREFIX) {
@@ -1425,7 +1505,16 @@ pub(crate) fn shown(text: &str, vault: &Vault, key: &[u8; 32]) -> String {
         let hash = blake3::keyed_hash(key, value.as_bytes()).to_hex();
         format!("‹hidden {}›", &hash[..6])
     };
+    // Search paths, set aside until the end as `‹path …›`: below, where
+    // their key is no longer known, they would read as tokens.
+    let mut paths = BTreeMap::new();
     let mut text = mask_env(text, |k, value| {
+        if is_path_setting(k, value) && !vault.inside(value) {
+            let hash = blake3::keyed_hash(key, value.as_bytes()).to_hex();
+            let aside = format!("‹path-{}›", &hash[..16]);
+            paths.insert(aside.clone(), value.to_owned());
+            return Ok(Some(aside));
+        }
         let secret = looks_secret(k, value) || vault.placeholder_for_value(value).is_some();
         Ok(secret.then(|| mark(value)))
     })
@@ -1481,6 +1570,9 @@ pub(crate) fn shown(text: &str, vault: &Vault, key: &[u8; 32]) -> String {
         }
     }
     flush(&mut word, &mut out);
+    for (aside, value) in paths {
+        out = out.replace(&aside, &value);
+    }
     out
 }
 
@@ -1610,6 +1702,56 @@ mod tests {
         assert!(looks_secret("API_KEY", "falsetto-not-a-switch"));
     }
 
+    #[test]
+    fn search_paths_and_folders_are_settings_under_keys_that_name_them() {
+        let path = "$HOME/.cargo/bin:/opt/homebrew/bin:${HOME}/go/bin:$PATH";
+        // Kept for its key as well as its shape: under any other key, masked.
+        assert!(looks_secret("X", path));
+        for (key, value) in [
+            ("PATH", path),
+            ("MANPATH", "/opt/homebrew/share/man:/usr/share/Man1"),
+            ("DYLD_LIBRARY_PATH", "/opt/homebrew/Cellar/Lib2/lib"),
+            ("JAVA_HOME", "/Library/Java/JavaVirtualMachines/Jdk21/Home"),
+            ("XDG_DATA_DIRS", "~/.local/share:/usr/share/Gnome40"),
+            ("HOMEBREW_PREFIX", "/opt/homebrew/Cellar/Brew4.2"),
+            ("GOROOT", "../vendor/Go1.23/toolchain/root"),
+            ("NVM_DIR", "/Users/me/Masaüstü/Tools/Nvm0.39"),
+        ] {
+            assert!(!looks_secret(key, value), "{key}={value}");
+        }
+        // A key word wins over the shape of a path.
+        assert!(looks_secret("SECRET_DIR", "/run/secrets/kule/Test1ngOnly"));
+        assert!(looks_secret("DB_PASSWORD", "/x:y"));
+        // A token that starts with `/` (base64 may) is no path where the
+        // key names none.
+        assert!(looks_secret("UPLOAD", "/K7MDENG/bPxRfiCYEXAMPLEKEY"));
+        // Under a key that names a path, what is not one stays a secret: a
+        // part that is no path, a command, a part that is a token.
+        for value in [
+            "/opt/homebrew/bin:ghp_aB3dE6fG9hJ2kL5mN8pQ1rS4tU7v",
+            "$(pwd)/Tools9/bin:/usr/local/Bin",
+            "/opt/homebrew/bin::/usr/Local9/bin",
+            "~bob/Tools9/bin:/usr/local/Bin",
+            "/opt/ghp_aB3dE6fG9hJ2kL5mN8pQ1rS4tU7v/bin",
+            "$9HOME/bin:/usr/local/Bin8x",
+        ] {
+            assert!(looks_secret("PATH", value), "{value}");
+        }
+    }
+
+    #[test]
+    fn a_search_path_is_shown_and_a_token_beside_it_hidden() {
+        let key = [7u8; 32];
+        let path = "$HOME/.cargo/bin:/opt/homebrew/bin:${HOME}/go/bin:$PATH";
+        let text = format!(
+            "export PATH=\"{path}\"\nexport UPLOAD={path}\nexport SECRET_DIR=/run/secrets/Test1ng\n"
+        );
+        let seen = shown(&text, &Vault::default(), &key);
+        assert!(seen.contains(&format!("export PATH=\"{path}\"")), "{seen}");
+        assert!(seen.contains("export UPLOAD=‹hidden "), "{seen}");
+        assert!(seen.contains("export SECRET_DIR=‹hidden "), "{seen}");
+    }
+
     fn vault_with(home: &TempDir, ws: &TempDir, dir: &TempDir) -> Vault {
         add_secret(
             home.path(),
@@ -1675,6 +1817,39 @@ mod tests {
         task.save(dir.path(), home.path()).unwrap();
         let vault = Vault::load(home.path(), ws.path(), dir.path()).unwrap();
         assert_eq!(vault.unmask(".bashrc", &out), twice);
+    }
+
+    /// A search path with a secret in it, kept or masked in another
+    /// setting, is masked in the layer and hidden from view.
+    #[test]
+    fn a_search_path_with_a_secret_in_it_stays_hidden() {
+        let (home, ws, dir) = (
+            TempDir::new().unwrap(),
+            TempDir::new().unwrap(),
+            TempDir::new().unwrap(),
+        );
+        let vault = vault_with(&home, &ws, &dir);
+        let mut task = TaskSecrets::load(dir.path(), home.path()).unwrap();
+        let text = "PATH=/opt/sk_test_real/bin:$PATH\nGOPATH=/opt/go/Tools1:$HOME/go/bin\n";
+        let out = mask_with(".zshrc", text, &mut task, &vault).unwrap();
+        assert!(!out.contains("sk_test_real"), "{out}");
+        assert!(
+            out.contains("\nGOPATH=/opt/go/Tools1:$HOME/go/bin\n"),
+            "{out}"
+        );
+        let seen = shown(text, &vault, &[7u8; 32]);
+        assert!(!seen.contains("sk_test_real"), "{seen}");
+        assert!(
+            seen.contains("GOPATH=/opt/go/Tools1:$HOME/go/bin"),
+            "{seen}"
+        );
+
+        // So is one with a value Kule masked in another setting.
+        mask_with(".env", "DB_PASSWORD=hunter2\n", &mut task, &vault).unwrap();
+        task.save(dir.path(), home.path()).unwrap();
+        let vault = Vault::load(home.path(), ws.path(), dir.path()).unwrap();
+        let out = mask_with(".zshrc", "PATH=/opt/hunter2/bin\n", &mut task, &vault).unwrap();
+        assert!(!out.contains("hunter2"), "{out}");
     }
 
     #[test]

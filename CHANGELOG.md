@@ -22,6 +22,14 @@
   setting stopped working in the task, and the task's proxy blanked the
   same word in every response, so installs from crates.io and npm failed
   for anyone whose home held one.
+- A search path or a folder under a key that names one
+  (`PATH="$HOME/.cargo/bin:/opt/homebrew/bin:$PATH"`, `GOPATH`,
+  `JAVA_HOME`, `XDG_DATA_DIRS`) is no longer taken for a secret by its
+  length. It stays as it is in the task's `.zshrc`, `.profile` and `.env`
+  files and shows in their diff, so a login shell in the task finds its
+  tools. It stays masked where the key names a secret, where a part of it
+  is no path or looks like a token, and where a secret Kule keeps or
+  masked elsewhere is in it.
 
 ### Development
 
