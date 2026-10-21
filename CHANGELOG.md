@@ -33,6 +33,13 @@
 
 ### Development
 
+- The kule CLI in a release carries its dependency tree (built with
+  cargo-auditable), so `cargo audit bin` and other scanners can read what
+  is inside it. The release workflow audits the very binaries it is about
+  to publish, on macOS (each slice of the universal binary) and on Linux,
+  and the gate refuses a binary without that tree, of which cargo audit
+  reads only part. CI runs osv-scanner over every lockfile on every
+  change.
 - The release gate runs sandbox-probe in a task, against a home with
   something at every path Kule hides, and installs, builds and tests real
   projects in a task (ripgrep from crates.io, commander from npm). CI runs

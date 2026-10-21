@@ -10,7 +10,8 @@ permissions:
 
 jobs:
   # What Kule depends on: advisories, licences, duplicate and wildcard
-  # versions, and where crates come from (deny.toml).
+  # versions, and where crates come from (deny.toml); and osv-scanner over
+  # every lockfile, the docs site's included (the release gate's `deps`).
   deny:
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -23,6 +24,15 @@ jobs:
       - name: cargo-deny, at a pinned version
         run: cargo install --locked cargo-deny --version 0.20.2
       - run: cargo deny --locked check
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.26.8"
+          cache: false
+      - name: osv-scanner over the lockfiles (scripts/release-gate.sh)
+        run: |
+          go install github.com/google/osv-scanner/v2/cmd/osv-scanner@v2.6.0
+          PATH="$(go env GOPATH)/bin:$PATH"
+          scripts/release-gate.sh deps
 
   # The workflows themselves: expressions, shell steps and runner labels
   # (actionlint); injection, kept credentials, caches and pins (zizmor).

@@ -98,8 +98,10 @@ Every change follows these rules:
 Before a release, besides CI, `scripts/release-gate.sh` runs on macOS and
 on Linux: the workflows through actionlint and zizmor, the lockfiles
 through osv-scanner (accepted advisories in `osv-scanner.toml`, as in
-`deny.toml`), the built binary through `cargo audit bin` (built with
-cargo-auditable), and canary secrets planted in a workspace's env files,
+`deny.toml`), the kule binary through `cargo audit bin` (the release
+builds carry their dependency tree, with cargo-auditable, and a binary
+without one is refused, as cargo audit would read only part of it), and
+canary secrets planted in a workspace's env files,
 which must be masked in a task and found nowhere but the workspace. It
 runs [sandbox-probe](https://github.com/controlplaneio/sandbox-probe) in a
 task, through the proxy and with no network, against a home holding
@@ -111,9 +113,11 @@ first, so a clean result means something. And it installs, builds and
 tests real projects in a task (ripgrep from crates.io, commander from npm)
 with a home holding a token and settings: the workspace stays as it was,
 the token stays masked, and a host the policy does not name is refused.
-Each tool runs at a pinned version, and none sends what it scans anywhere.
+Each tool runs at a pinned version. None sends a file it scans anywhere;
+osv-scanner asks osv.dev about the package names and versions in the
+lockfiles.
 After the release is built, `scripts/release-gate.sh attest <tag>`
 verifies every asset's provenance against the release workflow and the
-tag. CI runs the workflow, canary, probe and project checks on every
-change, and the release workflow runs the probe and project checks on the
-binaries it is about to publish.
+tag. CI runs the workflow, lockfile, canary, probe and project checks on
+every change, and the release workflow runs the binary, probe and project
+checks on the binaries it is about to publish, on macOS and Linux.
