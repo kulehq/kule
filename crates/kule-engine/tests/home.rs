@@ -48,7 +48,8 @@ impl Setup {
         }
     }
 
-    /// Runs `script` in the sandbox with the home layer as `HOME`.
+    /// Runs `script` in the sandbox with the home layer as `HOME`. How it
+    /// ended goes to the test's output, shown when the test fails.
     fn run(&self, script: &str) -> String {
         let p = self.person.path();
         let mut sandbox = Sandbox::for_task_with(
@@ -73,7 +74,13 @@ impl Setup {
             .unwrap()
             .output()
             .unwrap();
-        String::from_utf8_lossy(&out.stdout).into_owned()
+        let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        eprintln!(
+            "--- run ({}):\n{script}\n--- stdout:\n{stdout}--- stderr:\n{}",
+            out.status,
+            String::from_utf8_lossy(&out.stderr)
+        );
+        stdout
     }
 
     fn real(&self, rel: &str) -> String {
@@ -159,6 +166,58 @@ fn applied_changes_reach_the_real_home_and_what_they_replaced_is_kept() {
         "{e}"
     );
     assert_eq!(s.real(".config/tool/settings.toml"), "x = 9\n");
+}
+
+// Filesystems keep time in ticks (milliseconds on Linux ext4, two seconds on
+// FAT), so a same-size save right after Kule reads a stamp can leave the
+// stamp as it was. The test below repeats a race that a coarse clock loses
+// often; on a nanosecond clock (APFS) it passes either way.
+const SAME_TICK_TRIES: usize = 20;
+
+#[test]
+fn a_same_size_save_while_the_layer_is_made_is_not_overwritten() {
+    for _ in 0..SAME_TICK_TRIES {
+        let s = Setup::new();
+        let p = s.person.path();
+        for i in 0..500 {
+            fs::write(p.join(format!(".b{i}")), "b\n").unwrap();
+        }
+        let a = p.join(".a");
+        fs::write(&a, "1\n").unwrap();
+        // Saves .a again as soon as its clone appears, while the rest of the
+        // home is still being cloned. Gives up after a while, so a layer
+        // made elsewhere fails the test instead of hanging.
+        let writer = {
+            let (layer, a) = (s.task.home_layer(), a.clone());
+            std::thread::spawn(move || {
+                let started = std::time::Instant::now();
+                while started.elapsed() < std::time::Duration::from_secs(30) {
+                    if layer.join(".a").exists() {
+                        fs::write(&a, "2\n").unwrap();
+                        return;
+                    }
+                    std::thread::yield_now();
+                }
+                panic!("the layer never appeared");
+            })
+        };
+        // Right after the first save, so the clone reads its stamp within
+        // the same tick where the clock is coarse.
+        s.task
+            .prepare_home(p, &[p.join(".claude")], &[], &[".claude".to_owned()])
+            .unwrap();
+        writer.join().unwrap();
+        let layer = s.task.home_layer();
+        let cloned = fs::read_to_string(layer.join(".a")).unwrap();
+        fs::write(layer.join(".a"), "agent\n").unwrap();
+        match s.task.apply_home(&[".a".to_owned()]) {
+            Err(e) => {
+                assert!(e.to_string().contains("~/.a"), "{e}");
+                assert_eq!(s.real(".a"), "2\n");
+            }
+            Ok(_) => assert_eq!(cloned, "2\n", "the person's save was overwritten unseen"),
+        }
+    }
 }
 
 #[test]
