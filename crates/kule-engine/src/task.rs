@@ -22,12 +22,22 @@ use crate::limits::TaskLimits;
 use crate::manifest::{Baseline, Entry, Kind, Stamp, Tree, relative, scan};
 use crate::meet::{self, Touched};
 use crate::outline::{self, FileOutline};
+use crate::policy::Policy;
 use crate::preview::{self, Preview};
 use crate::secrets::{self, TaskSecrets, Vault};
 use crate::usage::Money;
 
 /// The largest settings file Kule masks secrets in.
 const MAX_SETTINGS: u64 = 1024 * 1024;
+
+/// The built-in policy's rules for files that run by themselves where a
+/// tool finds them, without anyone running the project.
+const RUNS_BY_ITSELF: [&str; 4] = [
+    "automation",
+    "other-vcs",
+    "nested-repository",
+    "nested-git-hooks",
+];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskInfo {
@@ -1217,12 +1227,20 @@ impl Task {
         write_json(&self.dir.join("settings.json"), &settings)
     }
 
-    /// The copy, for a person's own terminal, unless what the task ran
-    /// changed what git runs there: config (`core.fsmonitor`, aliases) or
-    /// hooks would run outside the sandbox the moment their shell prompt
-    /// calls `git status`. Then this refuses, naming them, until they are
-    /// committed or rolled back.
+    /// The copy, for a person's own terminal or editor, outside the
+    /// sandbox, unless what the task ran changed what runs there by itself:
+    /// git's config (`core.fsmonitor`, aliases) or hooks the moment a shell
+    /// prompt calls `git status`, a toolchain pin or an editor's tasks the
+    /// moment a prompt or an editor reads them. Then this refuses, naming
+    /// them, until they are committed or rolled back; and while an agent is
+    /// at work, since it could change them right after.
     pub fn terminal_dir(&self) -> Result<PathBuf> {
+        if let Some(pid) = self.agent_pid() {
+            return Err(Error::Invalid(format!(
+                "an agent is at work in task {} (process {pid}); wait until it is done",
+                self.info.id
+            )));
+        }
         let effects = self.effects()?;
         // A repository inside the copy, or a `.git` file pointing git at one
         // elsewhere: git in that folder reads what the task put there.
@@ -1241,7 +1259,7 @@ impl Task {
                  review it, then commit or roll it back before opening a terminal"
             )));
         }
-        if let Some(git) = effects.git {
+        if let Some(git) = &effects.git {
             let mut runs: Vec<String> = git.hooks.iter().map(|h| format!("hook {h}")).collect();
             if git.config {
                 runs.insert(0, "git config".to_owned());
@@ -1253,6 +1271,33 @@ impl Task {
                     runs.join(", ")
                 )));
             }
+        }
+        // What runs by itself where a prompt or an editor finds it, as the
+        // built-in policy names it: a person's own policy may let these
+        // through to their folder, never through to their shell.
+        let runs: Vec<String> = Policy::builtin()
+            .judge(&effects)
+            .judgements
+            .into_iter()
+            .filter(|j| {
+                j.rules
+                    .iter()
+                    .any(|r| RUNS_BY_ITSELF.contains(&r.as_str()) || r.starts_with("policy-error"))
+            })
+            .map(|j| j.subject)
+            .filter(|path| {
+                // A folder alone runs nothing, nor does a file gone.
+                effects
+                    .files()
+                    .any(|e| e.path == *path && e.change != Change::Deleted && e.kind != Kind::Dir)
+            })
+            .collect();
+        if let Some(first) = runs.first() {
+            return Err(Error::Invalid(format!(
+                "the copy's {first} changed, and a shell prompt or an editor there could run it \
+                 outside the sandbox; review it, then commit or roll it back before opening a \
+                 terminal"
+            )));
         }
         Ok(self.copy())
     }

@@ -53,9 +53,11 @@ when { resource.kind like "fs.*" && (resource.folded_name like "*.csproj" || res
 
 // What runs code, or steers an agent, without anyone running the project:
 // CI, editor tasks, dev containers, git hooks managers, toolchain and
-// package manager settings, build scripts an editor runs on opening, an
-// agent's settings, instructions and servers, and Kule's own rules. In any
-// folder, as the tools look for them.
+// package manager settings and the version pins a shell prompt reads on
+// entering a folder, build scripts an editor runs on opening, an agent's
+// settings, instructions and servers, and Kule's own rules. In any folder,
+// as the tools look for them. Kule's terminal and editor refuse a copy
+// where one of these changed.
 @id("automation")
 forbid (principal, action == Kule::Action::"auto", resource)
 when {
@@ -64,19 +66,41 @@ when {
      ".github", ".circleci", ".devcontainer", ".vscode", ".idea", ".zed", ".kule",
      ".husky", ".claude", ".cursor", ".gemini", ".codex", ".cargo", ".mvn", ".yarn",
      ".buildkite", ".gitea", ".forgejo", ".woodpecker",
-     ".windsurf", ".continue", ".roo", ".clinerules"
+     ".windsurf", ".continue", ".roo", ".clinerules", ".mise"
    ]) ||
    resource.folded_path like "gradle/wrapper/*" || resource.folded_path like "*/gradle/wrapper/*" ||
+   resource.folded_path like "mise/config.toml" || resource.folded_path like "*/mise/config.toml" ||
+   resource.folded_path like ".config/mise.toml" || resource.folded_path like "*/.config/mise.toml" ||
    resource.folded_name like ".gitlab-ci*" ||
+   resource.folded_name like "*.code-workspace" ||
    [
      ".envrc", ".gitattributes", ".gitmodules", ".npmrc", ".yarnrc", ".yarnrc.yml", ".pnpmfile.cjs",
      "build.rs", "gradlew", "gradlew.bat", "mise.toml", ".mise.toml", ".tool-versions",
+     "mise.local.toml", ".mise.local.toml", ".rtx.toml",
+     ".nvmrc", ".node-version", ".python-version", ".ruby-version", ".java-version",
+     ".go-version", ".sdkmanrc", ".terraform-version",
      ".pre-commit-config.yaml", "lefthook.yml", ".lefthook.yml",
      ".mcp.json", "claude.md", "claude.local.md", "agents.md", "gemini.md", ".cursorrules", ".windsurfrules",
      ".devcontainer.json", "rust-toolchain", "rust-toolchain.toml", "mvnw", "mvnw.cmd", "bunfig.toml",
      "dotnet-tools.json", "azure-pipelines.yml", ".travis.yml", "jenkinsfile", "bitbucket-pipelines.yml",
      ".clinerules", "opencode.json", ".aider.conf.yml"
    ].contains(resource.folded_name))
+};
+
+// Another version control system's repository, at any depth: its config
+// and hooks run on its next command, as the person who runs it (Mercurial's
+// and Sapling's hooks and extensions, Jujutsu's, Darcs's and Pijul's
+// settings), and Kule reads none of them as a repository, so whatever
+// changes in one waits. Kule's terminal and editor refuse a copy where one
+// changed.
+@id("other-vcs")
+forbid (principal, action == Kule::Action::"auto", resource)
+when {
+  resource.kind like "fs.*" &&
+  resource.parts.containsAny([
+    ".hg", ".sl", ".jj", "_darcs", ".pijul", ".bzr", ".svn",
+    ".fslckout", "_fossil_", ".fossil-settings"
+  ])
 };
 
 // A repository inside the folder: its config and a `.git` file pointing

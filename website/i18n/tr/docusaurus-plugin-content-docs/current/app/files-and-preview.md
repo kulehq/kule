@@ -93,8 +93,10 @@ engelleyeceğinizi söyler:
   (Restricted Mode);
 - **Cursor**, ayarlarında Workspace Trust açık değilse sormaz.
 
-Görev kopyanın git config'ini ya da hook'larını değiştirdiği sürece bu
-işlem, terminalde olduğu gibi reddedilir. Editörde değiştirdikleriniz,
+Görevde bir ajan çalışırken ve görev orada kendiliğinden çalışacak bir
+şeyi (git config'i ya da hook'ları, bir sürüm dosyasını, bir editörün
+ayarlarını ve görevlerini) değiştirdiği sürece bu işlem, terminalde olduğu
+gibi reddedilir. Editörde değiştirdikleriniz,
 ajanın işi gibi Review'da görünür.
 
 ## Ajana bir dosyadaki bir yeri sormak {#asking-the-agent-about-a-place-in-a-file}

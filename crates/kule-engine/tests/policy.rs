@@ -154,6 +154,46 @@ fn ci_editor_and_kule_files_wait_for_a_person() {
     }
 }
 
+/// Another version control system's repository: its config and hooks run
+/// on its next command, as the person, and Kule reads none of it as a
+/// repository. Whatever changes in it waits, at any depth, however cased.
+#[test]
+fn another_version_control_systems_repository_waits_for_a_person() {
+    let files: Vec<(&str, &str)> = [
+        (".hg/hgrc", "[paths]\n"),
+        (".hg/store/data/a.i", "x"),
+        (".jj/repo/config.toml", "\n"),
+        (".sl/config", "\n"),
+        ("_darcs/prefs/defaults", "\n"),
+        (".pijul/config", "\n"),
+        (".bzr/branch/branch.conf", "\n"),
+        (".svn/wc.db", "x"),
+        (".fslckout", "x"),
+    ]
+    .into_iter()
+    .chain(PROJECT.iter().copied())
+    .collect();
+    let s = Setup::new(&files, false);
+    for (path, _) in &files[..9] {
+        write(&s.copy().join(path), "[hooks]\npre-status = ./x.sh\n");
+    }
+    write(&s.copy().join("vendor/lib/.HG/hgrc"), "[hooks]\n");
+    write(&s.copy().join("_FOSSIL_"), "x");
+
+    let ruling = s.judged();
+    for path in files[..9]
+        .iter()
+        .map(|(p, _)| *p)
+        .chain(["vendor/lib/.HG/hgrc", "_FOSSIL_"])
+    {
+        assert_eq!(
+            on(&ruling, path),
+            (Verdict::Ask, rules(&["other-vcs"])),
+            "{path}"
+        );
+    }
+}
+
 /// What runs code, or steers an agent, without anyone running the project
 /// waits: at any depth, however its name is cased, and a link never passes
 /// on its own.

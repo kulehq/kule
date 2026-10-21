@@ -252,9 +252,11 @@ ya da kopyayı olduğu gibi bırakın.
 it says outside the sandbox; review it, then commit or roll it back before
 opening a terminal".
 
-**Neden:** görev, kopyanın git config'ini ya da hook'larını değiştirdi.
-Kabuk isteminizdeki (shell prompt) `git status`, onları sandbox'ın dışında
-çalıştırırdı.
+**Neden:** görev, kopyada sandbox'ın dışında kendiliğinden çalışacak bir
+şeyi değiştirdi: git config'ini ya da hook'larını (kabuk isteminizdeki
+`git status` onları çalıştırırdı), `rust-toolchain.toml` ya da `.nvmrc`
+gibi bir sürüm dosyasını, `.envrc`'yi ya da bir editörün ayarlarını. Ya da
+görevde bir ajan çalışıyor: işi bitene kadar bekleyin.
 
 **Çözüm:** değişikliği Review'da (ya da `kule status` ile) inceleyin,
 sonra commit edin ya da atın.

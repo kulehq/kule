@@ -26,9 +26,11 @@ açabilir ya da bir betikte kullanabilirsiniz.
 ulaşmak için hiçbir zaman bir bağlantıyı (link) izlemez ve `..`'yı
 reddeder; bu yüzden yazdırılan yol her zaman kopyanın içindedir.
 
-[kule shell](shell.md) gibi `kule path` de, görev kopyanın git config'ini ya
-da hook'larını değiştirmişse stderr'e bir uyarı yazar: o klasördeki git,
-onları sandbox dışında çalıştırırdı. Yolu yine de yazdırır (tek başına bir
+[kule shell](shell.md) gibi `kule path` de, görev o klasörde kendiliğinden
+çalışacak bir şeyi (git config'i ya da hook'ları, bir sürüm dosyasını, bir
+editörün ayarlarını) değiştirmişse ya da görevde bir ajan çalışıyorsa
+stderr'e bir uyarı yazar: prompt'unuz ya da editörünüz onları sandbox
+dışında çalıştırırdı. Yolu yine de yazdırır (tek başına bir
 yol hiçbir şey çalıştırmaz), ama orada git çalıştırmadan ya da bir editör
 açmadan önce uyarıyı ciddiye alın.
 

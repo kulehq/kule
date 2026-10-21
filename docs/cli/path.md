@@ -25,8 +25,9 @@ link to get there, and refuses `..`, so the printed path is always inside
 the copy.
 
 Like [kule shell](shell.md), `kule path` warns on stderr when the task has
-changed the copy's git config or hooks: git in that folder would run them
-outside the sandbox. It still prints the path (a path alone runs nothing),
+changed what would run in that folder by itself (git config or hooks, a
+toolchain pin, an editor's settings), or while an agent is at work: your
+prompt or editor would run them outside the sandbox. It still prints the path (a path alone runs nothing),
 but take the warning seriously before you run git or open an editor there.
 
 Only stdout holds the path, so command substitution works even with the

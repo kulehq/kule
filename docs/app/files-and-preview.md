@@ -86,8 +86,10 @@ extensions, git hooks) and how to keep it from doing so:
   (Restricted Mode);
 - **Cursor** does not ask unless Workspace Trust is on in its settings.
 
-It is refused, as the terminal is, while the task changed the copy's git
-config or hooks. What you change in the editor shows in Review like the
+It is refused, as the terminal is, while an agent is at work in the task,
+and while the task changed what would run there by itself: git config or
+hooks, a toolchain pin, an editor's settings and tasks. What you change in
+the editor shows in Review like the
 agent's work.
 
 ## Asking the agent about a place in a file

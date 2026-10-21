@@ -1347,9 +1347,11 @@ impl Service {
         crate::files::openable(&task.copy(), path)
     }
 
-    /// The copy, for the person's own terminal (see `Task::terminal_dir`).
+    /// The copy, for the person's own terminal or editor (see
+    /// `Task::terminal_dir`), only while no agent is at work here: one
+    /// could change what runs there right after the check.
     pub fn terminal_dir(&self, id: &str) -> Result<PathBuf> {
-        self.open(id)?.terminal_dir().map_err(text)
+        self.idle(id)?.terminal_dir().map_err(text)
     }
 
     /// Deletes the task and its copy; the workspace is not touched.
@@ -2497,6 +2499,29 @@ mod tests {
         assert!(s.app.openable(&id, "summary.pdf").is_ok());
         s.app.remove(&id).unwrap();
         assert!(s.app.tasks().unwrap().is_empty());
+    }
+
+    /// A run that has started, before its agent marks the task: the person's
+    /// terminal or editor waits, since the agent could change what runs
+    /// there right after the check.
+    #[test]
+    fn no_terminal_while_a_run_is_starting_or_at_work() {
+        let s = Setup::new();
+        let (id, _) = s.task();
+        assert!(s.app.terminal_dir(&id).is_ok());
+        s.app
+            .running
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(id.clone());
+        let e = s.app.terminal_dir(&id).unwrap_err();
+        assert!(e.contains("at work"), "{e}");
+        s.app
+            .running
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&id);
+        assert!(s.app.terminal_dir(&id).is_ok());
     }
 
     #[test]

@@ -33,10 +33,14 @@ Kabuğun içinde `KULE_TASK` görevin kimliğini tutar. `exit` yaptığınızda 
 kopyadaki değişiklikleri yazdırır ve `kule shell` kabuğun çıkış koduyla
 çıkar.
 
-**Görev kopyanın git config'ini ya da hook'larını değiştirmişse Kule kabuğu
-açmayı reddeder.** Prompt'unuzdaki `git status` ya da yazdığınız herhangi
-bir git komutu onları sandbox dışında çalıştırırdı. Önce bu değişiklikleri
-[kule status](status.md) ile inceleyin, sonra commit edin ya da atın.
+**Görevde bir ajan çalışırken ve görev kopyada kendiliğinden çalışacak bir
+şeyi değiştirmişken Kule kabuğu açmayı reddeder:** git config ya da
+hook'lar (prompt'unuzdaki `git status` ya da yazdığınız herhangi bir git
+komutu onları çalıştırırdı) ya da prompt'unuzun klasöre girerken okuduğu
+bir sürüm dosyası ya da `.envrc` gibi bir dosya; hepsi sandbox dışında.
+Bkz. [kendiliğinden çalışanlar](../concepts/git.md#what-runs-by-itself-protects-your-terminal-too).
+Önce bu değişiklikleri [kule status](status.md) ile inceleyin, sonra commit
+edin ya da atın.
 
 ## Argümanlar
 

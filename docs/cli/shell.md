@@ -31,10 +31,14 @@ agent's: `kule status` lists it and `kule commit` applies it.
 `KULE_TASK` holds the task's id inside the shell. When you `exit`, Kule
 prints the copy's changes, and `kule shell` exits with the shell's exit code.
 
-**Kule refuses to open the shell while the task has changed the copy's git
-config or hooks.** Your prompt's `git status`, or any git command you type,
-would run them outside the sandbox. Review those changes with
-[kule status](status.md), then commit or roll them back first.
+**Kule refuses to open the shell while an agent is at work in the task,
+and while the task has changed what would run in the copy by itself:** git
+config or hooks (your prompt's `git status`, or any git command you type,
+would run them), or a file such as a toolchain pin or `.envrc` that your
+prompt reads on entering the folder; all outside the sandbox. See
+[what runs by itself](../concepts/git.md#what-runs-by-itself-protects-your-terminal-too).
+Review those changes with [kule status](status.md), then commit or roll
+them back first.
 
 ## Arguments
 

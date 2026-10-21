@@ -31,10 +31,13 @@ themselves can reach anything you can.
 
 - On Linux and Windows, only Ctrl+Shift shortcuts and function keys leave the
   shell, so Ctrl+L and the rest stay the shell's.
-- Kule **refuses to open a terminal** while the task has changed the copy's
-  git config or hooks: your prompt's `git status` would run them outside the
-  sandbox. Review and commit, or roll them back, first. The same holds for
-  *Open the copy in your editor*.
+- Kule **refuses to open a terminal** while an agent is at work in the
+  task, and while the task has changed what would run in the copy by
+  itself: git config or hooks (your prompt's `git status` would run them),
+  a toolchain pin such as `rust-toolchain.toml` or `.nvmrc`, `.envrc`, or an
+  editor's settings, all outside the sandbox. Review and commit, or roll
+  them back, first. The same holds for *Open the copy in your editor*. See
+  [what runs by itself](../concepts/git.md#what-runs-by-itself-protects-your-terminal-too).
 
 ## Servers the task runs
 
@@ -71,7 +74,7 @@ stays.
 ## From a terminal
 
 [`kule shell TASK`](../cli/shell.md) opens your shell in the copy, outside the
-sandbox, with the same refusal while git config or hooks changed.
+sandbox, with the same refusals.
 [`kule path TASK`](../cli/path.md) prints where the copy is, for
-`cd "$(kule path TASK)"`, and warns on stderr when git there would run what
-the task changed.
+`cd "$(kule path TASK)"`, and warns on stderr when something there would
+run what the task changed.

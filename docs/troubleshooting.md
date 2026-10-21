@@ -239,8 +239,11 @@ leave the copy as it is.
 it says outside the sandbox; review it, then commit or roll it back before
 opening a terminal".
 
-**Cause:** the task changed the copy's git config or hooks. Your shell
-prompt's `git status` would run them outside the sandbox.
+**Cause:** the task changed what would run in the copy by itself, outside
+the sandbox: its git config or hooks (your shell prompt's `git status`), a
+toolchain pin such as `rust-toolchain.toml` or `.nvmrc`, `.envrc`, or an
+editor's settings. Or an agent is at work in the task: wait until it is
+done.
 
 **Fix:** review the change in Review (or `kule status`), then commit or roll
 it back.

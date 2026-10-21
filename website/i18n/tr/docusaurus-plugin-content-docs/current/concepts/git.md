@@ -58,13 +58,26 @@ git: hook pre-commit changed (it runs on the next matching git command)
 Git sunucuları paket kayıt deposu değildir: `github.com`'a bir bağlantı
 sizi bekler, çünkü TLS içinde bir push bir fetch'ten ayırt edilemez.
 
-## Git config ve hook'lar terminalinizi de korur
+## Kendiliğinden çalışanlar terminalinizi de korur {#what-runs-by-itself-protects-your-terminal-too}
 
-Bir görev kopyanın git config'ini ya da hook'larını değiştirmişken Kule,
-kopyada **bir terminal açmayı** (ve `kule shell`'i) reddeder ve kopyayı bir
-editörde açmayı da reddeder: isteminizdeki (prompt) `git status` bunları
-sandbox'ın dışında çalıştırırdı. `kule path` stderr'e bir uyarı yazar. Önce
-inceleyip commit edin ya da değişiklikleri atın (roll back).
+Görevde bir ajan çalışırken ve görev orada sandbox'ın dışında kendiliğinden
+çalışacak bir şeyi değiştirmişken Kule, kopyada **bir terminal açmayı** (ve
+`kule shell`'i) reddeder ve kopyayı bir editörde açmayı da reddeder:
+
+- kopyanın git config'i ya da hook'ları; isteminizdeki (prompt) `git status`
+  bunları çalıştırırdı. `.git` içinde git'in veri olarak tutmadığı her şey
+  (nesneler, ref'ler, index, log'lar dışındakiler) git config sayılır;
+- kopyanın içindeki bir repo ya da başka bir sürüm kontrol sisteminin
+  deposu (Mercurial, Sapling, Jujutsu, Darcs, Pijul ve diğerleri); bunların
+  config'i ve hook'ları bir sonraki komutlarında çalışır;
+- [`automation`](../reference/policy-rules.md) kuralının adını verdiği bir
+  dosya: bir araç zinciri sürüm dosyası (`rust-toolchain.toml`, `.nvmrc`,
+  `.python-version`, `.tool-versions`), `.envrc` ya da bir editörün ayarları
+  ve görevleri (`.vscode/`); bir prompt ya da editör klasörü açarken
+  bunları okur.
+
+`kule path` stderr'e bir uyarı yazar. Önce inceleyip commit edin ya da
+değişiklikleri atın (roll back).
 
 ## Worktree'ler
 

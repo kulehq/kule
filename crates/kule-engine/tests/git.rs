@@ -393,6 +393,91 @@ fn no_terminal_in_a_copy_whose_inner_repository_changed() {
     assert_eq!(r.task.terminal_dir().unwrap(), r.copy());
 }
 
+/// `.git/commondir` sends git to another folder for its config and hooks:
+/// one in the copy, written by the task, is what git there reads.
+#[test]
+fn no_terminal_and_a_git_config_ruling_when_commondir_points_elsewhere() {
+    let r = Repo::new();
+    let common = r.copy().join("vendor/cache");
+    for dir in ["objects", "refs"] {
+        fs::create_dir_all(common.join(dir)).unwrap();
+    }
+    write(
+        &common.join("config"),
+        "[core]\n\trepositoryformatversion = 0\n\tfsmonitor = ./fmt.sh\n",
+    );
+    write(&r.copy().join(".git/commondir"), "../vendor/cache\n");
+    // Git really reads it there.
+    assert_eq!(
+        git(&r.copy(), &["config", "--get", "core.fsmonitor"]),
+        "./fmt.sh"
+    );
+
+    let e = r.task.terminal_dir().unwrap_err().to_string();
+    assert!(e.contains("git config"), "{e}");
+    let ruling = Policy::builtin().judge(&r.task.effects().unwrap());
+    let config = ruling
+        .judgements
+        .iter()
+        .find(|j| j.subject == "git config")
+        .expect("judged as git config");
+    assert_ne!(config.verdict, Verdict::Allow);
+    r.task.rollback().unwrap();
+    assert_eq!(r.task.terminal_dir().unwrap(), r.copy());
+}
+
+/// A rebase's plan holds commands (`exec`) that `git rebase --continue`
+/// runs: it is git config, not data.
+#[test]
+fn no_terminal_while_the_copy_holds_a_sequencer_plan() {
+    let r = Repo::new();
+    write(
+        &r.copy().join(".git/rebase-merge/git-rebase-todo"),
+        "exec ./fmt.sh\n",
+    );
+    let e = r.task.terminal_dir().unwrap_err().to_string();
+    assert!(e.contains("git config"), "{e}");
+}
+
+/// A toolchain pin or an editor's settings run by themselves when a shell
+/// prompt (`rustc --version`) or an editor reads them, in any folder.
+#[test]
+fn no_terminal_in_a_copy_whose_toolchain_pins_or_editor_settings_changed() {
+    let r = Repo::new();
+    for path in [
+        "tools/rust-toolchain.toml",
+        ".nvmrc",
+        ".python-version",
+        ".vscode/tasks.json",
+        "app/.envrc",
+        "mise/config.toml",
+        // Another version control system's config runs on its next command.
+        ".hg/hgrc",
+        ".jj/repo/config.toml",
+        "lib/_darcs/prefs/defaults",
+    ] {
+        write(&r.copy().join(path), "x\n");
+        let e = r.task.terminal_dir().unwrap_err().to_string();
+        assert!(e.contains(path), "{path}: {e}");
+        r.task.rollback().unwrap();
+    }
+    // Code and docs alone leave it open.
+    write(&r.copy().join("src/main.rs"), "fn main() { println!(); }\n");
+    write(&r.copy().join("docs/guide.md"), "# Guide\n");
+    assert_eq!(r.task.terminal_dir().unwrap(), r.copy());
+}
+
+/// An agent at work could change what runs there right after the check.
+#[test]
+fn no_terminal_while_an_agent_is_at_work() {
+    let r = Repo::new();
+    let at_work = r.task.agent_at_work().unwrap();
+    let e = r.task.terminal_dir().unwrap_err().to_string();
+    assert!(e.contains("agent is at work"), "{e}");
+    drop(at_work);
+    assert_eq!(r.task.terminal_dir().unwrap(), r.copy());
+}
+
 fn staged(r: &Repo) -> Vec<String> {
     r.task
         .effects()

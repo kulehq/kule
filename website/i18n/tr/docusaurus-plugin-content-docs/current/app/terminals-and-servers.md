@@ -31,11 +31,14 @@ erişebildiğiniz her şeye erişebilir.
 
 - Linux ve Windows'ta kabuktan yalnızca Ctrl+Shift kısayolları ve fonksiyon
   tuşları çıkar; böylece Ctrl+L ve diğerleri kabuğa ait kalır.
-- Görev kopyanın git config'ini ya da hook'larını değiştirdiği sürece Kule
-  **terminal açmayı reddeder**: prompt'unuzdaki `git status` bunları
-  sandbox'ın dışında çalıştırırdı. Önce bunları inceleyip commit edin ya da
-  değişiklikleri atın. Aynı kural *Open the copy in your editor* için de
-  geçerlidir.
+- Görevde bir ajan çalışırken ve görev kopyada kendiliğinden çalışacak bir
+  şeyi değiştirdiği sürece Kule **terminal açmayı reddeder**: git config ya
+  da hook'lar (prompt'unuzdaki `git status` bunları çalıştırırdı),
+  `rust-toolchain.toml` ya da `.nvmrc` gibi bir sürüm dosyası, `.envrc` ya
+  da bir editörün ayarları; hepsi sandbox'ın dışında. Önce bunları inceleyip
+  commit edin ya da değişiklikleri atın. Aynı kural *Open the copy in your
+  editor* için de geçerlidir. Bkz.
+  [kendiliğinden çalışanlar](../concepts/git.md#what-runs-by-itself-protects-your-terminal-too).
 
 ## Görevin çalıştırdığı sunucular {#servers-the-task-runs}
 
@@ -73,7 +76,7 @@ terminalde sizin başlattığınız bir sunucu ise kalır.
 ## Terminalden {#from-a-terminal}
 
 [`kule shell TASK`](../cli/shell.md), kabuğunuzu kopyada, sandbox'ın
-dışında açar; git config'i ya da hook'ları değiştiği sürece aynı şekilde
-reddeder. [`kule path TASK`](../cli/path.md), `cd "$(kule path TASK)"` için
-kopyanın nerede olduğunu yazdırır ve orada git'in görevin değiştirdiği
-şeyleri çalıştıracağı durumlarda stderr'e uyarı yazar.
+dışında açar ve aynı durumlarda reddeder.
+[`kule path TASK`](../cli/path.md), `cd "$(kule path TASK)"` için kopyanın
+nerede olduğunu yazdırır ve orada bir şeyin görevin değiştirdiklerini
+çalıştıracağı durumlarda stderr'e uyarı yazar.
