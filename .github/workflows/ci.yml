@@ -24,9 +24,10 @@ jobs:
       - name: cargo-deny, at a pinned version
         run: cargo install --locked cargo-deny --version 0.20.2
       - run: cargo deny --locked check
+      # osv-scanner 2.6.0 needs Go 1.27 or later.
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.26.8"
+          go-version: "1.27.3"
           cache: false
       - name: osv-scanner over the lockfiles (scripts/release-gate.sh)
         run: |
