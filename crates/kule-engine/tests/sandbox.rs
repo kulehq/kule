@@ -1059,37 +1059,78 @@ fn network_ip() -> Option<std::net::IpAddr> {
 /// Asks the server at `ip`:`port` and says whether it answered.
 #[cfg(target_os = "macos")]
 fn answers(ip: std::net::IpAddr, port: u16) -> bool {
+    ask(ip, port, std::time::Duration::from_secs(3)).unwrap_or(false)
+}
+
+/// Asks once, waiting up to `wait` for the answer.
+#[cfg(target_os = "macos")]
+fn ask(ip: std::net::IpAddr, port: u16, wait: std::time::Duration) -> std::io::Result<bool> {
     use std::io::{Read, Write};
-    std::net::TcpStream::connect_timeout(&(ip, port).into(), std::time::Duration::from_secs(3))
-        .and_then(|mut c| {
-            c.set_read_timeout(Some(std::time::Duration::from_secs(3)))?;
-            c.write_all(b"ping")?;
-            let mut buf = [0u8; 2];
-            c.read_exact(&mut buf)?;
-            Ok(buf == *b"hi")
-        })
-        .unwrap_or(false)
+    let mut c = std::net::TcpStream::connect_timeout(
+        &(ip, port).into(),
+        wait.min(std::time::Duration::from_secs(3)),
+    )?;
+    c.set_read_timeout(Some(wait))?;
+    c.write_all(b"ping")?;
+    let mut buf = [0u8; 2];
+    c.read_exact(&mut buf)?;
+    Ok(buf == *b"hi")
+}
+
+/// Whether the server at `ip`:`port` answers within `within`. macOS's
+/// application firewall, when it is on, holds a new connection until it
+/// has judged it, and judges one connection after another; earlier ones,
+/// to processes that have since ended, take seconds each. So one
+/// connection waits for its answer, as each new try would only join the
+/// queue; it asks again only when it could not get through.
+#[cfg(target_os = "macos")]
+fn answers_within(ip: std::net::IpAddr, port: u16, within: std::time::Duration) -> bool {
+    let deadline = std::time::Instant::now() + within;
+    loop {
+        let left = deadline.saturating_duration_since(std::time::Instant::now());
+        if left.is_zero() {
+            return false;
+        }
+        match ask(ip, port, left) {
+            Ok(answered) => return answered,
+            Err(_) => std::thread::sleep(std::time::Duration::from_millis(100)),
+        }
+    }
+}
+
+/// A test server, stopped when the test ends, however it ends.
+#[cfg(target_os = "macos")]
+struct Server(std::process::Child);
+
+#[cfg(target_os = "macos")]
+impl Drop for Server {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
 }
 
 /// A sandboxed server, `python3 -I` so no hook reaches it, on `host`; returns
 /// it with its port.
 #[cfg(target_os = "macos")]
-fn raw_server(sandbox: &Sandbox, host: &str) -> (std::process::Child, u16) {
+fn raw_server(sandbox: &Sandbox, host: &str) -> (Server, u16) {
     use std::io::{BufRead, BufReader};
     let code = format!(
         "import socket\ns=socket.socket()\ns.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)\ns.bind(('{host}',0))\ns.listen()\nprint(s.getsockname()[1],flush=True)\nwhile True:\n c,_=s.accept()\n c.settimeout(3)\n try:\n  if c.recv(4)==b'ping': c.sendall(b'hi')\n except Exception: pass\n c.close()"
     );
-    let mut child = sandbox
-        .command("python3", &["-I".to_owned(), "-c".to_owned(), code])
-        .unwrap()
-        .stdout(std::process::Stdio::piped())
-        .spawn()
-        .unwrap();
+    let mut server = Server(
+        sandbox
+            .command("python3", &["-I".to_owned(), "-c".to_owned(), code])
+            .unwrap()
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .unwrap(),
+    );
     let mut line = String::new();
-    BufReader::new(child.stdout.take().unwrap())
+    BufReader::new(server.0.stdout.take().unwrap())
         .read_line(&mut line)
         .unwrap();
-    (child, line.trim().parse().unwrap())
+    (server, line.trim().parse().unwrap())
 }
 
 /// On macOS, a server no hook reaches that listens on every address answers
@@ -1105,7 +1146,7 @@ fn the_shield_keeps_an_unhooked_server_off_the_network() {
     };
     let s = Setup::new();
     let sandbox = s.sandbox();
-    let (mut server, port) = raw_server(&sandbox, "0.0.0.0");
+    let (_server, port) = raw_server(&sandbox, "0.0.0.0");
     let loopback: std::net::IpAddr = "127.0.0.1".parse().unwrap();
     assert!(
         answers(outward, port),
@@ -1131,20 +1172,13 @@ fn the_shield_keeps_an_unhooked_server_off_the_network() {
         guarded.stopped.iter().any(|s| s.port == own_port),
         "{guarded:?}"
     );
-    assert!(own.wait().is_ok());
+    assert!(own.0.wait().is_ok());
 
     shield.release();
-    // The firewall lets go a moment after it is told, under load later.
-    let started = std::time::Instant::now();
-    while !answers(outward, port) && started.elapsed() < std::time::Duration::from_secs(5) {
-        std::thread::sleep(std::time::Duration::from_millis(100));
-    }
     assert!(
-        answers(outward, port),
+        answers_within(outward, port, std::time::Duration::from_secs(60)),
         "released, the port is the server's again"
     );
-    let _ = server.kill();
-    let _ = server.wait();
 }
 
 /// On Linux, without a network of its own, any program's server is held to
