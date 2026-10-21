@@ -285,3 +285,60 @@ fn switches_and_short_numbers_are_not_masked() {
         )
     );
 }
+
+/// A kept secret is masked wherever it is in a settings file, not only as
+/// a whole value, and so is one kept for another folder, under a
+/// placeholder no host fills. A commit puts a line back only as Kule masked
+/// it, and no more times than the file held it: a copy of it the agent
+/// made stays masked.
+#[test]
+fn a_kept_secret_inside_a_value_is_masked_and_put_back_where_it_was() {
+    let (home, ws, other) = (
+        TempDir::new().unwrap(),
+        TempDir::new().unwrap(),
+        TempDir::new().unwrap(),
+    );
+    add_secret(
+        home.path(),
+        "STRIPE_KEY",
+        "sk_live_51Hreal",
+        &["api.stripe.com".into()],
+        None,
+    )
+    .unwrap();
+    add_secret(
+        home.path(),
+        "OTHER_KEY",
+        "other-Folder-9",
+        &["api.other.example".into()],
+        Some(other.path()),
+    )
+    .unwrap();
+    let env = "CHECKOUT=\"curl -u sk_live_51Hreal: https://api.stripe.com\"\n\
+               NOTE=other-Folder-9 # kept for another folder\n";
+    fs::write(ws.path().join(".env"), env).unwrap();
+    let task = Task::create(home.path(), ws.path()).unwrap();
+    let copy = fs::read_to_string(task.copy().join(".env")).unwrap();
+    assert!(
+        !copy.contains("sk_live_51Hreal") && !copy.contains("other-Folder-9"),
+        "{copy}"
+    );
+    // The proxy fills the kept secret's placeholder for its host.
+    let vars = task.vault().unwrap().env();
+    assert_eq!(vars.len(), 1, "{vars:?}");
+    assert!(
+        copy.contains(&format!("curl -u {}: https://api.stripe.com", vars[0].1)),
+        "{copy}"
+    );
+    assert!(task.effects().unwrap().is_empty());
+
+    let first = copy.lines().next().unwrap().to_owned();
+    fs::write(
+        task.copy().join(".env"),
+        format!("{copy}NEW_FLAG=1\n{first}\n"),
+    )
+    .unwrap();
+    task.commit().unwrap().unwrap();
+    let folder = fs::read_to_string(ws.path().join(".env")).unwrap();
+    assert_eq!(folder, format!("{env}NEW_FLAG=1\n{first}\n"));
+}

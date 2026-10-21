@@ -87,7 +87,13 @@ are replaced with placeholders:
   settings file the agent changed, and merges with the real values;
 - the task keeps the values it masked in its own `secrets.json`, sealed;
 - a masked value that is also a kept secret gets that secret's placeholder,
-  so it reaches the secret's hosts. Any other stays a placeholder.
+  so it reaches the secret's hosts. Any other stays a placeholder;
+- a kept secret is masked wherever it is in these files, not only as a
+  whole value: inside a longer value, an alias, a command or a comment,
+  and as a URL or JSON writes it. Secrets kept for other folders are
+  masked too, under placeholders no host fills. A line Kule masked this
+  way goes back only where it is unchanged, and no more times than the
+  file held it.
 
 The same masking applies to the [home layer](home-layer.md)'s clones of
 `.zshrc`, `.profile`, `~/.env` and the like.
