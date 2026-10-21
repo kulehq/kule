@@ -263,3 +263,25 @@ fn a_secret_typed_into_the_copy_is_masked_before_an_agent_starts() {
         format!("{ENV}GITHUB_TOKEN=ghp_typedByThePerson12345\n")
     );
 }
+
+/// Switches and short numbers stay as they are, whatever their keys say:
+/// a tool reads them as settings, and a response that holds the same word
+/// would be blanked.
+#[test]
+fn switches_and_short_numbers_are_not_masked() {
+    let (home, ws) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+    let settings =
+        "ALLOW_PRIVATE_NETWORKS=false\nAUTH_ENABLED=true\nMAX_TOKENS=4096\nDB_PASSWORD=123456\n";
+    fs::write(ws.path().join(".env"), settings).unwrap();
+    let task = Task::create(home.path(), ws.path()).unwrap();
+    let copy = fs::read_to_string(task.copy().join(".env")).unwrap();
+    let p = placeholders(&copy);
+    assert_eq!(p.len(), 1, "{copy}");
+    assert_eq!(
+        copy,
+        format!(
+            "ALLOW_PRIVATE_NETWORKS=false\nAUTH_ENABLED=true\nMAX_TOKENS=4096\nDB_PASSWORD={}\n",
+            p[0]
+        )
+    );
+}
