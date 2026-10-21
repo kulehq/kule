@@ -608,3 +608,83 @@ func main() {
     );
     assert_eq!(lines.next(), Some("trusted"), "{out:?}");
 }
+
+/// The task's tmp is the sandbox's to write to, and kept between runs: a
+/// link a command left there, at a name Kule writes or in a folder it keeps
+/// there, leads none of Kule's own writes outside.
+#[test]
+fn links_left_in_the_tasks_tmp_lead_kules_writes_nowhere() {
+    use std::os::unix::fs::symlink;
+    let home = TempDir::new().unwrap();
+    let ws = TempDir::new().unwrap();
+    let person = TempDir::new().unwrap();
+    let outside = TempDir::new().unwrap();
+    fs::write(ws.path().join("README.md"), "hello\n").unwrap();
+    fs::create_dir_all(person.path().join(".cargo/registry")).unwrap();
+    fs::write(person.path().join(".cargo/config.toml"), "[net]\n").unwrap();
+    let sources = kule_engine::CacheSources {
+        home: person.path().to_owned(),
+        cargo_home: person.path().join(".cargo"),
+    };
+    let task = Task::create(home.path(), ws.path()).unwrap();
+    let tmp = task.tmp().unwrap();
+    let victim = outside.path().join("victim");
+    fs::write(&victim, "mine\n").unwrap();
+    let elsewhere = outside.path().join("elsewhere");
+    fs::create_dir(&elsewhere).unwrap();
+    let untouched = |when: &str| {
+        assert_eq!(fs::read_to_string(&victim).unwrap(), "mine\n", "{when}");
+        let made: Vec<_> = fs::read_dir(&elsewhere).unwrap().flatten().collect();
+        assert!(made.is_empty(), "{when}: {made:?}");
+    };
+    let run = || {
+        let proxy = Proxy::start(&task, policy()).unwrap();
+        let mut sandbox = Sandbox::new(&task).unwrap();
+        sandbox.set_network(Network::Proxy(proxy.port()));
+        sandbox.use_task_caches(&sources).unwrap();
+        let out = sandbox.command("true", &[]).unwrap().output().unwrap();
+        assert!(out.status.success(), "{out:?}");
+    };
+
+    // At the names Kule writes, and in place of the folders it keeps.
+    symlink(&victim, tmp.join("kule-ca.pem")).unwrap();
+    symlink(&victim, tmp.join("kule-ca-bundle.pem")).unwrap();
+    symlink(&elsewhere, tmp.join(".kule-loopback")).unwrap();
+    symlink(&elsewhere, tmp.join("caches")).unwrap();
+    run();
+    untouched("links at the top");
+    for name in ["kule-ca.pem", "kule-ca-bundle.pem"] {
+        let meta = fs::symlink_metadata(tmp.join(name)).unwrap();
+        assert!(meta.is_file(), "{name}");
+    }
+    for dir in [".kule-loopback", "caches", "caches/cargo"] {
+        let meta = fs::symlink_metadata(tmp.join(dir)).unwrap();
+        assert!(meta.is_dir(), "{dir}");
+    }
+    assert!(tmp.join(".kule-loopback/sitecustomize.py").is_file());
+    assert_eq!(
+        fs::read_to_string(tmp.join("caches/cargo/config.toml")).unwrap(),
+        "[net]\n"
+    );
+
+    // Inside the folders Kule made.
+    fs::remove_file(tmp.join(".kule-loopback/sitecustomize.py")).unwrap();
+    symlink(&victim, tmp.join(".kule-loopback/sitecustomize.py")).unwrap();
+    fs::remove_dir_all(tmp.join("caches/cargo")).unwrap();
+    symlink(&elsewhere, tmp.join("caches/cargo")).unwrap();
+    fs::remove_dir_all(tmp.join("caches/pip")).unwrap();
+    symlink(&elsewhere, tmp.join("caches/pip")).unwrap();
+    run();
+    untouched("links inside");
+    assert!(
+        fs::symlink_metadata(tmp.join(".kule-loopback/sitecustomize.py"))
+            .unwrap()
+            .is_file()
+    );
+    for dir in ["caches/cargo", "caches/pip"] {
+        assert!(
+            fs::symlink_metadata(tmp.join(dir)).unwrap().is_dir(),
+            "{dir}"
+        );
+    }
+}

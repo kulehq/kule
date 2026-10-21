@@ -12,6 +12,28 @@
   fills, since the home is the same for every folder. A commit or an
   apply puts such a line back only where it is as Kule masked it, and no
   more times than the file held it.
+- Anything in `.git` that git does not keep as data (objects, refs, the
+  index, logs) counts as git config: it waits for you as git config does,
+  and keeps the terminal and the editor closed on the copy.
+- Kule's terminal, `kule shell` and *Open the copy in your editor* wait
+  while an agent is at work in the task, and stay closed while the task
+  has changed a file that a shell prompt or an editor runs by itself: a
+  toolchain pin (`rust-toolchain.toml`, `.nvmrc`, `.python-version`,
+  `.tool-versions` and the like), `.envrc`, an editor's settings and
+  tasks, and the rest of what the `automation` rule names. The built-in
+  policy decides this, whatever policy you chose.
+- A change in another version control system's repository (Mercurial,
+  Sapling, Jujutsu, Darcs, Pijul, Bazaar, Subversion, Fossil), at any
+  depth, waits for you (`other-vcs`) and keeps the terminal and the editor
+  closed on the copy: its config and hooks run on its next command, and
+  Kule reads none of it as a repository.
+- The version pins a shell prompt reads on entering a folder (`.nvmrc`,
+  `.node-version`, `.python-version`, `.ruby-version`, `.java-version`,
+  `.go-version`, `.sdkmanrc`, `.terraform-version`, mise's other files) and
+  `*.code-workspace` wait for you at commit (`automation`).
+- What Kule writes in a task's temporary folder (the proxy's certificate,
+  the loopback hooks, the package caches) goes through folders it opens
+  without following a link, and replaces whatever stands at the name.
 
 ### Fixes
 

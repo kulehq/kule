@@ -11,9 +11,13 @@
 //! the others, they start empty and fill through the proxy.
 
 use std::ffi::OsString;
+use std::fs::File;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
-use crate::error::{IoContext, Result};
+use crate::error::{Error, IoContext, Result};
+use crate::fsops;
+use crate::manifest::Kind;
 
 /// Where the person's caches are, to read from or to clone.
 #[derive(Debug, Clone)]
@@ -55,21 +59,25 @@ const PNPM: &str = "pnpm";
 const CARGO_SETTINGS: &[&str] = &["config.toml", "config"];
 
 /// Prepares the caches under `tmp` (on first use) and returns the variables
-/// that point the tools there.
+/// that point the tools there. The tmp is the sandbox's to write to, so
+/// every folder here is made and opened without following a link put on
+/// the way, and written to through its descriptor.
 pub(crate) fn prepare(tmp: &Path, sources: &Sources) -> Result<Vec<(String, OsString)>> {
     let root = tmp.join("caches");
-    std::fs::create_dir_all(&root).at(&root)?;
+    let caches = fsops::kept_dir(tmp, "caches")?;
     let mut env = Vec::new();
 
     let cargo = root.join("cargo");
-    seed(&cargo, |staging| {
+    seed(&caches, &cargo, |staging| {
         for dir in ["registry", "git"] {
-            clone_dir(&sources.cargo_home.join(dir), &staging.join(dir))?;
+            clone_dir(&sources.cargo_home.join(dir), staging, dir, &cargo)?;
         }
         for file in CARGO_SETTINGS {
             let from = sources.cargo_home.join(file);
             if from.is_file() {
-                std::fs::copy(&from, staging.join(file)).at(&from)?;
+                let mode = std::fs::metadata(&from).at(&from)?.permissions().mode() & 0o777;
+                let bytes = std::fs::read(&from).at(&from)?;
+                fsops::put_at(staging, file, &bytes, mode, &cargo.join(file))?;
             }
         }
         Ok(())
@@ -77,20 +85,18 @@ pub(crate) fn prepare(tmp: &Path, sources: &Sources) -> Result<Vec<(String, OsSt
     env.push(("CARGO_HOME".to_owned(), cargo.into_os_string()));
 
     let npm = root.join("npm");
-    seed(&npm, |staging| {
-        clone_dir(&sources.home.join(".npm"), staging)?;
-        Ok(())
-    })?;
+    // Cloned whole where it can be; otherwise it starts empty.
+    seed_clone(&caches, &npm, &sources.home.join(".npm"))?;
     env.push(("npm_config_cache".to_owned(), npm.into_os_string()));
 
     for (var, dir) in PLAIN {
         let path = root.join(dir);
-        std::fs::create_dir_all(&path).at(&path)?;
+        fsops::kept_child(&caches, dir, &path)?;
         env.push(((*var).to_owned(), path.into_os_string()));
     }
     let pnpm = root.join(PNPM);
     let store = pnpm.join("store");
-    std::fs::create_dir_all(&store).at(&store)?;
+    fsops::kept_child(&fsops::kept_child(&caches, PNPM, &pnpm)?, "store", &store)?;
     env.push(("PNPM_HOME".to_owned(), pnpm.into_os_string()));
     env.push(("pnpm_config_store_dir".to_owned(), store.into_os_string()));
     // NuGet still finds what the person has: read-only, as a fallback.
@@ -104,58 +110,96 @@ pub(crate) fn prepare(tmp: &Path, sources: &Sources) -> Result<Vec<(String, OsSt
     Ok(env)
 }
 
-/// Creates `dir` with `fill`, unless it exists: filled in a staging
-/// directory beside it and renamed into place, so a run that stops halfway
-/// leaves nothing half made.
-fn seed(dir: &Path, fill: impl FnOnce(&Path) -> Result<()>) -> Result<()> {
-    if dir.exists() {
+/// Creates the folder `dir` in `caches` with `fill`, unless a folder is
+/// there: filled under a staging name of its own beside it and renamed
+/// into place, so a run that stops halfway leaves nothing half made.
+fn seed(caches: &File, dir: &Path, fill: impl FnOnce(&File) -> Result<()>) -> Result<()> {
+    let Some(staging) = staging(caches, dir)? else {
         return Ok(());
-    }
-    let staging = dir.with_extension("partial");
-    if staging.exists() {
-        std::fs::remove_dir_all(&staging).at(&staging)?;
-    }
-    std::fs::create_dir(&staging).at(&staging)?;
-    fill(&staging)?;
-    std::fs::rename(&staging, dir).at(dir)
+    };
+    let kept = fsops::kept_child(caches, &staging, dir)?;
+    fill(&kept)?;
+    place(caches, &staging, dir)
 }
 
-/// Clones the directory `from` to `to` where the filesystem does that in
-/// one go; otherwise, or when `from` is missing, leaves `to` as it is.
-/// `to` may exist and be empty.
-fn clone_dir(from: &Path, to: &Path) -> Result<()> {
-    if !std::fs::symlink_metadata(from).is_ok_and(|m| m.is_dir()) {
+/// [`seed`], with `dir` a clone of `from` where the filesystem clones a
+/// folder in one go, and empty otherwise.
+fn seed_clone(caches: &File, dir: &Path, from: &Path) -> Result<()> {
+    let Some(staging) = staging(caches, dir)? else {
+        return Ok(());
+    };
+    clone_dir(from, caches, &staging, dir)?;
+    place(caches, &staging, dir)
+}
+
+/// The staging name for `dir` in `caches`, or `None` when the folder is
+/// there already. A link or a file the sandbox put in its place is taken
+/// out, and so is what a run that stopped halfway left at the staging name.
+fn staging(caches: &File, dir: &Path) -> Result<Option<String>> {
+    let name = file_name(dir)?;
+    match fsops::entry_at(caches, name).at(dir)? {
+        Some(Kind::Dir) => return Ok(None),
+        Some(_) => fsops::remove_at(caches, name).at(dir)?,
+        None => {}
+    }
+    let staging = format!("{name}.partial");
+    fsops::remove_tree_at(caches, &staging).at(&dir.with_extension("partial"))?;
+    Ok(Some(staging))
+}
+
+fn place(caches: &File, staging: &str, dir: &Path) -> Result<()> {
+    fsops::rename_at(caches, staging, file_name(dir)?).at(dir)
+}
+
+fn file_name(dir: &Path) -> Result<&str> {
+    dir.file_name()
+        .and_then(|n| n.to_str())
+        .ok_or_else(|| Error::Invalid(format!("{} has no plain name", dir.display())))
+}
+
+/// Makes `name` in `parent` a clone of the folder `from` where the
+/// filesystem does that in one go, and an empty folder otherwise or when
+/// `from` is missing. `shown` names it in errors.
+fn clone_dir(from: &Path, parent: &File, name: &str, shown: &Path) -> Result<()> {
+    if std::fs::symlink_metadata(from).is_ok_and(|m| m.is_dir())
+        && platform_clone(from, parent, name)
+    {
         return Ok(());
     }
-    platform_clone(from, to)
+    fsops::kept_child(parent, name, shown).map(drop)
 }
 
 #[cfg(target_os = "macos")]
-fn platform_clone(from: &Path, to: &Path) -> Result<()> {
+fn platform_clone(from: &Path, parent: &File, name: &str) -> bool {
     use std::ffi::CString;
+    use std::os::fd::AsRawFd;
     use std::os::unix::ffi::OsStrExt;
 
-    if std::fs::read_dir(to).is_ok_and(|mut d| d.next().is_none()) {
-        std::fs::remove_dir(to).at(to)?;
-    }
-    let c = |p: &Path| CString::new(p.as_os_str().as_bytes()).ok();
-    let (Some(src), Some(dst)) = (c(from), c(to)) else {
-        return Ok(());
+    let (Ok(src), Ok(dst)) = (
+        CString::new(from.as_os_str().as_bytes()),
+        CString::new(name.as_bytes()),
+    ) else {
+        return false;
     };
     // From <sys/clonefile.h>: links inside are cloned as links, not followed.
     const CLONE_NOFOLLOW: u32 = 0x0001;
-    // SAFETY: both are valid NUL-terminated paths for the call's duration.
-    let done = unsafe { libc::clonefile(src.as_ptr(), dst.as_ptr(), CLONE_NOFOLLOW) } == 0;
-    if !done {
-        // Another volume, or no APFS: start empty instead.
-        std::fs::create_dir_all(to).at(to)?;
+    // SAFETY: both are valid NUL-terminated paths for the call's duration,
+    // and `parent` a directory descriptor we own. Another volume, or no
+    // APFS, fails: the folder then starts empty.
+    unsafe {
+        libc::clonefileat(
+            libc::AT_FDCWD,
+            src.as_ptr(),
+            parent.as_raw_fd(),
+            dst.as_ptr(),
+            CLONE_NOFOLLOW,
+        ) == 0
     }
-    Ok(())
 }
 
 #[cfg(not(target_os = "macos"))]
-fn platform_clone(_from: &Path, to: &Path) -> Result<()> {
-    std::fs::create_dir_all(to).at(to)
+fn platform_clone(_from: &Path, _parent: &File, _name: &str) -> bool {
+    false
 }
 
 #[cfg(test)]

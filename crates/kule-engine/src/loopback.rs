@@ -13,10 +13,11 @@
 //! hooks keep the servers working there too.
 
 use std::ffi::OsString;
-use std::fs;
+use std::io::Read;
 use std::path::Path;
 
-use crate::error::{IoContext, Result};
+use crate::error::Result;
+use crate::fsops::{self, Beneath};
 
 const NODE: &str = include_str!("loopback/loopback.cjs");
 const PYTHON: &str = include_str!("loopback/sitecustomize.py");
@@ -32,16 +33,23 @@ pub(crate) fn hooks(
     current: impl Fn(&str) -> Option<OsString>,
 ) -> Result<Vec<(String, OsString)>> {
     let dir = tmp.join(DIR);
-    fs::create_dir_all(&dir).at(&dir)?;
+    // The tmp is the sandbox's to write to: nothing put there is followed.
+    let kept = fsops::kept_dir(tmp, DIR)?;
     for (name, text) in [
         ("loopback.cjs", NODE),
         ("sitecustomize.py", PYTHON),
         ("loopback.rb", RUBY),
     ] {
-        let path = dir.join(name);
         // Written again only when changed: a run's processes may be reading it.
-        if fs::read_to_string(&path).ok().as_deref() != Some(text) {
-            fs::write(&path, text).at(&path)?;
+        let now = match fsops::beneath(tmp, &format!("{DIR}/{name}")) {
+            Ok(Beneath::File(mut file)) => {
+                let mut now = String::new();
+                file.read_to_string(&mut now).ok().map(|_| now)
+            }
+            _ => None,
+        };
+        if now.as_deref() != Some(text) {
+            fsops::put_at(&kept, name, text.as_bytes(), 0o644, &dir.join(name))?;
         }
     }
     let Some(dir_text) = dir.to_str() else {

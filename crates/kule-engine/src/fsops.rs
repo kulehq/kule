@@ -703,6 +703,307 @@ pub(crate) fn replace_file(path: &Path, bytes: &[u8]) -> Result<()> {
     fs::rename(&tmp, path).at(path)
 }
 
+/// A folder Kule keeps at `rel` under `root`, in a place a sandbox writes
+/// to as well (the task's tmp): opened one component at a time without
+/// following a link, made where it is missing, and made anew where a link
+/// or a file stands in its place. Kule writes in it through the returned
+/// descriptor, by name, so nothing the sandbox puts on the way, then or
+/// later, leads a write elsewhere.
+pub(crate) fn kept_dir(root: &Path, rel: &str) -> Result<File> {
+    let shown = root.join(rel);
+    let mut dir = File::open(root).at(root)?;
+    for part in rel.split('/').filter(|p| !p.is_empty()) {
+        dir = kept_child(&dir, part, &shown)?;
+    }
+    Ok(dir)
+}
+
+/// The folder `name` in `dir`, as [`kept_dir`] keeps it; `shown` names it
+/// in errors.
+pub(crate) fn kept_child(dir: &File, name: &str, shown: &Path) -> Result<File> {
+    use std::os::fd::{AsRawFd, FromRawFd};
+    let cname = plain_name(name).at(shown)?;
+    for _ in 0..KEPT_TRIES {
+        // SAFETY: a directory descriptor we own and a NUL-terminated name.
+        if unsafe { libc::mkdirat(dir.as_raw_fd(), cname.as_ptr(), 0o755) } == -1 {
+            let e = io::Error::last_os_error();
+            if e.raw_os_error() != Some(libc::EEXIST) {
+                return Err(e).at(shown);
+            }
+        }
+        let flags = libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC;
+        // SAFETY: openat reads the name and returns a new descriptor or -1.
+        let fd = unsafe { libc::openat(dir.as_raw_fd(), cname.as_ptr(), flags) };
+        if fd != -1 {
+            // SAFETY: fd was just opened and is owned by nothing else.
+            return Ok(unsafe { File::from_raw_fd(fd) });
+        }
+        let e = io::Error::last_os_error();
+        match e.raw_os_error() {
+            // A link or a file in its place: taken out, and made again.
+            Some(libc::ELOOP | libc::ENOTDIR) => unlink_at(dir, &cname).at(shown)?,
+            // Gone in between: made again.
+            Some(libc::ENOENT) => {}
+            _ => return Err(e).at(shown),
+        }
+    }
+    Err(Error::Invalid(format!(
+        "{} kept being replaced while Kule made it",
+        shown.display()
+    )))
+}
+
+/// Writes `bytes` as the file `name` in `dir`, with `mode`: a new file,
+/// renamed over whatever is there, so a link at that name is replaced,
+/// never written through, and a reader sees the old file or the new one.
+/// `shown` names it in errors.
+pub(crate) fn put_at(dir: &File, name: &str, bytes: &[u8], mode: u32, shown: &Path) -> Result<()> {
+    use std::io::Write;
+    use std::os::fd::{AsRawFd, FromRawFd};
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let cname = plain_name(name).at(shown)?;
+    let n = NEXT.fetch_add(1, Ordering::Relaxed);
+    let ctmp = plain_name(&format!(".kule-tmp-{}-{n}", std::process::id())).at(shown)?;
+    let flags = libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW | libc::O_CLOEXEC;
+    // SAFETY: openat reads the name and returns a new descriptor or -1.
+    let fd = unsafe { libc::openat(dir.as_raw_fd(), ctmp.as_ptr(), flags, 0o600 as libc::c_uint) };
+    if fd == -1 {
+        return Err(io::Error::last_os_error()).at(shown);
+    }
+    // SAFETY: fd was just opened and is owned by nothing else.
+    let mut file = unsafe { File::from_raw_fd(fd) };
+    let written = file
+        .write_all(bytes)
+        .and_then(|()| file.set_permissions(fs::Permissions::from_mode(mode)));
+    drop(file);
+    let placed = written.and_then(|()| {
+        // SAFETY: both names are NUL-terminated and relative to `dir`.
+        let done = unsafe {
+            libc::renameat(
+                dir.as_raw_fd(),
+                ctmp.as_ptr(),
+                dir.as_raw_fd(),
+                cname.as_ptr(),
+            )
+        };
+        if done == -1 {
+            Err(io::Error::last_os_error())
+        } else {
+            Ok(())
+        }
+    });
+    if placed.is_err() {
+        let _ = unlink_at(dir, &ctmp);
+    }
+    placed.at(shown)
+}
+
+/// Writes `bytes` as the file `rel` under `root`, as [`put_at`] does, in a
+/// folder kept as [`kept_dir`] keeps it.
+pub(crate) fn put_beneath(root: &Path, rel: &str, bytes: &[u8], mode: u32) -> Result<()> {
+    let (parent, name) = rel.rsplit_once('/').unwrap_or(("", rel));
+    let dir = kept_dir(root, parent)?;
+    put_at(&dir, name, bytes, mode, &root.join(rel))
+}
+
+/// How many times a kept folder is made again when something keeps taking
+/// its place.
+const KEPT_TRIES: usize = 8;
+
+/// `name` for an `*at` call: one component, neither `.` nor `..`.
+fn plain_name(name: &str) -> io::Result<std::ffi::CString> {
+    use std::os::unix::ffi::OsStrExt;
+    if matches!(name, "" | "." | "..") || name.contains('/') {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{name:?} is not a plain name"),
+        ));
+    }
+    Ok(std::ffi::CString::new(
+        std::ffi::OsStr::new(name).as_bytes(),
+    )?)
+}
+
+/// Removes the entry `name` in `dir` that is not a folder; one already gone
+/// is not an error.
+fn unlink_at(dir: &File, name: &std::ffi::CStr) -> io::Result<()> {
+    use std::os::fd::AsRawFd;
+    // SAFETY: a directory descriptor we own and a NUL-terminated name.
+    if unsafe { libc::unlinkat(dir.as_raw_fd(), name.as_ptr(), 0) } == -1 {
+        let e = io::Error::last_os_error();
+        if e.raw_os_error() != Some(libc::ENOENT) {
+            return Err(e);
+        }
+    }
+    Ok(())
+}
+
+/// What the entry `name` in `dir` is, not following a link; `None` when
+/// there is none.
+pub(crate) fn entry_at(dir: &File, name: &str) -> io::Result<Option<Kind>> {
+    use std::os::fd::AsRawFd;
+    let cname = plain_name(name)?;
+    // SAFETY: an all-zero stat is valid, and fstatat fills it.
+    let mut st: libc::stat = unsafe { std::mem::zeroed() };
+    // SAFETY: a directory descriptor we own and a NUL-terminated name.
+    let found = unsafe {
+        libc::fstatat(
+            dir.as_raw_fd(),
+            cname.as_ptr(),
+            &mut st,
+            libc::AT_SYMLINK_NOFOLLOW,
+        )
+    };
+    if found == -1 {
+        let e = io::Error::last_os_error();
+        return match e.raw_os_error() {
+            Some(libc::ENOENT) => Ok(None),
+            _ => Err(e),
+        };
+    }
+    Ok(Some(match st.st_mode & libc::S_IFMT {
+        libc::S_IFDIR => Kind::Dir,
+        libc::S_IFLNK => Kind::Symlink,
+        _ => Kind::File,
+    }))
+}
+
+/// Removes the entry `name` in `dir` that is not a folder (a file, a link,
+/// anything else); one already gone is not an error.
+pub(crate) fn remove_at(dir: &File, name: &str) -> io::Result<()> {
+    unlink_at(dir, &plain_name(name)?)
+}
+
+/// How deep [`remove_tree_at`] goes before it gives up.
+const REMOVE_DEPTH: usize = 512;
+
+/// Removes the entry `name` in `dir`, a whole folder included, through
+/// descriptors only: nothing in it is followed, whatever a sandbox puts
+/// there meanwhile. A folder deeper than Kule ever makes is refused.
+pub(crate) fn remove_tree_at(dir: &File, name: &str) -> io::Result<()> {
+    use std::os::fd::AsRawFd;
+    /// A folder on the way down: its descriptor, the names left to remove
+    /// in it, and its own name in the folder above.
+    struct Frame {
+        dir: File,
+        left: Vec<std::ffi::CString>,
+        name: std::ffi::CString,
+    }
+    let top = plain_name(name)?;
+    let Some(first) = open_dir_at(dir, &top)? else {
+        return Ok(());
+    };
+    let mut stack = vec![Frame {
+        left: names_in(&first)?,
+        dir: first,
+        name: top,
+    }];
+    while let Some(frame) = stack.last_mut() {
+        if let Some(next) = frame.left.pop() {
+            if let Some(sub) = open_dir_at(&frame.dir, &next)? {
+                if stack.len() >= REMOVE_DEPTH {
+                    return Err(io::Error::other("a folder too deep to remove"));
+                }
+                stack.push(Frame {
+                    left: names_in(&sub)?,
+                    dir: sub,
+                    name: next,
+                });
+            }
+            continue;
+        }
+        let done = stack.pop().expect("looked at just now");
+        let parent = stack.last().map_or(dir, |f| &f.dir);
+        // SAFETY: a directory descriptor we own and a NUL-terminated name.
+        let removed =
+            unsafe { libc::unlinkat(parent.as_raw_fd(), done.name.as_ptr(), libc::AT_REMOVEDIR) };
+        if removed == -1 {
+            let e = io::Error::last_os_error();
+            if e.raw_os_error() != Some(libc::ENOENT) {
+                return Err(e);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The folder `name` in `dir`, opened without following a link; `None`
+/// when there is none, or when the entry is not a folder, which is then
+/// removed.
+fn open_dir_at(dir: &File, name: &std::ffi::CStr) -> io::Result<Option<File>> {
+    use std::os::fd::{AsRawFd, FromRawFd};
+    let flags = libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC;
+    // SAFETY: openat reads the name and returns a new descriptor or -1.
+    let fd = unsafe { libc::openat(dir.as_raw_fd(), name.as_ptr(), flags) };
+    if fd == -1 {
+        let e = io::Error::last_os_error();
+        return match e.raw_os_error() {
+            Some(libc::ELOOP | libc::ENOTDIR) => unlink_at(dir, name).map(|()| None),
+            Some(libc::ENOENT) => Ok(None),
+            _ => Err(e),
+        };
+    }
+    // SAFETY: fd was just opened and is owned by nothing else.
+    Ok(Some(unsafe { File::from_raw_fd(fd) }))
+}
+
+/// The names in the folder `dir`, but `.` and `..`.
+fn names_in(dir: &File) -> io::Result<Vec<std::ffi::CString>> {
+    use std::os::fd::AsRawFd;
+    // fdopendir takes the descriptor it is given: a duplicate of ours.
+    // SAFETY: fcntl returns a new descriptor or -1.
+    let fd = unsafe { libc::fcntl(dir.as_raw_fd(), libc::F_DUPFD_CLOEXEC, 0) };
+    if fd == -1 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: fd is ours to give; on failure it is still ours to close.
+    let stream = unsafe { libc::fdopendir(fd) };
+    if stream.is_null() {
+        let e = io::Error::last_os_error();
+        // SAFETY: fdopendir did not take it.
+        unsafe { libc::close(fd) };
+        return Err(e);
+    }
+    // SAFETY: a stream fdopendir just made; read from its start.
+    unsafe { libc::rewinddir(stream) };
+    let mut names = Vec::new();
+    loop {
+        // SAFETY: the stream is open until closedir below.
+        let entry = unsafe { libc::readdir(stream) };
+        if entry.is_null() {
+            break;
+        }
+        // SAFETY: the entry holds a NUL-terminated name until the next
+        // call; it is copied out first.
+        let name = unsafe { std::ffi::CStr::from_ptr((*entry).d_name.as_ptr()) };
+        if !matches!(name.to_bytes(), b"." | b"..") {
+            names.push(name.to_owned());
+        }
+    }
+    // SAFETY: closes the stream and the descriptor it took.
+    unsafe { libc::closedir(stream) };
+    Ok(names)
+}
+
+/// Renames `from` to `to`, both in `dir`.
+pub(crate) fn rename_at(dir: &File, from: &str, to: &str) -> io::Result<()> {
+    use std::os::fd::AsRawFd;
+    let (cfrom, cto) = (plain_name(from)?, plain_name(to)?);
+    // SAFETY: both names are NUL-terminated and relative to `dir`.
+    let done = unsafe {
+        libc::renameat(
+            dir.as_raw_fd(),
+            cfrom.as_ptr(),
+            dir.as_raw_fd(),
+            cto.as_ptr(),
+        )
+    };
+    if done == -1 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
 /// Removes a file, symlink or whole directory; a missing path is not an error.
 pub fn remove(path: &Path) -> Result<()> {
     match fs::symlink_metadata(path) {
@@ -864,5 +1165,63 @@ mod tests {
             );
         }
         assert!(!cloned.taken.contains_key("a/gone"));
+    }
+
+    /// What Kule keeps in a place a sandbox writes to: a link put in its
+    /// place, or inside it, is replaced or removed, never followed.
+    #[test]
+    fn kept_folders_and_files_never_follow_a_link() {
+        let root = TempDir::new().unwrap();
+        let outside = TempDir::new().unwrap();
+        let victim = outside.path().join("victim");
+        fs::write(&victim, "mine\n").unwrap();
+        symlink(outside.path(), root.path().join("dir")).unwrap();
+        let dir = kept_dir(root.path(), "dir/sub").unwrap();
+        assert!(
+            fs::symlink_metadata(root.path().join("dir"))
+                .unwrap()
+                .is_dir()
+        );
+        symlink(&victim, root.path().join("dir/sub/file")).unwrap();
+        put_at(&dir, "file", b"kule\n", 0o644, Path::new("file")).unwrap();
+        assert_eq!(fs::read_to_string(&victim).unwrap(), "mine\n");
+        assert_eq!(
+            fs::read_to_string(root.path().join("dir/sub/file")).unwrap(),
+            "kule\n"
+        );
+        assert_eq!(fs::read_dir(outside.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn a_tree_is_removed_without_following_its_links() {
+        let root = TempDir::new().unwrap();
+        let outside = TempDir::new().unwrap();
+        fs::write(outside.path().join("kept"), "mine\n").unwrap();
+        let tree = root.path().join("tree");
+        fs::create_dir_all(tree.join("a/b")).unwrap();
+        fs::write(tree.join("a/b/f"), "x").unwrap();
+        symlink(outside.path(), tree.join("a/out")).unwrap();
+        symlink(outside.path().join("kept"), tree.join("file-link")).unwrap();
+        let dir = File::open(root.path()).unwrap();
+        remove_tree_at(&dir, "tree").unwrap();
+        assert!(!tree.exists());
+        assert_eq!(
+            fs::read_to_string(outside.path().join("kept")).unwrap(),
+            "mine\n"
+        );
+        // A link in place of the tree goes as a link.
+        symlink(outside.path(), &tree).unwrap();
+        remove_tree_at(&dir, "tree").unwrap();
+        assert!(fs::symlink_metadata(&tree).is_err());
+        assert!(outside.path().join("kept").exists());
+        remove_tree_at(&dir, "gone").unwrap();
+
+        // Deeper than a path can name: made one folder at a time, as a
+        // command can.
+        let mut deep = kept_dir(root.path(), "deep").unwrap();
+        for _ in 0..REMOVE_DEPTH + 1 {
+            deep = kept_child(&deep, "d", Path::new("d")).unwrap();
+        }
+        assert!(remove_tree_at(&dir, "deep").is_err());
     }
 }
