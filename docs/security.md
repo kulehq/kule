@@ -60,6 +60,24 @@ Nothing is trusted by default:
 | Extensions ↔ Kule | Sandboxed frames on their own origin; every call checked against the permissions you approved; network only to approved public hosts. |
 | Release ↔ you | Checksums, build provenance and a CycloneDX SBOM for every file, from a pinned toolchain (`rust-toolchain.toml`); on macOS signed ad hoc, never notarized, as its notes say. No job of the release workflow holds a secret, and publishing waits in an environment for a maintainer's approval: nothing is published before it. |
 
+## What Kule does not cover
+
+Kule holds back only the effects it can keep from the world until you
+decide: a change to your folder waits for commit, a connection waits at the
+proxy. An action with no copy, no diff and no undo, such as a click, a
+keystroke or a message sent from an app on your screen, cannot wait. So
+Kule does not support it, by design:
+
+- **Inside a task, it is refused.** The sandbox keeps commands, and the MCP
+  servers the agent starts, away from the screen, the keyboard, the
+  clipboard and other apps, as far as the platform allows.
+- **There is no gate on tool calls.** A tool call is the agent describing
+  what it is about to do, and Kule does not trust that description. Trusting
+  the tool's own report instead would hand that trust to third-party code.
+- **Outside a task, Kule protects nothing.** An agent or tool you run
+  outside Kule, a screen-driving MCP server included, is not reviewed, even
+  while Kule is running.
+
 ## For contributors
 
 Every change follows these rules:

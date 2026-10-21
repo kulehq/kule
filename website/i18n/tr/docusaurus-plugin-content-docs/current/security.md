@@ -61,6 +61,25 @@ Varsayılan olarak hiçbir şeye güvenilmez:
 | Eklentiler ↔ Kule | Kendi origin'lerinde sandbox'lı çerçeveler; her çağrı onayladığınız izinlere karşı denetlenir; ağ yalnızca onaylanmış herkese açık host'lara. |
 | Sürüm ↔ siz | Her dosya için checksum'lar, derleme kaynağı kanıtı (build provenance) ve bir CycloneDX SBOM; sabitlenmiş bir araç zincirinden (`rust-toolchain.toml`); macOS'ta, notlarında da söylendiği gibi ad hoc imzalı, hiçbir zaman noter onaylı (notarized) değil. Sürüm workflow'unun hiçbir işi (job) gizli bir değer tutmaz; yayımlama bir bakımcının onayını bekleyen bir ortamda çalışır ve ondan önce hiçbir şey yayımlanmaz. |
 
+## Kule'nin kapsamadığı şeyler {#what-kule-does-not-cover}
+
+Kule yalnızca siz karar verene kadar dünyaya ulaşmadan bekletebildiği
+etkileri tutar: klasörünüzdeki bir değişiklik commit'i, bir bağlantı
+proxy'yi bekler. Kopyası, diff'i ve geri alması olmayan bir eylem, örneğin
+ekranınızdaki bir uygulamada bir tıklama, bir tuş vuruşu ya da gönderilen
+bir mesaj, bekleyemez. Bu yüzden Kule onu tasarım gereği desteklemez:
+
+- **Bir görevin içinde reddedilir.** Sandbox, komutları ve ajanın başlattığı
+  MCP sunucularını, platformun izin verdiği ölçüde ekrandan, klavyeden,
+  panodan ve diğer uygulamalardan uzak tutar.
+- **Araç çağrıları için bir kapı yoktur.** Bir araç çağrısı, ajanın yapmak
+  üzere olduğu şeyi anlatmasıdır ve Kule bu anlatıma güvenmez. Onun yerine
+  aracın kendi bildirimine güvenmek, bu güveni üçüncü taraf koda devretmek
+  olurdu.
+- **Bir görevin dışında Kule hiçbir şeyi korumaz.** Kule'nin dışında
+  çalıştırdığınız bir ajan ya da araç, ekranı süren bir MCP sunucusu da
+  dahil, Kule açıkken bile incelenmez.
+
 ## Katkıda bulunanlar için {#for-contributors}
 
 Her değişiklik şu kurallara uyar:
