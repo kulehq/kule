@@ -3452,7 +3452,7 @@ dependencies = [
 
 [[package]]
 name = "kule"
-version = "0.2.0-preview.1"
+version = "0.2.0-preview.2"
 dependencies = [
  "anyhow",
  "clap",
@@ -3470,7 +3470,7 @@ dependencies = [
 
 [[package]]
 name = "kule-acp"
-version = "0.2.0-preview.1"
+version = "0.2.0-preview.2"
 dependencies = [
  "agent-client-protocol",
  "async-process",
@@ -3490,7 +3490,7 @@ dependencies = [
 
 [[package]]
 name = "kule-daemon"
-version = "0.2.0-preview.1"
+version = "0.2.0-preview.2"
 dependencies = [
  "futures",
  "kule-acp",
@@ -3506,7 +3506,7 @@ dependencies = [
 
 [[package]]
 name = "kule-desktop"
-version = "0.2.0-preview.1"
+version = "0.2.0-preview.2"
 dependencies = [
  "base64 0.22.1",
  "kule-daemon",
@@ -3528,7 +3528,7 @@ dependencies = [
 
 [[package]]
 name = "kule-engine"
-version = "0.2.0-preview.1"
+version = "0.2.0-preview.2"
 dependencies = [
  "base64 0.22.1",
  "blake3",
@@ -3560,7 +3560,7 @@ dependencies = [
 
 [[package]]
 name = "kule-entities"
-version = "0.2.0-preview.1"
+version = "0.2.0-preview.2"
 dependencies = [
  "serde",
  "serde_json",
@@ -3577,7 +3577,7 @@ dependencies = [
 
 [[package]]
 name = "kule-ext"
-version = "0.2.0-preview.1"
+version = "0.2.0-preview.2"
 dependencies = [
  "blake3",
  "libc",
@@ -3590,7 +3590,7 @@ dependencies = [
 
 [[package]]
 name = "kule-view"
-version = "0.2.0-preview.1"
+version = "0.2.0-preview.2"
 dependencies = [
  "base64 0.22.1",
  "imagesize",

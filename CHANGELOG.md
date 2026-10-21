@@ -1,5 +1,30 @@
 # Changes
 
+## 0.2.0-preview.2
+
+A small preview: up-to-date certificate checks, and the security model
+says what Kule does not cover.
+
+### Security
+
+- Every HTTPS connection Kule makes itself, its proxy's included, checks
+  certificates with webpki-roots 1.0.10 and rustls-webpki 0.103.16, which
+  no longer trust the distrusted emSign certificates (RUSTSEC-2026-0381,
+  RUSTSEC-2026-0382).
+
+### Documentation
+
+- The security model has a section on what Kule does not cover. An action
+  with no copy, no diff and no undo (a click, a keystroke, a message sent
+  from an app on your screen) is refused in a task by design; tool calls
+  have no gate; and nothing outside a task is protected, even while Kule
+  is running.
+
+### Development
+
+- A sandbox test no longer fails, or leaves a server running, on a Mac
+  with the application firewall on.
+
 ## 0.2.0-preview.1
 
 The first preview: the macOS app (universal) and Linux `.deb` and `.rpm`
