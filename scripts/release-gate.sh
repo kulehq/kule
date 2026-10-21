@@ -436,17 +436,32 @@ EOF
     done
     [ "$(finding "$report" env_secret_detection)" = '[]' ] ||
       fail "in the task, secrets in the environment: $(finding "$report" env_secret_detection)"
+    # Seatbelt on macOS; on Linux the scan reads Landlock off a line
+    # /proc/self/status does not have (see the layers below), and finds
+    # the task's own user namespace.
     case $(uname) in
       Darwin) want=seatbelt ;;
-      *) want=landlock ;;
+      *) want=user-namespace ;;
     esac
-    finding "$report" sandbox_detection | grep -q "$want" ||
+    finding "$report" sandbox_detection | grep -q "\"$want\"" ||
       fail "in the task, no $want: $(finding "$report" sandbox_detection)"
     if [ "$net" = proxy ]; then
       finding "$report" proxy_detection | grep -q '"https_proxy":"http://127.0.0.1:' ||
         fail "in the task, the network does not go through Kule's proxy"
     fi
   done
+
+  # On Linux, the command is under Landlock: sandbox-probe stacks layers
+  # until the kernel's 16 are reached, all of them outside the task, fewer
+  # in it.
+  if [ "$(uname)" = Linux ]; then
+    outside=$("$copy/sandbox-probe" probe | jq .lockdownDepth)
+    [ "$outside" = 16 ] || fail "outside the task, Landlock's depth is $outside, not 16"
+    timed 120 "$kule" exec "$task" --no-network -- sh -c './sandbox-probe probe > layers.json' \
+      >"$work/layers.log" 2>&1 || fail "the layers were not counted in the task: $work/layers.log"
+    inside=$(jq .lockdownDepth "$copy/layers.json")
+    [ "$inside" -lt 16 ] || fail "in the task, no Landlock: $inside layers left of 16"
+  fi
 
   # A file made in each folder: none in the task, every one outside it.
   printf '%s\n' "$WRITES" >"$copy/writes.sh"
