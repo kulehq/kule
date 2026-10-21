@@ -559,3 +559,47 @@ fn a_kept_secret_inside_a_startup_line_is_masked_and_applied_back() {
     s.task.apply_home(&[".zshrc".to_owned()]).unwrap();
     assert_eq!(s.real(".zshrc"), format!("{zshrc}export B=2\n"));
 }
+
+/// A search path in a startup file is a setting, not a credential: it stays
+/// as it is in the layer, so a shell that reads the file finds its tools,
+/// and the diff shows it. A path under a key that names a secret stays
+/// masked, and so does a token that starts with `/` under a key that names
+/// no path.
+#[test]
+fn a_search_path_in_a_startup_file_is_kept_as_it_is() {
+    let s = Setup::new();
+    let p = s.person.path();
+    let path = "$HOME/.cargo/bin:/opt/homebrew/bin:${HOME}/go/bin:$PATH";
+    let secret_dir = "/run/secrets/kule/Test1ngOnly";
+    let token = "/K7MDENG/bPxRfiCYEXAMPLEKEY";
+    let zshrc =
+        format!("export PATH=\"{path}\"\nexport SECRET_DIR={secret_dir}\nexport UPLOAD={token}\n");
+    fs::write(p.join(".zshrc"), &zshrc).unwrap();
+
+    let seen = s.run(". \"$HOME/.zshrc\"; cat \"$HOME/.zshrc\"; echo \"path=$PATH\"");
+    assert!(seen.contains(&format!("export PATH=\"{path}\"")), "{seen}");
+    assert!(
+        seen.contains("/.cargo/bin:/opt/homebrew/bin:") && !seen.contains("path=kule_secret_"),
+        "{seen}"
+    );
+    assert!(
+        !seen.contains(secret_dir) && !seen.contains(token),
+        "{seen}"
+    );
+    assert!(
+        seen.contains("export SECRET_DIR=kule_secret_")
+            && seen.contains("export UPLOAD=kule_secret_"),
+        "{seen}"
+    );
+    assert!(s.task.home_changes().unwrap().is_empty());
+
+    s.run("echo 'export B=2' >> \"$HOME/.zshrc\"");
+    let diff = format!("{:?}", s.task.home_diff(".zshrc").unwrap());
+    assert!(diff.contains(path), "{diff}");
+    assert!(
+        !diff.contains(secret_dir) && !diff.contains(token),
+        "{diff}"
+    );
+    s.task.apply_home(&[".zshrc".to_owned()]).unwrap();
+    assert_eq!(s.real(".zshrc"), format!("{zshrc}export B=2\n"));
+}

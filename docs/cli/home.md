@@ -47,7 +47,9 @@ review**. See [Home layer](../concepts/home-layer.md).
 - While changes wait, the layer stays as it is from run to run. Once none
   wait, the next run starts from your home as it is then.
 - Settings in the layer that look like secrets (`export GITHUB_TOKEN=…`) are
-  masked for the task's commands; an apply puts your value back.
+  masked for the task's commands; an apply puts your value back. Search
+  paths (`export PATH="$HOME/.cargo/bin:$PATH"`) stay as they are, so a
+  shell in the task finds your tools.
 
 ### Writing paths
 

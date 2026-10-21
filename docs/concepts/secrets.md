@@ -79,7 +79,10 @@ profile you write can do the same under `keys` (see [Agents](../using-agents.md)
 
 Values in the copy's `.env` files (`.env`, `.env.local`, `*.env`, `.envrc`;
 not `.env.example`) that look like secrets, by their name or their shape,
-are replaced with placeholders:
+are replaced with placeholders. A switch (`true`, `off`), a short number
+and a search path under a key that names one (`PATH`, `GOPATH`,
+`JAVA_HOME`) are settings and stay as they are, unless the key names a
+secret or a secret Kule keeps or masked is in the path.
 
 - when the task is made, after each commit, rollback and undo, and before
   every run;
