@@ -1008,6 +1008,19 @@ pub(crate) fn looks_secret(key: &str, value: &str) -> bool {
         return false;
     }
     let key = key.to_ascii_uppercase();
+    // A switch or a short number is no credential, whatever its key says
+    // (`AUTH_ENABLED=true`, `MAX_TOKENS=4096`): masked, the setting stops
+    // working, and the proxy would blank that word in every response. A
+    // number stays one where the key names a password or a PIN.
+    const SWITCHES: &[&str] = &["true", "false", "yes", "no", "on", "off"];
+    if SWITCHES.iter().any(|s| value.eq_ignore_ascii_case(s)) {
+        return false;
+    }
+    if value.len() < 8 && value.bytes().all(|b| b.is_ascii_digit()) {
+        return ["PASSWORD", "PASSWD", "PASS", "PWD", "PIN"]
+            .iter()
+            .any(|w| key.contains(w));
+    }
     const SECRET_WORDS: &[&str] = &[
         "KEY",
         "SECRET",
@@ -1422,6 +1435,21 @@ mod tests {
         assert!(!looks_secret("URL", "https://example.com/path"));
         assert!(!looks_secret("PORT", "3000"));
         assert!(!looks_secret("API_KEY", ""));
+    }
+
+    #[test]
+    fn switches_and_short_numbers_are_settings_whatever_their_key() {
+        assert!(!looks_secret("ALLOW_PRIVATE_NETWORKS", "false"));
+        assert!(!looks_secret("AUTH_ENABLED", "True"));
+        assert!(!looks_secret("SESSION_SECURE", "on"));
+        assert!(!looks_secret("MAX_TOKENS", "4096"));
+        assert!(!looks_secret("SESSION_TTL", "3600"));
+        // Where the key names a password, a number is one; a long run of
+        // digits under a key word stays a secret.
+        assert!(looks_secret("DB_PASSWORD", "123456"));
+        assert!(looks_secret("CARD_PIN", "4829"));
+        assert!(looks_secret("API_KEY", "12345678901234"));
+        assert!(looks_secret("API_KEY", "falsetto-not-a-switch"));
     }
 
     fn vault_with(home: &TempDir, ws: &TempDir, dir: &TempDir) -> Vault {

@@ -78,7 +78,7 @@ jobs:
       # Go for betterleaks below: the macOS runner image no longer has it.
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.25.12"
+          go-version: "1.26.8"
           cache: false
       - name: Canary secrets stay out of a task (scripts/release-gate.sh)
         run: |
@@ -86,6 +86,18 @@ jobs:
           PATH="$(go env GOPATH)/bin:$PATH"
           cargo build --locked -p kule
           scripts/release-gate.sh canary
+      - name: What a command in a task can reach, under sandbox-probe (scripts/release-gate.sh)
+        run: |
+          go install github.com/controlplaneio/sandbox-probe/v6@v6.19.1
+          PATH="$(go env GOPATH)/bin:$PATH"
+          scripts/release-gate.sh probe
+      # Node for commander below, which needs 22.12 or later.
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - name: Real projects install, build and test in a task (scripts/release-gate.sh)
+        run: scripts/release-gate.sh project
       - name: Weaker isolation runs only once accepted (user namespaces refused)
         if: runner.os == 'Linux'
         env:

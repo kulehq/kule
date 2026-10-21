@@ -1,5 +1,26 @@
 # Changes
 
+## Unreleased
+
+### Fixes
+
+- A setting that is only a switch (`true`, `false`, `yes`, `no`, `on`,
+  `off`) or a number of fewer than 8 digits is no longer taken for a
+  secret because of its key (`AUTH_ENABLED=true`, `MAX_TOKENS=4096`); a
+  number stays one where the key names a password or a PIN. Masked, such a
+  setting stopped working in the task, and the task's proxy blanked the
+  same word in every response, so installs from crates.io and npm failed
+  for anyone whose home held one.
+
+### Development
+
+- The release gate runs sandbox-probe in a task, against a home with
+  something at every path Kule hides, and installs, builds and tests real
+  projects in a task (ripgrep from crates.io, commander from npm). CI runs
+  both on macOS and Linux on every change; the release workflow runs them
+  on the binaries it is about to publish, and publishes nothing unless
+  they pass.
+
 ## 0.2.0-preview.2
 
 A small preview: up-to-date certificate checks, and the security model
