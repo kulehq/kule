@@ -98,6 +98,8 @@ pub use protect::{Kept, PutBack};
 pub use remembered::{
     Allowance, Impact, REMEMBERABLE, REMEMBERED_FILE, Remembered, forget, impact, remember,
 };
+#[cfg(target_os = "macos")]
+pub use sandbox::ProcessFinder;
 pub use sandbox::{
     Denial, HIDDEN_IN_HOME, Network, PASSED_ENV, PERSONAL_IN_HOME, Sandbox, denials,
     isolates_network, own_processes, protects_in_place, record_denials,

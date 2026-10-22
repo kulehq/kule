@@ -91,7 +91,7 @@ kule limits cpu=none                       # no processor limit
 | `memory` | GB, all the run's processes together | The processes are **killed at once**; the run stops. |
 | `disk` | GB the copy, its temporary files and home changes may grow by since the task was made | The run **stops**. No single file can be written past it. |
 | `gpu` | `on` / `off` | Off: Metal (and OpenCL) gets no device on macOS; `/dev/dri` and NVIDIA's devices stay read-only on Linux. |
-| `servers` | `on` / `off` (off by default) | macOS: off, the run's programs do not listen for connections while its network goes through the proxy; on, they do, which is weaker isolation you accept: Node, Python and Ruby servers are pointed at this computer, and while an agent runs in the app Kule keeps the others off your network from outside the sandbox (see [`kule isolation`](../cli/isolation.md)). On Linux every server is held to this computer whatever it says. |
+| `servers` | `on` / `off` (off by default) | macOS: off, the run's programs do not listen for connections while its network goes through the proxy; on, they do, which is weaker isolation you accept: Node, Python and Ruby servers are pointed at this computer, and Kule keeps the others off your network from outside the sandbox (see [`kule isolation`](../cli/isolation.md)). On Linux every server is held to this computer whatever it says. |
 | `run` | minutes, one run | The run **stops**. |
 | `task` | hours, all of a task's runs together | The run **stops**, and none starts until you raise it. |
 | `idle` | minutes doing nothing | The run **stops**. |

@@ -69,7 +69,7 @@ put-back replaces is moved to `~/.kule/kept/replaced`, never lost.
 - On **macOS**, the sandbox cannot tell the address a server listens on, so
   a task's servers listen only once you allow them. Then Node, Python and
   Ruby servers are pointed at this computer, and others are kept off the
-  network from outside the sandbox while an agent runs in the app.
+  network from outside the sandbox.
 - On **macOS**, while a task's network goes through the proxy, the system's
   certificate service stays closed to its commands. A tool that checks
   certificates only through it cannot use HTTPS in a task. pip 24.2 and

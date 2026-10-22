@@ -33,9 +33,9 @@ verebildiğiyle çalışmasına izin verir. Seçiminiz Kule'nin evinde
 macOS'ta tek eksik, `servers` [sınırının](limits.md) dinlemelerine izin
 verdiği görevin sunucularıdır: macOS sandbox'ı bir sunucunun dinlediği
 port'u görür ama adresini görmez. Kule Node, Python ve Ruby sunucularını bu
-bilgisayara yönlendirir, diğerlerini de uygulamada bir ajan çalışırken
-sandbox'ın dışından ağınızdan uzak tutar; `kule exec`, `kule run` ya da bir
-terminalin başlattığı başka bir programın sunucusu ağınızda dinleyebilir. `kule isolation`, her görevin
+bilgisayara yönlendirir, diğerlerini de 50 ms'de bir bakarak sandbox'ın
+dışından ağınızdan uzak tutar; o arada ağdan gelen bir bağlantı birine
+ulaşabilir ve Kule onu o zaman durdurur. `kule isolation`, her görevin
 sınırları sunuculara izin verdiğinde bunu gösterir; sunuculara kendi başına
 izin veren bir görev ya da gruba bu, çalıştığında söylenir.
 

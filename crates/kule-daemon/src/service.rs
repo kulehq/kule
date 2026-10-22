@@ -444,15 +444,25 @@ impl Service {
             .clone()
     }
 
-    /// macOS: while runs go on, keeps what they listen on off the network,
-    /// looking every 50 ms; lets go when none does. Runs for
-    /// the life of the daemon.
+    /// macOS: keeps what a task's processes listen on off the network,
+    /// looking every 50 ms, while one of its runs goes on or its limits let
+    /// its servers listen (its terminals' and strays' too, found by their
+    /// sandbox, whatever became of their parent); lets go when there is
+    /// none. Runs for the life of the daemon.
     #[cfg(target_os = "macos")]
     pub fn shield(self: Arc<Self>) {
         let mut shield = kule_engine::shield::Shield::new();
+        let mut finder = kule_engine::ProcessFinder::new();
         // Each stopped process is told once.
         let mut told: HashSet<(u32, u16)> = HashSet::new();
+        // The tasks whose servers may listen, read again each second.
+        let mut allowed: Vec<String> = Vec::new();
+        let mut read_at: Option<std::time::Instant> = None;
         loop {
+            if read_at.is_none_or(|at| at.elapsed() >= Duration::from_secs(1)) {
+                allowed = self.servers_allowed();
+                read_at = Some(std::time::Instant::now());
+            }
             let runs: Vec<String> = self
                 .running
                 .lock()
@@ -460,7 +470,9 @@ impl Service {
                 .iter()
                 .cloned()
                 .collect();
-            if runs.is_empty() {
+            let mut watched = allowed.clone();
+            watched.extend(runs.iter().filter(|r| !allowed.contains(r)).cloned());
+            if watched.is_empty() {
                 if !shield.held().is_empty() {
                     shield.release();
                     self.shielded
@@ -472,7 +484,16 @@ impl Service {
                 std::thread::sleep(Duration::from_millis(500));
                 continue;
             }
-            let guarded = shield.guard(&kule_engine::shield::descendants());
+            watched.sort();
+            let found = finder.find(&watched);
+            let mut pids: Vec<i32> = found.iter().map(|(pid, _)| *pid).collect();
+            // What a run started outside a sandbox, too.
+            if !runs.is_empty() {
+                pids.extend(kule_engine::shield::descendants());
+            }
+            pids.sort_unstable();
+            pids.dedup();
+            let guarded = shield.guard(&pids);
             *self
                 .shielded
                 .lock()
@@ -481,17 +502,39 @@ impl Service {
                 if !told.insert((stopped.pid, stopped.port)) {
                     continue;
                 }
-                let text = format!(
-                    "Kule stopped {} (pid {}): it listened on {}:{}, which your network reaches. Servers keep to this computer; listen on 127.0.0.1 or every address",
-                    stopped.process, stopped.pid, stopped.address, stopped.port
-                );
-                for task in &runs {
+                let text = stopped.said();
+                let of_task = found
+                    .iter()
+                    .find(|(pid, _)| *pid as u32 == stopped.pid)
+                    .map(|(_, task)| task.clone());
+                let to: Vec<&String> = match &of_task {
+                    Some(task) => runs.iter().filter(|r| *r == task).collect(),
+                    None => runs.iter().collect(),
+                };
+                for task in to {
                     self.emit(task, RunEvent::Preparing { text: text.clone() });
                 }
             }
-            // A look takes under a millisecond; what is left open is this.
+            // A look takes a few milliseconds; what is left open is this.
             std::thread::sleep(Duration::from_millis(50));
         }
+    }
+
+    /// The tasks whose limits let their servers listen.
+    #[cfg(target_os = "macos")]
+    fn servers_allowed(&self) -> Vec<String> {
+        let Ok(tasks) = Task::list(&self.home) else {
+            return Vec::new();
+        };
+        tasks
+            .into_iter()
+            .filter(|info| {
+                Task::open(&self.home, &info.id)
+                    .and_then(|t| t.limits_in_force())
+                    .is_ok_and(|l| l.servers)
+            })
+            .map(|info| info.id)
+            .collect()
     }
 
     /// Kule's home, which this service keeps everything in.

@@ -28,13 +28,18 @@ use std::time::Duration;
 
 use crate::ports::macos;
 
-/// A process Kule stopped for listening on a network address of its own.
+/// A process Kule stopped: for listening on a network address of its own,
+/// or for holding a connection the network made to it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Stopped {
     pub pid: u32,
     pub process: String,
+    /// The network address it listened on, or the address on the network
+    /// the connection came from.
     pub address: IpAddr,
     pub port: u16,
+    /// A connection from `address` reached it on `port`.
+    pub reached: bool,
 }
 
 /// What a look found and did.
@@ -133,6 +138,72 @@ pub fn network_addresses() -> Vec<SocketAddr> {
     out
 }
 
+/// A shield of its own for one task's processes, looking every 50 ms
+/// until it is dropped: for a command started here, where no daemon looks.
+/// What it stopped is told on stderr as it happens.
+pub struct Watch {
+    done: Arc<AtomicBool>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Watch {
+    pub fn start(task: &str) -> Watch {
+        let done = Arc::new(AtomicBool::new(false));
+        let (task, stop) = (task.to_owned(), Arc::clone(&done));
+        let thread = std::thread::spawn(move || {
+            let mut shield = Shield::new();
+            let mut finder = crate::ProcessFinder::new();
+            let tasks = [task];
+            let mut told = std::collections::HashSet::new();
+            while !stop.load(Ordering::SeqCst) {
+                let pids: Vec<i32> = finder
+                    .find(&tasks)
+                    .into_iter()
+                    .map(|(pid, _)| pid)
+                    .collect();
+                let guarded = shield.guard(&pids);
+                for s in guarded.stopped {
+                    if told.insert((s.pid, s.port)) {
+                        eprintln!("kule: {}", s.said());
+                    }
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            shield.release();
+        });
+        Watch {
+            done,
+            thread: Some(thread),
+        }
+    }
+}
+
+impl Drop for Watch {
+    fn drop(&mut self) {
+        self.done.store(true, Ordering::SeqCst);
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+impl Stopped {
+    /// What happened, said for a person.
+    pub fn said(&self) -> String {
+        if self.reached {
+            format!(
+                "Kule stopped {} (pid {}): a connection from {} on your network reached it on port {}. Servers keep to this computer",
+                self.process, self.pid, self.address, self.port
+            )
+        } else {
+            format!(
+                "Kule stopped {} (pid {}): it listened on {}:{}, which your network reaches. Servers keep to this computer; listen on 127.0.0.1 or every address",
+                self.process, self.pid, self.address, self.port
+            )
+        }
+    }
+}
+
 /// Every process descended from this one: what its runs started.
 pub fn descendants() -> Vec<i32> {
     let me = std::process::id() as i32;
@@ -158,11 +229,27 @@ impl Shield {
         Shield::default()
     }
 
-    /// Looks at what `pids` listen on and keeps it off the network.
+    /// Looks at what `pids` listen on and keeps it off the network; stops
+    /// any of them that holds a connection the network made to one of
+    /// their ports in the moment before (Kule's sockets take those once
+    /// they are there).
     pub fn guard(&mut self, pids: &[i32]) -> Guarded {
         let mut guarded = Guarded::default();
+        let mut ports = BTreeSet::new();
+        let stop = |pid: i32, address: IpAddr, port: u16, reached: bool, guarded: &mut Guarded| {
+            // SAFETY: a signal to a process of the task's own sandbox.
+            unsafe { libc::kill(pid, libc::SIGKILL) };
+            guarded.stopped.push(Stopped {
+                pid: pid as u32,
+                process: macos::name_of(pid),
+                address,
+                port,
+                reached,
+            });
+        };
         for &pid in pids {
             for (ip, port) in macos::listening(pid) {
+                ports.insert(port);
                 if local_only(&ip) {
                     continue;
                 }
@@ -170,14 +257,20 @@ impl Shield {
                     guarded.shielded.insert(port);
                     continue;
                 }
-                // SAFETY: a signal to a process of this one's own run.
-                unsafe { libc::kill(pid, libc::SIGKILL) };
-                guarded.stopped.push(Stopped {
-                    pid: pid as u32,
-                    process: macos::name_of(pid),
-                    address: ip,
-                    port,
-                });
+                stop(pid, ip, port, false, &mut guarded);
+            }
+        }
+        // A connection to one of their ports from anywhere but this
+        // computer came from the network: their own reach out goes through
+        // the proxy, on loopback.
+        for &pid in pids {
+            let reached = macos::connected(pid)
+                .into_iter()
+                .find(|(port, from)| ports.contains(port) && !local_only(from) && !every(from));
+            if let Some((port, from)) = reached
+                && !guarded.stopped.iter().any(|s| s.pid == pid as u32)
+            {
+                stop(pid, from, port, true, &mut guarded);
             }
         }
         self.cover(&guarded.shielded);
