@@ -524,6 +524,7 @@ impl Task {
         let Some(mut layer) = self.load_layer()? else {
             return Ok(HomeApplied::default());
         };
+        self.no_terminal_open("apply its home changes")?;
         // Nothing left running in the task's sandbox changes the layer
         // while it is applied.
         crate::Sandbox::end_all(self)?;

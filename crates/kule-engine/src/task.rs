@@ -22,12 +22,22 @@ use crate::limits::TaskLimits;
 use crate::manifest::{Baseline, Entry, Kind, Stamp, Tree, relative, scan};
 use crate::meet::{self, Touched};
 use crate::outline::{self, FileOutline};
+use crate::policy::Policy;
 use crate::preview::{self, Preview};
 use crate::secrets::{self, TaskSecrets, Vault};
 use crate::usage::Money;
 
 /// The largest settings file Kule masks secrets in.
 const MAX_SETTINGS: u64 = 1024 * 1024;
+
+/// The built-in policy's rules for files that run by themselves where a
+/// tool finds them, without anyone running the project.
+const RUNS_BY_ITSELF: [&str; 4] = [
+    "automation",
+    "other-vcs",
+    "nested-repository",
+    "nested-git-hooks",
+];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskInfo {
@@ -634,6 +644,7 @@ impl Task {
     ) -> Result<Option<Checkpoint>> {
         let _lock = self.lock()?;
         self.workspace_in_place()?;
+        self.no_terminal_open("commit")?;
         // Nothing left running in the task's sandbox changes the copy
         // while it is read and committed.
         crate::Sandbox::end_all(self)?;
@@ -1217,12 +1228,20 @@ impl Task {
         write_json(&self.dir.join("settings.json"), &settings)
     }
 
-    /// The copy, for a person's own terminal, unless what the task ran
-    /// changed what git runs there: config (`core.fsmonitor`, aliases) or
-    /// hooks would run outside the sandbox the moment their shell prompt
-    /// calls `git status`. Then this refuses, naming them, until they are
-    /// committed or rolled back.
+    /// The copy, for a person's own terminal or editor, outside the
+    /// sandbox, unless what the task ran changed what runs there by itself:
+    /// git's config (`core.fsmonitor`, aliases) or hooks the moment a shell
+    /// prompt calls `git status`, a toolchain pin or an editor's tasks the
+    /// moment a prompt or an editor reads them. Then this refuses, naming
+    /// them, until they are committed or rolled back; and while an agent is
+    /// at work, since it could change them right after.
     pub fn terminal_dir(&self) -> Result<PathBuf> {
+        if let Some(pid) = self.agent_pid() {
+            return Err(Error::Invalid(format!(
+                "an agent is at work in task {} (process {pid}); wait until it is done",
+                self.info.id
+            )));
+        }
         let effects = self.effects()?;
         // A repository inside the copy, or a `.git` file pointing git at one
         // elsewhere: git in that folder reads what the task put there.
@@ -1241,7 +1260,7 @@ impl Task {
                  review it, then commit or roll it back before opening a terminal"
             )));
         }
-        if let Some(git) = effects.git {
+        if let Some(git) = &effects.git {
             let mut runs: Vec<String> = git.hooks.iter().map(|h| format!("hook {h}")).collect();
             if git.config {
                 runs.insert(0, "git config".to_owned());
@@ -1253,6 +1272,33 @@ impl Task {
                     runs.join(", ")
                 )));
             }
+        }
+        // What runs by itself where a prompt or an editor finds it, as the
+        // built-in policy names it: a person's own policy may let these
+        // through to their folder, never through to their shell.
+        let runs: Vec<String> = Policy::builtin()
+            .judge(&effects)
+            .judgements
+            .into_iter()
+            .filter(|j| {
+                j.rules
+                    .iter()
+                    .any(|r| RUNS_BY_ITSELF.contains(&r.as_str()) || r.starts_with("policy-error"))
+            })
+            .map(|j| j.subject)
+            .filter(|path| {
+                // A folder alone runs nothing, nor does a file gone.
+                effects
+                    .files()
+                    .any(|e| e.path == *path && e.change != Change::Deleted && e.kind != Kind::Dir)
+            })
+            .collect();
+        if let Some(first) = runs.first() {
+            return Err(Error::Invalid(format!(
+                "the copy's {first} changed, and a shell prompt or an editor there could run it \
+                 outside the sandbox; review it, then commit or roll it back before opening a \
+                 terminal"
+            )));
         }
         Ok(self.copy())
     }
@@ -1509,7 +1555,9 @@ impl Task {
     /// Marks the task as having an agent at work (by this process) until the
     /// guard is dropped. Commit, rollback, undo and remove refuse meanwhile,
     /// whichever process asks: committing or rolling back under a running
-    /// agent would split its work in two.
+    /// agent would split its work in two. Refused while a terminal Kule
+    /// opened is open on the copy, or one it opened outside may still be
+    /// (see [`Task::terminal_opened`] and [`Task::opened_outside`]).
     pub fn agent_at_work(&self) -> Result<AgentAtWork> {
         let path = self.dir.join("agent");
         if let Some(pid) = self.agent_pid() {
@@ -1518,6 +1566,8 @@ impl Task {
                 self.info.id
             )));
         }
+        self.no_terminal_open("start work")?;
+        self.nothing_open_outside()?;
         // Before anything at work reads the copy: its settings files hold
         // placeholders, not secrets (a person may have typed one in since).
         self.protect_secrets()?;
@@ -1528,7 +1578,129 @@ impl Task {
             .open(&path)
             .at(&path)?;
         writeln!(file, "{}", std::process::id()).at(&path)?;
-        Ok(AgentAtWork(path))
+        let at_work = AgentAtWork(path);
+        // Looked at again once marked: a terminal opened since the look
+        // above saw no agent, and the two refuse each other rather than
+        // both going on.
+        self.no_terminal_open("start work")?;
+        Ok(at_work)
+    }
+
+    /// Marks a terminal Kule opened on the task's copy, held by this
+    /// process, until the guard is dropped. Meanwhile no agent starts work
+    /// in the task, and commit, sync and applying its home changes refuse,
+    /// rather than end what runs there: what the terminal ran would be cut
+    /// off, and an editor in it would lose what it had not saved. Refused
+    /// while an agent is at work.
+    pub fn terminal_opened(&self) -> Result<OpenTerminal> {
+        let dir = self.dir.join("terminals");
+        fs::create_dir_all(&dir).at(&dir)?;
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos());
+        let path = dir.join(format!("{}-{nanos:x}", std::process::id()));
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .at(&path)?;
+        writeln!(file, "{}", std::process::id()).at(&path)?;
+        let open = OpenTerminal(path);
+        // Marked first, then looked: see `agent_at_work`.
+        if let Some(pid) = self.agent_pid() {
+            return Err(Error::Invalid(format!(
+                "an agent is at work in task {} (process {pid}); wait until it is done",
+                self.info.id
+            )));
+        }
+        Ok(open)
+    }
+
+    /// The processes holding a terminal open on the task's copy (see
+    /// [`Task::terminal_opened`]); one that ended without saying so holds
+    /// none.
+    pub fn terminals_open(&self) -> Vec<u32> {
+        let dir = self.dir.join("terminals");
+        let Ok(entries) = fs::read_dir(&dir) else {
+            return Vec::new();
+        };
+        let mut pids: Vec<u32> = entries
+            .flatten()
+            .filter_map(|e| {
+                let pid = fs::read_to_string(e.path()).ok()?.trim().parse().ok()?;
+                if alive(pid) {
+                    Some(pid)
+                } else {
+                    let _ = fs::remove_file(e.path());
+                    None
+                }
+            })
+            .collect();
+        pids.sort_unstable();
+        pids.dedup();
+        pids
+    }
+
+    /// Refuses `doing` while a terminal Kule opened is open on the copy.
+    pub(crate) fn no_terminal_open(&self, doing: &str) -> Result<()> {
+        match self.terminals_open().first() {
+            Some(pid) => Err(Error::Invalid(format!(
+                "a terminal is open on task {}'s copy (held by process {pid}); \
+                 close it first, then {doing}",
+                self.info.id
+            ))),
+            None => Ok(()),
+        }
+    }
+
+    /// Notes that Kule opened the copy in `what` (a terminal app, an
+    /// editor), outside the sandbox and out of its sight: it may stay open
+    /// and run what an agent writes there next. No agent starts work in the
+    /// task until the person says it is closed ([`Task::forget_outside`]).
+    pub fn opened_outside(&self, what: &str) -> Result<()> {
+        let mut opened = self.outside()?;
+        if !opened.iter().any(|o| o.what == what) {
+            opened.push(OpenedOutside {
+                what: what.to_owned(),
+                at_unix: SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .map_or(0, |d| d.as_secs()),
+            });
+        }
+        write_json(&self.dir.join(OUTSIDE_FILE), &opened)
+    }
+
+    /// What Kule opened the copy in outside the sandbox, until the person
+    /// says it is closed.
+    pub fn outside(&self) -> Result<Vec<OpenedOutside>> {
+        let path = self.dir.join(OUTSIDE_FILE);
+        if !path.exists() {
+            return Ok(Vec::new());
+        }
+        read_json(&path)
+    }
+
+    /// The person closed what Kule opened the copy in outside the sandbox.
+    pub fn forget_outside(&self) -> Result<()> {
+        let path = self.dir.join(OUTSIDE_FILE);
+        match fs::remove_file(&path) {
+            Err(e) if e.kind() != ErrorKind::NotFound => Err(e).at(&path),
+            _ => Ok(()),
+        }
+    }
+
+    fn nothing_open_outside(&self) -> Result<()> {
+        let opened = self.outside()?;
+        if opened.is_empty() {
+            return Ok(());
+        }
+        let names: Vec<&str> = opened.iter().map(|o| o.what.as_str()).collect();
+        Err(Error::Invalid(format!(
+            "Kule opened task {id}'s copy in {} outside the sandbox; while that is open it can run \
+             what an agent writes there. Close it, then say so: in the app, or with `kule closed {id}`",
+            names.join(" and "),
+            id = self.info.id
+        )))
     }
 
     /// The process with an agent at work in the task, if it is still alive.
@@ -1538,10 +1710,7 @@ impl Task {
             .trim()
             .parse()
             .ok()?;
-        // SAFETY: signal 0 only asks whether the process exists.
-        let alive = unsafe { libc::kill(pid as i32, 0) } == 0
-            || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM);
-        alive.then_some(pid)
+        alive(pid).then_some(pid)
     }
 
     pub(crate) fn lock(&self) -> Result<Lock> {
@@ -1568,6 +1737,39 @@ impl Task {
 /// An agent at work in a task, marked until dropped (see
 /// [`Task::agent_at_work`]).
 pub struct AgentAtWork(PathBuf);
+
+/// A terminal open on a task's copy, marked until dropped (see
+/// [`Task::terminal_opened`]).
+pub struct OpenTerminal(PathBuf);
+
+impl Drop for OpenTerminal {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.0);
+    }
+}
+
+/// Where Kule notes what it opened a task's copy in outside the sandbox.
+const OUTSIDE_FILE: &str = "outside.json";
+
+/// Something Kule opened a task's copy in outside the sandbox (see
+/// [`Task::opened_outside`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OpenedOutside {
+    /// What it was: `Terminal`, `VS Code`.
+    pub what: String,
+    pub at_unix: u64,
+}
+
+/// Whether process `pid` is alive (or alive under another user).
+fn alive(pid: u32) -> bool {
+    let Ok(pid) = i32::try_from(pid) else {
+        return false;
+    };
+    // SAFETY: signal 0 only asks whether the process exists.
+    pid > 0
+        && (unsafe { libc::kill(pid, 0) } == 0
+            || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM))
+}
 
 impl Drop for AgentAtWork {
     fn drop(&mut self) {

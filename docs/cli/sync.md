@@ -37,8 +37,9 @@ the copy does not see it. [kule status](status.md) lists these files under
 The workspace is only read. After a sync, steps start over, as after a
 commit, and the agent hears what came in at the start of its next turn.
 
-Kule refuses a sync while an agent is at work; programs still running in the
-task's sandbox are stopped first.
+Kule refuses a sync while an agent is at work, and while a terminal is
+open on the task (the app's, or [kule shell](shell.md)); programs still
+running in the task's sandbox are stopped first.
 
 See [Sync and merging](../concepts/sync-and-merging.md) for how the merge
 works.
@@ -108,6 +109,7 @@ hint: commit or roll back the task's changes there first, or leave the copy as i
 | --- | --- |
 | `kule: the folder and the task both changed: <paths>; nothing was brought in` | Both sides changed the same function, section or key. Commit or roll back the task's change there first, or leave the copy as it is and resolve it at commit time. |
 | `kule: an agent is at work in task <id> …` | Wait for the run to end. |
+| `kule: a terminal is open on task <id>'s copy …; close it first, then sync` | Close the task's terminal (the app's tab, or `exit` in `kule shell`), then sync. |
 
 ## In the app
 

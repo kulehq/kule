@@ -38,47 +38,120 @@ pub(crate) enum Part {
     Other,
 }
 
-/// What a workspace path under `.git` is, or `None` outside `.git`.
+/// What a workspace path under `.git` is, or `None` outside `.git`. Only
+/// what git keeps by a name it gives is anything else than config: a file
+/// git may read to find its config and hooks elsewhere (`commondir`), a
+/// sequencer's plan with commands in it, or a name this version does not
+/// know, can make the next `git` command run code.
 pub(crate) fn classify(path: &str) -> Option<Part> {
     if path == ".git" {
         return Some(Part::Other);
     }
     let rest = path.strip_prefix(".git/")?;
-    if rest.ends_with(".lock") {
+    let parts: Vec<&str> = rest.split('/').collect();
+    Some(within(&parts).unwrap_or(Part::Config))
+}
+
+/// What `parts` is inside a git directory, or `None` for a name git does
+/// not keep there.
+fn within(parts: &[&str]) -> Option<Part> {
+    if parts.last().is_some_and(|p| p.ends_with(".lock")) {
         return Some(Part::Lock);
     }
-    let parts: Vec<&str> = rest.split('/').collect();
-    // Submodules and worktrees keep repositories of their own under
-    // `.git/modules/<name>/` and `.git/worktrees/<name>/`: their hooks and
-    // config run code just the same.
-    if matches!(parts[0], "modules" | "worktrees") {
-        let name = parts.last().copied().unwrap_or_default();
-        return Some(if parts.contains(&"hooks") {
-            Part::Hook
-        } else if matches!(name, "config" | "config.worktree") {
-            Part::Config
-        } else {
-            Part::Other
-        });
-    }
-    Some(match parts[0] {
+    Some(match parts {
         // Alternates point the repository at another object store.
-        "objects"
-            if matches!(
-                parts.get(1..),
-                Some(["info", "alternates" | "http-alternates"])
-            ) =>
-        {
-            Part::Config
-        }
-        "objects" => Part::Object,
-        "HEAD" | "packed-refs" | "refs" => Part::Ref,
-        "index" => Part::Index,
-        "logs" | "COMMIT_EDITMSG" | "ORIG_HEAD" | "FETCH_HEAD" => Part::Derived,
-        "config" | "config.worktree" => Part::Config,
-        "hooks" => Part::Hook,
-        _ => Part::Other,
+        ["objects", "info", "alternates" | "http-alternates"] => Part::Config,
+        ["objects", ..] => Part::Object,
+        ["HEAD" | "packed-refs"] | ["refs", ..] => Part::Ref,
+        ["index"] => Part::Index,
+        ["logs", ..] | ["COMMIT_EDITMSG" | "ORIG_HEAD" | "FETCH_HEAD"] => Part::Derived,
+        // Git LFS keeps its objects by content, and its downloads beside them.
+        ["lfs", "objects", ..] => Part::Object,
+        ["lfs", ..] => Part::Derived,
+        ["config" | "config.worktree"] => Part::Config,
+        ["hooks", ..] => Part::Hook,
+        ["modules" | "worktrees"] => Part::Other,
+        // Submodules and worktrees keep repositories of their own under
+        // `.git/modules/<name>/` and `.git/worktrees/<name>/`: their hooks
+        // and config run code just the same.
+        ["modules" | "worktrees", inner @ ..] => nested(inner),
+        // Kept beside the data, read as text and never run.
+        [
+            "description" | "info" | "shallow" | "MERGE_HEAD" | "MERGE_MSG" | "MERGE_MODE"
+            | "CHERRY_PICK_HEAD" | "REVERT_HEAD" | "REBASE_HEAD" | "AUTO_MERGE",
+        ]
+        | ["info", "exclude" | "refs" | "sparse-checkout"] => Part::Other,
+        _ => return None,
     })
+}
+
+/// What `inner` (`<name>/<what>`) is in a submodule's or worktree's own
+/// repository. A submodule's name may hold slashes, so the name could end
+/// before any of the names git keeps at a repository's top: each such
+/// reading is tried, and one that runs code is enough, so no name makes
+/// what follows it look like data; otherwise the shortest name.
+fn nested(inner: &[&str]) -> Part {
+    if inner.len() == 1 {
+        return Part::Other;
+    }
+    let readings: Vec<Part> = (1..inner.len())
+        .filter(|&at| at_top(inner[at]))
+        .map(|at| within(&inner[at..]).unwrap_or(Part::Config))
+        .collect();
+    if readings.contains(&Part::Hook) {
+        Part::Hook
+    } else if readings.contains(&Part::Config) {
+        Part::Config
+    } else {
+        readings.first().copied().unwrap_or(Part::Config)
+    }
+}
+
+/// Whether git keeps `name` at the top of a repository's directory
+/// (gitrepository-layout), as data or not.
+fn at_top(name: &str) -> bool {
+    name.ends_with(".lock")
+        || name.starts_with("BISECT_")
+        || name.starts_with("sharedindex.")
+        || matches!(
+            name,
+            "objects"
+                | "refs"
+                | "packed-refs"
+                | "HEAD"
+                | "index"
+                | "logs"
+                | "hooks"
+                | "info"
+                | "branches"
+                | "remotes"
+                | "config"
+                | "config.worktree"
+                | "commondir"
+                | "gitdir"
+                | "locked"
+                | "modules"
+                | "worktrees"
+                | "description"
+                | "shallow"
+                | "lfs"
+                | "rr-cache"
+                | "rebase-merge"
+                | "rebase-apply"
+                | "sequencer"
+                | "gc.pid"
+                | "gc.log"
+                | "COMMIT_EDITMSG"
+                | "ORIG_HEAD"
+                | "FETCH_HEAD"
+                | "MERGE_HEAD"
+                | "MERGE_MSG"
+                | "MERGE_MODE"
+                | "CHERRY_PICK_HEAD"
+                | "REVERT_HEAD"
+                | "REBASE_HEAD"
+                | "AUTO_MERGE"
+        )
 }
 
 /// Whether reference `name` is listed in the repository's `packed-refs`.
@@ -330,7 +403,17 @@ pub(crate) fn summarize(
             Some(Part::Object) if effect.kind != Kind::Dir => {
                 summary.other.push(effect.path.clone());
             }
-            Some(Part::Config) => summary.config = true,
+            // A folder runs nothing; what it holds is read one by one.
+            Some(Part::Config) if effect.kind != Kind::Dir => summary.config = true,
+            // A `.git` file sends git to whatever folder it names, and to
+            // the config and hooks there.
+            Some(Part::Other)
+                if effect.path == ".git"
+                    && effect.kind != Kind::Dir
+                    && effect.change != Change::Deleted =>
+            {
+                summary.config = true;
+            }
             Some(Part::Hook) if effect.kind != Kind::Dir => {
                 summary
                     .hooks
@@ -574,4 +657,51 @@ fn ancestry(
     let commits = count(new, old);
     let behind = count(old, new);
     (behind.map(|b| b == 0), commits)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Part, classify};
+
+    #[test]
+    fn only_what_git_keeps_by_its_own_names_is_data() {
+        for (path, part) in [
+            (".git/objects/ab/cdef", Part::Object),
+            (".git/objects/pack/pack-1.idx", Part::Object),
+            (".git/objects/info/alternates", Part::Config),
+            (".git/refs/heads/main", Part::Ref),
+            (".git/HEAD", Part::Ref),
+            (".git/index", Part::Index),
+            (".git/logs/HEAD", Part::Derived),
+            (".git/index.lock", Part::Lock),
+            (".git/lfs/objects/ab/cd/abcd", Part::Object),
+            (".git/info/exclude", Part::Other),
+            (".git/MERGE_MSG", Part::Other),
+            (".git/config", Part::Config),
+            (".git/hooks/pre-commit", Part::Hook),
+            // Read to find config and hooks, or holding commands, or unknown.
+            (".git/commondir", Part::Config),
+            (".git/info/attributes", Part::Config),
+            (".git/rebase-merge/git-rebase-todo", Part::Config),
+            (".git/sequencer/todo", Part::Config),
+            (".git/something-new", Part::Config),
+            // A submodule's or a worktree's own repository.
+            (".git/modules/sub", Part::Other),
+            (".git/modules/sub/objects/ab/cdef", Part::Object),
+            (".git/modules/sub/logs/HEAD", Part::Derived),
+            (".git/modules/sub/config", Part::Config),
+            (".git/modules/sub/commondir", Part::Config),
+            (".git/modules/sub/hooks/post-checkout", Part::Hook),
+            (".git/worktrees/wt/gitdir", Part::Config),
+            (".git/worktrees/wt/HEAD", Part::Ref),
+            // A name with slashes can't make config look like data.
+            (".git/modules/a/objects/b/config", Part::Config),
+            (".git/modules/a/refs/b/commondir", Part::Config),
+            (".git/modules/a/b/c", Part::Config),
+        ] {
+            assert_eq!(classify(path), Some(part), "{path}");
+        }
+        assert_eq!(classify("src/.git/config"), None);
+        assert_eq!(classify(".gitignore"), None);
+    }
 }

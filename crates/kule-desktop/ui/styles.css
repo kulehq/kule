@@ -3345,18 +3345,22 @@ body.dragging-panel * {
   font-size: calc(13px * var(--text-scale));
 }
 
+.editor-note .outside-changed {
+  max-height: 160px;
+  overflow-y: auto;
+  padding: 8px 12px 8px 28px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: calc(12px * var(--text-scale));
+  overflow-wrap: anywhere;
+}
+
 .editor-note-tip {
   padding: 10px 12px;
   border-radius: 8px;
   background: var(--accent-soft);
-  font-size: calc(13px * var(--text-scale));
-}
-
-.editor-note-again {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  color: var(--muted);
   font-size: calc(13px * var(--text-scale));
 }
 
@@ -3961,7 +3965,7 @@ body.dragging-panel * {
   gap: 10px;
 }
 
-/* "outside the sandbox", in the terminal's corner. */
+/* "in the sandbox", in the terminal's corner. */
 .terminal-note {
   position: absolute;
   top: 6px;
@@ -3969,8 +3973,8 @@ body.dragging-panel * {
   z-index: 3;
   padding: 1px 8px;
   border-radius: 999px;
-  background: var(--ask-soft);
-  color: var(--ask);
+  background: var(--accent-soft);
+  color: var(--muted);
   font-size: calc(11px * var(--text-scale));
   opacity: 0.85;
   white-space: nowrap;

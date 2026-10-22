@@ -26,7 +26,7 @@ use kule_daemon::shortcuts::Shortcuts;
 use kule_daemon::themes::{ThemeFile, Themes};
 use kule_daemon::{
     AgentProfile, Alert, Alerts, Call, Client, Commit, DailyBudget, Hello, IsolationView, Limits,
-    Money, Notice, PROTOCOL, PolicyChoice, Question, Result, Review, RunEvent, Sequenced,
+    Money, Notice, Outside, PROTOCOL, PolicyChoice, Question, Result, Review, RunEvent, Sequenced,
     SharedBudget, TaskChange, TaskColor, TaskLimits, TaskView, Timeline, default_home,
 };
 use serde::Serialize;
@@ -236,14 +236,39 @@ fn remove_task(kule: K<'_>, task: String) -> Result<()> {
     kule.call(Call::RemoveTask { task })
 }
 
+/// Opens the task's copy in the person's terminal app, outside the
+/// sandbox: refused while what the task changed would run there by itself,
+/// and, while the copy holds changes not committed, asked first (see
+/// `Call::OpenOutside`). What to ask, or nothing once opened.
 #[tauri::command(async)]
-fn open_terminal(kule: K<'_>, task: String) -> Result<()> {
-    let copy: PathBuf = kule.call(Call::TerminalDir { task })?;
-    terminal::open(&copy)
+fn open_terminal(kule: K<'_>, task: String, confirmed: bool) -> Result<Option<Outside>> {
+    match kule.call(Call::OpenOutside {
+        task,
+        what: "a terminal app".to_owned(),
+        confirmed,
+    })? {
+        Outside::Open { dir } => terminal::open(&dir).map(|()| None),
+        ask => Ok(Some(ask)),
+    }
 }
 
-/// A shell in the task's copy, inside the window; its id. Refused when
-/// what the task ran changed what git would run there (see `TerminalDir`).
+/// What Kule opened the task's copy in outside the sandbox, which may
+/// still be open: asked about before a run.
+#[tauri::command(async)]
+fn outside_opened(kule: K<'_>, task: String) -> Result<serde_json::Value> {
+    kule.call(Call::OutsideOpened { task })
+}
+
+/// The person closed what Kule opened the task's copy in outside the
+/// sandbox.
+#[tauri::command(async)]
+fn forget_outside(kule: K<'_>, task: String) -> Result<()> {
+    kule.call(Call::ForgetOutside { task })
+}
+
+/// A shell in the task's copy, inside the window and the task's sandbox;
+/// its id. Refused while an agent is at work in the task, and while it is
+/// open no run starts there.
 #[tauri::command(async)]
 fn terminal_open(
     app: AppHandle,
@@ -253,8 +278,7 @@ fn terminal_open(
     cols: u16,
     rows: u16,
 ) -> Result<pty::Opened> {
-    let copy: PathBuf = kule.call(Call::TerminalDir { task: task.clone() })?;
-    let id = terms.open(app, &copy, &task, cols, rows)?;
+    let id = terms.open(app, &kule.home, &task, cols, rows)?;
     Ok(pty::Opened {
         id,
         shell: pty::shell_name(),
@@ -660,12 +684,29 @@ fn set_editors(kule: K<'_>, choice: EditorChoice) -> Result<EditorChoice> {
     kule.call(Call::SetEditors { choice })
 }
 
-/// Opens the task's copy in an editor this computer has. Refused, as the
-/// terminal is, when what the task ran changed what git would run there.
+/// Opens the task's copy in an editor this computer has, outside the
+/// sandbox: refused or asked first as the terminal app is (see
+/// `open_terminal`). What to ask, or nothing once opened.
 #[tauri::command(async)]
-fn open_in_editor(kule: K<'_>, task: String, editor: String) -> Result<()> {
-    let copy: PathBuf = kule.call(Call::TerminalDir { task })?;
-    opener::open_in(&editor, &copy)
+fn open_in_editor(
+    kule: K<'_>,
+    task: String,
+    editor: String,
+    confirmed: bool,
+) -> Result<Option<Outside>> {
+    let name = opener::found()
+        .into_iter()
+        .find(|f| f.id == editor)
+        .map(|f| f.name)
+        .ok_or_else(|| format!("{editor:?} is not an editor this computer has"))?;
+    match kule.call(Call::OpenOutside {
+        task,
+        what: name.to_owned(),
+        confirmed,
+    })? {
+        Outside::Open { dir } => opener::open_in(&editor, &dir).map(|()| None),
+        ask => Ok(Some(ask)),
+    }
 }
 
 /// Puts the person's shortcuts next to the menu's items: command id →
@@ -1055,6 +1096,8 @@ fn main() {
             timeline,
             remove_task,
             open_terminal,
+            outside_opened,
+            forget_outside,
             questions,
             answer,
             rules,

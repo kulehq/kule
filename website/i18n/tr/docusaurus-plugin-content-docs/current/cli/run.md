@@ -166,6 +166,8 @@ günlüğe kaydetmeyi kolaylaştırır.
 | `kule: task <id> has spent its budget; raise it or turn it off to run again` | `kule budget TASK <amount>` ile artırın ya da `kule budget TASK off` ile kapatın. Tükenen bir grubun ya da günlük bütçeyse mesaj onun adını verir. |
 | `kule: the task has used its time: its runs took N minutes together; …` | Görevin süre sınırını [kule limits](limits.md) ile artırın ya da kaldırın. |
 | `kule: an agent is at work in task <id> …` | Görev başına tek ajan. Bekleyin ya da başka bir görev açın. |
+| `kule: a terminal is open on task <id>'s copy …; close it first, then start work` | Görevde bir terminal (uygulamanınki ya da `kule shell`) açık. Önce onu kapatın. |
+| `kule: Kule opened task <id>'s copy in <app> outside the sandbox; …` | O terminal uygulamasını ya da editörü kapatın, sonra [kule closed](closed.md) `TASK` çalıştırın. |
 | `kule: <error> (see <home>/tasks/<id>/agent.log)` | Ajan başarısız oldu. Kendi mesajları `agent.log` içinde. |
 | `kule: <agent> reported no cost, so the task's budget does not count this run` | Hata değil, bir uyarı: abonelikle oturum açmış ajanlar yalnızca token bildirebilir ve bütçe, bildirilmeyeni tutamaz. |
 

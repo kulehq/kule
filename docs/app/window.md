@@ -54,7 +54,7 @@ holds **panels** as tabs.
 | **Timeline** | Commits, steps, network connections and sandbox refusals. See [Timeline](timeline.md). | Main |
 | **Preview** | One file of the copy, shown large. See [Files and Preview](files-and-preview.md). | Main |
 | **Agent** (Live) | The conversation with the agent and the prompt line. See [Live](live.md). | Bottom |
-| **Terminal** | Your own shells in the copy, one tab each. See [Terminals and servers](terminals-and-servers.md). | Bottom |
+| **Terminal** | Your own shells in the copy, in the task's sandbox, one tab each. See [Terminals and servers](terminals-and-servers.md). | Bottom |
 
 The right region is empty and hidden by default. By default the agent chat
 and the terminals share the bottom, side by side:
@@ -120,9 +120,9 @@ Above the main area, the open task's header shows:
 - **Tasks** lists every task and group. The **+** next to the title makes a
   [group](../concepts/groups.md).
 - Each task has a **⋮ menu** (Mod+., or a right click): *Rename…*, a
-  colour, *Group…*, *Budget…*, *Limits…*, *Open terminal*, *Open the copy in
-  an editor*, *Bring in the folder's changes*, *Fork task*, *Move up*/*Move
-  down* and *Delete task*. Items that would disturb a running agent say
+  colour, *Group…*, *Budget…*, *Limits…*, *Open in terminal app*, *Open the
+  copy in an editor*, *Bring in the folder's changes*, *Fork task*, *Move
+  up*/*Move down* and *Delete task*. Items that would disturb a running agent say
   *(agent at work)* and wait.
 - A group's ⋮ menu has *Rename…*, a colour, *Budget…*, *Limits…*, *Move
   up*/*Move down* and *Delete group* (its tasks stay, in no group).

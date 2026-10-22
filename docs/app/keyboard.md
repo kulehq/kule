@@ -35,7 +35,7 @@ so one set of shortcuts serves all three.
 | Move the task up / down the list | Alt+Shift+↑ / Alt+Shift+↓ (Alt+↑/↓ with the list focused) |
 | Task actions (⋮ menu) | Mod+. |
 | Rename the task | F2 |
-| Open a terminal in the task's copy | Mod+T |
+| Open the task's copy in your terminal app, outside the sandbox | Mod+T |
 | Open the task's copy in your editor | Mod+Shift+O |
 | Fork the task | Mod+Shift+D |
 | Bring the folder's changes into the copy | Mod+Shift+G |

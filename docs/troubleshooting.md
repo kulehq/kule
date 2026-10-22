@@ -239,11 +239,41 @@ leave the copy as it is.
 it says outside the sandbox; review it, then commit or roll it back before
 opening a terminal".
 
-**Cause:** the task changed the copy's git config or hooks. Your shell
-prompt's `git status` would run them outside the sandbox.
+**Cause:** the task changed what would run in the copy by itself, outside
+the sandbox: its git config or hooks (your shell prompt's `git status`), a
+toolchain pin such as `rust-toolchain.toml` or `.nvmrc`, `.envrc`, or an
+editor's settings. Or an agent is at work in the task: wait until it is
+done.
 
 **Fix:** review the change in Review (or `kule status`), then commit or roll
-it back.
+it back. Such changes stop only what opens the copy outside the sandbox
+(*Open in terminal app*, *Open the copy in your editor*,
+`kule shell --outside`); the task's terminal and `kule shell` run in the
+sandbox and open anyway.
+
+### Commit, sync or a run waits for a terminal
+
+**Symptom:** "a terminal is open on task …'s copy (held by process …);
+close it first, then commit" (or *then sync*, *then apply its home
+changes*, *then start work*).
+
+**Cause:** a terminal is open on the task: a tab of the app's **Terminal**
+panel, or `kule shell`. Kule does not end what runs there, so nothing you
+have not saved is lost.
+
+**Fix:** close the terminal's tab, or type `exit` in it, then try again.
+
+### A run is refused after opening the copy in an app
+
+**Symptom:** the app asks *Close … first* before a run, or `kule run` and
+`kule exec` say "Kule opened task …'s copy in … outside the sandbox; …
+Close it, then say so: in the app, or with `kule closed …`".
+
+**Cause:** *Open in terminal app* or *Open the copy in your editor* opened
+the copy outside the sandbox, and Kule cannot see that app close.
+
+**Fix:** close the terminal app or editor, then choose *I closed it, start
+the run* in the app, or run [`kule closed TASK`](cli/closed.md).
 
 ### A program that needs the screen fails (LibreOffice and others)
 

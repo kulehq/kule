@@ -15,8 +15,8 @@ agent-client-protocol = { version = "3.4.0", features = ["stdio", "unstable_end_
 async-process = "2.5.0"
 blake3.workspace = true
 futures = "0.3.34"
-kule-engine = { version = "0.2.0-preview.2", path = "../kule-engine" }
-kule-ext = { version = "0.2.0-preview.2", path = "../kule-ext" }
+kule-engine = { version = "0.2.0-preview.3", path = "../kule-engine" }
+kule-ext = { version = "0.2.0-preview.3", path = "../kule-ext" }
 libc = "0.2.190"
 serde.workspace = true
 serde_json.workspace = true

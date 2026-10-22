@@ -58,13 +58,31 @@ With the [balanced policy](policy.md):
 Git hosts are not package registries: a connection to `github.com` waits
 for you, because inside TLS a push cannot be told apart from a fetch.
 
-## Git config and hooks protect your terminal too
+## What runs by itself protects your terminal too
 
-While a task has changed the copy's git config or hooks, Kule **refuses to
-open a terminal** in the copy (and `kule shell`), and refuses to open the
-copy in an editor: your prompt's `git status` would run them outside the
-sandbox. `kule path` warns on stderr. Review and commit or roll them back
-first.
+The task's terminal and [`kule shell`](../cli/shell.md) run in the task's
+sandbox, like the agent. Opening the copy **outside** the sandbox is
+different: *Open in terminal app*, *Open the copy in your editor* and
+`kule shell --outside` run as you. Kule refuses them while an agent is at
+work in the task, and while the task has changed something that would run
+there by itself, outside the sandbox:
+
+- the copy's git config or hooks, which your prompt's `git status` would
+  run. Anything in `.git` that git does not keep as data (objects, refs,
+  the index, logs) counts as git config;
+- a repository inside the copy, or another version control system's
+  (Mercurial, Sapling, Jujutsu, Darcs, Pijul and others), whose config and
+  hooks run on its next command;
+- a file the [`automation`](../reference/policy-rules.md) rule names, such
+  as a toolchain pin (`rust-toolchain.toml`, `.nvmrc`, `.python-version`,
+  `.tool-versions`), `.envrc`, or an editor's settings and tasks
+  (`.vscode/`), which a prompt or an editor reads when it opens the folder.
+
+`kule path` warns on stderr. Review and commit or roll them back first.
+
+While the copy holds other changes not committed, Kule lists them and asks
+before it opens the copy outside the sandbox. See
+[Terminals and servers](../app/terminals-and-servers.md#outside-the-sandbox).
 
 ## Worktrees
 

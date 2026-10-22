@@ -178,6 +178,8 @@ kule exec "$TASK" --reveal ~/Library/Keychains \
 | bir `net: … refused` satırı ve başarısız bir indirme | Host'u [kule rules allow](rules.md) ile geçirin ya da bağlantının cevabınızı beklediği uygulamayı kullanın. |
 | `kule: could not run <program>` | Program, komutun gördüğü `PATH` üzerinde değil ya da çalıştırılabilir değil. |
 | `kule: an agent is at work in task <id> …` | Ajanın çalıştırmasının bitmesini bekleyin. |
+| `kule: a terminal is open on task <id>'s copy …; close it first, then start work` | Görevde bir terminal (uygulamanınki ya da `kule shell`) açık. Önce onu kapatın. |
+| `kule: Kule opened task <id>'s copy in <app> outside the sandbox; …` | O terminal uygulamasını ya da editörü kapatın, sonra [kule closed](closed.md) `TASK` çalıştırın. |
 
 Unprivileged user namespace'leri olmayan Linux sistemleri için bkz.
 [kule isolation](isolation.md).
@@ -185,8 +187,10 @@ Unprivileged user namespace'leri olmayan Linux sistemleri için bkz.
 ## Uygulamada
 
 Uygulamada tek bir komut için bir alan yoktur. Komutları kendiniz
-çalıştırmak için görevin **Terminal**'ini açın (Ctrl+\`); terminalin,
-[kule shell](shell.md) gibi sandbox'ın **dışında** olduğunu unutmayın.
+çalıştırmak için görevin **Terminal**'ini açın (Ctrl+\`): `kule exec` ve
+[kule shell](shell.md) gibi görevin sandbox'ında çalışır.
+`kule shell --outside` ve uygulamanın *Open in terminal app*'i kopyayı
+sandbox'ın dışında açar.
 
 ## Ayrıca bakın
 

@@ -567,7 +567,7 @@ function taskMenu(task, list, e) {
       disabled: list !== "tasks" || at === siblings.length - 1,
       "aria-keyshortcuts": "Alt+ArrowDown",
     }),
-    item("Open terminal", () => (closeMenu(), openTerminal(task))),
+    item("Open in terminal app", () => (closeMenu(), openTerminal(task))),
     item(`Show the copy in ${FILE_MANAGER}`, () => (closeMenu(), showOutside(task.id, ""))),
     ...editorItems(task, item),
     item(busy ? "Bring in the folder's changes (agent at work)" : "Bring in the folder's changes", () => (closeMenu(), bringIn(task.id)), {
@@ -3378,15 +3378,43 @@ async function submitPrompt(e) {
   // The places picked in the Preview go with it, and leave the prompt with it.
   const refs = (promptRefs.get(task.id) || []).map((c) => c.ref);
   try {
-    await call("start_run", { task: task.id, agent: $("agent").value, prompt, refs });
-    $("prompt").value = "";
-    promptRefs.delete(task.id);
-    renderPromptRefs(task);
-    fitPrompt();
-    await refresh();
+    // What Kule opened the copy in outside the sandbox may still be open,
+    // and run what the agent writes next: the person closes it first.
+    const opened = await call("outside_opened", { task: task.id });
+    if (opened.length) {
+      const names = opened.map((o) => o.what).join(" and ");
+      note({
+        id: "closed-note",
+        title: `Close ${names} first`,
+        body: [
+          h("p", {}, `Kule opened this task's copy in ${names}, outside the sandbox. While that is open it can run what the agent writes there, as you: a settings file, a task, a git hook.`),
+          h("p", {}, "Close it, then start the run. Kule cannot see it close, so it asks you."),
+        ],
+        action: "I closed it, start the run",
+        go: async () => {
+          try {
+            await call("forget_outside", { task: task.id });
+            await startRun(task, prompt, refs);
+          } catch (err) {
+            fail(err);
+          }
+        },
+      });
+      return;
+    }
+    await startRun(task, prompt, refs);
   } catch (err) {
     fail(err);
   }
+}
+
+async function startRun(task, prompt, refs) {
+  await call("start_run", { task: task.id, agent: $("agent").value, prompt, refs });
+  $("prompt").value = "";
+  promptRefs.delete(task.id);
+  renderPromptRefs(task);
+  fitPrompt();
+  await refresh();
 }
 
 // --- Review ----------------------------------------------------------------
@@ -4990,11 +5018,7 @@ async function newTask() {
 
 async function openTerminal(task = currentTask()) {
   if (!task) return;
-  try {
-    await call("open_terminal", { task: task.id });
-  } catch (err) {
-    fail(err);
-  }
+  await openOutside("your terminal app", null, (confirmed) => call("open_terminal", { task: task.id, confirmed }));
 }
 
 /** The task the delete shortcut was pressed for once, and when that ends. */
@@ -5208,7 +5232,7 @@ function terminalTabs(name) {
           "aria-selected": String(selected),
           "aria-controls": "panel-terminal",
           tabindex: selected ? 0 : -1,
-          title: "Your shell in the task's copy, outside the sandbox · drag to move the terminals",
+          title: "Your shell in the task's copy, in its sandbox · drag to move the terminals",
           onclick: () => {
             if (panelDrag.moved) return;
             focusTerminal(task.id, e.key);
@@ -5708,22 +5732,15 @@ function chosenEditor() {
   return found.find((f) => f.id === choice.chosen) || found[0] || null;
 }
 
-/** Opens the task's copy in `editor` ({id, name}); the first time for that
- * editor, after a note on what an editor runs by itself from a folder. */
+/** Opens the task's copy in `editor` ({id, name}), outside the sandbox. */
 async function openInEditor(task, editor = chosenEditor()) {
   if (!editor) {
     toast("No editor Kule knows was found: VS Code, Cursor or Zed", "error");
     return;
   }
-  const go = async () => {
-    try {
-      await call("open_in_editor", { task: task.id, editor: editor.id });
-    } catch (err) {
-      fail(err);
-    }
-  };
-  if (outside.editors.choice.told.includes(editor.id)) return go();
-  editorNote(editor, go);
+  await openOutside(editor.name, EDITOR_TIPS[editor.id] || EDITOR_TIPS.other, (confirmed) =>
+    call("open_in_editor", { task: task.id, editor: editor.id, confirmed })
+  );
 }
 
 async function pickEditor(id) {
@@ -5735,30 +5752,52 @@ async function pickEditor(id) {
   }
 }
 
-/** The note shown before a copy first opens in `editor`. */
-function editorNote(editor, go) {
-  const again = h("input", { type: "checkbox", id: "editor-note-again" });
+/** Opens the task's copy in `what` with `open(confirmed)`, which comes back
+ * with nothing once it opened, or with the changes not committed to show
+ * first ({changed, more}); asked about each time, never remembered. */
+async function openOutside(what, tip, open) {
+  try {
+    const ask = await open(false);
+    if (!ask) return;
+    const changed = h("ul", { class: "outside-changed" }, ask.changed.map((path) => h("li", {}, path)), ask.more ? h("li", {}, `and ${plural(ask.more, "more file")}`) : null);
+    note({
+      id: "outside-note",
+      title: `Open the task's copy in ${what}?`,
+      body: [
+        h("p", {}, `These changes are not committed yet. ${what} runs outside the sandbox, as you: it, or a tool it starts, can run code from them by itself (settings, tasks, git hooks, toolchain pins).`),
+        changed,
+        tip ? h("p", { class: "editor-note-tip" }, tip) : null,
+        h(
+          "ul",
+          {},
+          h("li", {}, "Look at them in Review first if you can."),
+          h("li", {}, "Until you tell Kule it is closed, no agent starts work in this task: it could run what the agent writes next.")
+        ),
+      ],
+      action: `Open in ${what}`,
+      go: () => open(true).catch(fail),
+    });
+  } catch (err) {
+    fail(err);
+  }
+}
+
+/** A note to read before something is done: `go` runs on its action, and
+ * Cancel, Escape or a click beside it closes it. Cancel has the focus. */
+function note({ id, title, body, action, go }) {
   const close = () => dialog.remove();
-  const open = h(
+  const ok = h(
     "button",
     {
       class: "button",
       type: "button",
-      "data-key": "editor-note-open",
+      "data-key": `${id}-go`,
       onclick: async () => {
         close();
-        if (again.checked) {
-          const choice = { ...outside.editors.choice, told: [...outside.editors.choice.told, editor.id] };
-          try {
-            outside.editors.choice = await call("set_editors", { choice });
-          } catch (err) {
-            fail(err);
-          }
-        }
         await go();
       },
     },
-    `Open in ${editor.name}`
+    action
   );
   const cancel = h("button", { class: "button ghost", type: "button", onclick: close }, "Cancel");
   const dialog = h(
@@ -5766,26 +5805,14 @@ function editorNote(editor, go) {
     { class: "palette-backdrop", onpointerdown: (e) => e.target === e.currentTarget && close() },
     h(
       "div",
-      { class: "editor-note", role: "dialog", "aria-modal": "true", "aria-labelledby": "editor-note-title" },
-      h("h2", { id: "editor-note-title" }, `Open the task's copy in ${editor.name}`),
-      h(
-        "p",
-        {},
-        "The agent wrote files in this copy. An editor can run code from a folder by itself: its tasks and settings, the extensions it recommends, git hooks. That would run outside the sandbox."
-      ),
-      h("p", { class: "editor-note-tip" }, EDITOR_TIPS[editor.id] || EDITOR_TIPS.other),
-      h(
-        "ul",
-        {},
-        h("li", {}, "What you change there shows in Review; commit or roll it back as usual."),
-        h("li", {}, "While the agent is at work, change nothing there: you would both write the same files.")
-      ),
-      h("label", { class: "editor-note-again", for: "editor-note-again" }, again, `Don't tell me again for ${editor.name}`),
-      h("div", { class: "editor-note-actions" }, cancel, open)
+      { class: "editor-note", role: "dialog", "aria-modal": "true", "aria-labelledby": `${id}-title` },
+      h("h2", { id: `${id}-title` }, title),
+      body,
+      h("div", { class: "editor-note-actions" }, cancel, ok)
     )
   );
   // Keyboard stays in the note until it closes.
-  const stops = [again, cancel, open];
+  const stops = [cancel, ok];
   dialog.addEventListener("keydown", (k) => {
     if (k.key === "Escape") {
       k.preventDefault();
@@ -5797,7 +5824,7 @@ function editorNote(editor, go) {
     }
   });
   document.body.append(dialog);
-  open.focus();
+  cancel.focus();
 }
 
 /** What to answer when the editor asks, or what to do when it does not. */
@@ -5963,8 +5990,9 @@ function filesKey(e) {
 // --- Terminal --------------------------------------------------------------
 
 // The person's shells in the open task's copy, drawn by xterm.js, as many
-// as they open, each a tab. They run outside the sandbox, as Open terminal
-// does, and last while the window is open.
+// as they open, each a tab. They run in the task's sandbox, as `kule exec`
+// runs a command, and last while the window is open; meanwhile no agent
+// starts work in the task, and commit and sync wait.
 
 /** Task id → { list: [terminal], active: key }; a terminal is
  * { key, n, term, fit, search, el, id (the shell's), shell, ended }. */
@@ -7185,7 +7213,7 @@ const COMMANDS = [
   { id: "group.policy", title: "Group policies", group: "Settings", keys: "", run: () => openPolicy() },
   { id: "isolation.settings", title: "Isolation on this computer", group: "Settings", keys: "", run: () => openPolicy() },
   { id: "agents.toggle-all", title: "Open or close every agent's details", group: "Settings", keys: "", run: () => toggleAllAgents() },
-  { id: "task.terminal", title: "Open a terminal in the task's copy", group: "Tasks", keys: "Mod+T", run: () => withTask((t) => openTerminal(t)) },
+  { id: "task.terminal", title: "Open the task's copy in your terminal app, outside the sandbox", group: "Tasks", keys: "Mod+T", run: () => withTask((t) => openTerminal(t)) },
   { id: "task.fork", title: "Fork the task: a new one from its copy as it is now", group: "Tasks", keys: "Mod+Shift+D", run: () => withTask((t) => forkTask(t.id, null)) },
   {
     id: "task.sync", title: "Bring the folder's changes into the task's copy", group: "Tasks", keys: "Mod+Shift+G",

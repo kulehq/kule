@@ -228,7 +228,9 @@ const SYSTEM_ROOTS: &[&str] = &[
 fn trust(task: &Task, ca_pem: &str) -> Result<Vec<(String, OsString)>> {
     let tmp = task.tmp()?;
     let ca = tmp.join("kule-ca.pem");
-    std::fs::write(&ca, ca_pem).at(&ca)?;
+    // The tmp is the sandbox's to write to: a link put at either name is
+    // replaced, never written through.
+    crate::fsops::put_beneath(&tmp, "kule-ca.pem", ca_pem.as_bytes(), 0o644)?;
     let mut bundle_text = SYSTEM_ROOTS
         .iter()
         .find_map(|p| std::fs::read_to_string(p).ok())
@@ -238,7 +240,7 @@ fn trust(task: &Task, ca_pem: &str) -> Result<Vec<(String, OsString)>> {
     }
     bundle_text.push_str(ca_pem);
     let bundle = tmp.join("kule-ca-bundle.pem");
-    std::fs::write(&bundle, bundle_text).at(&bundle)?;
+    crate::fsops::put_beneath(&tmp, "kule-ca-bundle.pem", bundle_text.as_bytes(), 0o644)?;
     let mut env = vec![("NODE_EXTRA_CA_CERTS".to_owned(), ca.into_os_string())];
     for var in [
         "SSL_CERT_FILE",

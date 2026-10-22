@@ -18,7 +18,7 @@ a command inside a task looks like.
 | `PATH` | the app, the sandbox | Where commands and agents (`npx`, `node`, `gemini`, …) are found. Opened from the Finder or a launcher, the app reads `PATH` from your login shell, so it finds the same tools as a terminal. |
 | `SHELL` | `kule shell`, the app's terminals | The shell to open in a task's copy. |
 | `NO_COLOR` | `kule` | Set (non-empty) to turn colours off. Colour is also off when the output is not a terminal, or `TERM=dumb`. |
-| `KULE_TERMINAL` | the app | The terminal app *Open terminal* uses: an app name on macOS (for example `iTerm`), a command on Linux. Without it, macOS uses the terminal the app was started from, else Terminal; Linux tries the usual terminals on `PATH`. |
+| `KULE_TERMINAL` | the app | The terminal app *Open in terminal app* uses: an app name on macOS (for example `iTerm`), a command on Linux. Without it, macOS uses the terminal the app was started from, else Terminal; Linux tries the usual terminals on `PATH`. |
 | `KULE_NO_EXTENSIONS` | the app | Set to start the app with every extension off, like `--no-extensions`. |
 | `CARGO_HOME` | the sandbox | Where your cargo caches are, to start a task's own from. |
 | `XDG_CONFIG_HOME` | the sandbox | When it points at your real `~/.config`, a command gets the home layer's `.config` instead. |

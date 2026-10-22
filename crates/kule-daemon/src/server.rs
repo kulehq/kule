@@ -379,7 +379,13 @@ pub fn dispatch(service: &Arc<Service>, call: Call) -> Result<Value, String> {
         Call::Timeline { task } => json(service.timeline(&task)?),
         Call::RemoveTask { task } => json(service.remove(&task)?),
         Call::CopyOf { task } => json(service.copy_of(&task)?),
-        Call::TerminalDir { task } => json(service.terminal_dir(&task)?),
+        Call::OpenOutside {
+            task,
+            what,
+            confirmed,
+        } => json(service.open_outside(&task, &what, confirmed)?),
+        Call::OutsideOpened { task } => json(service.outside_opened(&task)?),
+        Call::ForgetOutside { task } => json(service.forget_outside(&task)?),
         Call::StartRun {
             task,
             agent,

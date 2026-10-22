@@ -35,7 +35,7 @@ gelir; böylece tek bir kısayol takımı üçüne de hizmet eder.
 | Görevi listede yukarı / aşağı taşı | Alt+Shift+↑ / Alt+Shift+↓ (liste odaktayken Alt+↑/↓) |
 | Görev eylemleri (⋮ menüsü) | Mod+. |
 | Görevi yeniden adlandır | F2 |
-| Görevin kopyasında bir terminal aç | Mod+T |
+| Görevin kopyasını terminal uygulamanızda, sandbox dışında aç | Mod+T |
 | Görevin kopyasını editörünüzde aç | Mod+Shift+O |
 | Görevden fork al | Mod+Shift+D |
 | Klasörün değişikliklerini kopyaya al | Mod+Shift+G |

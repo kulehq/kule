@@ -18,7 +18,7 @@ bir komutun ortamının neye benzediğini listeler.
 | `PATH` | uygulama, sandbox | Komutların ve ajanların (`npx`, `node`, `gemini`, …) bulunduğu yerler. Finder'dan ya da bir başlatıcıdan açıldığında uygulama `PATH`'i giriş kabuğunuzdan okur; böylece bir terminalle aynı araçları bulur. |
 | `SHELL` | `kule shell`, uygulamanın terminalleri | Bir görevin kopyasında açılacak kabuk. |
 | `NO_COLOR` | `kule` | Renkleri kapatmak için (boş olmayan bir değerle) ayarlayın. Çıktı bir terminal değilse ya da `TERM=dumb` ise de renk kapalıdır. |
-| `KULE_TERMINAL` | uygulama | *Open terminal*'in kullandığı terminal uygulaması: macOS'ta bir uygulama adı (örneğin `iTerm`), Linux'ta bir komut. Ayarlı değilse macOS, uygulamanın başlatıldığı terminali, o da yoksa Terminal'i kullanır; Linux `PATH` üzerindeki bilinen terminalleri dener. |
+| `KULE_TERMINAL` | uygulama | *Open in terminal app*'in kullandığı terminal uygulaması: macOS'ta bir uygulama adı (örneğin `iTerm`), Linux'ta bir komut. Ayarlı değilse macOS, uygulamanın başlatıldığı terminali, o da yoksa Terminal'i kullanır; Linux `PATH` üzerindeki bilinen terminalleri dener. |
 | `KULE_NO_EXTENSIONS` | uygulama | Uygulamayı `--no-extensions` gibi, tüm eklentiler kapalı başlatmak için ayarlayın. |
 | `CARGO_HOME` | sandbox | Bir görevin kendi cargo önbelleğini başlatmak için sizin cargo önbelleklerinizin bulunduğu yer. |
 | `XDG_CONFIG_HOME` | sandbox | Gerçek `~/.config` dizininizi gösterdiğinde, bir komut onun yerine ev katmanının `.config` dizinini alır. |

@@ -2347,3 +2347,135 @@ fn the_agent_hears_why_a_refusal_kept_a_tool_from_working_once() {
     // The refusals themselves stay recorded for the person.
     assert_eq!(kule_engine::denials(&s.task).unwrap().len(), 4);
 }
+
+/// A pseudo-terminal's two ends, closed when dropped.
+struct Pty {
+    leader: std::os::fd::OwnedFd,
+    follower: std::os::fd::OwnedFd,
+}
+
+fn pty() -> Pty {
+    use std::os::fd::FromRawFd;
+
+    let (mut leader, mut follower) = (0, 0);
+    // SAFETY: openpty fills the two descriptors; null names and modes
+    // (mutable on macOS, read-only on Linux).
+    let made = unsafe {
+        libc::openpty(
+            &mut leader,
+            &mut follower,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        )
+    };
+    assert_eq!(made, 0);
+    // SAFETY: openpty made both, and nothing else owns them.
+    unsafe {
+        Pty {
+            leader: std::os::fd::OwnedFd::from_raw_fd(leader),
+            follower: std::os::fd::OwnedFd::from_raw_fd(follower),
+        }
+    }
+}
+
+/// What the command wrote to its terminal until `want` shows, it ends, or
+/// ten seconds pass.
+fn heard_until(leader: &std::os::fd::OwnedFd, want: &str) -> String {
+    use std::io::Read;
+    use std::os::fd::AsRawFd;
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let mut file = fs::File::from(leader.try_clone().unwrap());
+    let mut seen = Vec::new();
+    let mut buf = [0u8; 4096];
+    while !String::from_utf8_lossy(&seen).contains(want) {
+        let left = deadline.saturating_duration_since(std::time::Instant::now());
+        let mut ready = libc::pollfd {
+            fd: leader.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        // SAFETY: poll reads and fills the one entry.
+        if left.is_zero() || unsafe { libc::poll(&mut ready, 1, left.as_millis() as i32) } < 1 {
+            break;
+        }
+        match file.read(&mut buf) {
+            Ok(0) | Err(_) => break,
+            Ok(n) => seen.extend_from_slice(&buf[..n]),
+        }
+    }
+    String::from_utf8_lossy(&seen).into_owned()
+}
+
+/// A shell on a terminal Kule made for the person runs in the sandbox, and
+/// that terminal is its own: the controlling terminal of its session, with
+/// its group in front, so job control and Ctrl-C work as in any terminal.
+#[test]
+fn a_command_on_a_terminal_has_it_as_its_own() {
+    use std::io::Write;
+    use std::os::fd::AsFd;
+
+    let s = Setup::new();
+    let p = pty();
+    let script = format!(
+        "import os, sys, termios\n\
+         me = os.getpid()\n\
+         print('own:', os.getsid(0) == me, os.tcgetpgrp(0) == os.getpgrp(), os.isatty(0))\n\
+         mode = termios.tcgetattr(0)\n\
+         termios.tcsetattr(0, termios.TCSANOW, mode)\n\
+         print('typed:', sys.stdin.readline().strip())\n\
+         try:\n    open('{}/escaped', 'w').write('x')\n    print('outside: written')\n\
+         except OSError:\n    print('outside: refused')\n\
+         print('end')\n",
+        s.outside().display()
+    );
+    let mut child = s
+        .sandbox()
+        .terminal_command("python3", &["-c".to_owned(), script], p.follower.as_fd())
+        .unwrap()
+        .spawn()
+        .unwrap();
+    // Only the command holds the terminal now: its end is the reader's.
+    let Pty { leader, follower } = p;
+    drop(follower);
+    let said = heard_until(&leader, "own:");
+    // Typed once it is asked for; a command that already ended takes
+    // nothing.
+    let _ = fs::File::from(leader.try_clone().unwrap()).write_all(b"hello\n");
+    let said = said + &heard_until(&leader, "end");
+    let status = child.wait().unwrap();
+    assert!(status.success(), "{said:?}");
+    assert!(said.contains("own: True True True"), "{said:?}");
+    assert!(said.contains("typed: hello"), "{said:?}");
+    assert!(said.contains("outside: refused"), "{said:?}");
+    assert!(!s.outside().join("escaped").exists());
+}
+
+/// What a terminal's shell left running ends with it, and only that: the
+/// task's other sandboxes, another terminal's shell among them, go on.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_sandbox_ends_what_it_left_and_nothing_of_the_others() {
+    let s = Setup::new();
+    let (one, other) = (s.sandbox(), s.sandbox());
+    let left = |sandbox: &Sandbox| -> i32 {
+        let out = sh(
+            sandbox,
+            "nohup sleep 60 </dev/null >/dev/null 2>&1 & echo $!",
+        );
+        assert!(ok(&out), "{out:?}");
+        text(&out).parse().unwrap()
+    };
+    let alive = |pid: i32| unsafe { libc::kill(pid, 0) } == 0;
+    let (mine, theirs) = (left(&one), left(&other));
+    assert!(alive(mine) && alive(theirs));
+    assert_eq!(one.end_own().unwrap(), 1);
+    let gone = std::time::Instant::now();
+    while alive(mine) && gone.elapsed() < std::time::Duration::from_secs(5) {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(!alive(mine), "the sandbox's own process still runs");
+    assert!(alive(theirs), "another sandbox's process was ended");
+    assert_eq!(other.end_own().unwrap(), 1);
+}

@@ -24,9 +24,11 @@ so you can `cd` there, open it in an editor, or use it in a script.
 link to get there, and refuses `..`, so the printed path is always inside
 the copy.
 
-Like [kule shell](shell.md), `kule path` warns on stderr when the task has
-changed the copy's git config or hooks: git in that folder would run them
-outside the sandbox. It still prints the path (a path alone runs nothing),
+Where [`kule shell --outside`](shell.md#outside-the-sandbox) refuses,
+`kule path` warns on stderr when the task has changed what would run in
+that folder by itself (git config or hooks, a toolchain pin, an editor's
+settings), or while an agent is at work: your
+prompt or editor would run them outside the sandbox. It still prints the path (a path alone runs nothing),
 but take the warning seriously before you run git or open an editor there.
 
 Only stdout holds the path, so command substitution works even with the
@@ -104,7 +106,8 @@ One absolute path on stdout. A warning, if any, on stderr starting with
 An editor runs things by itself from a folder: tasks, settings, recommended
 extensions, git hooks. If an agent worked in the copy, open it in VS Code's
 Restricted Mode (answer *no* when it asks whether you trust the authors).
-The app's *Open the copy in your editor* explains this the first time.
+The app's *Open the copy in your editor* asks first each time the copy
+holds changes not committed.
 
 :::
 

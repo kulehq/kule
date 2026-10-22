@@ -1,6 +1,12 @@
 # Changes
 
-## Unreleased
+## 0.2.0-preview.3
+
+A security preview. Your terminals run in the task's sandbox, and the copy
+opens outside it only when you choose, after seeing what changed. Secrets
+you keep stay masked inside longer lines, and Kule's own files in a task's
+temporary folder go only where it means them to. Releases now carry what
+they are built from, and are checked before they are published.
 
 ### Security
 
@@ -12,6 +18,43 @@
   fills, since the home is the same for every folder. A commit or an
   apply puts such a line back only where it is as Kule masked it, and no
   more times than the file held it.
+- Anything in `.git` that git does not keep as data (objects, refs, the
+  index, logs) counts as git config: it waits for you as git config does,
+  and keeps the terminal and the editor closed on the copy.
+- Kule's terminal, `kule shell` and *Open the copy in your editor* wait
+  while an agent is at work in the task, and stay closed while the task
+  has changed a file that a shell prompt or an editor runs by itself: a
+  toolchain pin (`rust-toolchain.toml`, `.nvmrc`, `.python-version`,
+  `.tool-versions` and the like), `.envrc`, an editor's settings and
+  tasks, and the rest of what the `automation` rule names. The built-in
+  policy decides this, whatever policy you chose.
+- A change in another version control system's repository (Mercurial,
+  Sapling, Jujutsu, Darcs, Pijul, Bazaar, Subversion, Fossil), at any
+  depth, waits for you (`other-vcs`) and keeps the terminal and the editor
+  closed on the copy: its config and hooks run on its next command, and
+  Kule reads none of it as a repository.
+- The version pins a shell prompt reads on entering a folder (`.nvmrc`,
+  `.node-version`, `.python-version`, `.ruby-version`, `.java-version`,
+  `.go-version`, `.sdkmanrc`, `.terraform-version`, mise's other files) and
+  `*.code-workspace` wait for you at commit (`automation`).
+- What Kule writes in a task's temporary folder (the proxy's certificate,
+  the loopback hooks, the package caches) goes through folders it opens
+  without following a link, and replaces whatever stands at the name.
+- The window's terminals and `kule shell` run your shell in the task's
+  sandbox, as `kule exec` runs a command, on a terminal of their own:
+  what you run there, and what your prompt runs by itself, reaches only
+  what the agent's commands reach. `kule shell --outside` opens your
+  shell outside the sandbox, as before.
+- While a terminal is open on a task, no agent starts work there, and
+  commit, sync and applying home changes wait until you close it, rather
+  than ending what runs in it.
+- *Open in terminal app*, *Open the copy in your editor* and `kule shell
+  --outside` show the changes not committed yet and ask before they open
+  the copy outside the sandbox, each time. Kule remembers what it opened
+  the copy in, and before the task's next run asks you to close it
+  (`kule closed TASK` from a terminal).
+- The desktop app no longer depends on `portable-pty`; its terminals use
+  the system's pseudo-terminals directly.
 
 ### Fixes
 
