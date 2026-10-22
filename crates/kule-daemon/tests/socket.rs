@@ -345,9 +345,8 @@ fn connections_that_say_nothing_are_let_go() {
         .map(|_| UnixStream::connect(socket_path(home.path())).unwrap())
         .collect();
     let mut first = silent.into_iter().next().unwrap();
-    first
-        .set_read_timeout(Some(Duration::from_secs(30)))
-        .unwrap();
+    // Refused where the daemon already ended it.
+    let _ = first.set_read_timeout(Some(Duration::from_secs(30)));
     let started = std::time::Instant::now();
     let mut reply = Vec::new();
     let _ = first.read_to_end(&mut reply);
@@ -360,6 +359,28 @@ fn connections_that_say_nothing_are_let_go() {
     std::thread::sleep(Duration::from_secs(1));
     let tasks: Vec<TaskView> = Client::new(home.path()).call(Call::Tasks).unwrap();
     assert!(tasks.is_empty());
+}
+
+/// Connections that have not shown the token take only a few of the
+/// daemon's places: whoever carries it is answered at once, however many
+/// wait.
+#[test]
+fn connections_not_yet_proven_leave_room_for_the_app() {
+    let home = TempDir::new().unwrap();
+    daemon(home.path());
+    let _silent: Vec<UnixStream> = (0..100)
+        .map(|_| UnixStream::connect(socket_path(home.path())).unwrap())
+        .collect();
+    // Taken in by the daemon before the app comes.
+    std::thread::sleep(Duration::from_millis(300));
+    let started = std::time::Instant::now();
+    let tasks: Vec<TaskView> = Client::new(home.path()).call(Call::Tasks).unwrap();
+    assert!(tasks.is_empty());
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "{:?}",
+        started.elapsed()
+    );
 }
 
 /// Neither a line given a byte at a time nor lines that are not requests

@@ -24,6 +24,10 @@ pub const MAX_REQUEST: usize = 1 << 20;
 /// Connections served at once: the app, its subscribers and the CLI need a
 /// handful.
 const MAX_CLIENTS: usize = 64;
+/// Connections that have not shown the token yet, at once: past that the
+/// one waiting longest goes for the next, so a crowd of them never keeps
+/// out a client that shows it at once, as Kule's own do.
+const MAX_UNPROVEN: usize = 8;
 /// How long a connection may take, in all, to show the token.
 const UNPROVEN_FOR: std::time::Duration = std::time::Duration::from_secs(5);
 /// Unix socket paths are limited to about this many bytes.
@@ -92,6 +96,7 @@ pub fn serve(
     token: String,
 ) {
     let clients = Arc::new(AtomicUsize::new(0));
+    let unproven = Arc::new(Unproven::default());
     // What runs listen on is kept off the network (macOS; Linux does it in
     // the sandbox itself).
     #[cfg(target_os = "macos")]
@@ -129,6 +134,9 @@ pub fn serve(
         if peer_uid(&stream) != Some(me) {
             continue; // dropped: closes the connection
         }
+        let Some(place) = unproven.take(&stream) else {
+            continue;
+        };
         // A crowd of connections holds no more than so many threads.
         if clients.load(Ordering::SeqCst) >= MAX_CLIENTS {
             continue;
@@ -136,7 +144,7 @@ pub fn serve(
         let (service, clients, control) = (service.clone(), clients.clone(), control.clone());
         clients.fetch_add(1, Ordering::SeqCst);
         std::thread::spawn(move || {
-            let _ = handle(stream, &service, &control);
+            let _ = handle(stream, &service, &control, place);
             clients.fetch_sub(1, Ordering::SeqCst);
         });
     }
@@ -243,14 +251,69 @@ pub fn peer_uid(stream: &UnixStream) -> Option<u32> {
     }
 }
 
+/// The connections that have not shown the token yet, oldest first.
+#[derive(Default)]
+struct Unproven {
+    waiting: std::sync::Mutex<std::collections::VecDeque<(u64, UnixStream)>>,
+    next: std::sync::atomic::AtomicU64,
+}
+
+impl Unproven {
+    /// A place for `stream`, ending the connection waiting longest when
+    /// none is left.
+    fn take(self: &Arc<Self>, stream: &UnixStream) -> Option<Place> {
+        let kept = stream.try_clone().ok()?;
+        let id = self.next.fetch_add(1, Ordering::SeqCst);
+        let mut waiting = self
+            .waiting
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if waiting.len() >= MAX_UNPROVEN
+            && let Some((_, oldest)) = waiting.pop_front()
+        {
+            let _ = oldest.shutdown(std::net::Shutdown::Both);
+        }
+        waiting.push_back((id, kept));
+        Some(Place {
+            unproven: Some(self.clone()),
+            id,
+        })
+    }
+}
+
+/// A connection's place among those yet to show the token, given up once
+/// it does or goes.
+struct Place {
+    unproven: Option<Arc<Unproven>>,
+    id: u64,
+}
+
+impl Place {
+    fn give_up(&mut self) {
+        if let Some(unproven) = self.unproven.take() {
+            unproven
+                .waiting
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .retain(|(id, _)| *id != self.id);
+        }
+    }
+}
+
+impl Drop for Place {
+    fn drop(&mut self) {
+        self.give_up();
+    }
+}
+
 /// The connection, read with one deadline for all that comes before the
 /// token: a line given a byte at a time does not stretch it.
-struct Unproven {
+struct Deadlined {
     stream: UnixStream,
     until: Option<Instant>,
 }
 
-impl Read for Unproven {
+impl Read for Deadlined {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         if let Some(until) = self.until {
             let left = until.saturating_duration_since(Instant::now());
@@ -263,11 +326,16 @@ impl Read for Unproven {
     }
 }
 
-fn handle(stream: UnixStream, service: &Arc<Service>, control: &Control) -> io::Result<()> {
+fn handle(
+    stream: UnixStream,
+    service: &Arc<Service>,
+    control: &Control,
+    mut place: Place,
+) -> io::Result<()> {
     // Until it shows the token, a connection has a few seconds in all, and
     // one line that is not a request ends it.
     let mut writer = stream.try_clone()?;
-    let mut reader = BufReader::new(Unproven {
+    let mut reader = BufReader::new(Deadlined {
         stream,
         until: Some(Instant::now() + UNPROVEN_FOR),
     });
@@ -297,6 +365,7 @@ fn handle(stream: UnixStream, service: &Arc<Service>, control: &Control) -> io::
         }
         if !proven {
             proven = true;
+            place.give_up();
             reader.get_mut().until = None;
             reader.get_ref().stream.set_read_timeout(None)?;
         }
