@@ -320,7 +320,9 @@ fn a_message_past_its_limit_ends_the_run() {
 fn the_agent_s_log_keeps_its_end_within_a_limit() {
     let s = Setup::new();
     let ran = s.run(
-        "exec head -c 41943040 /dev/zero >&2; exec echo the-end >&2",
+        // Three bytes first, so the pieces read from the pipe do not end on
+        // the limit by chance before it turns over the first time.
+        "exec printf abc >&2; exec head -c 10485760 /dev/zero >&2; exec echo the-end >&2",
         Plan::default(),
     );
     assert_eq!(ran.outcome.as_deref(), Ok("endturn"));
@@ -337,11 +339,12 @@ fn the_agent_s_log_keeps_its_end_within_a_limit() {
     );
     let len = |p: &std::path::Path| fs::metadata(p).map_or(0, |m| m.len());
     assert!(
-        len(&log) + len(&older) <= 16 << 20,
-        "{} + {}",
+        len(&log) <= 8 << 20 && len(&older) <= 8 << 20,
+        "{} and {}",
         len(&log),
         len(&older)
     );
+    assert!(len(&older) > 0, "it never turned over");
     use std::os::unix::fs::PermissionsExt;
     assert_eq!(
         fs::metadata(&older).unwrap().permissions().mode() & 0o777,

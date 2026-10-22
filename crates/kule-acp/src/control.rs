@@ -112,6 +112,14 @@ impl RunControl {
         self.touch();
     }
 
+    pub(crate) fn ended_command(&self, pid: i32) {
+        self.0
+            .commands
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .retain(|p| *p != pid);
+    }
+
     /// The agent did something: said, called or printed.
     pub fn touch(&self) {
         let now = self.0.started.elapsed().as_millis() as u64;

@@ -241,8 +241,12 @@ impl Terminals {
         })
         .collect();
         let (term, events) = (Arc::clone(&term), self.events.clone());
+        let control = self.control.clone();
         std::thread::spawn(move || {
             let status = child.wait();
+            // Its pid may now name another process: no longer one the run
+            // looks from.
+            control.ended_command(term.group);
             // What it printed last is read first; but a process it left in
             // the background (a server) can hold the output open for good,
             // and the command has ended all the same.

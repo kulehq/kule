@@ -408,6 +408,15 @@ impl Setup {
     /// [`Setup::run`], with Kule running the agent's commands for it in
     /// the agent's sandbox when `terminals` is set.
     fn run_terminals(&self, script: &str, terminals: bool) -> Vec<Event> {
+        self.run_terminals_with(script, terminals, &kule_acp::RunControl::new())
+    }
+
+    fn run_terminals_with(
+        &self,
+        script: &str,
+        terminals: bool,
+        control: &kule_acp::RunControl,
+    ) -> Vec<Event> {
         let sandbox = Sandbox::new(&self.task).unwrap();
         let agent = sandbox
             .command(env!("CARGO_BIN_EXE_kule-test-agent"), &[])
@@ -425,7 +434,7 @@ impl Setup {
                 &[],
                 &sandbox,
                 terminals,
-                &kule_acp::RunControl::new(),
+                control,
                 tx,
             ))
             .unwrap();
@@ -675,4 +684,18 @@ fn a_long_title_is_cut() {
     }
     let steps = s.task.steps().unwrap();
     assert_eq!(steps.last().unwrap().label.chars().count(), 201);
+}
+
+/// A command that ended is no longer one the run looks from: its pid may
+/// name another process by then, which the run's limits must not slow
+/// down or end.
+#[test]
+fn commands_that_ended_are_no_longer_the_run_s() {
+    let s = Setup::new();
+    let control = kule_acp::RunControl::new();
+    let said = said(&s.run_terminals_with("shell true; shell true", true, &control));
+    assert_eq!(said, ["exit 0: ", "exit 0: "], "{said:?}");
+    // The agent's own, alone.
+    let roots = control.roots();
+    assert!(roots.len() <= 1, "{roots:?}");
 }
