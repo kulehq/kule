@@ -1,6 +1,11 @@
 # Changes
 
-## Unreleased
+## 0.2.0-preview.4
+
+A security preview. Nothing an agent writes in Kule reaches your home:
+Kule's own agents keep their settings, history and transcripts in a home
+of their own in Kule, start every time from your settings as they are, and
+anything else an agent writes in your home stays in the task's copy of it.
 
 ### Security
 
