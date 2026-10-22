@@ -3,6 +3,9 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::office::clip;
+use crate::{Budget, FRAME, MAX_VIEW, cost};
+
 /// The most rows of a sheet shown.
 pub const MAX_ROWS: usize = 5000;
 /// The most columns of a sheet shown.
@@ -19,7 +22,7 @@ pub struct Sheet {
     pub name: String,
     /// Row 1 first, each row from column A; a row may stop short.
     pub rows: Vec<Vec<String>>,
-    /// More rows or columns than are here.
+    /// More rows, columns or text than are here.
     pub cut: bool,
     /// Formulas of the cells that have them, as written after `=`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -34,21 +37,24 @@ pub struct Formula {
     pub text: String,
 }
 
-/// Cells put in place as they are found, within the limits.
-pub(crate) struct Grid {
+/// Cells put in place as they are found, within the limits and the
+/// view's budget.
+pub(crate) struct Grid<'b> {
     pub(crate) rows: Vec<Vec<String>>,
     pub(crate) cut: bool,
-    pub(crate) formulas: Vec<Formula>,
+    formulas: Vec<Formula>,
     cells_left: usize,
+    budget: &'b mut Budget,
 }
 
-impl Grid {
-    pub(crate) fn new(cells_left: usize) -> Self {
+impl<'b> Grid<'b> {
+    pub(crate) fn new(cells_left: usize, budget: &'b mut Budget) -> Self {
         Grid {
             rows: Vec::new(),
             cut: false,
             formulas: Vec::new(),
             cells_left,
+            budget,
         }
     }
 
@@ -63,26 +69,46 @@ impl Grid {
             self.cut = true;
             return false;
         }
-        if self.rows.len() <= row {
-            self.rows.resize_with(row + 1, Vec::new);
-        }
-        let cells = &mut self.rows[row];
-        let added = (col + 1).saturating_sub(cells.len());
-        if added > self.cells_left {
+        let text = clip(text, MAX_CELL);
+        // Rows and cells it adds before it cost as empty ones.
+        let rows = (row + 1).saturating_sub(self.rows.len());
+        let added = (col + 1).saturating_sub(self.rows.get(row).map_or(0, Vec::len));
+        if added > self.cells_left || !self.budget.take((rows + added) * cost("") + cost(&text)) {
             self.cut = true;
             return false;
         }
         self.cells_left -= added;
+        if rows > 0 {
+            self.rows.resize_with(row + 1, Vec::new);
+        }
+        let cells = &mut self.rows[row];
         if cells.len() <= col {
             cells.resize(col + 1, String::new());
         }
-        cells[col] = crate::office::clip(text, MAX_CELL);
+        cells[col] = text;
         true
     }
 
+    /// Whether the view's budget is spent: no more cells fit.
+    pub(crate) fn spent(&self) -> bool {
+        self.budget.spent()
+    }
+
+    /// Adds the formula of the cell at `row`, `col`; what falls outside
+    /// the limits marks the grid cut instead.
+    pub(crate) fn formula(&mut self, row: usize, col: usize, text: String) {
+        let text = clip(text, MAX_CELL);
+        if self.formulas.len() >= MAX_CELLS || !self.budget.take(FRAME + cost(&text)) {
+            self.cut = true;
+            return;
+        }
+        self.formulas.push(Formula { row, col, text });
+    }
+
+    /// The sheet named `name`, cut to [`MAX_CELL`] characters as a cell is.
     pub(crate) fn sheet(self, name: String) -> Sheet {
         Sheet {
-            name,
+            name: clip(name, MAX_CELL),
             rows: self.rows,
             cut: self.cut,
             formulas: self.formulas,
@@ -151,7 +177,8 @@ fn delimiter(path: &str, text: &str) -> char {
 pub fn csv(path: &str, text: &str, cut: bool) -> Sheet {
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     let d = delimiter(path, text);
-    let mut grid = Grid::new(MAX_CELLS);
+    let mut budget = Budget::new(MAX_VIEW);
+    let mut grid = Grid::new(MAX_CELLS, &mut budget);
     let (mut row, mut col) = (0usize, 0usize);
     let mut field = String::new();
     let mut quoted = false;
@@ -261,11 +288,12 @@ mod tests {
 
     #[test]
     fn a_grid_keeps_to_its_limits() {
-        let mut grid = Grid::new(10);
+        let mut budget = Budget::new(MAX_VIEW);
+        let mut grid = Grid::new(10, &mut budget);
         assert!(grid.put(0, 9, "x".into()));
         assert!(!grid.put(1, 0, "y".into()));
         assert!(grid.cut);
-        let mut grid = Grid::new(MAX_CELLS);
+        let mut grid = Grid::new(MAX_CELLS, &mut budget);
         assert!(!grid.put(MAX_ROWS, 0, "x".into()));
         assert!(!grid.put(0, MAX_COLS, "x".into()));
         assert!(grid.put(0, 0, "ç".repeat(MAX_CELL + 5)));
@@ -273,5 +301,26 @@ mod tests {
         let many = csv("x.csv", &"1\n".repeat(MAX_ROWS + 3), false);
         assert_eq!(many.rows.len(), MAX_ROWS);
         assert!(many.cut);
+    }
+
+    #[test]
+    fn cells_and_formulas_draw_on_one_budget() {
+        let mut budget = Budget::new(2 * cost("") + cost("abc") + FRAME + cost("A1"));
+        let mut grid = Grid::new(MAX_CELLS, &mut budget);
+        assert!(grid.put(0, 0, "abc".into()));
+        grid.formula(0, 0, "A1".into());
+        assert!(!grid.cut);
+        // Nothing is left: not even an empty cell fits.
+        assert!(!grid.put(0, 1, String::new()));
+        assert!(grid.cut);
+        grid.cut = false;
+        grid.formula(0, 0, "A1".into());
+        assert!(grid.cut);
+        let sheet = grid.sheet("s".repeat(MAX_CELL * 2));
+        assert_eq!(sheet.rows, [["abc"]]);
+        assert_eq!(sheet.formulas.len(), 1);
+        assert_eq!(sheet.name.chars().count(), MAX_CELL + 1);
+        // The row and the cell added cost as empty ones: all is taken.
+        assert_eq!(budget.left, 0);
     }
 }

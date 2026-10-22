@@ -9,13 +9,17 @@ use quick_xml::events::Event;
 use serde::{Deserialize, Serialize};
 
 use crate::office::{Parts, Result, attr, clip, reference, unread};
+use crate::{Budget, FRAME, MAX_VIEW, cost};
 
 /// The most blocks shown.
 pub const MAX_BLOCKS: usize = 5000;
 /// The most characters of one block shown.
 const MAX_BLOCK: usize = 10_000;
-/// The most characters of all blocks together.
+/// The most characters of all blocks together, list markers counted.
 const MAX_CHARS: usize = 2_000_000;
+/// The most characters of a list item's marker, and of the pattern a list
+/// level makes its markers from.
+const MAX_MARKER: usize = 64;
 /// The most rows and columns of one table shown.
 const MAX_TABLE_ROWS: usize = 500;
 const MAX_TABLE_COLS: usize = 50;
@@ -55,7 +59,13 @@ pub fn blocks(bytes: &[u8]) -> Result<(Vec<Block>, bool)> {
         Some(xml) => Numbering::read(&xml)?,
         None => Numbering::default(),
     };
-    read(&document, &headings, numbering, &parts)
+    read(
+        &document,
+        &headings,
+        numbering,
+        &mut Budget::new(MAX_VIEW),
+        &parts,
+    )
 }
 
 fn malformed<E>(_: E) -> crate::office::Unread {
@@ -137,7 +147,9 @@ impl Numbering {
                         text = String::new();
                     }
                     "numFmt" if level.is_some() => format = attr(&e, "val").unwrap_or_default(),
-                    "lvlText" if level.is_some() => text = attr(&e, "val").unwrap_or_default(),
+                    "lvlText" if level.is_some() => {
+                        text = clip(attr(&e, "val").unwrap_or_default(), MAX_MARKER)
+                    }
                     "num" => num_id = attr(&e, "numId"),
                     "abstractNumId" => {
                         if let (Some(id), Some(a)) = (&num_id, attr(&e, "val")) {
@@ -212,7 +224,11 @@ impl Numbering {
                 out.push(c);
             }
         }
-        if out.is_empty() { "•".into() } else { out }
+        if out.is_empty() {
+            "•".into()
+        } else {
+            clip(out, MAX_MARKER)
+        }
     }
 }
 
@@ -282,6 +298,7 @@ fn read(
     xml: &str,
     headings: &HashMap<String, u8>,
     mut numbering: Numbering,
+    budget: &mut Budget,
     parts: &Parts,
 ) -> Result<(Vec<Block>, bool)> {
     let mut reader = Reader::from_str(xml);
@@ -382,7 +399,7 @@ fn read(
                         },
                         _ => Block::Paragraph { text },
                     };
-                    if !push(&mut blocks, &mut chars, block) {
+                    if !push(&mut blocks, &mut chars, budget, block) {
                         cut = true;
                         break;
                     }
@@ -398,7 +415,7 @@ fn read(
                                     .collect()
                             })
                             .collect();
-                        if !push(&mut blocks, &mut chars, Block::Table { rows }) {
+                        if !push(&mut blocks, &mut chars, budget, Block::Table { rows }) {
                             cut = true;
                             break;
                         }
@@ -432,15 +449,17 @@ fn properties(e: &quick_xml::events::BytesStart, para: &mut Para) {
     }
 }
 
-/// Adds `block` within the limits; false when it does not fit.
-fn push(blocks: &mut Vec<Block>, chars: &mut usize, block: Block) -> bool {
-    let size = match &block {
-        Block::Heading { text, .. } | Block::Paragraph { text } | Block::ListItem { text, .. } => {
-            text.len()
-        }
-        Block::Table { rows } => rows.iter().flatten().map(String::len).sum(),
+/// Adds `block` within the limits and the view's budget; false when it
+/// does not fit.
+fn push(blocks: &mut Vec<Block>, chars: &mut usize, budget: &mut Budget, block: Block) -> bool {
+    let texts: Vec<&str> = match &block {
+        Block::Heading { text, .. } | Block::Paragraph { text } => vec![text],
+        Block::ListItem { marker, text, .. } => vec![marker, text],
+        Block::Table { rows } => rows.iter().flatten().map(String::as_str).collect(),
     };
-    if blocks.len() >= MAX_BLOCKS || *chars + size > MAX_CHARS {
+    let size: usize = texts.iter().map(|t| t.len()).sum();
+    let costs = FRAME + texts.iter().map(|t| cost(t)).sum::<usize>();
+    if blocks.len() >= MAX_BLOCKS || *chars + size > MAX_CHARS || !budget.take(costs) {
         return false;
     }
     *chars += size;
@@ -544,5 +563,64 @@ pub(crate) mod tests {
         let (blocks, cut) = blocks(&archive(&[("word/document.xml", body.as_bytes())])).unwrap();
         assert_eq!(blocks.len(), MAX_BLOCKS);
         assert!(cut);
+    }
+
+    #[test]
+    fn a_list_marker_keeps_to_its_limit() {
+        let numbering = |pattern: &str| {
+            Numbering::read(&format!(
+                r#"<w:numbering {W}><w:abstractNum w:abstractNumId="7"><w:lvl w:ilvl="0"><w:numFmt w:val="decimal"/><w:lvlText w:val="{pattern}"/></w:lvl></w:abstractNum><w:num w:numId="1"><w:abstractNumId w:val="7"/></w:num></w:numbering>"#
+            ))
+            .unwrap()
+        };
+        // A pattern is cut where it is read.
+        let long = numbering(&"x".repeat(MAX_MARKER * 10));
+        let (_, pattern) = &long.levels[&("7".to_owned(), 0)];
+        assert_eq!(pattern.chars().count(), MAX_MARKER + 1);
+        // A pattern within the limit can still count past it.
+        let mut counting = numbering(&"%1".repeat(MAX_MARKER / 2));
+        assert_eq!(counting.next("1", 0), "1".repeat(MAX_MARKER / 2));
+        let marker = (0..99).map(|_| counting.next("1", 0)).last().unwrap();
+        assert_eq!(marker, clip("100".repeat(MAX_MARKER / 2), MAX_MARKER));
+    }
+
+    #[test]
+    fn markers_count_toward_a_document_s_limits() {
+        let item = |marker: String| Block::ListItem {
+            level: 0,
+            marker,
+            text: "a".into(),
+        };
+        let mut blocks = Vec::new();
+        let mut chars = 0;
+        let mut budget = Budget::new(MAX_VIEW);
+        assert!(!push(
+            &mut blocks,
+            &mut chars,
+            &mut budget,
+            item("1".repeat(MAX_CHARS))
+        ));
+        assert!(push(
+            &mut blocks,
+            &mut chars,
+            &mut budget,
+            item("1.".into())
+        ));
+        assert_eq!(chars, 3);
+        // What the view's budget cannot carry is not added either.
+        let mut budget = Budget::new(FRAME + cost("1.") + cost("a"));
+        assert!(push(
+            &mut blocks,
+            &mut chars,
+            &mut budget,
+            item("1.".into())
+        ));
+        assert!(!push(
+            &mut blocks,
+            &mut chars,
+            &mut budget,
+            item("1.".into())
+        ));
+        assert_eq!(blocks.len(), 2);
     }
 }

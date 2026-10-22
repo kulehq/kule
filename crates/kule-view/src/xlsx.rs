@@ -8,7 +8,8 @@ use quick_xml::Reader;
 use quick_xml::events::Event;
 
 use crate::office::{Parts, Result, attr, reference, unread};
-use crate::table::{Formula, Grid, MAX_CELLS, MAX_SHEETS, Sheet, cell_at};
+use crate::table::{Grid, MAX_CELLS, MAX_SHEETS, Sheet, cell_at};
+use crate::{Budget, MAX_VIEW};
 
 pub fn sheets(bytes: &[u8]) -> Result<Vec<Sheet>> {
     let mut parts = Parts::open(bytes)?;
@@ -31,6 +32,7 @@ pub fn sheets(bytes: &[u8]) -> Result<Vec<Sheet>> {
     };
     let mut out = Vec::new();
     let mut cells_left = MAX_CELLS;
+    let mut budget = Budget::new(MAX_VIEW);
     for (name, id) in listed.into_iter().take(MAX_SHEETS) {
         let Some(target) = targets.get(&id) else {
             continue;
@@ -38,7 +40,8 @@ pub fn sheets(bytes: &[u8]) -> Result<Vec<Sheet>> {
         let Some(xml) = parts.text(&part_path(target))? else {
             continue;
         };
-        let grid = sheet(&xml, &strings, &dates, date1904, cells_left, &parts)?;
+        let mut grid = Grid::new(cells_left, &mut budget);
+        sheet(&xml, &strings, &dates, date1904, &mut grid, &parts)?;
         cells_left = grid.cells_left();
         out.push(grid.sheet(name));
     }
@@ -257,11 +260,10 @@ fn sheet(
     strings: &[String],
     dates: &[bool],
     date1904: bool,
-    cells_left: usize,
+    grid: &mut Grid,
     parts: &Parts,
-) -> Result<Grid> {
+) -> Result<()> {
     let mut reader = Reader::from_str(xml);
-    let mut grid = Grid::new(cells_left);
     let mut row = 0usize;
     let mut next_row = 0usize;
     let mut next_col = 0usize;
@@ -307,13 +309,11 @@ fn sheet(
                 };
                 if grid.put(r, col, shown)
                     && let Some(text) = formula
-                    && grid.formulas.len() < MAX_CELLS
                 {
-                    grid.formulas.push(Formula {
-                        row: r,
-                        col,
-                        text: crate::office::clip(text, crate::table::MAX_CELL),
-                    });
+                    grid.formula(r, col, text);
+                }
+                if grid.spent() {
+                    break;
                 }
                 seen += 1;
                 if seen.is_multiple_of(4096) {
@@ -323,7 +323,7 @@ fn sheet(
             _ => {}
         }
     }
-    Ok(grid)
+    Ok(())
 }
 
 /// A cell's saved value (`<v>`, or inline `<is>` text) and its formula.
@@ -369,6 +369,7 @@ fn cell(reader: &mut Reader<&[u8]>) -> Result<(String, Option<String>)> {
 pub(crate) mod tests {
     use super::*;
     use crate::office::tests::archive;
+    use crate::table::Formula;
 
     /// A workbook of two sheets: shared and inline strings, numbers, a
     /// formula, a date, a boolean and a cell far from A1.
