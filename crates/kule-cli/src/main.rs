@@ -687,7 +687,9 @@ fn run() -> Result<ExitCode> {
                     task.id()
                 );
             }
-            let at = kule_daemon::files::openable(&task.copy(), &file).map_err(|e| anyhow!(e))?;
+            let opened = home.join(kule_daemon::files::OPENED);
+            let at = kule_daemon::files::openable(&task.copy(), &file, &opened)
+                .map_err(|e| anyhow!(e))?;
             if dry_run {
                 println!("{}", at.display());
             } else {

@@ -1,5 +1,18 @@
 # Changes
 
+## Unreleased
+
+### Security
+
+- *Open with its app* opens Kule's own copy of the file, made before it is
+  checked and readable only by you, without the file's extended attributes,
+  and on macOS marked as downloaded. Kule looks inside Word, Excel,
+  PowerPoint, OpenDocument and CSV files first, and opens none that holds
+  macros, controls or embedded objects, links to anything outside the file
+  but a web page or an email address, or has a field, formula or CSV cell
+  that fetches or runs something. Pages, Numbers, Keynote, EPUB and RTF
+  files are no longer opened with their app.
+
 ## 0.2.0-preview.4
 
 A security preview. Nothing an agent writes in Kule reaches your home:

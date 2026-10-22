@@ -18,27 +18,42 @@ kule open [OPTIONS] <TASK> <FILE>
 ## Açıklama
 
 Kopyadaki dosyaları ajan yazdı; bu yüzden Kule onlara güvenmez. Bir dosyayı
-kendi uygulamasıyla açmak sandbox'ın **dışında**, sizin bilgisayarınızda
-olur. Bir program, bir betik, bir web sayfası ya da makrolu bir Office
-dosyası tüm erişiminizle çalışırdı. Bu yüzden `kule open` yalnızca
-açılarak kod çalıştıramayan dosyaları açar ve her birini önce kontrol eder:
+kendi uygulamasıyla açmak sandbox'ın ve proxy'nin **dışında**, sizin
+bilgisayarınızda olur. Bir program, bir betik, bir web sayfası ya da makrolu
+bir Office dosyası tüm erişiminizle çalışırdı; başka bir yerden şablon,
+resim ya da veri yükleyen bir belge de Kule'nin politikasını aşarak ağa
+ulaşırdı. Bu yüzden `kule open` yalnızca açılınca bunların hiçbirini
+yapmayan dosyaları açar ve her birini önce kontrol eder:
 
 - **Türü Kule'nin listesindedir:** PDF, Word, Excel, PowerPoint,
-  OpenDocument, Pages, Numbers, Keynote, EPUB, RTF, CSV, düz metin ve
-  yaygın resim, ses ve video türleri. Asla bir program, betik, web sayfası
-  ya da SVG, bir bağlantı (link) dosyası ya da makrolu bir Office dosyası
-  değil.
+  OpenDocument (metin, hesap tablosu, sunum), CSV, düz metin ve yaygın
+  resim, ses ve video türleri. Asla bir program, betik, web sayfası ya da
+  SVG, bir bağlantı (link) dosyası ya da makrolu bir Office dosyası değil.
 - **Adının söylediği şeydir:** Kule dosyanın ilk baytlarını okur. Adı
   `notes.pdf` olan bir betik reddedilir.
+- **Kendi içinde kalır:** Kule Word, Excel, PowerPoint, OpenDocument ve CSV
+  dosyalarının içine bakar. Şunları içereni reddeder: makro, denetim
+  (control) ya da gömülü nesne; tıklayacağınız bir web sayfası ya da e-posta
+  adresi dışında dosyanın dışındaki bir şeye bağlantı (şablon, resim, başka
+  bir çalışma kitabı, veri bağlantısı); bir şey getiren, içeri alan ya da
+  çalıştıran bir Word alanı; ağa ya da başka bir programa ulaşan bir formül;
+  ve bir hesap tablosu uygulamasının formül olarak okuyacağı bir CSV hücresi.
 - **Bir bağlantı üzerinden değil,** kopyanın içinden ulaşılır ve diskte
   yalnızca bir adı vardır.
-- **Görevde çalışan bir ajan yoktur.** Kule kopyanın sakinleşmesini bekler;
-  böylece dosya, kontrol ile açılış arasında değişemez.
+- **Görevde çalışan bir ajan yoktur.**
 
-Dosya macOS'ta `open` ile, Linux'ta `xdg-open` ile açılır.
+Açılan, dosyanın **Kule'ye ait bir kopyasıdır**: kontrolden önce,
+`~/.kule/opened` içinde, yalnızca sizin okuyabileceğiniz şekilde yapılır.
+Ajanın sonradan kendi dosyasına yaptığı hiçbir şey uygulamanın okuduğu şey
+olmaz. Kopya, dosyanın genişletilmiş özniteliklerinin (extended attributes)
+hiçbirini taşımaz ve macOS'ta web'den gelen bir dosya gibi "indirilmiş"
+olarak işaretlenir. Uygulamada yaptığınız değişiklikler görevin değil, bu
+kopyanın içinde kalır: kopyalar açıldıktan bir gün sonra silinir.
 
-`--dry-run` tüm kontrolleri yapar ve dosyayı açmadan nerede olduğunu
-yazdırır.
+Kopya macOS'ta `open` ile, Linux'ta `xdg-open` ile açılır.
+
+`--dry-run` tüm kontrolleri yapar, kopyayı oluşturur ve açmadan nerede
+olduğunu yazdırır.
 
 ## Argümanlar
 
@@ -51,7 +66,7 @@ yazdırır.
 
 | Seçenek | Değer | Varsayılan | Anlamı |
 | --- | --- | --- | --- |
-| `--dry-run` | | | Dosyayı kontrol eder ve açmadan nerede olduğunu yazdırır. |
+| `--dry-run` | | | Dosyayı kontrol eder ve açmadan Kule'nin kopyasının nerede olduğunu yazdırır. |
 | `--home` | yol | `~/.kule` | Kule'nin ev klasörü (`KULE_HOME` ile de verilebilir). Bkz. [genel seçenekler](index.md). |
 
 ## Örnekler
@@ -66,7 +81,7 @@ kule open 3422f830 report.pdf
 
 ```text
 $ kule open 3422f830 report.pdf --dry-run
-/Users/me/.kule/tasks/3422f830/w/app/report.pdf
+/Users/me/.kule/opened/18e0e1b1ae198f08-54035-0/report.pdf
 ```
 
 **Bir betik reddedilir:**
@@ -85,7 +100,7 @@ kule: fake.pdf: it is not the .pdf file its name says, so Kule does not open it
 
 ## Çıktı
 
-Dosya açıldığında hiçbir şey. `--dry-run` ile dosyanın mutlak yolu.
+Dosya açıldığında hiçbir şey. `--dry-run` ile Kule'nin kopyasının mutlak yolu.
 
 ## Hatalar ve çözümleri
 
@@ -93,6 +108,8 @@ Dosya açıldığında hiçbir şey. `--dry-run` ile dosyanın mutlak yolu.
 | --- | --- |
 | `kule: <file>: Kule opens documents, pictures, sound and video with their app, not this kind of file; …` | Bilinçli bir tasarım. Dosyaya bir metin görüntüleyicide ya da sandbox içinde [kule exec](exec.md) ile bakın. |
 | `kule: <file>: it is not the .<ext> file its name says, so Kule does not open it` | İçerik adla uyuşmuyor. Dosyaya şüpheyle yaklaşın. |
+| `kule: <file>: Kule does not open it with its app: …` | Dosya bir şey çalıştırır ya da kendi dışına ulaşırdı; mesajın devamı neyi olduğunu söyler. Dosyaya Preview'da ya da sandbox içinde bakın. |
+| `kule: <file>: too large for Kule to look inside, …` | 20 MB'tan büyük Word, Excel, PowerPoint, OpenDocument ve CSV dosyaları açılmaz. |
 | `kule: <file>: a path inside the copy, without ..` | Kopyanın en üstüne göre bir yol kullanın. |
 | `kule: an agent is at work in task <id> (process <pid>); wait until it is done` | Çalıştırmanın bitmesini bekleyin. |
 

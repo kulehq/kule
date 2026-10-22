@@ -6,6 +6,7 @@
 pub mod docx;
 pub mod image;
 pub mod office;
+pub mod opens;
 pub mod refs;
 pub mod table;
 pub mod text;

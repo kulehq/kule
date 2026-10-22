@@ -86,6 +86,17 @@ impl<'a> Parts<'a> {
         ))
     }
 
+    /// The names of all parts, as the archive lists them.
+    pub(crate) fn names(&self) -> Result<Vec<String>> {
+        self.zip
+            .file_names()
+            .map(|n| {
+                n.map(|n| n.into_owned())
+                    .map_err(|_| unread("not a file Kule can read"))
+            })
+            .collect()
+    }
+
     pub(crate) fn check_time(&self) -> Result<()> {
         if Instant::now() > self.until {
             return Err(unread("took too long to read"));

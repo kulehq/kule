@@ -63,8 +63,9 @@ app* vardır.
 
 Belgeleri, resimleri, sesleri ve videoları bilgisayarınızın onlar için
 kullandığı uygulamayla açar: PDF, Word, Excel, PowerPoint, OpenDocument,
-Pages, Numbers, Keynote, EPUB, RTF, CSV, düz metin ve yaygın resim, ses ve
-video türleri.
+CSV, düz metin ve yaygın resim, ses ve video türleri. Açılan, dosyanın
+kontrolden önce yapılan Kule'ye ait kopyasıdır: uygulamada yaptığınız
+değişiklikler görevin değil, o kopyanın içinde kalır.
 
 :::warning Kule'nin açmayacakları
 
@@ -72,7 +73,10 @@ Bir program, bir betik (script), bir web sayfası ya da SVG, bir bağlantı
 dosyası veya makro içeren bir Office dosyası asla açılmaz. Bunları ajan
 yazdı; açılırlarsa bilgisayarınızda, sandbox'ın dışında çalışırlar. Bir
 dosya ayrıca adının söylediği şey olmalıdır: `notes.pdf` adlı bir betik
-açılmaz. Ayrıca ajan çalışırken bu işlem bekler.
+açılmaz. Word, Excel, PowerPoint, OpenDocument ve CSV dosyaları kendi
+içinde kalmalıdır: makro, denetim ya da gömülü nesne yok; bir web sayfası ya
+da e-posta adresi dışında dosyanın dışına bağlantı yok; bir şey getiren ya
+da çalıştıran alan veya formül yok. Ayrıca ajan çalışırken bu işlem bekler.
 
 :::
 
@@ -146,4 +150,4 @@ olduğunu alır ve Live bunu belirtir. Live, bir prompt'un yerlerini onun
 dosyanın diskte nerede olduğunu yazdırır (`cd "$(kule path TASK)"`).
 [`kule open TASK FILE`](../cli/open.md) ise kopyadaki bir dosyayı kendi
 uygulamasıyla açar; aynı türlere ve denetimlere tabidir (`--dry-run`
-dosyayı denetler ve nerede olduğunu yazdırır).
+dosyayı denetler ve Kule'nin kopyasının nerede olduğunu yazdırır).

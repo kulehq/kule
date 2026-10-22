@@ -1361,7 +1361,7 @@ impl Service {
                 "an agent is at work in task {id} (process {pid}); wait until it is done"
             ));
         }
-        crate::files::openable(&task.copy(), path)
+        crate::files::openable(&task.copy(), path, &self.home.join(crate::files::OPENED))
     }
 
     /// The copy, to open in `what` outside the sandbox (see

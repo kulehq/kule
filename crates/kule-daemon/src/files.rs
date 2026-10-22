@@ -13,6 +13,9 @@ use crate::Result;
 /// The most of a file the explorer shows.
 pub const MAX_READ: u64 = 256 * 1024;
 
+/// Where, in Kule's home, the copies of files opened with their app are.
+pub const OPENED: &str = "opened";
+
 /// The most entries of one directory listed.
 const MAX_ENTRIES: usize = 5000;
 
@@ -175,10 +178,9 @@ pub fn list(root: &Path, rel: &str) -> Result<Listing> {
     Ok(Listing { entries, cut })
 }
 
-/// The first `max` bytes of file `rel` in the copy at `root`, and the
-/// file's size.
-fn read_start(root: &Path, rel: &str, max: u64) -> Result<(Vec<u8>, u64)> {
-    use std::io::Read;
+/// File `rel` in the copy at `root`, opened (see [`open`]), and its size:
+/// a regular file with one name.
+fn open_file(root: &Path, rel: &str) -> Result<(std::fs::File, u64)> {
     use std::os::unix::fs::MetadataExt;
     let file = open(root, rel)?;
     // What was opened, not what the path names now.
@@ -193,7 +195,14 @@ fn read_start(root: &Path, rel: &str, max: u64) -> Result<(Vec<u8>, u64)> {
             "{rel}: a file with more than one name, which the explorer does not read"
         ));
     }
-    let size = meta.len();
+    Ok((file, meta.len()))
+}
+
+/// The first `max` bytes of file `rel` in the copy at `root`, and the
+/// file's size.
+fn read_start(root: &Path, rel: &str, max: u64) -> Result<(Vec<u8>, u64)> {
+    use std::io::Read;
+    let (file, size) = open_file(root, rel)?;
     let mut bytes = Vec::with_capacity(size.min(max) as usize);
     file.take(max)
         .read_to_end(&mut bytes)
@@ -235,9 +244,10 @@ const ISO_BOX: Starts = Starts::BoxAt4(&[b"ftyp", b"moov", b"wide", b"mdat", b"f
 
 /// What the person's own app may open from the copy, by name, and how such
 /// a file starts: documents, pictures, sound and video. Never a program, a
-/// script, a page a browser would run, a document with macros or a link
-/// to elsewhere: those would run on the computer, outside the sandbox, and
-/// the agent wrote them.
+/// script, a page a browser would run, or a kind whose documents can run
+/// macros or fetch from elsewhere unless Kule looks inside it first (see
+/// [`kule_view::opens`]): those would run on the computer, outside the
+/// sandbox and the proxy, and the agent wrote them.
 const OPENABLE: &[(&str, Starts)] = &[
     ("pdf", Starts::With(&[b"%PDF-"])),
     ("png", Starts::With(&[b"\x89PNG\r\n\x1a\n"])),
@@ -271,11 +281,6 @@ const OPENABLE: &[(&str, Starts)] = &[
     ("odt", ZIP),
     ("ods", ZIP),
     ("odp", ZIP),
-    ("pages", ZIP),
-    ("numbers", ZIP),
-    ("key", ZIP),
-    ("epub", ZIP),
-    ("rtf", Starts::With(&[b"{\\rtf"])),
     ("csv", Starts::Text),
     ("txt", Starts::Text),
 ];
@@ -296,11 +301,21 @@ fn starts_as(bytes: &[u8], starts: Starts) -> bool {
     }
 }
 
+/// How long a copy of a file opened with its app is kept: the app reads it
+/// at once, and may keep it open through a day's work.
+const OPENED_FOR: std::time::Duration = std::time::Duration::from_secs(24 * 3600);
+
 /// File `rel` of the copy at `root`, for the person's own app to open:
 /// reached without a link, a single-named regular file, of a kind in
-/// [`OPENABLE`] by its name, and starting as that kind does, so a script
-/// named `notes.pdf` is not handed to whatever opens it. Its path on disk.
-pub fn openable(root: &Path, rel: &str) -> Result<PathBuf> {
+/// [`OPENABLE`] by its name, starting as that kind does (so a script named
+/// `notes.pdf` is not handed to whatever opens it), and, for the kinds
+/// Kule looks inside, reaching nothing outside itself (see
+/// [`kule_view::opens`]). What opens is Kule's own copy of it under
+/// `opened`, made before it is checked: nothing the agent does to its file
+/// afterwards is what the app reads, and the copy carries none of the
+/// file's extended attributes (one names the app a file opens with), only
+/// macOS's mark of a file come from elsewhere. That copy's path.
+pub fn openable(root: &Path, rel: &str, opened: &Path) -> Result<PathBuf> {
     let ext = Path::new(rel)
         .extension()
         .and_then(|e| e.to_str())
@@ -311,13 +326,169 @@ pub fn openable(root: &Path, rel: &str) -> Result<PathBuf> {
             "{rel}: Kule opens documents, pictures, sound and video with their app, not this kind of file; it would run outside the sandbox"
         ));
     };
-    let (bytes, _) = read_start(root, rel, 8192)?;
-    if !starts_as(&bytes, starts) {
+    let looked_inside = kule_view::opens::LOOKED_INSIDE.contains(&ext.as_str());
+    let (file, size) = open_file(root, rel)?;
+    if looked_inside && size > kule_view::office::MAX_FILE as u64 {
         return Err(format!(
-            "{rel}: it is not the .{ext} file its name says, so Kule does not open it"
+            "{rel}: too large for Kule to look inside, so it does not open it with its app"
         ));
     }
-    Ok(root.join(rel))
+    let name = Path::new(rel)
+        .file_name()
+        .ok_or_else(|| format!("{rel}: not a file"))?;
+    let dir = fresh_dir(opened)?;
+    let at = dir.join(name);
+    let checked = (|| {
+        copy_out(&file, &at).map_err(|e| format!("{rel}: {e}"))?;
+        let max = if looked_inside { size } else { 8192 };
+        let mut bytes = Vec::new();
+        {
+            use std::io::Read;
+            std::fs::File::open(&at)
+                .and_then(|f| f.take(max).read_to_end(&mut bytes))
+                .map_err(|e| format!("{rel}: {e}"))?;
+        }
+        if !starts_as(&bytes, starts) {
+            return Err(format!(
+                "{rel}: it is not the .{ext} file its name says, so Kule does not open it"
+            ));
+        }
+        kule_view::opens::opens_nothing_else(&ext, &bytes)
+            .map_err(|why| format!("{rel}: Kule does not open it with its app: {why}"))
+    })();
+    match checked {
+        Ok(()) => Ok(at),
+        Err(e) => {
+            let _ = std::fs::remove_dir_all(&dir);
+            Err(e)
+        }
+    }
+}
+
+/// A new directory of Kule's own under `opened` (made, only Kule's to
+/// read, when missing) for one copy, the ones there from more than
+/// [`OPENED_FOR`] ago removed.
+fn fresh_dir(opened: &Path) -> Result<PathBuf> {
+    use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
+    let shown = |e: std::io::Error| format!("{}: {e}", opened.display());
+    match std::fs::DirBuilder::new().mode(0o700).create(opened) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(e) => return Err(shown(e)),
+    }
+    let meta = std::fs::symlink_metadata(opened).map_err(shown)?;
+    // SAFETY: geteuid only reads the process's user.
+    if !meta.is_dir() || meta.uid() != unsafe { libc::geteuid() } {
+        return Err(format!(
+            "{}: not a folder of Kule's own, so nothing is opened from it",
+            opened.display()
+        ));
+    }
+    std::fs::set_permissions(opened, std::fs::Permissions::from_mode(0o700)).map_err(shown)?;
+    let now = std::time::SystemTime::now();
+    for entry in std::fs::read_dir(opened).map_err(shown)?.flatten() {
+        let old = entry
+            .metadata()
+            .and_then(|m| m.modified())
+            .is_ok_and(|t| now.duration_since(t).is_ok_and(|age| age > OPENED_FOR));
+        if old {
+            let _ = std::fs::remove_dir_all(entry.path());
+        }
+    }
+    static MADE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    loop {
+        let nanos = now
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos());
+        let n = MADE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = opened.join(format!("{nanos:x}-{}-{n}", std::process::id()));
+        match std::fs::DirBuilder::new().mode(0o700).create(&dir) {
+            Ok(()) => return Ok(dir),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(shown(e)),
+        }
+    }
+}
+
+/// The open `file` copied to `to`, which must not exist: a clone where the
+/// filesystem makes one, only Kule's to read, without the extended
+/// attributes it had, and on macOS marked as come from elsewhere, so the
+/// app opens it as it would a download.
+fn copy_out(file: &std::fs::File, to: &Path) -> std::io::Result<()> {
+    use std::os::fd::AsRawFd;
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+    let name = std::ffi::CString::new(to.as_os_str().as_bytes())?;
+    #[cfg(target_os = "macos")]
+    // SAFETY: the descriptor is open and the path NUL-terminated.
+    let cloned =
+        unsafe { libc::fclonefileat(file.as_raw_fd(), libc::AT_FDCWD, name.as_ptr(), 0) } == 0;
+    #[cfg(not(target_os = "macos"))]
+    let cloned = false;
+    let out = if cloned {
+        std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(to)?
+    } else {
+        let out = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(to)?;
+        #[cfg(target_os = "linux")]
+        // SAFETY: both descriptors are open; FICLONE only shares extents.
+        let shared = unsafe { libc::ioctl(out.as_raw_fd(), libc::FICLONE, file.as_raw_fd()) } == 0;
+        #[cfg(not(target_os = "linux"))]
+        let shared = false;
+        if !shared {
+            let (mut from, mut into) = (file, &out);
+            std::io::copy(&mut from, &mut into)?;
+        }
+        out
+    };
+    out.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+    #[cfg(target_os = "macos")]
+    {
+        let fd = out.as_raw_fd();
+        let mut names = vec![0u8; 64 * 1024];
+        // SAFETY: the descriptor is open and names valid for its length.
+        let n = unsafe { libc::flistxattr(fd, names.as_mut_ptr().cast(), names.len(), 0) };
+        if n < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        names.truncate(n as usize);
+        for attribute in names.split(|b| *b == 0).filter(|n| !n.is_empty()) {
+            let attribute = std::ffi::CString::new(attribute)?;
+            // SAFETY: the descriptor is open and the name NUL-terminated.
+            if unsafe { libc::fremovexattr(fd, attribute.as_ptr(), 0) } != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+        }
+        let secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs());
+        let value = format!("0081;{secs:08x};Kule;");
+        // SAFETY: the descriptor is open, the name NUL-terminated and the
+        // value valid for its length.
+        let set = unsafe {
+            libc::fsetxattr(
+                fd,
+                c"com.apple.quarantine".as_ptr(),
+                value.as_ptr().cast(),
+                value.len(),
+                0,
+                0,
+            )
+        };
+        if set != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = name;
+    Ok(())
 }
 
 /// File or directory `rel` of the copy at `root` (the copy itself when
@@ -408,10 +579,12 @@ mod tests {
             tempfile::TempDir::new().unwrap(),
         );
         let root = copy.path();
+        let kule = tempfile::TempDir::new().unwrap();
+        let opened = kule.path().join("opened");
         std::fs::create_dir_all(root.join("invoices")).unwrap();
         std::fs::write(root.join("invoices/summary.pdf"), b"%PDF-1.7\n...").unwrap();
         std::fs::write(root.join("Photo.JPG"), b"\xff\xd8\xff\xe0rest").unwrap();
-        std::fs::write(root.join("march.xlsx"), b"PK\x03\x04rest").unwrap();
+        std::fs::write(root.join("march.xlsx"), sheet("SUM(1,2)")).unwrap();
         std::fs::write(root.join("clip.mov"), b"\0\0\0\x14ftypqt  ").unwrap();
         std::fs::write(root.join("song.wav"), b"RIFF\x24\0\0\0WAVEfmt ").unwrap();
         std::fs::write(root.join("prices.csv"), b"name;price\nk\xe4se;3\n").unwrap();
@@ -423,7 +596,7 @@ mod tests {
             "song.wav",
             "prices.csv",
         ] {
-            assert_eq!(openable(root, ok).unwrap(), root.join(ok), "{ok}");
+            assert!(openable(root, ok, &opened).is_ok(), "{ok}");
         }
 
         // What would run: a script, a program, a page, a link file, macros;
@@ -466,14 +639,219 @@ mod tests {
             "",
         ] {
             assert!(
-                openable(root, refused).is_err(),
+                openable(root, refused, &opened).is_err(),
                 "{refused} was let through"
             );
         }
-        let why = openable(root, "notes.pdf").unwrap_err();
+        let why = openable(root, "notes.pdf", &opened).unwrap_err();
         assert!(why.contains("not the .pdf file its name says"), "{why}");
-        let why = openable(root, "rename.command").unwrap_err();
+        let why = openable(root, "rename.command", &opened).unwrap_err();
         assert!(why.contains("outside the sandbox"), "{why}");
+    }
+
+    /// A zip archive of `parts`, as office files are.
+    fn archive(parts: &[(&str, &[u8])]) -> Vec<u8> {
+        use std::io::Write;
+        let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        let options = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+        for (name, bytes) in parts {
+            zip.start_file(*name, options).unwrap();
+            zip.write_all(bytes).unwrap();
+        }
+        zip.finish().unwrap().into_inner()
+    }
+
+    fn sheet(formula: &str) -> Vec<u8> {
+        let xml = format!(
+            "<worksheet><sheetData><row><c r=\"A1\"><f>{formula}</f></c></row></sheetData></worksheet>"
+        );
+        archive(&[("xl/worksheets/sheet1.xml", xml.as_bytes())])
+    }
+
+    fn docx(extra: &[(&str, &[u8])]) -> Vec<u8> {
+        let mut parts: Vec<(&str, &[u8])> = vec![(
+            "word/document.xml",
+            b"<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:body><w:p><w:r><w:t>Hi</w:t></w:r></w:p></w:body></w:document>",
+        )];
+        parts.extend_from_slice(extra);
+        archive(&parts)
+    }
+
+    #[test]
+    fn documents_that_would_reach_outside_themselves_are_not_opened() {
+        let (copy, kule) = (
+            tempfile::TempDir::new().unwrap(),
+            tempfile::TempDir::new().unwrap(),
+        );
+        let (root, opened) = (copy.path(), kule.path().join("opened"));
+        let template = br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/attachedTemplate" Target="https://example.com/t.dotm" TargetMode="External"/></Relationships>"#;
+        std::fs::write(
+            root.join("template.docx"),
+            docx(&[("word/_rels/settings.xml.rels", template)]),
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("macros.docx"),
+            docx(&[("word/vbaProject.bin", b"\xd0\xcf\x11\xe0")]),
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("linked.xlsx"),
+            archive(&[("xl/externalLinks/externalLink1.xml", b"<externalLink/>")]),
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("picture.xlsx"),
+            sheet("_xlfn.IMAGE(\"https://example.com/p\")"),
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("sums.csv"),
+            "a,b\n1,=IMAGE(\"https://example.com/p\")\n",
+        )
+        .unwrap();
+        // Kinds Kule does not look inside, whatever they hold.
+        std::fs::write(root.join("letter.rtf"), b"{\\rtf1 hi}").unwrap();
+        std::fs::write(
+            root.join("book.epub"),
+            archive(&[("mimetype", b"application/epub+zip")]),
+        )
+        .unwrap();
+        std::fs::write(root.join("deck.key"), archive(&[("Index.zip", b"")])).unwrap();
+        for refused in [
+            "template.docx",
+            "macros.docx",
+            "linked.xlsx",
+            "picture.xlsx",
+            "sums.csv",
+            "letter.rtf",
+            "book.epub",
+            "deck.key",
+        ] {
+            assert!(
+                openable(root, refused, &opened).is_err(),
+                "{refused} was let through"
+            );
+        }
+        let why = openable(root, "template.docx", &opened).unwrap_err();
+        assert!(why.contains("outside the file"), "{why}");
+        // Nothing refused is left behind for an app to find.
+        let left = std::fs::read_dir(&opened)
+            .map(|d| d.flatten().count())
+            .unwrap_or(0);
+        assert_eq!(left, 0);
+    }
+
+    #[test]
+    fn what_opens_is_kules_own_copy_and_never_the_agents_file() {
+        use std::os::unix::fs::PermissionsExt;
+        let (copy, kule, outside) = (
+            tempfile::TempDir::new().unwrap(),
+            tempfile::TempDir::new().unwrap(),
+            tempfile::TempDir::new().unwrap(),
+        );
+        let (root, opened) = (copy.path(), kule.path().join("opened"));
+        let bytes = docx(&[]);
+        std::fs::write(root.join("report.docx"), &bytes).unwrap();
+        #[cfg(target_os = "macos")]
+        set_xattr(
+            &root.join("report.docx"),
+            "com.apple.LaunchServices.OpenWith",
+            b"bplist00",
+        );
+
+        let at = openable(root, "report.docx", &opened).unwrap();
+        assert!(
+            at.starts_with(&opened) && !at.starts_with(root),
+            "{}",
+            at.display()
+        );
+        assert_eq!(at.file_name().unwrap(), "report.docx");
+        assert_eq!(std::fs::read(&at).unwrap(), bytes);
+        let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(&at), 0o600);
+        assert_eq!(mode(at.parent().unwrap()), 0o700);
+        assert_eq!(mode(&opened), 0o700);
+        #[cfg(target_os = "macos")]
+        {
+            // Marked as come from elsewhere, and opened with no app the
+            // agent chose.
+            // The system's own provenance mark aside, which no program
+            // sets or removes.
+            let names: Vec<String> = xattr_names(&at)
+                .into_iter()
+                .filter(|n| n != "com.apple.provenance")
+                .collect();
+            assert_eq!(names, ["com.apple.quarantine"], "{names:?}");
+        }
+
+        // What the agent does to its file afterwards is not what opens.
+        std::fs::write(outside.path().join("run.sh"), "#!/bin/sh\n").unwrap();
+        std::fs::remove_file(root.join("report.docx")).unwrap();
+        std::os::unix::fs::symlink(outside.path().join("run.sh"), root.join("report.docx"))
+            .unwrap();
+        assert_eq!(std::fs::read(&at).unwrap(), bytes);
+
+        // A picture, which Kule does not look inside, is copied all the same.
+        std::fs::write(root.join("logo.png"), b"\x89PNG\r\n\x1a\nrest").unwrap();
+        let picture = openable(root, "logo.png", &opened).unwrap();
+        assert!(picture.starts_with(&opened));
+        assert_eq!(std::fs::read(&picture).unwrap(), b"\x89PNG\r\n\x1a\nrest");
+        assert_ne!(picture.parent(), at.parent());
+    }
+
+    #[test]
+    fn copies_opened_long_ago_are_cleared() {
+        let (copy, kule) = (
+            tempfile::TempDir::new().unwrap(),
+            tempfile::TempDir::new().unwrap(),
+        );
+        let (root, opened) = (copy.path(), kule.path().join("opened"));
+        std::fs::write(root.join("a.txt"), "a\n").unwrap();
+        let first = openable(root, "a.txt", &opened).unwrap();
+        let old = std::time::SystemTime::now() - std::time::Duration::from_secs(2 * 24 * 3600);
+        std::fs::File::open(first.parent().unwrap())
+            .unwrap()
+            .set_modified(old)
+            .unwrap();
+        let second = openable(root, "a.txt", &opened).unwrap();
+        assert!(!first.exists(), "{}", first.display());
+        assert!(second.exists());
+    }
+
+    #[cfg(target_os = "macos")]
+    fn set_xattr(path: &Path, name: &str, value: &[u8]) {
+        use std::os::unix::ffi::OsStrExt;
+        let p = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
+        let n = std::ffi::CString::new(name).unwrap();
+        // SAFETY: both strings are NUL-terminated; value is valid for its length.
+        let r = unsafe {
+            libc::setxattr(
+                p.as_ptr(),
+                n.as_ptr(),
+                value.as_ptr().cast(),
+                value.len(),
+                0,
+                0,
+            )
+        };
+        assert_eq!(r, 0);
+    }
+
+    #[cfg(target_os = "macos")]
+    fn xattr_names(path: &Path) -> Vec<String> {
+        use std::os::unix::ffi::OsStrExt;
+        let p = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
+        let mut buf = vec![0u8; 4096];
+        // SAFETY: the path is NUL-terminated and buf is valid for its length.
+        let n = unsafe { libc::listxattr(p.as_ptr(), buf.as_mut_ptr().cast(), buf.len(), 0) };
+        assert!(n >= 0);
+        buf.truncate(n as usize);
+        buf.split(|b| *b == 0)
+            .filter(|n| !n.is_empty())
+            .map(|n| String::from_utf8_lossy(n).into_owned())
+            .collect()
     }
 
     #[test]
