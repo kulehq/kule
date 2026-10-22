@@ -67,7 +67,8 @@ fn openpty(cols: u16, rows: u16) -> Result<(OwnedFd, OwnedFd), String> {
             &mut follower,
             std::ptr::null_mut(),
             std::ptr::null_mut(),
-            &mut ws,
+            // Mutable on macOS, read-only on Linux.
+            std::ptr::addr_of_mut!(ws),
         )
     };
     if made != 0 {
