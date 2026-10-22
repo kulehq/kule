@@ -22,6 +22,21 @@
 - On macOS a task's commands no longer write to the system's `/tmp`, which
   your other programs and tasks share: `TMPDIR`, and now zsh's `TMPPREFIX`,
   point at the task's own temporary directory.
+- A tunnel the proxy does not look inside goes on only once the client's
+  TLS hello asks for the host it was opened to, without hiding the name it
+  asks for; port 443 carries nothing but TLS. Plain `http://` requests are
+  read one by one, each for the host it was let through to. A cut
+  connection is logged as `cut`, with why.
+- On a host Kule holds a secret for, a request carries no credentials but
+  Kule's: headers and URL parameters named as credentials by any spelling,
+  `Basic` with the placeholder as the password, and the fields of JSON and
+  multipart bodies as well as forms. That host is asked for whole responses
+  only, and a response that repeats a secret has it blanked in more of the
+  forms it can take (base64, escapes in either case), even split between
+  chunks.
+- For IPv6, only the global unicast range counts as public, with the IPv4
+  address inside 6to4 judged as itself. Host names are judged in lower
+  case and without a final dot. `Content-Length` takes digits alone.
 
 ## 0.2.0-preview.4
 

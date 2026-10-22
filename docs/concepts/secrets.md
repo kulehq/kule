@@ -53,8 +53,22 @@ stays a placeholder:
 - sent to any other host, it is a string that opens nothing.
 
 A request to that host carrying credentials Kule does not hold for it is
-refused (403). A response that repeats the value has it blanked out with
-`*`, as far as the proxy can read it.
+refused (403), so nothing goes out under an account that is not yours:
+
+- a credential header, a cookie, or a header or URL parameter named as a
+  credential (`token`, `key`, `secret`, `password`, `auth`, `session` and
+  the like, by any spelling: `private_token`, `JOB-TOKEN`, `apiKey`) holds
+  only Kule's placeholder;
+- with `Basic`, the placeholder is the password, under any user name, or
+  the user name with no password;
+- a body with fields (a form, JSON, a multipart form, text) is read whole,
+  up to 1 MB, and the same holds for its fields, at the top of JSON and in
+  objects within objects; one too large or chunked to read is refused.
+
+The proxy asks that host for whole responses only (no `Range`). A response
+that repeats the value has it blanked out with `*`, as far as the proxy
+can read it: as it is, escaped as JSON or a URL writes it, or in base64,
+even split between chunks.
 
 The connection log names the secrets that went out:
 

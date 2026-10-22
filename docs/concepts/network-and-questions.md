@@ -32,7 +32,10 @@ net: example.com:443 · refused, would wait for approval; the command line asks 
 ```
 
 The proxy also checks the address it connects to, and keeps private
-addresses out of reach.
+addresses out of reach. For IPv6 only the global unicast range counts as
+public; an IPv4 address carried inside an IPv6 one (mapped, NAT64, 6to4)
+is judged as itself. A name is judged in lower case and without a final
+dot, so `Example.com.` is `example.com`.
 
 ## Questions
 
@@ -75,7 +78,17 @@ kule exec TASK --open-network -- ./fetch.sh # connect anywhere: no proxy, no pol
 ## HTTPS and secrets
 
 Normally the proxy only tunnels HTTPS: it sees the host and port, not the
-content. For hosts that a [secret](secrets.md) belongs to, it looks inside
+content. Before a tunnel goes on, it reads the client's TLS hello: the name
+it asks for must be the host the tunnel was opened to (none for an
+address), or the tunnel is cut before a byte reaches the host, as many
+hosts share one address and serve whichever name a hello asks for. A
+hello that hides its name (Encrypted Client Hello) is cut too; in
+Chromium-based tools, turn it off with
+`--disable-features=EncryptedClientHello`. Port 443 carries nothing but
+TLS. Plain `http://` requests are read one by one, and each must be for the
+host it was let through to. A cut connection is logged as `cut`, with why.
+
+For hosts that a [secret](secrets.md) belongs to, it looks inside
 TLS to put the secret's value into the request. For that it makes a
 certificate authority of its own for each run, valid only for those hosts,
 and points `SSL_CERT_FILE`, `NODE_EXTRA_CA_CERTS`, `REQUESTS_CA_BUNDLE` and

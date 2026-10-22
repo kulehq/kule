@@ -778,10 +778,12 @@ impl Vault {
             .collect()
     }
 
-    /// The credential header of `head`, bound for `host`, that holds none of
-    /// the placeholders of the secrets kept for `host`: credentials Kule
-    /// does not hold, an account that is not the person's. `None` when every
-    /// credential is Kule's, or Kule holds nothing for `host`.
+    /// The credential of `head`, bound for `host`, that is none of the
+    /// placeholders of the secrets kept for `host`: credentials Kule does not
+    /// hold, an account that is not the person's. A credential is a header
+    /// Kule fills, a cookie, or a header or query parameter named as one
+    /// (see [`credential_named`]). `None` when every credential is Kule's,
+    /// or Kule holds nothing for `host`.
     pub(crate) fn foreign_credential(&self, host: &str, head: &str) -> Option<String> {
         let going = self.going_to(host);
         if going.is_empty() {
@@ -796,11 +798,8 @@ impl Vault {
         let query = target.split_once('?').map_or("", |(_, q)| q);
         let in_query = query.split('&').find_map(|pair| {
             let (name, value) = pair.split_once('=').unwrap_or((pair, ""));
-            let name = percent_decoded(name);
-            let credential = CREDENTIAL_PARAMS
-                .iter()
-                .any(|c| name.eq_ignore_ascii_case(c));
-            (credential && !ours(&percent_decoded(value))).then(|| format!("?{name}="))
+            let (name, value) = (percent_decoded(name), percent_decoded(value));
+            (credential_field(&name, &value, false) && !ours(&value)).then(|| format!("?{name}="))
         });
         if in_query.is_some() {
             return in_query;
@@ -813,11 +812,13 @@ impl Vault {
             if name.eq_ignore_ascii_case("cookie") {
                 return Some(name.to_owned());
             }
-            if !is_credential(line) {
+            if !is_credential(line) && !(credential_named(name) && !not_a_credential(value)) {
                 return None;
             }
             // `<placeholder>`, or one scheme word before it; with Basic,
-            // one side of `user:password`.
+            // the placeholder as the password under any user name, or as
+            // the user with no password: the host takes the password, or
+            // the user where there is none, as the credential.
             let scheme_and_rest = value.split_once(' ');
             let basic = scheme_and_rest
                 .filter(|(scheme, _)| scheme.eq_ignore_ascii_case("basic"))
@@ -828,9 +829,9 @@ impl Vault {
                 })
                 .and_then(|d| String::from_utf8(d).ok());
             let fine = match (&basic, scheme_and_rest) {
-                (Some(pair), _) => pair
-                    .split_once(':')
-                    .is_some_and(|(user, password)| ours(user) || ours(password)),
+                (Some(pair), _) => pair.split_once(':').is_some_and(|(user, password)| {
+                    ours(password) || (ours(user) && matches!(password, "" | "x-oauth-basic"))
+                }),
                 (None, Some((_, rest))) => ours(rest.trim()),
                 (None, None) => ours(value),
             };
@@ -844,27 +845,63 @@ impl Vault {
         !self.going_to(host).is_empty()
     }
 
-    /// The credential field of a form `body` (`application/x-www-form-
-    /// urlencoded`) bound for `host` that is none of Kule's placeholders:
-    /// as [`Vault::foreign_credential`] for a form's fields. `None` when it
-    /// has none, or Kule holds nothing for `host`.
-    pub(crate) fn foreign_in_form(&self, host: &str, body: &[u8]) -> Option<String> {
+    /// The credential field of a request `body` of type `kind` bound for
+    /// `host` that is none of Kule's placeholders, as
+    /// [`Vault::foreign_credential`] for a head: a field of a form, of JSON
+    /// at any depth, or a field of a multipart form that is not a file.
+    /// A body that does not read as its type says is refused, as is JSON
+    /// sent as text. `None` when it has none, or Kule holds nothing for
+    /// `host`.
+    pub(crate) fn foreign_in_body(&self, host: &str, kind: &str, body: &[u8]) -> Option<String> {
         let going = self.going_to(host);
         if going.is_empty() {
             return None;
         }
-        let text = String::from_utf8_lossy(body);
-        text.split('&').find_map(|pair| {
-            let (name, value) = pair.split_once('=').unwrap_or((pair, ""));
-            let decoded = |s: &str| percent_decoded(&s.replace('+', " "));
-            let (name, value) = (decoded(name), decoded(value));
-            let credential = CREDENTIAL_PARAMS
-                .iter()
-                .chain(FORM_CREDENTIALS)
-                .any(|c| name.trim().eq_ignore_ascii_case(c));
-            let ours = going.iter().any(|h| value == h.placeholder);
-            (credential && !ours).then(|| format!("form field {}", name.trim()))
-        })
+        let ours = |value: &str| going.iter().any(|h| value == h.placeholder);
+        let foreign = |name: &str, value: &str| credential_field(name, value, true) && !ours(value);
+        let essence = kind
+            .split(';')
+            .next()
+            .unwrap_or_default()
+            .trim()
+            .to_ascii_lowercase();
+        let unread = || Some(format!("body, which does not read as {essence}"));
+        let json_kind =
+            essence == "application/json" || essence.ends_with("+json") || essence == "text/json";
+        if essence == "application/x-www-form-urlencoded" {
+            let text = String::from_utf8_lossy(body);
+            return text.split('&').find_map(|pair| {
+                let (name, value) = pair.split_once('=').unwrap_or((pair, ""));
+                let (name, value) = (percent_decoded(name), percent_decoded(value));
+                foreign(name.trim(), &value).then(|| format!("form field {}", name.trim()))
+            });
+        }
+        if essence == "multipart/form-data" {
+            let Some(fields) = multipart_fields(kind, body) else {
+                return unread();
+            };
+            return fields
+                .into_iter()
+                .find(|(name, value)| foreign(name, value))
+                .map(|(name, _)| format!("form field {name}"));
+        }
+        // JSON, or text a host may read as JSON all the same.
+        let text = std::str::from_utf8(body).ok();
+        let looks_json = text.is_some_and(|t| t.trim_start().starts_with(['{', '[']));
+        if !json_kind && !looks_json {
+            return None;
+        }
+        let Some(value) = text.and_then(|t| serde_json::from_str::<serde_json::Value>(t).ok())
+        else {
+            return unread();
+        };
+        let mut found = None;
+        json_fields(&value, 0, &mut |name, value| {
+            if found.is_none() && foreign(name, value) {
+                found = Some(format!("field {name}"));
+            }
+        });
+        found
     }
 
     /// Each kept secret's value as it is, and as it reads in JSON and in a
@@ -886,16 +923,12 @@ impl Vault {
         forms
     }
 
-    /// Every real value the vault holds, as it is and as it reads in JSON
-    /// and in a URL: the forms a response that repeats it may hold.
+    /// Every real value the vault holds in the forms a response that
+    /// repeats it may hold (see [`forms_of`]).
     pub(crate) fn values(&self) -> Vec<String> {
         let mut forms = BTreeSet::new();
         for h in &self.held {
-            for encoding in [Encoding::Raw, Encoding::Json, Encoding::Url] {
-                let mut form = Vec::new();
-                encoding.write(&h.value, &mut form);
-                forms.insert(String::from_utf8_lossy(&form).into_owned());
-            }
+            forms.extend(forms_of(&h.value));
         }
         forms.into_iter().collect()
     }
@@ -986,12 +1019,173 @@ fn percent_decoded(text: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-/// Query parameters that carry credentials, on a host Kule holds a secret
-/// for.
-const CREDENTIAL_PARAMS: &[&str] = &["key", "api_key", "apikey", "access_token", "token"];
+/// Words a field or header is named with when it carries a credential.
+const CREDENTIAL_WORDS: &[&str] = &[
+    "token",
+    "key",
+    "apikey",
+    "secret",
+    "password",
+    "passwd",
+    "pwd",
+    "auth",
+    "authorization",
+    "credential",
+    "credentials",
+    "session",
+    "sessionid",
+    "jwt",
+    "bearer",
+];
 
-/// What else a form carries credentials in: OAuth's token requests.
-const FORM_CREDENTIALS: &[&str] = &["client_secret", "refresh_token"];
+/// Names made of those words that carry no credential: a page of results,
+/// a request's own idempotency, a sort or partition, a public key.
+const NOT_CREDENTIALS: &[&str] = &[
+    "pagetoken",
+    "nextpagetoken",
+    "nexttoken",
+    "continuationtoken",
+    "synctoken",
+    "idempotencykey",
+    "xidempotencykey",
+    "secwebsocketkey",
+    "sortkey",
+    "partitionkey",
+    "primarykey",
+    "publickey",
+    "keyid",
+    "maxtokens",
+    "tokentype",
+];
+
+/// Whether a field or header `name` says it carries a credential: one of
+/// its words (split at anything but a letter or digit, and where a lower
+/// case letter meets an upper case one) is one of [`CREDENTIAL_WORDS`],
+/// and it is none of [`NOT_CREDENTIALS`].
+pub(crate) fn credential_named(name: &str) -> bool {
+    let joined: String = name
+        .chars()
+        .filter(char::is_ascii_alphanumeric)
+        .collect::<String>()
+        .to_ascii_lowercase();
+    if NOT_CREDENTIALS.contains(&joined.as_str()) {
+        return false;
+    }
+    let mut words = Vec::new();
+    let mut word = String::new();
+    let mut last_lower = false;
+    for c in name.chars() {
+        if !c.is_ascii_alphanumeric() {
+            words.push(std::mem::take(&mut word));
+            last_lower = false;
+            continue;
+        }
+        if c.is_ascii_uppercase() && last_lower {
+            words.push(std::mem::take(&mut word));
+        }
+        last_lower = c.is_ascii_lowercase() || c.is_ascii_digit();
+        word.push(c.to_ascii_lowercase());
+    }
+    words.push(word);
+    words.iter().any(|w| CREDENTIAL_WORDS.contains(&w.as_str()))
+}
+
+/// A value no host reads as a credential, whatever it is named: nothing,
+/// a switch, or a short number.
+fn not_a_credential(value: &str) -> bool {
+    const SWITCHES: &[&str] = &["true", "false", "yes", "no", "on", "off", "null"];
+    value.is_empty()
+        || SWITCHES.iter().any(|s| value.eq_ignore_ascii_case(s))
+        || (value.len() < 8 && value.bytes().all(|b| b.is_ascii_digit()))
+}
+
+/// Whether a field `name` holding `value` carries a credential: named as
+/// one, and holding something. In a body (`in_body`), a field named `key`
+/// alone is not one: there it names a thing (an issue's key, a stored
+/// object's, a public key), where in an address or a header it is a key.
+fn credential_field(name: &str, value: &str, in_body: bool) -> bool {
+    credential_named(name)
+        && !not_a_credential(value)
+        && !(in_body && name.trim().eq_ignore_ascii_case("key"))
+}
+
+/// How deep in JSON objects Kule looks for credentials.
+const MAX_JSON_DEPTH: usize = 3;
+
+/// `found` for every field of `value` that holds text or a number, by the
+/// name of its own key: at the top and in objects within objects, as deep
+/// as [`MAX_JSON_DEPTH`], where APIs read credentials (`{"token": …}`,
+/// `{"auth": {"password": …}}`). Not inside arrays: those hold the data a
+/// request carries (a model's conversation, a tool's input), whose names
+/// are anyone's.
+fn json_fields(value: &serde_json::Value, depth: usize, found: &mut impl FnMut(&str, &str)) {
+    let serde_json::Value::Object(map) = value else {
+        return;
+    };
+    for (name, v) in map {
+        match v {
+            serde_json::Value::String(text) => found(name, text),
+            serde_json::Value::Number(n) => found(name, &n.to_string()),
+            serde_json::Value::Object(_) if depth + 1 < MAX_JSON_DEPTH => {
+                json_fields(v, depth + 1, found)
+            }
+            _ => {}
+        }
+    }
+}
+
+/// The fields of a `multipart/form-data` body that are not files, by name,
+/// as text; `None` when it does not read as one: no boundary, a part with
+/// no name, or no closing boundary.
+fn multipart_fields(kind: &str, body: &[u8]) -> Option<Vec<(String, String)>> {
+    let boundary = kind.split(';').skip(1).find_map(|p| {
+        let (k, v) = p.split_once('=')?;
+        k.trim()
+            .eq_ignore_ascii_case("boundary")
+            .then(|| v.trim().trim_matches('"').to_owned())
+    })?;
+    if boundary.is_empty() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(body);
+    let delimiter = format!("--{boundary}");
+    let mut parts = text.split(delimiter.as_str());
+    // What comes before the first boundary is no part.
+    parts.next()?;
+    let mut fields = Vec::new();
+    let mut closed = false;
+    for part in parts {
+        if part.starts_with("--") {
+            closed = true;
+            break;
+        }
+        let part = part.strip_prefix("\r\n")?;
+        let (headers, value) = part.split_once("\r\n\r\n")?;
+        let value = value.strip_suffix("\r\n").unwrap_or(value);
+        let disposition = headers
+            .split("\r\n")
+            .find_map(|l| {
+                let (n, v) = l.split_once(':')?;
+                n.trim()
+                    .eq_ignore_ascii_case("content-disposition")
+                    .then_some(v)
+            })
+            .unwrap_or_default();
+        let param = |wanted: &str| {
+            disposition.split(';').skip(1).find_map(|p| {
+                let (k, v) = p.split_once('=')?;
+                k.trim()
+                    .eq_ignore_ascii_case(wanted)
+                    .then(|| v.trim().trim_matches('"').to_owned())
+            })
+        };
+        let name = param("name")?;
+        if param("filename").is_none() {
+            fields.push((name, value.to_owned()));
+        }
+    }
+    closed.then_some(fields)
+}
 
 fn is_credential(line: &str) -> bool {
     line.split_once(':').is_some_and(|(name, _)| {
@@ -1046,6 +1240,58 @@ impl Encoding {
             }
         }
     }
+}
+
+/// The ways text may hold `value`: as it is; as JSON writes it, with `"`
+/// and `\` escaped or with every character a `\u` escape (either case);
+/// as a URL writes it, its escapes in either case; and in base64 or
+/// base64url, alone or inside a longer run at each of the three places a
+/// run can start it. Derived forms shorter than eight characters are
+/// left out: they would blank what is not the secret.
+fn forms_of(value: &str) -> Vec<String> {
+    use base64::engine::general_purpose::{STANDARD_NO_PAD, URL_SAFE_NO_PAD};
+    let mut forms = Vec::new();
+    for encoding in [Encoding::Raw, Encoding::Json, Encoding::Url] {
+        let mut form = Vec::new();
+        encoding.write(value, &mut form);
+        forms.push(String::from_utf8_lossy(&form).into_owned());
+    }
+    let mut derived = Vec::new();
+    // The URL form with its escapes in lower case (`%2f`), the letters
+    // around them as they are.
+    let mut lower = String::new();
+    let mut chars = forms[2].chars().peekable();
+    while let Some(c) = chars.next() {
+        lower.push(c);
+        if c == '%' {
+            for _ in 0..2 {
+                if let Some(h) = chars.next() {
+                    lower.push(h.to_ascii_lowercase());
+                }
+            }
+        }
+    }
+    derived.push(lower);
+    let units: Vec<u16> = value.encode_utf16().collect();
+    derived.push(units.iter().map(|u| format!("\\u{u:04x}")).collect());
+    derived.push(units.iter().map(|u| format!("\\u{u:04X}")).collect());
+    let bytes = value.as_bytes();
+    for engine in [STANDARD_NO_PAD, URL_SAFE_NO_PAD] {
+        derived.push(engine.encode(bytes));
+        for lead in 0..3 {
+            let mut run = vec![0u8; lead];
+            run.extend_from_slice(bytes);
+            let encoded = engine.encode(&run);
+            // The four-character groups that hold nothing but the value.
+            let first = lead.div_ceil(3);
+            let last = run.len() / 3;
+            if last > first {
+                derived.push(encoded[first * 4..last * 4].to_owned());
+            }
+        }
+    }
+    forms.extend(derived.into_iter().filter(|f| f.len() >= 8));
+    forms
 }
 
 /// `data` with each placeholder of `held` put back to its value, written
@@ -1958,16 +2204,93 @@ mod tests {
                 base64::engine::general_purpose::STANDARD.encode(format!("sk-other:x{p}"))
             ),
             "Cookie: session=other".to_owned(),
+            // Basic with Kule's placeholder on one side and another token
+            // on the other: the token is what the host would take.
+            format!(
+                "Authorization: Basic {}",
+                base64::engine::general_purpose::STANDARD.encode(format!("{p}:sk-other"))
+            ),
+            format!(
+                "Authorization: Basic {}",
+                base64::engine::general_purpose::STANDARD.encode("ghp_other:")
+            ),
+            // Credentials by any name a host reads them under.
+            "JOB-TOKEN: other".to_owned(),
+            "X-Amz-Security-Token: other-session".to_owned(),
+            "X-Custom-Auth: other".to_owned(),
         ] {
             let theirs = format!("GET / HTTP/1.1\r\n{line}\r\n\r\n");
             assert!(vault.foreign_credential(host, &theirs).is_some(), "{line}");
         }
+        for target in [
+            "/api/v4/projects?private_token=other",
+            "/api/v4/jobs?job_token=other",
+            "/x?apiKey=other",
+            "/x?client_secret=other",
+        ] {
+            let theirs = format!("GET {target} HTTP/1.1\r\nHost: {host}\r\n\r\n");
+            assert!(
+                vault.foreign_credential(host, &theirs).is_some(),
+                "{target}"
+            );
+        }
+        // Basic with the placeholder as the password, under any user name,
+        // or as the user with no password; names that are no credential.
+        for line in [
+            format!(
+                "Authorization: Basic {}",
+                base64::engine::general_purpose::STANDARD.encode(format!("x-access-token:{p}"))
+            ),
+            format!(
+                "Authorization: Basic {}",
+                base64::engine::general_purpose::STANDARD.encode(format!("{p}:"))
+            ),
+            format!(
+                "Authorization: Basic {}",
+                base64::engine::general_purpose::STANDARD.encode(format!("{p}:x-oauth-basic"))
+            ),
+            "Idempotency-Key: 6f1c2a9e-0b7d-4e2f-9a51-3c8d7e6f5a4b".to_owned(),
+            "X-Max-Tokens: 4096".to_owned(),
+        ] {
+            let fine = format!(
+                "GET /?pageToken=CgVhYmNkZRAB&max_tokens=100&sort_key=name HTTP/1.1\r\n{line}\r\n\r\n"
+            );
+            assert_eq!(vault.foreign_credential(host, &fine), None, "{line}");
+        }
 
-        // A response that repeats it may hold any of those forms.
-        assert_eq!(
-            vault.values(),
-            ["a%2Bb%2Fc%22d%5Ce", "a+b/c\"d\\e", "a+b/c\\\"d\\\\e"]
-        );
+        // A response that repeats it may hold any of those forms, and
+        // others: escapes in lower case, every character escaped, base64.
+        let values = vault.values();
+        for form in [
+            "a%2Bb%2Fc%22d%5Ce",
+            "a+b/c\"d\\e",
+            "a+b/c\\\"d\\\\e",
+            "a%2bb%2fc%22d%5ce",
+            "\\u0061\\u002b\\u0062\\u002f\\u0063\\u0022\\u0064\\u005c\\u0065",
+            "YStiL2MiZFxl",
+        ] {
+            assert!(values.iter().any(|v| v == form), "{form}: {values:?}");
+        }
+    }
+
+    /// Base64 of a secret is caught wherever it starts in a longer run:
+    /// the groups that hold nothing but the secret are the same at each
+    /// of the three places.
+    #[test]
+    fn a_secret_in_base64_is_found_however_it_lines_up() {
+        use base64::engine::general_purpose::STANDARD;
+        let secret = "s3cret-value-for-test";
+        let forms = forms_of(secret);
+        for prefix in ["", "u", "us", "user:", "x-access-token:"] {
+            let encoded = STANDARD.encode(format!("{prefix}{secret}"));
+            assert!(
+                // All of it but a byte or two at either end.
+                forms
+                    .iter()
+                    .any(|f| f.len() >= (secret.len() / 3 - 1) * 4 && encoded.contains(f.as_str())),
+                "{prefix:?}: {encoded}"
+            );
+        }
     }
 
     #[test]

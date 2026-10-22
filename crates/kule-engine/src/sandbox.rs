@@ -2322,7 +2322,8 @@ mod tests {
         .unwrap();
         assert!(tmp.hint.unwrap().contains("$TMPDIR"));
         let elsewhere =
-            parse_denial("Sandbox: bash(1) deny(1) file-write-create /Users/me/x\nkule-1-2").unwrap();
+            parse_denial("Sandbox: bash(1) deny(1) file-write-create /Users/me/x\nkule-1-2")
+                .unwrap();
         assert_eq!(elsewhere.hint, None);
     }
 
