@@ -1,6 +1,12 @@
 # Changes
 
-## Unreleased
+## 0.2.0-preview.5
+
+A security preview. What an agent wrote opens with its app only as Kule's
+own checked copy, keeping to itself. On macOS a task's servers listen only
+where you allow them, and the system's `/tmp` stays closed to it. The proxy
+passes a tunnel only to the host it was opened to, and on hosts Kule holds
+a secret for, only your credentials.
 
 ### Security
 
