@@ -12,7 +12,7 @@
 //! credentials Kule hides, never another agent's state, never a whole
 //! directory like `~/Documents`, and only exact package versions.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Component, Path};
 use std::process::Command;
 
@@ -111,13 +111,16 @@ const OWN_HOMES: &str = "Library/Application Support/Kule/agents";
 #[cfg(not(target_os = "macos"))]
 const OWN_HOMES: &str = ".local/share/kule/agents";
 
-/// Names in an agent's state that make it run something, or follow
+/// Names in an agent's home that make it run something, or follow
 /// instructions, the next time it starts: settings with hooks and MCP
 /// servers, extensions, plugins, skills, rules for what runs unasked,
-/// trusted folders. Written in Kule, they would reach the agent when the
-/// person starts it outside Kule. Upper-case Markdown files (`CLAUDE.md`)
-/// are its instructions, and count too.
+/// trusted folders, the shell snapshots it sources before a command.
+/// Upper-case Markdown files (`CLAUDE.md`) are its instructions, and count
+/// too. In its home of its own, those it does not carry from the person
+/// are removed at every start: what one task's agent leaves there never
+/// reaches another task.
 const RUNS_LATER: &[&str] = &[
+    "shell-snapshots",
     "settings.json",
     "settings.local.json",
     "config.toml",
@@ -171,13 +174,28 @@ pub struct Profile {
     /// Starts the agent speaking ACP on stdio.
     pub command: Vec<String>,
     /// Paths under the home directory the agent writes its own state to.
+    /// Each run gets a clone of them in the task's home layer: the agent
+    /// writes there, and nothing of it reaches the person's home.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub state: Vec<String>,
-    /// Paths in that state that configure what runs outside the sandbox
-    /// later (hooks, MCP servers, sandbox settings): readable, never
-    /// writable.
+    /// No longer used: nothing an agent writes reaches the person's home,
+    /// so nothing in it needs to be read-only. Kept so that older profiles
+    /// still load; `kule agents show` says so.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub protected: Vec<String>,
+    /// With a home of its own: where the agent keeps its state when the
+    /// person runs it outside Kule (`.claude`, `.claude.json`). Hidden from
+    /// it and from every other agent; only Kule reads there, for
+    /// [`Profile::carry`] and [`Profile::login_file`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub outside: Vec<String>,
+    /// With a home of its own: what Kule copies into it at every start, by
+    /// its path there, from its path in [`Profile::outside`]: the person's
+    /// settings and instructions. Each is made exactly what the person has,
+    /// or removed where they have none, and is read-only while the agent
+    /// runs: what an agent writes there never reaches its next start.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub carry: BTreeMap<String, String>,
     /// Its login inside that state, hidden from every other agent and from
     /// commands Kule runs itself.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -211,6 +229,12 @@ pub struct Profile {
     /// environment wins.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub keychain: BTreeMap<String, KeychainKey>,
+    /// Keys the agent keeps in a JSON file in [`Profile::outside`], by the
+    /// variable it reads them from: Kule reads each there itself, and the
+    /// agent gets a placeholder as for [`Profile::keys`]. A key of the same
+    /// name set in the person's environment, or in the keychain, wins.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub login_file: BTreeMap<String, LoginFile>,
     /// HTTPS hosts the agent needs for its login and model, beyond what the
     /// policy already lets through. Open only while this agent runs.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -248,18 +272,24 @@ pub struct KeychainKey {
     pub hosts: Vec<String>,
 }
 
+/// The key out of `text`: at `json` (`outer.inner`) when it is JSON, or
+/// the whole of it.
+fn pick(json: Option<&str>, text: &str) -> Option<String> {
+    let text = text.trim();
+    let Some(path) = json else {
+        return Some(text.to_owned()).filter(|v| !v.is_empty());
+    };
+    let mut at: serde_json::Value = serde_json::from_str(text).ok()?;
+    for step in path.split('.') {
+        at = at.get_mut(step)?.take();
+    }
+    at.as_str().filter(|v| !v.is_empty()).map(str::to_owned)
+}
+
 impl KeychainKey {
     /// The key out of `item`, the keychain item's text.
     pub fn pick(&self, item: &str) -> Option<String> {
-        let item = item.trim();
-        let Some(path) = &self.json else {
-            return Some(item.to_owned()).filter(|v| !v.is_empty());
-        };
-        let mut at: serde_json::Value = serde_json::from_str(item).ok()?;
-        for step in path.split('.') {
-            at = at.get_mut(step)?.take();
-        }
-        at.as_str().filter(|v| !v.is_empty()).map(str::to_owned)
+        pick(self.json.as_deref(), item)
     }
 
     /// The key, read from the person's login keychain; macOS only.
@@ -275,6 +305,33 @@ impl KeychainKey {
             .ok()
             .filter(|o| o.status.success())?;
         self.pick(&String::from_utf8_lossy(&out.stdout))
+    }
+}
+
+/// A key in a JSON file in the agent's state outside Kule (see
+/// [`Profile::login_file`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LoginFile {
+    /// The file, relative to the home directory, in [`Profile::outside`].
+    pub path: String,
+    /// Where in its JSON the key is, as `outer.inner`.
+    pub json: String,
+    /// The hosts it is for.
+    pub hosts: Vec<String>,
+}
+
+/// The most of a login file Kule reads.
+const LOGIN_FILE_MAX: u64 = 64 * 1024;
+
+impl LoginFile {
+    /// The key, read from the file under `home`.
+    fn read(&self, home: &Path) -> Option<String> {
+        use std::io::Read;
+        let file = std::fs::File::open(home.join(&self.path)).ok()?;
+        let mut text = String::new();
+        file.take(LOGIN_FILE_MAX).read_to_string(&mut text).ok()?;
+        pick(Some(&self.json), &text)
     }
 }
 
@@ -508,8 +565,8 @@ impl Agents {
                 .filter(|(name, _)| *name != l.profile.name)
                 .flat_map(|(_, paths)| paths.iter().cloned())
                 .collect();
+            l.warnings = l.profile.warnings();
             if let Some(home) = &home {
-                l.warnings = l.profile.warnings(home);
                 l.own_home_dir = l
                     .profile
                     .own_home
@@ -805,6 +862,8 @@ impl Profile {
             command,
             state: Vec::new(),
             protected: Vec::new(),
+            outside: Vec::new(),
+            carry: BTreeMap::new(),
             login: Vec::new(),
             reveal_on_macos: Vec::new(),
             mode: None,
@@ -812,6 +871,7 @@ impl Profile {
             pass_env: Vec::new(),
             keys: BTreeMap::new(),
             keychain: BTreeMap::new(),
+            login_file: BTreeMap::new(),
             hosts: Vec::new(),
             own_home: None,
             devices: Vec::new(),
@@ -820,11 +880,13 @@ impl Profile {
     }
 
     /// What this agent keeps, hidden from every other: its state, its
-    /// login and its home of its own, relative to the home directory.
+    /// login, its state outside Kule and its home of its own, relative to
+    /// the home directory.
     fn holds(&self) -> Vec<String> {
         self.state
             .iter()
             .chain(&self.login)
+            .chain(&self.outside)
             .cloned()
             .chain(std::iter::once(self.own_home_path()))
             .collect()
@@ -836,49 +898,13 @@ impl Profile {
         format!("{OWN_HOMES}/{}", self.name)
     }
 
-    /// What in its state under `home`, as it is now, can make the agent run
-    /// something or follow instructions the next time it starts, and is not
-    /// read-only: what a run in Kule could leave for a run outside it.
-    pub fn unprotected(&self, home: &Path) -> Vec<String> {
-        let protected = |rel: &str| self.protected.iter().any(|p| within(rel, p));
-        let mut found = Vec::new();
-        for state in &self.state {
-            let Ok(entries) = std::fs::read_dir(home.join(state)) else {
-                continue;
-            };
-            let mut names: Vec<String> = entries
-                .flatten()
-                .filter_map(|e| e.file_name().into_string().ok())
-                .filter(|name| RUNS_LATER.contains(&name.as_str()) || instructions(name))
-                .collect();
-            names.sort();
-            for name in names {
-                let rel = format!("{state}/{name}");
-                if !protected(&rel) {
-                    found.push(rel);
-                }
-            }
-        }
-        found
-    }
-
     /// What the person should know before approving it.
-    fn warnings(&self, home: &Path) -> Vec<String> {
-        let mut warnings: Vec<String> = self
-            .unprotected(home)
-            .into_iter()
-            .map(|path| {
-                format!(
-                    "~/{path} is writable: what the agent writes there in Kule takes effect when you start {} outside it. Make it read-only, or give the agent a home of its own.",
-                    self.name
-                )
-            })
-            .collect();
-        if warnings.is_empty() && !self.state.is_empty() && self.protected.is_empty() {
-            warnings.push(format!(
-                "Nothing in its state is read-only: what the agent writes there in Kule reaches {} when you start it outside, its settings included. Make those read-only, or give the agent a home of its own.",
-                self.name
-            ));
+    fn warnings(&self) -> Vec<String> {
+        let mut warnings = Vec::new();
+        if !self.protected.is_empty() {
+            warnings.push(
+                "protected is no longer needed: nothing an agent writes in Kule reaches your home. You can remove it.".to_owned(),
+            );
         }
         // Which of the person's credentials it gets, and where they go.
         for (name, hosts) in &self.keys {
@@ -896,10 +922,53 @@ impl Profile {
                 key.hosts.join(", ")
             ));
         }
+        for key in self.login_file.values() {
+            warnings.push(format!(
+                "Kule reads ~/{} and puts what it holds at {} into what {} sends to {}.",
+                key.path,
+                key.json,
+                self.name,
+                key.hosts.join(", ")
+            ));
+        }
         for name in &self.pass_env {
             warnings.push(format!("{} sees your {name} as it is.", self.name));
         }
         warnings
+    }
+
+    /// What in its home of its own at `dir` makes it run something or
+    /// follow instructions and is not carried from the person: what an
+    /// agent left there, in its top folder or beside what it carries.
+    fn left_behind(&self, dir: &Path) -> Vec<String> {
+        let mut folders: BTreeSet<String> = self
+            .carry
+            .keys()
+            .filter_map(|to| to.rsplit_once('/').map(|(parent, _)| parent.to_owned()))
+            .collect();
+        folders.insert(String::new());
+        let mut found = Vec::new();
+        for folder in folders {
+            let Ok(entries) = std::fs::read_dir(dir.join(&folder)) else {
+                continue;
+            };
+            for name in entries
+                .flatten()
+                .filter_map(|e| e.file_name().into_string().ok())
+            {
+                let rel = if folder.is_empty() {
+                    name.clone()
+                } else {
+                    format!("{folder}/{name}")
+                };
+                let runs = RUNS_LATER.contains(&name.as_str()) || instructions(&name);
+                if runs && !self.carry.contains_key(&rel) {
+                    found.push(rel);
+                }
+            }
+        }
+        found.sort();
+        found
     }
 
     /// Makes its home of its own, when it has one; where it is.
@@ -953,7 +1022,11 @@ impl Profile {
             .iter()
             .chain(&self.login)
             .chain(&self.protected)
-            .chain(&self.reveal_on_macos);
+            .chain(&self.reveal_on_macos)
+            .chain(&self.outside)
+            .chain(self.carry.keys())
+            .chain(self.carry.values())
+            .chain(self.login_file.values().map(|k| &k.path));
         for path in paths {
             let relative = !path.is_empty()
                 && Path::new(path)
@@ -980,13 +1053,21 @@ impl Profile {
                 ));
             }
         }
-        // Kule hides the built-in agents' logins too; those are kept from
-        // the others by their state, below.
+        // Kule hides the built-in agents' logins too, but for what they
+        // open or carry; those are kept from the others by their state and
+        // outside, below.
         let built_in = Agents::built_in();
         let logins: Vec<&str> = built_in
             .listed
             .iter()
-            .flat_map(|l| l.profile.login.iter().map(String::as_str))
+            .flat_map(|l| {
+                l.profile
+                    .login
+                    .iter()
+                    .chain(l.profile.carry.values())
+                    .chain(l.profile.login_file.values().map(|k| &k.path))
+            })
+            .map(String::as_str)
             .collect();
         let hidden = HIDDEN_IN_HOME
             .iter()
@@ -998,8 +1079,20 @@ impl Profile {
             Some(OWN_HOMES),
             Some(packages::PACKAGES),
         ];
-        for path in self.state.iter().chain(&self.login).chain(&self.protected) {
-            if let Some(h) = hidden.clone().find(|h| within(path, h) || within(h, path)) {
+        // What the agent reads or writes: never what Kule keeps hidden. Its
+        // state outside Kule is hidden from it, and only Kule reads there.
+        let opened: Vec<&String> = self
+            .state
+            .iter()
+            .chain(&self.login)
+            .chain(&self.protected)
+            .chain(self.carry.values())
+            .chain(self.login_file.values().map(|k| &k.path))
+            .collect();
+        for path in opened.iter().copied().chain(&self.outside) {
+            if opened.contains(&path)
+                && let Some(h) = hidden.clone().find(|h| within(path, h) || within(h, path))
+            {
                 return Err(format!("{path:?} reaches {h}, which Kule keeps hidden"));
             }
             if homes
@@ -1010,7 +1103,12 @@ impl Profile {
                 return Err(format!("{path:?} reaches Kule's own home"));
             }
             for other in others {
-                let theirs = other.profile.state.iter().chain(&other.profile.login);
+                let theirs = other
+                    .profile
+                    .state
+                    .iter()
+                    .chain(&other.profile.login)
+                    .chain(&other.profile.outside);
                 if let Some(t) = theirs
                     .into_iter()
                     .find(|t| within(path, t) || within(t, path))
@@ -1034,6 +1132,26 @@ impl Profile {
                 return Err(format!("login {login:?} is not in the agent's state"));
             }
         }
+        // What Kule reads outside: only with a home of its own, where the
+        // agent no longer writes it, and only from there.
+        if self.own_home.is_none() && !(self.outside.is_empty() && self.carry.is_empty()) {
+            return Err(
+                "outside and carry are for an agent with a home of its own (own_home)".to_owned(),
+            );
+        }
+        let in_outside = |p: &str| self.outside.iter().any(|o| within(p, o));
+        for (to, from) in &self.carry {
+            if !in_outside(from) {
+                return Err(format!("carry {to:?}: {from:?} is not in outside"));
+            }
+        }
+        for (name, key) in &self.login_file {
+            if !in_outside(&key.path) || key.json.trim().is_empty() || key.hosts.is_empty() {
+                return Err(format!(
+                    "{name}: a login file is in outside, with where in it the key is and the hosts it is for"
+                ));
+            }
+        }
         if let Some(var) = &self.own_home {
             let ok = !var.is_empty()
                 && var
@@ -1049,7 +1167,12 @@ impl Profile {
                 ));
             }
         }
-        for name in self.keys.keys().chain(self.keychain.keys()) {
+        for name in self
+            .keys
+            .keys()
+            .chain(self.keychain.keys())
+            .chain(self.login_file.keys())
+        {
             if self.env.contains_key(name) || self.pass_env.contains(name) {
                 return Err(format!(
                     "{name}: a key the agent never sees cannot also be in env or pass_env"
@@ -1069,6 +1192,7 @@ impl Profile {
             .chain(&self.pass_env)
             .chain(self.keys.keys())
             .chain(self.keychain.keys())
+            .chain(self.login_file.keys())
         {
             let ok = !name.is_empty()
                 && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
@@ -1098,6 +1222,11 @@ impl Profile {
                 self.keychain
                     .values()
                     .map(|k| (k.service.as_str(), &k.hosts)),
+            )
+            .chain(
+                self.login_file
+                    .iter()
+                    .map(|(name, k)| (name.as_str(), &k.hosts)),
             );
         for (name, hosts) in bound {
             if let Some((_, own)) = KNOWN_CREDENTIALS.iter().find(|(n, _)| *n == name)
@@ -1121,6 +1250,7 @@ impl Profile {
             .iter()
             .chain(self.keys.values().flatten())
             .chain(self.keychain.values().flat_map(|k| &k.hosts))
+            .chain(self.login_file.values().flat_map(|k| &k.hosts))
         {
             let labels: Vec<&str> = host.split('.').collect();
             let ok = labels.len() >= 2
@@ -1143,49 +1273,18 @@ impl Profile {
         Ok(())
     }
 
-    /// Makes the agent's state directories that are not there yet, which
-    /// the sandbox could not open otherwise: an agent that only ever runs
-    /// in Kule never made them itself. A state path named like a file
-    /// (`.claude.json`) is left to the agent.
-    pub fn make_state(&self, home: &Path) -> Result<()> {
-        use std::os::unix::fs::DirBuilderExt;
-        for state in &self.state {
-            let path = home.join(state);
-            let name = Path::new(state)
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or_default();
-            let file_like = name.trim_start_matches('.').contains('.');
-            if file_like || std::fs::symlink_metadata(&path).is_ok() {
-                continue;
-            }
-            std::fs::DirBuilder::new()
-                .recursive(true)
-                .mode(0o700)
-                .create(&path)
-                .map_err(|e| io(&path, e))?;
-        }
-        Ok(())
-    }
-
-    /// Opens the agent's own state and login in `sandbox`. Paths that do not
-    /// exist are skipped: the agent has never run here.
-    /// Other agents' state, their logins and what the person said to them,
-    /// is hidden. `home` is the person's home directory.
+    /// Sets `sandbox` up for the agent: its login readable, its state
+    /// outside Kule hidden, as other agents' state, their logins and what
+    /// the person said to them is. Nothing in the person's home is opened
+    /// for writing: the agent writes its state in the task's home layer
+    /// (see [`Profile::launch_with`]) and in its home of its own. `home` is
+    /// the person's home directory.
     pub fn apply(&self, sandbox: &mut Sandbox, home: &Path) -> Result<()> {
-        // State and logins as they are written: a link the agent put in
-        // place of one (it can write there) opens nothing more.
-        for state in &self.state {
-            let path = home.join(state);
-            if path.exists() {
-                sandbox.allow_write_here(&path)?;
-            }
-        }
         for path in &self.login {
             sandbox.reveal(&home.join(path))?;
         }
-        for path in &self.protected {
-            sandbox.protect(&home.join(path))?;
+        for path in &self.outside {
+            sandbox.hide(&home.join(path))?;
         }
         if cfg!(target_os = "macos") {
             for path in &self.reveal_on_macos {
@@ -1214,7 +1313,7 @@ impl Profile {
 
     /// The agent's keys the person has set, with their values, for the
     /// task's proxy to put in for it (see [`Profile::keys`]).
-    pub fn agent_keys(&self) -> Vec<AgentKey> {
+    pub fn agent_keys(&self, home: Option<&Path>) -> Vec<AgentKey> {
         let mut keys: Vec<AgentKey> = self
             .keys
             .iter()
@@ -1239,6 +1338,18 @@ impl Profile {
                 });
             }
         }
+        for (name, key) in &self.login_file {
+            if keys.iter().any(|k| &k.name == name) {
+                continue;
+            }
+            if let Some(value) = home.and_then(|h| key.read(h)) {
+                keys.push(AgentKey {
+                    name: name.clone(),
+                    value,
+                    hosts: key.hosts.clone(),
+                });
+            }
+        }
         keys
     }
 
@@ -1250,6 +1361,7 @@ impl Profile {
             .iter()
             .chain(self.keys.values().flatten())
             .chain(self.keychain.values().flat_map(|k| &k.hosts))
+            .chain(self.login_file.values().flat_map(|k| &k.hosts))
             .map(String::as_str)
             .collect();
         hosts.sort_unstable();
@@ -1299,25 +1411,31 @@ impl Profile {
         let mut sandbox = Sandbox::for_task_with(task, person)?;
         let mut own_home = None;
         if let Some(home) = home {
-            self.make_state(&home)?;
             own_home = self.make_own_home(&home)?;
             self.apply(&mut sandbox, &home)?;
             if let Some(dir) = &own_home {
                 sandbox.allow_write(dir)?;
+                // The person's settings and instructions, as they are now:
+                // whatever the agent left there last time is gone.
+                for (to, from) in &self.carry {
+                    kule_engine::carry(&home.join(from), dir, to)?;
+                    let path = dir.join(to);
+                    if std::fs::symlink_metadata(&path).is_ok() {
+                        sandbox.protect(&path)?;
+                    }
+                }
+                for rel in self.left_behind(dir) {
+                    kule_engine::remove_beneath(dir, &rel)?;
+                }
             }
             // An agent whose own home is HOME has its whole home in Kule's
             // keeping already.
             if layer && self.own_home.as_deref() != Some("HOME") {
-                let mut linked: Vec<std::path::PathBuf> =
+                let state: Vec<std::path::PathBuf> =
                     self.state.iter().map(|s| home.join(s)).collect();
-                linked.extend(own_home.clone());
-                let ignored: Vec<String> = self
-                    .state
-                    .iter()
-                    .filter_map(|s| s.split('/').next())
-                    .map(str::to_owned)
-                    .collect();
-                task.prepare_home(&home, &linked, sandbox.hidden(), &ignored)?;
+                let ignored: Vec<String> =
+                    self.state.iter().chain(&self.outside).cloned().collect();
+                task.prepare_home(&home, &state, sandbox.hidden(), &ignored)?;
                 sandbox.use_home(task, &home)?;
             }
         }
@@ -1578,9 +1696,11 @@ mod tests {
             .success()
     }
 
-    /// One agent's login and transcripts are none of another's business.
+    /// One agent's login and transcripts are none of another's business,
+    /// and those it keeps outside Kule none of its own: in Kule it has a
+    /// home of its own.
     #[test]
-    fn an_agent_sees_its_own_login_and_no_other_agents_state() {
+    fn no_agent_sees_what_agents_keep_outside_kule() {
         let (home, ws, person) = (
             TempDir::new().unwrap(),
             TempDir::new().unwrap(),
@@ -1598,7 +1718,13 @@ mod tests {
             std::fs::write(person.join(dir).join(file), "secret\n").unwrap();
         }
         let (claude, codex) = (profile("claude-code").unwrap(), profile("codex").unwrap());
-        assert!(reads(&task, &person, &claude, ".claude/.credentials.json"));
+        assert!(!reads(&task, &person, &claude, ".claude/.credentials.json"));
+        assert!(!reads(
+            &task,
+            &person,
+            &claude,
+            ".claude/projects/session.jsonl"
+        ));
         assert!(!reads(&task, &person, &claude, ".codex/auth.json"));
         assert!(!reads(
             &task,
@@ -1606,7 +1732,7 @@ mod tests {
             &claude,
             ".gemini/gemini-credentials.json"
         ));
-        assert!(reads(&task, &person, &codex, ".codex/auth.json"));
+        assert!(!reads(&task, &person, &codex, ".codex/auth.json"));
         assert!(!reads(&task, &person, &codex, ".claude/.credentials.json"));
         assert!(!reads(
             &task,
@@ -1827,6 +1953,11 @@ hosts = ["openrouter.ai"]
             (
                 "another login",
                 r#"login = [".codex/auth.json"]"#,
+                "Kule keeps hidden",
+            ),
+            (
+                "another agent's state outside Kule",
+                r#"state = [".codex/sessions"]"#,
                 "agent codex keeps",
             ),
             ("kule home", r#"state = [".kule"]"#, "Kule's own home"),
@@ -1925,7 +2056,7 @@ hosts = ["openrouter.ai"]
         // SAFETY: no other test reads or writes these names.
         unsafe { std::env::set_var("KULE_TEST_AGENT_KEY_SET", "sk-1") };
         assert_eq!(
-            profile.agent_keys(),
+            profile.agent_keys(None),
             [AgentKey {
                 name: "KULE_TEST_AGENT_KEY_SET".into(),
                 value: "sk-1".into(),
@@ -2142,22 +2273,116 @@ hosts = ["openrouter.ai"]
         });
     }
 
-    /// What each of Kule's own agents reads when it starts that can make it
-    /// run something or follow instructions: none of it may be writable.
+    /// Runs `sh -c script` in the sandbox `profile` gets, for `person`.
+    fn runs(task: &Task, person: &Path, profile: &Profile, script: &str) -> bool {
+        let mut sandbox = Sandbox::for_task_with(
+            task,
+            Some(CacheSources {
+                home: person.to_owned(),
+                cargo_home: person.join(".cargo"),
+            }),
+        )
+        .unwrap();
+        profile.apply(&mut sandbox, person).unwrap();
+        sandbox
+            .command("sh", &["-c".to_owned(), script.to_owned()])
+            .unwrap()
+            .output()
+            .unwrap()
+            .status
+            .success()
+    }
+
+    /// Nothing Kule's own agents write in Kule lands where they read it
+    /// when the person starts them outside Kule: not their settings, not
+    /// the shell snapshots Claude Code sources before a command, not their
+    /// transcripts, not a folder of a name nobody listed.
     #[test]
-    fn kules_own_agents_leave_nothing_writable_that_runs_later() {
-        let reads: &[(&str, &[&str])] = &[
+    fn kules_own_agents_write_nothing_where_they_read_it_outside_kule() {
+        let outside: &[(&str, &[&str])] = &[
             (
                 "claude-code",
                 &[
                     ".claude/settings.json",
-                    ".claude/settings.local.json",
-                    ".claude/hooks",
-                    ".claude/plugins",
-                    ".claude/skills",
-                    ".claude/commands",
-                    ".claude/agents",
+                    ".claude/shell-snapshots/snapshot-zsh-1.sh",
+                    ".claude/projects/p/session.jsonl",
                     ".claude/CLAUDE.md",
+                    ".claude/plugins/x/hooks.json",
+                    ".claude.json",
+                ],
+            ),
+            (
+                "gemini",
+                &[
+                    ".gemini/settings.json",
+                    ".gemini/GEMINI.md",
+                    ".gemini/extensions/x/a.json",
+                ],
+            ),
+            (
+                "codex",
+                &[
+                    ".codex/config.toml",
+                    ".codex/AGENTS.md",
+                    ".codex/sessions/s.jsonl",
+                ],
+            ),
+        ];
+        let (home, ws, person) = (
+            TempDir::new().unwrap(),
+            TempDir::new().unwrap(),
+            TempDir::new().unwrap(),
+        );
+        let task = Task::create(home.path(), ws.path()).unwrap();
+        let person = std::fs::canonicalize(person.path()).unwrap();
+        for (_, paths) in outside {
+            for path in *paths {
+                let path = person.join(path);
+                std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                std::fs::write(path, "mine\n").unwrap();
+            }
+        }
+        for (name, paths) in outside {
+            let profile = profile(name).unwrap();
+            for path in *paths {
+                let path = person.join(path);
+                let dir = path.parent().unwrap().join("new");
+                let script = format!(
+                    "echo x >> '{}' || mkdir -p '{}' || echo x > '{}/x'",
+                    path.display(),
+                    dir.display(),
+                    dir.display()
+                );
+                assert!(
+                    !runs(&task, &person, &profile, &script),
+                    "{name}: {}",
+                    path.display()
+                );
+                assert_eq!(std::fs::read_to_string(&path).unwrap(), "mine\n");
+                assert!(!dir.exists(), "{name}: {}", dir.display());
+            }
+        }
+    }
+
+    /// What each of Kule's own agents reads as it starts and can make it run
+    /// something or follow instructions, in its home of its own: carried
+    /// from the person's at every start, or removed then.
+    #[test]
+    fn kules_own_agents_start_from_the_persons_settings_alone() {
+        let reads: &[(&str, &[&str])] = &[
+            (
+                "claude-code",
+                &[
+                    "settings.json",
+                    "settings.local.json",
+                    "hooks",
+                    "plugins",
+                    "skills",
+                    "commands",
+                    "agents",
+                    "CLAUDE.md",
+                    "shell-snapshots",
+                    ".claude.json",
                 ],
             ),
             (
@@ -2174,36 +2399,39 @@ hosts = ["openrouter.ai"]
             (
                 "codex",
                 &[
-                    ".codex/config.toml",
-                    ".codex/rules",
-                    ".codex/plugins",
-                    ".codex/skills",
-                    ".codex/prompts",
-                    ".codex/AGENTS.md",
+                    "config.toml",
+                    "rules",
+                    "plugins",
+                    "skills",
+                    "prompts",
+                    "AGENTS.md",
+                    "AGENTS.override.md",
                 ],
             ),
         ];
-        let home = TempDir::new().unwrap();
-        for (_, paths) in reads {
+        let agents = Agents::built_in();
+        for (name, paths) in reads {
+            let profile = agents.get(name).unwrap();
+            assert!(profile.own_home.is_some(), "{name}");
+            assert!(
+                profile
+                    .state
+                    .iter()
+                    .all(|s| !profile.outside.iter().any(|o| within(s, o)))
+            );
+            let own = TempDir::new().unwrap();
             for path in *paths {
-                let path = home.path().join(path);
+                let path = own.path().join(path);
                 std::fs::create_dir_all(path.parent().unwrap()).unwrap();
                 std::fs::write(path, "x").unwrap();
             }
-        }
-        let agents = Agents::built_in();
-        for (name, _) in reads {
-            let profile = &agents
-                .listed()
-                .iter()
-                .find(|l| l.profile.name == *name)
-                .unwrap()
-                .profile;
-            assert_eq!(
-                profile.unprotected(home.path()),
-                Vec::<String>::new(),
-                "{name}"
-            );
+            let left = profile.left_behind(own.path());
+            for path in *paths {
+                assert!(
+                    profile.carry.contains_key(*path) || left.iter().any(|l| l == path),
+                    "{name}: {path}"
+                );
+            }
         }
     }
 
@@ -2237,13 +2465,12 @@ hosts = ["openrouter.ai"]
         wrong.pass_env.push("GITHUB_TOKEN".into());
         assert!(wrong.check(&[], None).is_err());
 
-        let home = TempDir::new().unwrap();
         let mut told = base();
         told.keys
             .insert("OPENROUTER_API_KEY".into(), vec!["openrouter.ai".into()]);
         told.pass_env.push("TOOL_CONFIG".into());
         assert!(told.check(&[], None).is_ok());
-        let warnings = told.warnings(home.path());
+        let warnings = told.warnings();
         assert!(
             warnings
                 .iter()
@@ -2279,43 +2506,228 @@ hosts = ["openrouter.ai"]
         assert_eq!(program, "npx");
     }
 
+    /// `protected` is from before an agent's state stayed out of the
+    /// person's home: a profile that still names it loads, does nothing
+    /// with it, and the person is told it is no longer needed.
     #[test]
-    fn what_runs_later_and_is_writable_is_found_and_warned_about() {
-        let home = TempDir::new().unwrap();
-        let mut profile = Profile::bare("tool", vec!["tool".into()], BTreeMap::new());
-        profile.state = vec![".tool".into()];
-        let dir = home.path().join(".tool");
-        std::fs::create_dir_all(dir.join("hooks")).unwrap();
-        for name in [
-            "settings.json",
-            "TOOL.md",
-            "notes.txt",
-            "cache.json",
-            "readme.md",
-        ] {
-            std::fs::write(dir.join(name), "x").unwrap();
-        }
-        assert_eq!(
-            profile.unprotected(home.path()),
-            [".tool/TOOL.md", ".tool/hooks", ".tool/settings.json"]
+    fn a_profile_that_still_protects_is_told_it_is_no_longer_needed() {
+        let kule = kule_home(OPENCODE);
+        let agents = Agents::load(kule.path()).unwrap();
+        let listed = agents
+            .listed()
+            .iter()
+            .find(|l| l.profile.name == "opencode")
+            .unwrap();
+        assert!(
+            listed
+                .warnings
+                .iter()
+                .any(|w| w.contains("no longer needed"))
         );
-        assert_eq!(profile.warnings(home.path()).len(), 3);
-        profile.protected = vec![
-            ".tool/hooks".into(),
-            ".tool/settings.json".into(),
-            ".tool/TOOL.md".into(),
-        ];
-        assert!(profile.unprotected(home.path()).is_empty());
-        assert!(profile.warnings(home.path()).is_empty());
+        let mut profile = listed.profile.clone();
+        profile.protected.clear();
+        assert!(
+            !profile
+                .warnings()
+                .iter()
+                .any(|w| w.contains("no longer needed"))
+        );
+    }
 
-        // Nothing found, nothing read-only: still told.
-        let mut bare = Profile::bare("other", vec!["other".into()], BTreeMap::new());
-        bare.state = vec![".other".into()];
-        assert_eq!(bare.warnings(home.path()).len(), 1);
-        // A home of its own and no state in the person's: nothing to tell.
-        bare.state.clear();
-        bare.own_home = Some("OTHER_HOME".into());
-        assert!(bare.warnings(home.path()).is_empty());
+    /// The person's settings and instructions reach an agent's home of its
+    /// own at every start, exactly as they are, and read-only while it
+    /// runs: what one task's agent wrote there, or left beside them, is gone
+    /// at the next start, and a link it put on the way leads nowhere.
+    #[test]
+    fn an_agents_own_home_starts_from_the_persons_settings_every_time() {
+        let (tasks, ws, person, elsewhere) = (
+            TempDir::new().unwrap(),
+            TempDir::new().unwrap(),
+            TempDir::new().unwrap(),
+            TempDir::new().unwrap(),
+        );
+        let task = Task::create(tasks.path(), ws.path()).unwrap();
+        let person = std::fs::canonicalize(person.path()).unwrap();
+        let elsewhere = std::fs::canonicalize(elsewhere.path()).unwrap();
+        let sources = || {
+            Some(CacheSources {
+                home: person.clone(),
+                cargo_home: person.join(".cargo"),
+            })
+        };
+        std::fs::create_dir_all(person.join(".tool/skills/one")).unwrap();
+        std::fs::write(person.join(".tool/settings.json"), "mine\n").unwrap();
+        std::fs::write(person.join(".tool/skills/one/SKILL.md"), "mine\n").unwrap();
+        let agents_file = r#"
+[[agent]]
+name = "tool"
+command = ["sh", "-c", "echo evil > \"$TOOL_HOME/settings.json\"; echo evil > \"$TOOL_HOME/skills/one/SKILL.md\"; echo ran > \"$TOOL_HOME/ran\""]
+own_home = "TOOL_HOME"
+outside = [".tool"]
+carry = { "settings.json" = ".tool/settings.json", "skills" = ".tool/skills", "TOOL.md" = ".tool/TOOL.md", ".x/settings.json" = ".tool/settings.json" }
+"#;
+        let kule = kule_home(agents_file);
+        Agents::approve(kule.path(), "tool").unwrap();
+        let agents = Agents::load(kule.path()).unwrap();
+        let tool = agents.get("tool").unwrap();
+        let own = person.join(tool.own_home_path());
+        // What an agent left in its home on an earlier run, as it could.
+        std::fs::create_dir_all(own.join("hooks")).unwrap();
+        std::fs::write(own.join("hooks/pre.sh"), "evil\n").unwrap();
+        std::fs::write(own.join("TOOL.md"), "evil\n").unwrap();
+        std::fs::write(own.join("notes.txt"), "its own\n").unwrap();
+        std::fs::write(elsewhere.join("settings.json"), "theirs\n").unwrap();
+        std::os::unix::fs::symlink(elsewhere.join("settings.json"), own.join("settings.json"))
+            .unwrap();
+        std::os::unix::fs::symlink(&elsewhere, own.join(".x")).unwrap();
+
+        let proxy = Proxy::start(&task, Policy::builtin()).unwrap();
+        let mut launch = tool.launch_for(&task, &proxy, sources()).unwrap();
+        let _ = launch.command.status().unwrap();
+        drop(launch);
+
+        assert_eq!(std::fs::read_to_string(own.join("ran")).unwrap(), "ran\n");
+        assert_eq!(
+            std::fs::read_to_string(own.join("settings.json")).unwrap(),
+            "mine\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(own.join("skills/one/SKILL.md")).unwrap(),
+            "mine\n"
+        );
+        assert!(!own.join("TOOL.md").exists());
+        assert!(!own.join("hooks").exists());
+        assert_eq!(
+            std::fs::read_to_string(own.join("notes.txt")).unwrap(),
+            "its own\n"
+        );
+        assert!(
+            !std::fs::symlink_metadata(own.join(".x"))
+                .unwrap()
+                .is_symlink()
+        );
+        assert_eq!(
+            std::fs::read_to_string(own.join(".x/settings.json")).unwrap(),
+            "mine\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(elsewhere.join("settings.json")).unwrap(),
+            "theirs\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(person.join(".tool/settings.json")).unwrap(),
+            "mine\n"
+        );
+        // And it never reads where the person keeps them.
+        assert!(!reads(&task, &person, tool, ".tool/settings.json"));
+    }
+
+    /// A sign-in kept in a file outside Kule is Kule's to read: the agent
+    /// gets a placeholder, never the file. A profile reads such a file only
+    /// in where it keeps its state outside Kule, and never one Kule hides.
+    #[test]
+    fn a_sign_in_file_is_kules_to_read_not_the_agents() {
+        let (tasks, ws, person) = (
+            TempDir::new().unwrap(),
+            TempDir::new().unwrap(),
+            TempDir::new().unwrap(),
+        );
+        let task = Task::create(tasks.path(), ws.path()).unwrap();
+        let person = std::fs::canonicalize(person.path()).unwrap();
+        std::fs::create_dir_all(person.join(".tool")).unwrap();
+        std::fs::write(
+            person.join(".tool/creds.json"),
+            r#"{"oauth":{"token":"tok-1","refresh":"r"}}"#,
+        )
+        .unwrap();
+        let mut tool = Profile::bare("tool", vec!["tool".into()], BTreeMap::new());
+        tool.own_home = Some("TOOL_HOME".into());
+        tool.outside = vec![".tool".into()];
+        tool.login_file.insert(
+            "KULE_TEST_TOOL_TOKEN".into(),
+            LoginFile {
+                path: ".tool/creds.json".into(),
+                json: "oauth.token".into(),
+                hosts: vec!["api.example.com".into()],
+            },
+        );
+        assert_eq!(tool.check(&[], None), Ok(()));
+        assert_eq!(
+            tool.agent_keys(Some(&person)),
+            [AgentKey {
+                name: "KULE_TEST_TOOL_TOKEN".into(),
+                value: "tok-1".into(),
+                hosts: vec!["api.example.com".into()],
+            }]
+        );
+        assert!(tool.agent_keys(None).is_empty());
+        assert!(!reads(&task, &person, &tool, ".tool/creds.json"));
+        assert!(
+            tool.warnings()
+                .iter()
+                .any(|w| w.contains("~/.tool/creds.json"))
+        );
+
+        let mut elsewhere = tool.clone();
+        elsewhere
+            .login_file
+            .get_mut("KULE_TEST_TOOL_TOKEN")
+            .unwrap()
+            .path = ".other/creds.json".into();
+        assert!(elsewhere.check(&[], None).is_err());
+        let mut hidden = tool.clone();
+        hidden.outside = vec![".aws".into()];
+        hidden
+            .login_file
+            .get_mut("KULE_TEST_TOOL_TOKEN")
+            .unwrap()
+            .path = ".aws/credentials".into();
+        assert!(
+            hidden
+                .check(&[], None)
+                .unwrap_err()
+                .contains("keeps hidden")
+        );
+        // Claude Code's sign-in on Linux, where no keychain holds it.
+        let claude = profile("claude-code").unwrap();
+        let key = &claude.login_file["CLAUDE_CODE_OAUTH_TOKEN"];
+        assert_eq!(key.path, ".claude/.credentials.json");
+        assert_eq!(key.hosts, ["api.anthropic.com"]);
+    }
+
+    /// Where an agent keeps its state outside Kule and what Kule carries
+    /// from there are only for an agent with a home of its own, in its own
+    /// folders, and never what Kule hides or another agent keeps.
+    #[test]
+    fn what_kule_carries_comes_from_the_agents_own_folders_alone() {
+        let mut tool = Profile::bare("tool", vec!["tool".into()], BTreeMap::new());
+        tool.outside = vec![".tool".into()];
+        assert!(tool.check(&[], None).unwrap_err().contains("own_home"));
+        tool.own_home = Some("TOOL_HOME".into());
+        assert_eq!(tool.check(&[], None), Ok(()));
+        tool.carry.insert("a".into(), ".other/a".into());
+        assert!(
+            tool.check(&[], None)
+                .unwrap_err()
+                .contains("not in outside")
+        );
+        tool.outside = vec![".aws".into()];
+        tool.carry = BTreeMap::from([("c".into(), ".aws/credentials".into())]);
+        assert!(tool.check(&[], None).unwrap_err().contains("keeps hidden"));
+        tool.carry.clear();
+        tool.carry.insert("../x".into(), ".aws/config".into());
+        assert!(tool.check(&[], None).is_err());
+
+        let agents = Agents::built_in();
+        let mut theirs = Profile::bare("tool", vec!["tool".into()], BTreeMap::new());
+        theirs.own_home = Some("TOOL_HOME".into());
+        theirs.outside = vec![".claude".into()];
+        assert!(
+            agents
+                .check_draft(Path::new("/k"), &theirs)
+                .unwrap_err()
+                .contains("claude-code")
+        );
     }
 
     #[test]

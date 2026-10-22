@@ -18,15 +18,16 @@ görevin proxy'si üzerinden geçer.
 | Ajan | Kule'deki adı | Neye ihtiyaç duyar | Nasıl oturum açar |
 | --- | --- | --- | --- |
 | **Claude Code** | `claude-code` | Node.js (`npx`) | Kule olmadan nasılsa öyle: bir terminalde `claude` ya da `ANTHROPIC_API_KEY`. |
-| **Codex** | `codex` | Node.js (`npx`) | Bir ChatGPT hesabıyla `codex login` ya da `OPENAI_API_KEY`. |
+| **Codex** | `codex` | Node.js (`npx`) | `OPENAI_API_KEY` ya da Kule'deki ev dizininde bir kez oturum açılmış bir ChatGPT hesabı (aşağıya bakın). |
 | **Gemini** | `gemini` | Gemini CLI (`PATH`'inizde `gemini`) | Google AI Studio'dan bir API anahtarı (aşağıya bakın). |
 
 Varsayılan `claude-code`'dur (`kule run TASK "prompt"` onu kullanır).
 Başka bir ajanı `kule run TASK --agent codex "prompt"` ile ya da uygulamada
 prompt'un altındaki ajan seçiciyle seçin.
 
-Her ajanda bir kez, Kule olmadan nasıl yapıyorsanız öyle oturum açın.
-Kule'nin çalıştırmaları bu oturumu kullanır. Uygulamanın ilk ekranı ve
+Her ajanda bir kez, Kule olmadan nasıl yapıyorsanız öyle oturum açın
+(ChatGPT ile Codex'te bir kez de Kule'de). Kule'nin çalıştırmaları bu
+oturumu kullanır. Uygulamanın ilk ekranı ve
 `kule agents list`, hangi ajanların başlayabildiğini ve diğerlerinde neyin
 eksik olduğunu söyler.
 
@@ -35,10 +36,11 @@ eksik olduğunu söyler.
 - Kule, Claude Code'u ACP bağdaştırıcısı (adapter) üzerinden başlatır; bu,
   sürümü sabitlenmiş bir npm paketidir
   (`@agentclientprotocol/claude-agent-acp`).
-- macOS'ta Claude Code'un oturumu anahtar zincirinde (keychain) durur ve
-  anahtar zinciri sandbox'tan gizli kalır. Kule token'ı oradan kendisi
-  okur ve ajana bir yer tutucu verir; görevin proxy'si gerçek token'ı
-  yalnızca `api.anthropic.com`'a giden isteklere koyar.
+- Claude Code'un oturumu macOS'ta anahtar zincirinde (keychain), Linux'ta
+  `~/.claude/.credentials.json` dosyasında durur; ikisi de sandbox'tan
+  gizlidir. Kule token'ı oradan kendisi okur ve ajana bir yer tutucu verir;
+  görevin proxy'si gerçek token'ı yalnızca `api.anthropic.com`'a giden
+  isteklere koyar.
 - Ortamınızdaki `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` ve
   `CLAUDE_CODE_OAUTH_TOKEN` de aynı şekilde işlenir: ajan anahtarı değil,
   bir yer tutucuyu görür.
@@ -50,10 +52,22 @@ eksik olduğunu söyler.
 - Codex'in kendi komut sandbox'ı Kule'ninkinin içinde kurulamaz; bu yüzden
   Kule onu tam erişim (full-access) modunda başlatır ve onun yerini Kule'nin
   sandbox'ı tutar.
-- ChatGPT oturumu (`codex login`) çalışır: token'ını `auth.openai.com`'da
-  yeniler ve modele `chatgpt.com` üzerinden ulaşır; Codex çalışırken bu iki
-  adres açıktır. `OPENAI_API_KEY` yalnızca `api.openai.com`'a, bir yer
-  tutucu olarak gider.
+- `OPENAI_API_KEY` yalnızca `api.openai.com`'a, bir yer tutucu olarak
+  gider.
+- ChatGPT oturumu, Codex Kule'deki ev dizininde oturum açtıktan sonra
+  çalışır. Bu, Kule olmadan kullandığınız oturumdan ayrıdır; Kule onu hiç
+  kopyalamaz (Codex'in bir yerde yenilediği token öbüründe çalışmaz). Bir
+  kez:
+
+  ```sh
+  # macOS
+  CODEX_HOME="$HOME/Library/Application Support/Kule/agents/codex" npx -y @openai/codex login
+  # Linux
+  CODEX_HOME="$HOME/.local/share/kule/agents/codex" npx -y @openai/codex login
+  ```
+
+  Token'ını `auth.openai.com`'da yeniler ve modele `chatgpt.com` üzerinden
+  ulaşır; Codex çalışırken bu iki adres açıktır.
 - ChatGPT ile oturum açılmışken Codex token sayısını bildirir ama maliyeti
   bildirmez; bu yüzden bir [bütçe](concepts/budgets-and-limits.md) onu
   sınırlayamaz.
@@ -81,8 +95,8 @@ eksik olduğunu söyler.
 Bir göreve prompt verdiğinizde (`kule run` ya da uygulamada **Run**):
 
 1. Kule ajanı **profiliyle** başlatır: onu başlatan komut ve sandbox'ta
-   ihtiyaç duyduğu dar ek alan (kendi durum (state) dizini ve oturumu,
-   host'ları).
+   ihtiyaç duyduğu dar ek alan (Kule'de kendine ait bir ev dizini,
+   oturumu, host'ları).
 2. Ajan görevin kopyasında, sandbox'ın içinde çalışır. Diğer ajanların
    oturumları ve konuşma kayıtları ondan gizli kalır.
 3. Yaptığı her araç çağrısı bir **adım** olur (`kule steps TASK` ya da
@@ -91,21 +105,30 @@ Bir göreve prompt verdiğinizde (`kule run` ya da uygulamada **Run**):
 4. Siz [commit](concepts/review-commit-undo.md) edene kadar klasörünüze
    hiçbir şey ulaşmaz.
 
-### Bir ajanın sonrası için değiştiremeyeceği şeyler {#what-an-agent-may-not-change-for-later}
+### Bir ajanın yazdıkları Kule'de kalır {#what-an-agent-writes-stays-in-kule}
 
-Bir ajanın kendi dizini (`~/.claude`, `~/.codex`, `~/.gemini`) sandbox'ın
-dışındadır; ajanın Kule'de oraya yazdıkları, onu Kule olmadan bir sonraki
-başlatışınızda ona ulaşır. Bu yüzden bir ajanın başlarken bir şey
-çalıştırmasına ya da talimat izlemesine yol açan şeyler sandbox'ta **salt
-okunurdur**: ayarlar, hook'lar, eklentiler (plugin'ler, extension'lar),
-skill'ler, komutlar, kurallar, güvenilen klasörler ve `CLAUDE.md`,
-`AGENTS.md` ya da `GEMINI.md` dosyası. Kule'nin kendi profilleri bunları
-kapsar; kendi profilleriniz için bir deneme (trial) bunları önerir ve
-`kule agents show` yazılabilir bırakılmış olanlar için uyarır.
+Bir ajanın Kule'de yazdığı hiçbir şey ev dizininize ulaşmaz; ulaşsaydı,
+ajanı Kule olmadan bir sonraki başlatışınızda etkili olurdu:
 
-Ya da bir ajana `own_home` ile Kule'de **kendine ait bir ev dizini** verin
-(aşağıya bakın): o zaman Kule'de yazdığı hiçbir şey dışarıda ona ulaşmaz;
-oturumu orada bir kez açarsınız.
+- Kule'nin kendi ajanlarının her birinin Kule'de **kendine ait bir ev
+  dizini** vardır (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `GEMINI_CLI_HOME`).
+  Kule'deki ayarları, geçmişi ve konuşma kayıtları görevler boyunca orada
+  tutulur. `~/.claude`, `~/.codex` ve `~/.gemini` ondan gizlidir.
+- Kule her başlangıçta ayarlarınızı, hook'larınızı, skill'lerinizi,
+  komutlarınızı, eklentilerinizi (extension'lar), kurallarınızı, güvenilen
+  klasörlerinizi ve talimatlarınızı (`CLAUDE.md`, `AGENTS.md`, `GEMINI.md`)
+  o ev dizinine kopyalar; ajan çalışırken bunlar salt okunurdur. Bir
+  ajanın herhangi bir görevde orada ya da onların yanında bıraktığı şey,
+  Claude Code'un bir komuttan önce okuduğu kabuk anlık görüntüleri (shell
+  snapshot) de dahil, bir sonraki başlangıçta silinir. Claude Code'un
+  plugin'leri kopyalanmaz.
+- Ajanın ev dizininize yazdığı diğer şeyler (`state`), görevin
+  [ev dizini kopyasına](concepts/home-layer.md) gider ve uygulanmak üzere
+  hiç önerilmez.
+
+Kule'de önceki bir sürümle çalıştırdığınız oturumlar olduğu yerde,
+`~/.claude/projects` ve benzerlerinde kalır; yenileri ajanın Kule'deki ev
+dizinindedir.
 
 ### npx ile getirilen paketler {#packages-fetched-with-npx}
 
@@ -183,15 +206,18 @@ ev dizininize göredir.
 | --- | --- | --- |
 | `name` | string, zorunlu | Ajanın nasıl istendiği (`kule run --agent NAME`). Küçük harfler, rakamlar ve tireler. Kule'nin kendi ajanlarından birinin adı olamaz. |
 | `command` | string listesi, zorunlu | Ajanı stdio üzerinden ACP konuşacak şekilde başlatır. `npx`, `bunx`, `pnpx`, `uvx` ya da `pipx` ile başlatılan bir paket **tek bir kesin sürüm** belirtmelidir (`npx -y name@1.2.3`). |
-| `state` | yol listesi | Ajanın kendi durumunu yazdığı yer, `~` altında. Birden fazla ajanınkinden çok daha fazlasını tutan bir dizin olamaz (`.config`, `.local/share`, `.cache`, `Library/Application Support`, `Documents`, …); bir kabuk, oturum ya da araç başlatırken çalışan bir şey de olamaz (`.zshrc`, `.gitconfig`, `.config/fish`, `.local/bin`, `Library/LaunchAgents`, …). |
-| `protected` | yol listesi | Durumunun içinde, daha sonra sandbox'ın dışında neyin çalışacağını yapılandıran yollar (ayarlar, hook'lar, MCP sunucuları, plugin'ler, talimatlar): okunabilir, asla yazılamaz. |
+| `state` | yol listesi | Ajanın kendi durumunu yazdığı yer, `~` altında. Her çalıştırma bunun bir kopyasını görevin [ev dizini kopyasında](concepts/home-layer.md) alır: ajan oraya yazar, hiçbiri ev dizininize ulaşmaz ya da uygulanmak üzere önerilmez. Birden fazla ajanınkinden çok daha fazlasını tutan bir dizin olamaz (`.config`, `.local/share`, `.cache`, `Library/Application Support`, `Documents`, …); bir kabuk, oturum ya da araç başlatırken çalışan bir şey de olamaz (`.zshrc`, `.gitconfig`, `.config/fish`, `.local/bin`, `Library/LaunchAgents`, …). |
 | `login` | yol listesi | Durumunun içindeki oturum bilgisi. Diğer tüm ajanlardan ve Kule'nin kendi çalıştırdığı komutlardan gizlidir. |
+| `outside` | yol listesi | `own_home` ile: ajanı Kule olmadan çalıştırdığınızda durumunu tuttuğu yer (`.claude`). Ondan ve diğer tüm ajanlardan gizlidir; orayı yalnızca Kule, `carry` ve `login_file` için okur. |
+| `carry` | tablo: kendi ev dizinindeki yol → `outside` içindeki yol | `own_home` ile: Kule'nin her başlangıçta ev dizinine sizde olduğu gibi kopyaladığı şeyler (sizde yoksa silinir); ajan çalışırken salt okunurdur. Ev dizininde ona bir şey çalıştırtan ya da talimat izleten ve kopyalanmayan her şey o sırada silinir. Kule'nin gizlediği hiçbir şey olamaz. |
+| `login_file` | tablo: değişken → `{ path, json, hosts }` | Ajanın `outside` içindeki bir JSON dosyasında tuttuğu bir anahtar, onu okuduğu değişkenle. Kule onu oradan okur (`json`, dosyanın içindeki noktalı yoldur) ve `keys`'teki gibi ajana bir yer tutucu verir. Ortamınızda ya da anahtar zincirinde aynı adlı bir anahtar varsa o kazanır. |
+| `protected` | yol listesi | Artık kullanılmıyor: bir ajanın yazdığı hiçbir şey ev dizininize ulaşmaz. Eski profiller yüklensin diye kabul edilir; `kule agents show` bunu söyler. |
 | `keys` | tablo: değişken → host listesi | Ajanın API anahtarlarını tutan ortam değişkenleriniz; her biri hangi host'lar için olduğuyla. Ajanın değişkeni bir yer tutucu tutar; görevin proxy'si anahtarı yalnızca o host'lara giden isteklere, HTTPS üzerinden koyar. |
 | `keychain` | tablo: değişken → `{ service, json, hosts }` | macOS: ajanın anahtar zincirinde tuttuğu bir anahtar, onu okuduğu değişkenle. Kule onu oradan okur (`service` anahtar zinciri öğesidir; `json`, varsa öğenin JSON'ı içindeki noktalı yoldur) ve `keys`'teki gibi ajana bir yer tutucu verir. Ortamınızda aynı adlı bir anahtar varsa o kazanır. |
 | `hosts` | host listesi | Oturumu ve modeli için, politikanın geçirdiklerinin ötesinde ihtiyaç duyduğu HTTPS host'ları. Yalnızca bu ajan çalışırken açıktır. |
 | `env` | tablo: değişken → değer | Ajanın başlatıldığı değişkenler. |
 | `pass_env` | değişken adı listesi | Ajanın olduğu gibi görebileceği ortam değişkenleriniz. Diğerleri dışarıda kalır. Gizli olan her şey için `keys`'i tercih edin. |
-| `own_home` | değişken adı | Durumunun nerede olduğunu bir değişkenden okuyan bir ajan için Kule'de kendine ait bir ev dizini (`CODEX_HOME`, `CLAUDE_CONFIG_DIR` ya da `HOME`'un kendisi). Kule değişkeni ajanın kendine ait bir klasörüne yönlendirir; böylece Kule'de yazdığı şey dışarıda ona hiç ulaşmaz; oturumu orada bir kez açarsınız. `PATH`, `TMPDIR`, `TMP`, `TEMP`, `PWD` ya da `SHELL` olamaz. |
+| `own_home` | değişken adı | Durumunun nerede olduğunu bir değişkenden okuyan bir ajan için Kule'de kendine ait bir ev dizini (`CODEX_HOME`, `CLAUDE_CONFIG_DIR`, `GEMINI_CLI_HOME` ya da `HOME`'un kendisi). Kule değişkeni ajanın kendine ait bir klasörüne yönlendirir; Kule'de yazdığı şey görevler boyunca orada kalır ve dışarıda ona hiç ulaşmaz. Ayarlarınızı ona `carry` ile verin; oturumu orada bir kez ya da `login_file` ile açın. `PATH`, `TMPDIR`, `TMP`, `TEMP`, `PWD` ya da `SHELL` olamaz. |
 | `reveal_on_macos` | yol listesi | macOS'ta okuması gereken, varsayılan olarak gizli yollar. Yalnızca `Library/Keychains` açılabilir. |
 | `mode` | string | Ajan sunuyorsa başlanacak ACP oturum modu: kendi sandbox'ı Kule'ninkinin içinde başlayamayan bir ajan için. |
 | `devices` | yol listesi | Linux: ajanın ve komutlarının, her komutun aldıklarının ötesinde ihtiyaç duyduğu `/dev` altındaki aygıtlar; örneğin `/dev/snd`, `/dev/video0` ya da bir seri port. Kule size ait olana ulaşanları reddeder: diskler, bellek, klavye ve fare, konsollar ve terminaller. |
@@ -206,7 +232,7 @@ Kule her profili çalışmadan önce denetler. Bir profil şunları asla açamaz
 
 - Kule'nin gizlediği kimlik bilgileri (`~/.ssh`, `~/.aws`, …);
   `reveal_on_macos` üzerinden macOS anahtar zinciri hariç;
-- başka bir ajanın durumu ya da oturumu;
+- başka bir ajanın durumu, oturumu ya da Kule dışındaki durumu;
 - Kule'nin kendi ev dizini;
 - `~/Documents`, `~/.config` ya da `~/Library` gibi bütün bir dizin;
 - bir kabuk, oturum ya da araç başlatırken çalışan şeyler;

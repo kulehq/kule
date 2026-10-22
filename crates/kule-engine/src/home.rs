@@ -7,9 +7,10 @@
 //! makes at the top, in the layer. Every other top-level entry is a link to
 //! the person's own, so tools find their toolchains, caches and settings
 //! where they always are, and a write through such a link meets the
-//! sandbox as before. The agent's own state is linked too, and what changes
-//! there is never offered. Paths the sandbox hides (`.ssh`, `.aws`, …) are
-//! not in the layer at all.
+//! sandbox as before. The agent's own state is cloned into the layer, never
+//! linked: it writes there, what it writes is never offered, and nothing of
+//! it reaches the person's home. Paths the sandbox hides (`.ssh`, `.aws`,
+//! …) are not in the layer at all.
 //!
 //! A person sees the changes ([`Task::home_changes`]) and takes them to the
 //! real home ([`Task::apply_home`]) or throws them away
@@ -24,6 +25,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 use walkdir::WalkDir;
 
+use crate::clock::Clock;
 use crate::effects::Change;
 use crate::error::{Error, IoContext, Result};
 use crate::fsops::{self, read_json, write_json};
@@ -116,10 +118,11 @@ struct Layer {
     entries: BTreeMap<String, Entry>,
     /// Paths made links to the person's own.
     links: BTreeSet<String>,
-    /// Names whose changes are the agent's own business: a path is left out
-    /// when its first component starts with one (`.claude.json.tmp.1`).
+    /// Paths whose changes are the agent's own business, and never offered:
+    /// what is in one, and a name beside one that starts with its name and a
+    /// dot (`.claude.json.tmp.1`).
     ignored: Vec<String>,
-    /// Who the layer was made for: its linked, hidden and ignored paths,
+    /// Who the layer was made for: its state, hidden and ignored paths,
     /// hashed. Another agent's run never takes it over, with what the first
     /// wrote in it (its state, perhaps its login).
     #[serde(default)]
@@ -161,15 +164,119 @@ impl Layer {
         let last = rel.rsplit('/').next().unwrap_or(rel);
         NOISE.iter().any(|n| first.starts_with(n))
             || last == ".DS_Store"
-            || self
-                .ignored
-                .iter()
-                .any(|name| first.starts_with(name.as_str()))
+            || self.ignored.iter().any(|p| own_business(p, rel))
             || self
                 .links
                 .iter()
                 .any(|l| rel == l || rel.starts_with(&format!("{l}/")))
     }
+}
+
+/// Whether `rel` is in the ignored path `ignored`, or a name beside it that
+/// starts with its name and a dot, as tools write a file next to the one
+/// they replace (`.claude.json.tmp.1`).
+fn own_business(ignored: &str, rel: &str) -> bool {
+    let ours: Vec<&str> = ignored.split('/').collect();
+    let theirs: Vec<&str> = rel.split('/').collect();
+    let Some((name, parents)) = ours.split_last() else {
+        return false;
+    };
+    theirs.len() >= ours.len()
+        && theirs[..parents.len()] == *parents
+        && (theirs[parents.len()] == *name
+            || theirs[parents.len()].starts_with(&format!("{name}.")))
+}
+
+/// Whether `rel` is a folder on the way to an ignored path, which the layer
+/// holds as a folder of its own only to reach that path.
+fn on_the_way(ignored: &[String], rel: &str) -> bool {
+    ignored.iter().any(|p| p.starts_with(&format!("{rel}/")))
+}
+
+/// Makes an agent's state at `rel` a clone in the layer `dir` of what it is
+/// under `real`; where the person has none, the agent makes it in the layer.
+/// Each folder on the way the layer holds as a link to the person's becomes
+/// a folder of its own, whose other entries stay links. State too large or
+/// unreadable to clone for every run, or behind a link of the person's own,
+/// stays a link: the sandbox refuses the agent's writes there.
+fn capture_state(
+    real: &Path,
+    dir: &Path,
+    rel: &str,
+    hidden: &[PathBuf],
+    layer: &mut Layer,
+    clock: &Clock,
+) -> Result<()> {
+    let parts: Vec<&str> = rel.split('/').collect();
+    for depth in 1..parts.len() {
+        let on = parts[..depth].join("/");
+        let (from, to) = (real.join(&on), dir.join(&on));
+        match fs::symlink_metadata(&to) {
+            Ok(m) if m.is_dir() => {}
+            Ok(_) if layer.links.contains(&on) => {
+                if !fs::symlink_metadata(&from).is_ok_and(|m| m.is_dir()) {
+                    return Ok(());
+                }
+                fs::remove_file(&to).at(&to)?;
+                layer.links.remove(&on);
+                fs::create_dir(&to).at(&to)?;
+                let mut children: Vec<_> = fs::read_dir(&from)
+                    .at(&from)?
+                    .filter_map(|e| e.ok())
+                    .map(|e| e.file_name())
+                    .collect();
+                children.sort();
+                for child in children {
+                    let Some(name) = child.to_str() else { continue };
+                    let from = from.join(&child);
+                    if name == parts[depth] || hidden.contains(&from) {
+                        continue;
+                    }
+                    let target = if fs::symlink_metadata(&from).at(&from)?.is_symlink() {
+                        fs::read_link(&from).at(&from)?
+                    } else {
+                        from.clone()
+                    };
+                    let to = to.join(&child);
+                    std::os::unix::fs::symlink(target, &to).at(&to)?;
+                    layer.links.insert(format!("{on}/{name}"));
+                }
+            }
+            Ok(_) => return Ok(()),
+            Err(_) => fs::create_dir(&to).at(&to)?,
+        }
+    }
+    let caught = |p: &String| *p == rel || p.starts_with(&format!("{rel}/"));
+    if layer.entries.keys().any(caught) {
+        // Cloned already, as a small file at the top or in `.config`.
+        return Ok(());
+    }
+    let (from, to) = (real.join(rel), dir.join(rel));
+    if fs::symlink_metadata(&to).is_ok() {
+        fsops::remove(&to)?;
+        layer.links.remove(rel);
+    }
+    let Some(stamp) = Stamp::of(&from)? else {
+        return Ok(());
+    };
+    let cloned = match stamp.kind {
+        Kind::Dir if capturable(&from) => fsops::clone_tree(&from, &to, clock).is_ok(),
+        Kind::File if stamp.size <= MAX_DIR_BYTES => {
+            matches!(fsops::clone_entry(&from, &to), Ok(Some(_)))
+        }
+        _ => false,
+    };
+    if !cloned {
+        fsops::remove(&to)?;
+        let target = if stamp.kind == Kind::Symlink {
+            fs::read_link(&from).at(&from)?
+        } else {
+            from
+        };
+        std::os::unix::fs::symlink(target, &to).at(&to)?;
+        layer.links.insert(rel.to_owned());
+    }
+    Ok(())
 }
 
 /// The relative form of `path` under `root`, if it is there.
@@ -198,23 +305,26 @@ impl Task {
     }
 
     /// Makes the home layer over `real` for a run, or keeps the one there
-    /// while it holds changes no one has looked at. `linked` are paths
-    /// under `real` that stay the person's own (an agent's state); `hidden`
-    /// ones are left out; `ignored` names are the agent's own business.
-    /// Returns the layer, to be the commands' `HOME`.
+    /// while it holds changes no one has looked at. `state` are paths under
+    /// `real` an agent writes its own state to: cloned into the layer, so
+    /// what it writes there never reaches the person's home. `hidden` ones
+    /// are left out; `ignored` paths (relative to `real`) are the agent's
+    /// own business, never offered. Returns the layer, to be the commands'
+    /// `HOME`.
     pub fn prepare_home(
         &self,
         real: &Path,
-        linked: &[PathBuf],
+        state: &[PathBuf],
         hidden: &[PathBuf],
         ignored: &[String],
     ) -> Result<PathBuf> {
+        let given = real.to_path_buf();
         let real = fs::canonicalize(real).at(real)?;
         let dir = self.home_layer();
         let canonical = |p: &PathBuf| fs::canonicalize(p).unwrap_or_else(|_| p.clone());
         let made_for = {
             let mut hasher = blake3::Hasher::new();
-            for (what, paths) in [("linked", linked), ("hidden", hidden)] {
+            for (what, paths) in [("state", state), ("hidden", hidden)] {
                 let mut paths: Vec<String> = paths
                     .iter()
                     .map(|p| canonical(p).display().to_string())
@@ -249,7 +359,6 @@ impl Task {
             made_for,
             ..Layer::default()
         };
-        let linked: Vec<PathBuf> = linked.iter().map(canonical).collect();
         let hidden: Vec<PathBuf> = hidden.iter().map(canonical).collect();
         // The person's files are stamped by the clock of the real home's
         // disk, the clones by the layer's.
@@ -276,7 +385,6 @@ impl Task {
             let Some(stamp) = Stamp::of(&from)? else {
                 continue;
             };
-            let is_linked = linked.contains(&from);
             match stamp.kind {
                 Kind::Symlink => {
                     // As the person has it: the target is reached the same way.
@@ -284,7 +392,7 @@ impl Task {
                     std::os::unix::fs::symlink(&target, &to).at(&to)?;
                     layer.links.insert(text);
                 }
-                Kind::File if !is_linked && stamp.size <= MAX_FILE => {
+                Kind::File if stamp.size <= MAX_FILE => {
                     if let Some(work) = fsops::clone_entry(&from, &to)?
                         && let Some(copy) = Stamp::of(&to)?
                     {
@@ -294,7 +402,7 @@ impl Task {
                         layer.entries.insert(text, Entry { work, copy });
                     }
                 }
-                Kind::Dir if !is_linked && CAPTURED_DIRS.contains(&text.as_str()) => {
+                Kind::Dir if CAPTURED_DIRS.contains(&text.as_str()) => {
                     fs::create_dir(&to).at(&to)?;
                     if let Some(copy) = Stamp::of(&to)? {
                         layer
@@ -317,9 +425,8 @@ impl Task {
                         let Some(stamp) = Stamp::of(&from)? else {
                             continue;
                         };
-                        let own = linked.contains(&from);
                         let caught = match stamp.kind {
-                            _ if own || hidden.contains(&from) => false,
+                            _ if hidden.contains(&from) => false,
                             Kind::File if stamp.size <= MAX_FILE => {
                                 match fsops::clone_entry(&from, &to) {
                                     Ok(Some(work)) => {
@@ -381,9 +488,8 @@ impl Task {
                             layer.links.insert(rel);
                         }
                     }
-                    // What is hidden goes; what stays the person's own
-                    // becomes a link to it.
-                    for path in hidden.iter().chain(&linked) {
+                    // What is hidden goes.
+                    for path in &hidden {
                         let Some(rel) =
                             under(&real, path).filter(|r| r.starts_with(&format!("{text}/")))
                         else {
@@ -393,16 +499,17 @@ impl Task {
                         layer
                             .entries
                             .retain(|p, _| !(*p == rel || p.starts_with(&format!("{rel}/"))));
-                        if linked.contains(path) && path.exists() {
-                            std::os::unix::fs::symlink(path, dir.join(&rel)).at(&dir.join(&rel))?;
-                            layer.links.insert(rel);
-                        }
                     }
                 }
                 _ => {
                     std::os::unix::fs::symlink(&from, &to).at(&to)?;
                     layer.links.insert(text);
                 }
+            }
+        }
+        for path in state {
+            if let Some(rel) = under(&given, path).or_else(|| under(&real, path)) {
+                capture_state(&real, &dir, &rel, &hidden, &mut layer, &real_clock)?;
             }
         }
         // Each is compared with its clone once the clock has moved on, before
@@ -484,6 +591,9 @@ impl Task {
                 continue;
             };
             seen.insert(rel.clone());
+            if now.kind == Kind::Dir && on_the_way(&layer.ignored, &rel) {
+                continue;
+            }
             match layer.entries.get(&rel) {
                 Some(was) if was.copy.unchanged(&now) => {}
                 Some(_) => changes.push(HomeChange {

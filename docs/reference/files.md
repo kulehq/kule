@@ -111,7 +111,7 @@ Finder and `du` count them at full size anyway; look at the free space
 | Path | What it holds |
 | --- | --- |
 | `~/Library/Application Support/Kule/packages` (macOS), `~/.local/share/kule/packages` (Linux) | Agents that Kule installs with npm (Claude Code's and Codex's ACP adapters), one folder per exact version, installed without running install scripts. No sandbox can write here. |
-| `~/Library/Application Support/Kule/agents/<name>` (macOS), `~/.local/share/kule/agents/<name>` (Linux) | A **home of its own** for an agent whose profile sets `own_home`. The agent signs in here once. |
+| `~/Library/Application Support/Kule/agents/<name>` (macOS), `~/.local/share/kule/agents/<name>` (Linux) | A **home of its own** for an agent whose profile sets `own_home`, as Kule's own agents do: its settings, history and transcripts in Kule, kept across tasks. Kule copies your settings and instructions in at every start (`carry`). |
 | `<workspace>/.kule/policy.cedar` | A repository's own **forbid** rules. It may only tighten the policy. Kule reads it from your real folder, never from a task's copy, and every change to anything under `.kule/` waits for a person. **Edit: yes.** |
 
 ## Files you move between computers

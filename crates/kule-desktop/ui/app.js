@@ -4298,9 +4298,10 @@ function opens(profile, ownHome) {
     "dl",
     { class: "agent-opens" },
     ...row("Runs", [profile.command.join(" ")]),
-    ...row("Writes in ~", profile.state),
+    ...row("Writes in ~ (the task's copy of it)", profile.state),
     ...row("Its login", profile.login),
-    ...row("Read-only", profile.protected),
+    ...row("Hidden from it", profile.outside),
+    ...row("Copied in at every start, read-only", Object.values(profile.carry || {})),
     ...row("Reveals (macOS)", profile.reveal_on_macos),
     ...row("Sees your env", profile.pass_env),
     ...row("Keys it never sees", Object.entries(profile.keys || {}).map(([k, hosts]) => `${k} → ${hosts.join(", ")}`)),
@@ -4424,7 +4425,7 @@ function editAgent(profile, isNew, note) {
   $("agent-form-name")?.focus();
 }
 
-const BLANK = { name: "", command: [], state: [], login: [], protected: [], reveal_on_macos: [], env: {}, pass_env: [], keys: {}, hosts: [], mode: null, own_home: null };
+const BLANK = { name: "", command: [], state: [], login: [], outside: [], carry: {}, reveal_on_macos: [], env: {}, pass_env: [], keys: {}, keychain: {}, login_file: {}, hosts: [], mode: null, own_home: null };
 
 /** The profile the form holds now. */
 function formProfile() {
@@ -4445,8 +4446,11 @@ function formProfile() {
     command: lines(value("agent-form-command")),
     state: lines(value("agent-form-state")),
     login: lines(value("agent-form-login")),
-    protected: lines(value("agent-form-protected")),
+    outside: agentsView.editing.outside || [],
+    carry: agentsView.editing.carry || {},
     reveal_on_macos: agentsView.editing.reveal_on_macos || [],
+    keychain: agentsView.editing.keychain || {},
+    login_file: agentsView.editing.login_file || {},
     mode: value("agent-form-mode").trim() || null,
     env,
     pass_env: lines(value("agent-form-pass-env")),
@@ -4478,9 +4482,8 @@ function agentEditor() {
       { class: "agent-form" },
       field("agent-form-name", "Name", "Lowercase letters, digits and dashes.", p.name),
       field("agent-form-command", "Command", "One argument per line; a package fetched by npx or uvx names one exact version.", p.command.join("\n"), 3),
-      field("agent-form-state", "Writes in ~", "Its own state, one path per line under your home directory.", p.state.join("\n"), 3),
+      field("agent-form-state", "Writes in ~", "Its own state, one path per line under your home directory. Each run gets a copy of it in the task's copy of your home: nothing it writes reaches your own.", p.state.join("\n"), 3),
       field("agent-form-login", "Its login", "In that state; hidden from every other agent.", p.login.join("\n"), 2),
-      field("agent-form-protected", "Read-only", "Its settings that run code outside the sandbox later (hooks, MCP servers).", p.protected.join("\n"), 2),
       field("agent-form-pass-env", "Sees your env", "Your variables it may read.", p.pass_env.join("\n"), 2),
       field("agent-form-keys", "Keys it never sees", "NAME host host, one per line: your variable with its API key, and the hosts it is for. The agent gets a placeholder; the task's proxy puts the key into requests to those hosts alone.", keys, 2),
       field("agent-form-env", "Sets env", "NAME=value, one per line.", env, 2),
@@ -4489,7 +4492,7 @@ function agentEditor() {
       field(
         "agent-form-own-home",
         "Home of its own",
-        "Optional: the variable the agent reads its config directory from (CODEX_HOME, CLAUDE_CONFIG_DIR, or HOME). Kule points it at a folder of the agent's own, so what it writes in Kule never reaches it outside. Sign it in there once.",
+        "Optional: the variable the agent reads its config directory from (CODEX_HOME, CLAUDE_CONFIG_DIR, or HOME). Kule points it at a folder of the agent's own, where what it writes in Kule stays, across tasks; it never reaches the agent outside. Sign it in there once.",
         p.own_home || ""
       )
     ),
@@ -4513,7 +4516,6 @@ function trialResult(trial) {
   const picks = [
     ...trial.state.map((path) => ({ kind: "state", value: path, label: `Writes in ~: ${path}` })),
     ...trial.hosts.map((host) => ({ kind: "hosts", value: host, label: `Connects to: https://${host}` })),
-    ...(trial.protect || []).map((path) => ({ kind: "protected", value: path, label: `Read-only: ${path} (it runs code or gives instructions later)` })),
   ];
   const boxes = picks.map((pick) => {
     const box = h("input", { type: "checkbox", checked: true });

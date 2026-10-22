@@ -59,15 +59,11 @@ pub struct Trial {
     /// Why the run ended badly, when it did.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
-    /// Paths under the home directory it was refused writing to, as state
-    /// to open.
+    /// Paths under the home directory it was refused writing to, as state:
+    /// what it writes there goes to the task's home layer.
     pub state: Vec<String>,
     /// HTTPS hosts it was refused, as hosts to open.
     pub hosts: Vec<String>,
-    /// What in its state, the suggested state included, can make it run
-    /// something the next time it starts outside Kule: to make read-only.
-    #[serde(default)]
-    pub protect: Vec<String>,
     /// Everything it was refused, as the sandbox and the proxy said it.
     pub refused: Vec<String>,
     /// The last lines the agent wrote to its error output.
@@ -118,7 +114,7 @@ fn try_in(
     let started = Instant::now();
     let outcome = (|| {
         let policy = profile.open_hosts(policy)?;
-        let proxy = Proxy::start_with_keys(&task, policy, &profile.agent_keys())?;
+        let proxy = Proxy::start_with_keys(&task, policy, &profile.agent_keys(home.as_deref()))?;
         let launch = profile.launch_for(&task, &proxy, person)?;
         let (tx, rx) = futures::channel::mpsc::unbounded();
         let runtime = tokio::runtime::Runtime::new().map_err(|e| Error::Invalid(e.to_string()))?;
@@ -182,11 +178,6 @@ fn try_in(
     trial.reply = reply.trim().chars().take(500).collect();
     trial.error = error;
     trial.log = log;
-    if let Some(home) = &home {
-        let mut probe = draft.clone();
-        probe.state.extend(trial.state.iter().cloned());
-        trial.protect = probe.unprotected(home);
-    }
     Ok(trial)
 }
 
@@ -218,7 +209,6 @@ pub fn suggest(
         let mut probe = draft.clone();
         probe.state = vec![state.clone()];
         probe.login.clear();
-        probe.protected.clear();
         if agents.check_draft(kule_home, &probe).is_ok() && !trial.state.contains(&state) {
             trial.state.push(state);
         }

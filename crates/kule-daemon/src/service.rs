@@ -1702,7 +1702,8 @@ impl Service {
         // the run returns, which closes it.
         let policy = profile.open_hosts(self.policy(task)?).map_err(text)?;
         let timeout = task.approval_timeout().map_err(text)?;
-        let keys = profile.agent_keys();
+        let person = kule_engine::CacheSources::from_env().map(|s| s.home);
+        let keys = profile.agent_keys(person.as_deref());
         let proxy =
             Proxy::start_asking(task, policy, &self.approvals, timeout, &keys).map_err(text)?;
         if let Some(spec) = profile.to_install() {

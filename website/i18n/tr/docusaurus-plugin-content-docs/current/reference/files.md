@@ -116,7 +116,7 @@ sayar; gerçekte ne kadar yer kullanıldığını görmek için boş alana bakı
 | Yol | Ne tutar |
 | --- | --- |
 | `~/Library/Application Support/Kule/packages` (macOS), `~/.local/share/kule/packages` (Linux) | Kule'nin npm ile kurduğu ajanlar (Claude Code'un ve Codex'in ACP bağdaştırıcıları); her tam sürüm için bir klasör, kurulum betikleri çalıştırılmadan kurulur. Hiçbir sandbox buraya yazamaz. |
-| `~/Library/Application Support/Kule/agents/<name>` (macOS), `~/.local/share/kule/agents/<name>` (Linux) | Profili `own_home` ayarlayan bir ajan için **ona ait bir ev dizini**. Ajan burada bir kez oturum açar. |
+| `~/Library/Application Support/Kule/agents/<name>` (macOS), `~/.local/share/kule/agents/<name>` (Linux) | Kule'nin kendi ajanları gibi profili `own_home` ayarlayan bir ajan için **ona ait bir ev dizini**: Kule'deki ayarları, geçmişi ve konuşma kayıtları, görevler boyunca. Kule ayarlarınızı ve talimatlarınızı her başlangıçta buraya kopyalar (`carry`). |
 | `<workspace>/.kule/policy.cedar` | Bir deponun kendi **forbid** kuralları. Politikayı yalnızca sıkılaştırabilir. Kule onu bir görevin kopyasından değil, her zaman gerçek klasörünüzden okur; `.kule/` altındaki herhangi bir şeye yapılan her değişiklik bir insanın onayını bekler. **Düzenleme: evet.** |
 
 ## Bilgisayarlar arasında taşıdığınız dosyalar {#files-you-move-between-computers}

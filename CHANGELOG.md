@@ -1,5 +1,34 @@
 # Changes
 
+## 0.2.0-preview.4
+
+A security preview. Nothing an agent writes in Kule reaches your home:
+Kule's own agents keep their settings, history and transcripts in a home
+of their own in Kule, start every time from your settings as they are, and
+anything else an agent writes in your home stays in the task's copy of it.
+
+### Security
+
+- Nothing an agent writes in Kule reaches your home. Each of Kule's own
+  agents has a home of its own in Kule (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`,
+  `GEMINI_CLI_HOME`), where its settings, history and transcripts in Kule
+  are kept across tasks; `~/.claude`, `~/.codex` and `~/.gemini` are hidden
+  from it. Sessions run in Kule before stay where they were.
+- At every start Kule copies your settings, hooks, skills, commands,
+  extensions, rules, trusted folders and instructions into that home,
+  read-only while the agent runs. Whatever an agent left there or beside
+  them, the shell snapshots Claude Code sources included, is gone at the
+  next start. Claude Code's plugins are not copied.
+- An agent's `state` is a copy in the task's home layer: the agent writes
+  there, and none of it is applied to your home or offered for review.
+- Codex signed in with ChatGPT signs in once more, in its home in Kule
+  (see Agents); Kule never copies that sign-in. Claude Code on Linux keeps
+  its sign-in in `~/.claude/.credentials.json`, which Kule reads and the
+  agent never sees, as on macOS with the keychain.
+- Profiles take `outside`, `carry` and `login_file` for the same in your
+  own agents. `protected` is no longer needed; a profile that has it still
+  loads, and `kule agents show` says so.
+
 ## 0.2.0-preview.3
 
 A security preview. Your terminals run in the task's sandbox, and the copy

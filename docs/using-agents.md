@@ -18,15 +18,15 @@ its network going through the task's proxy.
 | Agent | Name in Kule | What it needs | How it signs in |
 | --- | --- | --- | --- |
 | **Claude Code** | `claude-code` | Node.js (`npx`) | As without Kule: `claude` in a terminal, or `ANTHROPIC_API_KEY`. |
-| **Codex** | `codex` | Node.js (`npx`) | `codex login` with a ChatGPT account, or `OPENAI_API_KEY`. |
+| **Codex** | `codex` | Node.js (`npx`) | `OPENAI_API_KEY`, or a ChatGPT account signed in once in its home in Kule (see below). |
 | **Gemini** | `gemini` | The Gemini CLI (`gemini` on your `PATH`) | An API key from Google AI Studio (see below). |
 
 `claude-code` is the default (`kule run TASK "prompt"` uses it). Pick
 another with `kule run TASK --agent codex "prompt"`, or with the agent
 picker under the prompt in the app.
 
-Sign each agent in once, the way you do without Kule. Kule's runs use that
-sign-in.
+Sign each agent in once, the way you do without Kule (Codex with ChatGPT
+once more, in Kule). Kule's runs use that sign-in.
 The app's first screen, and `kule agents list`, say which agents can start
 and what is missing for the others.
 
@@ -34,10 +34,11 @@ and what is missing for the others.
 
 - Kule starts Claude Code through its ACP adapter, a pinned npm package
   (`@agentclientprotocol/claude-agent-acp`).
-- On macOS its sign-in lives in the keychain, which stays hidden from the
-  sandbox. Kule reads the token there itself and hands the agent a
-  placeholder; the task's proxy puts the real token into requests to
-  `api.anthropic.com` alone.
+- Its sign-in lives in the keychain on macOS and in
+  `~/.claude/.credentials.json` on Linux, both hidden from the sandbox. Kule
+  reads the token there itself and hands the agent a placeholder; the
+  task's proxy puts the real token into requests to `api.anthropic.com`
+  alone.
 - `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` and `CLAUDE_CODE_OAUTH_TOKEN`
   in your environment are handled the same way: the agent sees a
   placeholder, never the key.
@@ -48,10 +49,20 @@ and what is missing for the others.
   (`@agentclientprotocol/codex-acp`).
 - Codex's own command sandbox cannot be set up inside Kule's, so Kule starts
   it in full-access mode and Kule's sandbox stands in for it.
-- A ChatGPT sign-in (`codex login`) works: it refreshes its token at
-  `auth.openai.com` and reaches the model through `chatgpt.com`, which are
-  open while Codex runs. `OPENAI_API_KEY` goes to `api.openai.com` alone, as
-  a placeholder.
+- `OPENAI_API_KEY` goes to `api.openai.com` alone, as a placeholder.
+- A ChatGPT sign-in works once Codex is signed in in its home in Kule, apart
+  from the one you use without Kule, which Kule never copies (a token Codex
+  refreshes in one place stops working in the other). Once:
+
+  ```sh
+  # macOS
+  CODEX_HOME="$HOME/Library/Application Support/Kule/agents/codex" npx -y @openai/codex login
+  # Linux
+  CODEX_HOME="$HOME/.local/share/kule/agents/codex" npx -y @openai/codex login
+  ```
+
+  It refreshes its token at `auth.openai.com` and reaches the model through
+  `chatgpt.com`, which are open while Codex runs.
 - Signed in with ChatGPT, Codex reports tokens but no cost, so a
   [budget](concepts/budgets-and-limits.md) cannot hold it.
 
@@ -77,8 +88,8 @@ and what is missing for the others.
 When you give a task a prompt (`kule run`, or **Run** in the app):
 
 1. Kule starts the agent with its **profile**: the command that starts it,
-   and the narrow extra room it needs in the sandbox (its own state
-   directory and login, its hosts).
+   and the narrow extra room it needs in the sandbox (a home of its own in
+   Kule, its login, its hosts).
 2. The agent works in the task's copy, inside the sandbox. Other agents'
    logins and transcripts stay hidden from it.
 3. Every tool call it makes becomes a **step** (`kule steps TASK`, or the
@@ -86,20 +97,28 @@ When you give a task a prompt (`kule run`, or **Run** in the app):
    [questions](concepts/network-and-questions.md).
 4. Nothing reaches your folder until you [commit](concepts/review-commit-undo.md).
 
-### What an agent may not change for later
+### What an agent writes stays in Kule
 
-An agent's own directory (`~/.claude`, `~/.codex`, `~/.gemini`) is outside
-the sandbox, and what the agent writes there in Kule reaches it the next
-time you start it without Kule. So what makes an agent run something or
-follow instructions when it starts is **read-only** in the sandbox:
-settings, hooks, plugins, extensions, skills, commands, rules, trusted
-folders and its `CLAUDE.md`, `AGENTS.md` or `GEMINI.md`. Kule's own profiles
-cover these; for your own profiles, a trial suggests them and
-`kule agents show` warns about any left writable.
+Nothing an agent writes in Kule reaches your home, where it would take
+effect the next time you start the agent without Kule:
 
-Or give an agent a **home of its own** in Kule with `own_home` (see below):
-nothing it writes in Kule then reaches it outside, and you sign it in there
-once.
+- Each of Kule's own agents has a **home of its own** in Kule
+  (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `GEMINI_CLI_HOME`). Its settings,
+  history and transcripts in Kule are kept there, across tasks.
+  `~/.claude`, `~/.codex` and `~/.gemini` are hidden from it.
+- At every start, Kule copies your settings, hooks, skills, commands,
+  extensions, rules, trusted folders and instructions (`CLAUDE.md`,
+  `AGENTS.md`, `GEMINI.md`) into that home, read-only while the agent runs.
+  Whatever an agent left there or beside them, in any task, is gone at the
+  next start, as are the shell snapshots Claude Code sources before a
+  command. Claude Code's plugins are not copied.
+- What else an agent writes in your home (its `state`) goes to the task's
+  [copy of your home](concepts/home-layer.md) and is never offered to be
+  applied.
+
+Sessions you ran in Kule with an earlier version stay where they were, in
+`~/.claude/projects` and the like; new ones are in the agent's home in
+Kule.
 
 ### Packages fetched with npx
 
@@ -174,15 +193,18 @@ relative to your home directory.
 | --- | --- | --- |
 | `name` | string, required | How the agent is asked for (`kule run --agent NAME`). Lowercase letters, digits and dashes. It may not be one of Kule's own agents' names. |
 | `command` | list of strings, required | Starts the agent speaking ACP on stdio. A package started with `npx`, `bunx`, `pnpx`, `uvx` or `pipx` must name **one exact version** (`npx -y name@1.2.3`). |
-| `state` | list of paths | Where the agent writes its own state, under `~`. It may not be a directory that holds far more than one agent's (`.config`, `.local/share`, `.cache`, `Library/Application Support`, `Documents`, …), nor something that runs as you start a shell, a session or a tool (`.zshrc`, `.gitconfig`, `.config/fish`, `.local/bin`, `Library/LaunchAgents`, …). |
-| `protected` | list of paths | Paths in its state that configure what runs outside the sandbox later (settings, hooks, MCP servers, plugins, instructions): readable, never writable. |
+| `state` | list of paths | Where the agent writes its own state, under `~`. Each run gets a copy of it in the task's [copy of your home](concepts/home-layer.md): the agent writes there, and none of it reaches your home or is offered to be applied. It may not be a directory that holds far more than one agent's (`.config`, `.local/share`, `.cache`, `Library/Application Support`, `Documents`, …), nor something that runs as you start a shell, a session or a tool (`.zshrc`, `.gitconfig`, `.config/fish`, `.local/bin`, `Library/LaunchAgents`, …). |
 | `login` | list of paths | Its login, inside its state. Hidden from every other agent and from commands Kule runs itself. |
+| `outside` | list of paths | With `own_home`: where the agent keeps its state when you run it without Kule (`.claude`). Hidden from it and from every other agent; only Kule reads there, for `carry` and `login_file`. |
+| `carry` | table: path in its own home → path in `outside` | With `own_home`: what Kule copies into its home at every start, exactly as you have it (removed where you have none), read-only while it runs. Whatever in its home makes it run something or follow instructions and is not carried is removed then. Never what Kule hides. |
+| `login_file` | table: variable → `{ path, json, hosts }` | A key the agent keeps in a JSON file in `outside`, by the variable it reads it from. Kule reads it there (`json` is the dotted path inside the file) and hands the agent a placeholder, as for `keys`. A key of the same name in your environment or the keychain wins. |
+| `protected` | list of paths | No longer used: nothing an agent writes reaches your home. Accepted so older profiles load; `kule agents show` says so. |
 | `keys` | table: variable → list of hosts | Your environment variables that hold its API keys, each with the hosts it is for. The agent's variable holds a placeholder; the task's proxy puts the key into requests to those hosts alone, over HTTPS. |
 | `keychain` | table: variable → `{ service, json, hosts }` | macOS: a key the agent keeps in the keychain, by the variable it reads it from. Kule reads it there (`service` is the keychain item; `json` the dotted path inside the item's JSON, if any) and hands the agent a placeholder, as for `keys`. A key of the same name in your environment wins. |
 | `hosts` | list of hosts | HTTPS hosts it needs for its login and model, beyond what the policy lets through. Open only while this agent runs. |
 | `env` | table: variable → value | Variables the agent is started with. |
 | `pass_env` | list of variable names | Your environment variables the agent may see as they are. Others stay out. Prefer `keys` for anything secret. |
-| `own_home` | variable name | A home of its own in Kule, for an agent that reads where its state lives from a variable (`CODEX_HOME`, `CLAUDE_CONFIG_DIR`, or `HOME` itself). Kule points the variable at a folder of the agent's own, so what it writes in Kule never reaches it outside; you sign it in there once. Not `PATH`, `TMPDIR`, `TMP`, `TEMP`, `PWD` or `SHELL`. |
+| `own_home` | variable name | A home of its own in Kule, for an agent that reads where its state lives from a variable (`CODEX_HOME`, `CLAUDE_CONFIG_DIR`, `GEMINI_CLI_HOME`, or `HOME` itself). Kule points the variable at a folder of the agent's own, where what it writes in Kule stays, across tasks, and never reaches it outside. Give it your settings with `carry`; sign it in there once, or through `login_file`. Not `PATH`, `TMPDIR`, `TMP`, `TEMP`, `PWD` or `SHELL`. |
 | `reveal_on_macos` | list of paths | Default-hidden paths it needs to read on macOS. Only `Library/Keychains` may be revealed. |
 | `mode` | string | The ACP session mode to start in, when the agent offers one: for an agent whose own sandbox cannot start inside Kule's. |
 | `devices` | list of paths | Linux: devices under `/dev` the agent and its commands need beyond those every command gets, such as `/dev/snd`, `/dev/video0` or a serial port. Kule refuses those that reach what is yours: disks, memory, keyboard and mouse, consoles and terminals. |
@@ -197,7 +219,7 @@ Kule checks every profile before it can run. A profile may never open:
 
 - the credentials Kule hides (`~/.ssh`, `~/.aws`, …), except the macOS
   keychain through `reveal_on_macos`;
-- another agent's state or login;
+- another agent's state, login or state outside Kule;
 - Kule's own home;
 - a whole directory like `~/Documents`, `~/.config` or `~/Library`;
 - what runs as you start a shell, a session or a tool;
