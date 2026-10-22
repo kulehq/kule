@@ -89,9 +89,48 @@ pub(crate) mod macos {
         addr: [u8; 16],
     }
 
+    #[repr(C)]
+    struct RawConnection {
+        family: libc::c_int,
+        lport: libc::c_ushort,
+        raddr: [u8; 16],
+    }
+
     unsafe extern "C" {
         fn kule_listeners(pid: libc::c_int, out: *mut RawListener, max: libc::c_int)
         -> libc::c_int;
+        fn kule_connections(
+            pid: libc::c_int,
+            out: *mut RawConnection,
+            max: libc::c_int,
+        ) -> libc::c_int;
+    }
+
+    fn address(family: libc::c_int, raw: [u8; 16]) -> IpAddr {
+        if family == 6 {
+            IpAddr::V6(Ipv6Addr::from(raw))
+        } else {
+            IpAddr::V4(Ipv4Addr::new(raw[0], raw[1], raw[2], raw[3]))
+        }
+    }
+
+    /// The TCP connections `pid` holds open: this end's port, and the
+    /// other end's address.
+    pub(crate) fn connected(pid: i32) -> Vec<(u16, IpAddr)> {
+        const MAX: usize = 1024;
+        let mut raw: Vec<RawConnection> = (0..MAX)
+            .map(|_| RawConnection {
+                family: 0,
+                lport: 0,
+                raddr: [0; 16],
+            })
+            .collect();
+        // SAFETY: raw has room for MAX entries.
+        let n = unsafe { kule_connections(pid, raw.as_mut_ptr(), MAX as libc::c_int) };
+        raw.truncate(n.max(0) as usize);
+        raw.into_iter()
+            .map(|c| (c.lport, address(c.family, c.raddr)))
+            .collect()
     }
 
     /// The person's processes (those this one may read).
@@ -126,15 +165,26 @@ pub(crate) mod macos {
         let n = unsafe { kule_listeners(pid, raw.as_mut_ptr(), MAX as libc::c_int) };
         raw.truncate(n.max(0) as usize);
         raw.into_iter()
-            .map(|l| {
-                let ip = if l.family == 6 {
-                    IpAddr::V6(Ipv6Addr::from(l.addr))
-                } else {
-                    IpAddr::V4(Ipv4Addr::new(l.addr[0], l.addr[1], l.addr[2], l.addr[3]))
-                };
-                (ip, l.port)
-            })
+            .map(|l| (address(l.family, l.addr), l.port))
             .collect()
+    }
+
+    /// When `pid` started, in microseconds since the epoch: with the pid,
+    /// what tells one process from a later one given the same number.
+    pub(crate) fn started(pid: i32) -> Option<u64> {
+        // SAFETY: as in `parent_of`.
+        let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
+        let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
+        let got = unsafe {
+            libc::proc_pidinfo(
+                pid,
+                libc::PROC_PIDTBSDINFO,
+                0,
+                (&mut info as *mut libc::proc_bsdinfo).cast(),
+                size,
+            )
+        };
+        (got == size).then(|| info.pbi_start_tvsec * 1_000_000 + info.pbi_start_tvusec)
     }
 
     /// The parent of `pid`, if it can be read.

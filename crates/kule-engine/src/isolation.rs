@@ -62,13 +62,13 @@ pub fn isolation_gaps(network: Network, servers: bool) -> Vec<String> {
 
 /// macOS: Seatbelt sees a listening port but not its address, so where a
 /// run's servers may listen while its network goes through the proxy, only
-/// the hooks (see `loopback`) and, while an agent runs in the app, the
-/// shield from outside (see `shield`) keep them off the network.
+/// the hooks (see `loopback`) and the shield from outside (see `shield`)
+/// keep them off the network.
 #[cfg_attr(target_os = "linux", allow(dead_code))]
 pub(crate) fn macos_gaps(network: Network, servers: bool) -> Vec<String> {
     if servers && matches!(network, Network::Proxy(_)) {
         vec![
-            "its servers held to this computer: Kule points Node, Python and Ruby servers at it, and keeps the others off your network from outside the sandbox while an agent runs in the app, looking every 50 ms; any other server could be reached from your network"
+            "its servers held to this computer from inside: Kule points Node, Python and Ruby servers at it, and keeps the others off your network from outside the sandbox, looking every 50 ms; a connection in that moment could reach one, which Kule then stops"
                 .to_owned(),
         ]
     } else {

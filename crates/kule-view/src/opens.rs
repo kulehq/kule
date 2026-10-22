@@ -12,7 +12,17 @@ use crate::office::{Parts, attr, reference};
 
 /// The kinds [`opens_nothing_else`] looks inside; the others are what their
 /// first bytes say, and nothing in them runs or fetches.
-pub const LOOKED_INSIDE: &[&str] = &["docx", "xlsx", "pptx", "odt", "ods", "odp", "csv"];
+pub const LOOKED_INSIDE: &[&str] = &["pdf", "docx", "xlsx", "pptx", "odt", "ods", "odp", "csv"];
+
+/// The largest file of `kind` Kule looks inside; larger ones are not
+/// opened with their app.
+pub fn max_size(kind: &str) -> u64 {
+    if kind == "pdf" {
+        crate::pdf::MAX_FILE
+    } else {
+        crate::office::MAX_FILE as u64
+    }
+}
 
 /// `Ok` when a file of `kind` (its name's extension, lower case) holding
 /// `bytes` reaches nothing outside itself once its app opens it; what it
@@ -22,6 +32,7 @@ pub fn opens_nothing_else(kind: &str, bytes: &[u8]) -> Result<(), String> {
         "docx" | "xlsx" | "pptx" => ooxml(bytes),
         "odt" | "ods" | "odp" => odf(bytes),
         "csv" => csv(bytes),
+        "pdf" => crate::pdf::opens_nothing_else(bytes),
         _ => Ok(()),
     }
 }

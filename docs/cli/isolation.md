@@ -32,9 +32,8 @@ On macOS the one gap is the task's servers, where the `servers`
 [limit](limits.md) lets them listen: the macOS sandbox sees the port a
 server listens on but not its address. Kule points Node, Python and Ruby
 servers at this computer, and keeps the others off your network from
-outside the sandbox while an agent runs in the app; a server of another
-program started by `kule exec`, `kule run` or a terminal could listen on
-your network. `kule isolation` shows it when every task's limits
+outside the sandbox, looking every 50 ms; a connection from the network in
+that moment could reach one, and Kule stops it then. `kule isolation` shows it when every task's limits
 allow servers; a task or group that allows them on its own is told when it
 runs.
 

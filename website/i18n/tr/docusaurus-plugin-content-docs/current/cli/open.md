@@ -38,6 +38,11 @@ yapmayan dosyaları açar ve her birini önce kontrol eder:
   bir çalışma kitabı, veri bağlantısı); bir şey getiren, içeri alan ya da
   çalıştıran bir Word alanı; ağa ya da başka bir programa ulaşan bir formül;
   ve bir hesap tablosu uygulamasının formül olarak okuyacağı bir CSV hücresi.
+  Bir PDF'te, sıkıştırılmış akışlara konmuş olanlar da dahil her nesne
+  okunur: betik, başlatılacak bir program, kendini bir yere gönderen bir
+  form, başka bir belge ya da taşıdığı bir dosya, çalışan bir medya ya da
+  açılırken kendiliğinden çalışan bir eylem içeren bir PDF reddedilir;
+  şifreli bir PDF de öyle. Tıkladığınız bağlantılar kalır.
 - **Bir bağlantı üzerinden değil,** kopyanın içinden ulaşılır ve diskte
   yalnızca bir adı vardır.
 - **Görevde çalışan bir ajan yoktur.**
@@ -109,7 +114,7 @@ Dosya açıldığında hiçbir şey. `--dry-run` ile Kule'nin kopyasının mutla
 | `kule: <file>: Kule opens documents, pictures, sound and video with their app, not this kind of file; …` | Bilinçli bir tasarım. Dosyaya bir metin görüntüleyicide ya da sandbox içinde [kule exec](exec.md) ile bakın. |
 | `kule: <file>: it is not the .<ext> file its name says, so Kule does not open it` | İçerik adla uyuşmuyor. Dosyaya şüpheyle yaklaşın. |
 | `kule: <file>: Kule does not open it with its app: …` | Dosya bir şey çalıştırır ya da kendi dışına ulaşırdı; mesajın devamı neyi olduğunu söyler. Dosyaya Preview'da ya da sandbox içinde bakın. |
-| `kule: <file>: too large for Kule to look inside, …` | 20 MB'tan büyük Word, Excel, PowerPoint, OpenDocument ve CSV dosyaları açılmaz. |
+| `kule: <file>: too large for Kule to look inside, …` | 20 MB'tan büyük Word, Excel, PowerPoint, OpenDocument ve CSV dosyaları ile 100 MB'tan büyük PDF'ler açılmaz. |
 | `kule: <file>: a path inside the copy, without ..` | Kopyanın en üstüne göre bir yol kullanın. |
 | `kule: an agent is at work in task <id> (process <pid>); wait until it is done` | Çalıştırmanın bitmesini bekleyin. |
 

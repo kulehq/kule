@@ -288,8 +288,8 @@ shows a line about it, and the agent is told once.
 **Cause:** Kule opens only documents, pictures, sound and video that are
 what their name says, reached without a link, while no agent is at work.
 Never a program, a script, a web page, SVG or an Office file with macros:
-they would run outside the sandbox. Word, Excel, PowerPoint, OpenDocument
-and CSV files are refused when they would load something from elsewhere or
+they would run outside the sandbox. PDF, Word, Excel, PowerPoint,
+OpenDocument and CSV files are refused when they would load something from elsewhere or
 run something: the message says what.
 
 **Fix:** wait for the run to end, or look at the file in Preview.

@@ -996,51 +996,168 @@ impl Sandbox {
         self.marked(&task_mark(&self.task))
     }
 
-    /// The processes whose sandbox lets them look up `mark`, a name beside
-    /// the task's that only Kule's profiles allow (see [`Sandbox::strays`]).
+    /// Every process `task`'s sandboxes hold now, however it was started
+    /// and whatever became of its parent (macOS; see [`Sandbox::strays`]).
     #[cfg(target_os = "macos")]
-    fn marked(&self, mark: &str) -> Vec<i32> {
-        unsafe extern "C" {
-            fn sandbox_check(
-                pid: libc::pid_t,
-                operation: *const libc::c_char,
-                filter: libc::c_int,
-                ...
-            ) -> libc::c_int;
-        }
-        const FILTER_NONE: libc::c_int = 0;
-        const FILTER_GLOBAL_NAME: libc::c_int = 2;
-        const NO_REPORT: libc::c_int = 0x4000_0000;
-        let (Ok(mark), Ok(decoy)) = (
-            std::ffi::CString::new(mark),
-            std::ffi::CString::new(format!("{}.decoy", task_mark(&self.task))),
-        ) else {
-            return Vec::new();
-        };
-        let me = std::process::id() as i32;
-        crate::ports::macos::all_pids()
+    pub fn processes_of(task: &str) -> Vec<i32> {
+        Sandbox::processes_of_tasks(&[task.to_owned()])
             .into_iter()
-            .filter(|&pid| pid > 1 && pid != me)
-            .filter(|&pid| {
-                let lookup = |name: &std::ffi::CStr| {
-                    // SAFETY: sandbox_check only reads its arguments.
-                    unsafe {
-                        sandbox_check(
-                            pid,
-                            c"mach-lookup".as_ptr(),
-                            FILTER_GLOBAL_NAME | NO_REPORT,
-                            name.as_ptr(),
-                        )
-                    }
-                };
-                // SAFETY: as above.
-                let sandboxed =
-                    unsafe { sandbox_check(pid, std::ptr::null(), FILTER_NONE | NO_REPORT) == 1 };
-                sandboxed && lookup(&mark) == 0 && lookup(&decoy) == 1
-            })
+            .map(|(pid, _)| pid)
             .collect()
     }
 
+    /// [`Sandbox::processes_of`] for each of `tasks` in one look at the
+    /// processes: each with the task it belongs to.
+    #[cfg(target_os = "macos")]
+    pub fn processes_of_tasks(tasks: &[String]) -> Vec<(i32, String)> {
+        let marks: Vec<(String, String)> =
+            tasks.iter().map(|t| (task_mark(t), t.clone())).collect();
+        marked_in(&marks)
+    }
+
+    #[cfg(target_os = "macos")]
+    fn marked(&self, mark: &str) -> Vec<i32> {
+        marked_in(&[(mark.to_owned(), self.task.clone())])
+            .into_iter()
+            .map(|(pid, _)| pid)
+            .collect()
+    }
+}
+
+/// The processes whose sandbox lets them look up one of `marks`, a name
+/// beside its task's (the second of each pair) that only Kule's profiles
+/// allow (see [`Sandbox::strays`]); each with that task.
+#[cfg(target_os = "macos")]
+fn marked_in(marks: &[(String, String)]) -> Vec<(i32, String)> {
+    let marks = marks_of(marks);
+    let me = std::process::id() as i32;
+    crate::ports::macos::all_pids()
+        .into_iter()
+        .filter(|&pid| pid > 1 && pid != me)
+        .filter_map(|pid| classify(pid, &marks).map(|task| (pid, task)))
+        .collect()
+}
+
+/// Each mark with the name beside its task's that only Kule's profiles
+/// refuse, and the task.
+#[cfg(target_os = "macos")]
+type Marks = Vec<(std::ffi::CString, std::ffi::CString, String)>;
+
+#[cfg(target_os = "macos")]
+fn marks_of(marks: &[(String, String)]) -> Marks {
+    marks
+        .iter()
+        .filter_map(|(mark, task)| {
+            Some((
+                std::ffi::CString::new(mark.as_str()).ok()?,
+                std::ffi::CString::new(format!("{}.decoy", task_mark(task))).ok()?,
+                task.clone(),
+            ))
+        })
+        .collect()
+}
+
+/// The task of `marks` whose mark `pid`'s sandbox lets it look up, if any.
+#[cfg(target_os = "macos")]
+fn classify(pid: i32, marks: &Marks) -> Option<String> {
+    unsafe extern "C" {
+        fn sandbox_check(
+            pid: libc::pid_t,
+            operation: *const libc::c_char,
+            filter: libc::c_int,
+            ...
+        ) -> libc::c_int;
+    }
+    const FILTER_NONE: libc::c_int = 0;
+    const FILTER_GLOBAL_NAME: libc::c_int = 2;
+    const NO_REPORT: libc::c_int = 0x4000_0000;
+    let lookup = |name: &std::ffi::CStr| {
+        // SAFETY: sandbox_check only reads its arguments.
+        unsafe {
+            sandbox_check(
+                pid,
+                c"mach-lookup".as_ptr(),
+                FILTER_GLOBAL_NAME | NO_REPORT,
+                name.as_ptr(),
+            )
+        }
+    };
+    // SAFETY: as above.
+    let sandboxed = unsafe { sandbox_check(pid, std::ptr::null(), FILTER_NONE | NO_REPORT) == 1 };
+    if !sandboxed {
+        return None;
+    }
+    marks
+        .iter()
+        .find(|(mark, decoy, _)| lookup(mark) == 0 && lookup(decoy) == 1)
+        .map(|(_, _, task)| task.clone())
+}
+
+/// [`Sandbox::processes_of_tasks`], asked again and again (by the shield,
+/// 50 times a second) for little more than listing the processes: what it
+/// found of each process is kept, by its pid and when it started, so a
+/// later process given the same pid is looked at anew. That a process is
+/// a task's holds for its life, as no process leaves its sandbox; that it
+/// is none of theirs is kept only once it is a second old, as a command
+/// takes its sandbox in its first moments.
+#[cfg(target_os = "macos")]
+#[derive(Default)]
+pub struct ProcessFinder {
+    tasks: Vec<String>,
+    seen: std::collections::HashMap<(i32, u64), Option<String>>,
+}
+
+#[cfg(target_os = "macos")]
+impl ProcessFinder {
+    pub fn new() -> ProcessFinder {
+        ProcessFinder::default()
+    }
+
+    /// The processes of `tasks`' sandboxes now, each with its task.
+    pub fn find(&mut self, tasks: &[String]) -> Vec<(i32, String)> {
+        use crate::ports::macos;
+        if tasks != self.tasks {
+            self.tasks = tasks.to_vec();
+            self.seen.clear();
+        }
+        let marks = marks_of(
+            &self
+                .tasks
+                .iter()
+                .map(|t| (task_mark(t), t.clone()))
+                .collect::<Vec<_>>(),
+        );
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_micros() as u64);
+        let me = std::process::id() as i32;
+        let mut seen = std::collections::HashMap::new();
+        let mut found = Vec::new();
+        for pid in macos::all_pids() {
+            if pid <= 1 || pid == me {
+                continue;
+            }
+            let Some(started) = macos::started(pid) else {
+                continue;
+            };
+            let key = (pid, started);
+            let task = match self.seen.remove(&key) {
+                Some(known) => known,
+                None => classify(pid, &marks),
+            };
+            if let Some(task) = &task {
+                found.push((pid, task.clone()));
+            }
+            if task.is_some() || now.saturating_sub(started) > 1_000_000 {
+                seen.insert(key, task);
+            }
+        }
+        self.seen = seen;
+        found
+    }
+}
+
+impl Sandbox {
     /// Linux keeps no list of a Landlock domain's processes: a stray is a
     /// process of ours under no-new-privileges (as every sandboxed one is,
     /// and a person's shell is not) that works in the task's folders, by

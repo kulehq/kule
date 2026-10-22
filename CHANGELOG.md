@@ -1,5 +1,21 @@
 # Changes
 
+## Unreleased
+
+### Security
+
+- *Open with its app* looks inside PDFs too, the objects packed into
+  compressed streams included, and opens none with a script, a program to
+  start, a form that sends itself, another document or an attached file,
+  media that runs, or an action that runs by itself as it opens; nor an
+  encrypted one. Links you click stay.
+- On macOS, where a task's servers may listen, Kule finds its processes by
+  its sandbox, whatever started them and whatever became of their parent,
+  and keeps their servers off your network in the agent's runs, the task's
+  terminals, `kule exec`, `kule run` and `kule shell` alike. A process that
+  a connection from the network reached in the moment before Kule looked
+  is stopped.
+
 ## 0.2.0-preview.5
 
 A security preview. What an agent wrote opens with its app only as Kule's

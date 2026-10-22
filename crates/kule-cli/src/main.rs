@@ -598,6 +598,7 @@ fn run() -> Result<ExitCode> {
                 task.id()
             );
             let logged_before = connections(&task)?.len();
+            let _watch = watch_servers(&task);
             let (code, denials) = relay::run(&home, task.id(), &shell)?;
             print_set(&task, &task.effects()?);
             print_connections(&connections(&task)?[logged_before..]);
@@ -757,6 +758,9 @@ fn run() -> Result<ExitCode> {
                 if network != Network::Allow {
                     warn_if_network_not_isolated(&task);
                 }
+                let _watch = (network != Network::Allow)
+                    .then(|| watch_servers(&task))
+                    .flatten();
                 match &proxy {
                     Some(proxy) => sandbox.use_proxy(proxy),
                     None => sandbox.set_network(network),
@@ -828,6 +832,7 @@ fn run() -> Result<ExitCode> {
             };
             let logged_before = connections(&task)?.len();
             warn_if_network_not_isolated(&task);
+            let _watch = watch_servers(&task);
             let policy = profile.open_hosts(load_policy(&home, &task)?)?;
             let person = kule_engine::CacheSources::from_env().map(|s| s.home);
             let proxy =
@@ -1509,6 +1514,28 @@ fn plain_event(mut event: kule_acp::Event) -> kule_acp::Event {
     }
     event
 }
+
+/// macOS: where the task's limits let its servers listen, a shield of its
+/// own for as long as it is held, for no daemon may be looking (see
+/// `kule_engine::shield::Watch`).
+fn watch_servers(task: &Task) -> Option<WatchServers> {
+    #[cfg(target_os = "macos")]
+    {
+        task.limits_in_force()
+            .is_ok_and(|l| l.servers)
+            .then(|| kule_engine::shield::Watch::start(task.id()))
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = task;
+        None
+    }
+}
+
+#[cfg(target_os = "macos")]
+type WatchServers = kule_engine::shield::Watch;
+#[cfg(not(target_os = "macos"))]
+type WatchServers = ();
 
 fn warn_if_network_not_isolated(task: &Task) {
     let servers = task.limits_in_force().is_ok_and(|l| l.servers);

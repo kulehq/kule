@@ -100,20 +100,21 @@ one difference on macOS, below.
   [`kule isolation`](../cli/isolation.md)). While they are allowed:
   - Node, Python and Ruby servers are pointed at loopback when they ask for
     every address;
-  - for any other program (Go, Rust, Java), Kule **shields** the port while
-    the agent's run goes on, and the chip shows 🛡. No run goes on while a
-    terminal is open, so such a server started in the task's terminal is
-    not shielded: if the network can reach it, its chip is amber;
+  - for any other program (Go, Rust, Java), Kule **shields** the port, and
+    the chip shows 🛡: in the agent's runs, the task's terminals,
+    `kule exec` and `kule shell` alike, a server found by the task's
+    sandbox, whatever started it;
   - a server that listens on a network address of its own is stopped, and
-    Live says why.
+    so is one a connection from the network reached in the moment before
+    Kule looked; Live says why.
 
 The chips also say what needs your attention:
 
 | Chip | Meaning |
 | --- | --- |
 | Plain, with ↗ | A server on this computer only. Click to open it. |
-| With 🛡 (macOS) | A server whose port Kule shields from the network while the agent's run goes on. |
-| **Amber with a warning** | A server the network can still reach, typically one you started yourself: outside Kule's sandbox (in your terminal app, for example), or on macOS a Go, Rust or Java server from the task's terminal. Kule leaves yours alone. |
+| With 🛡 (macOS) | A server whose port Kule shields from the network. |
+| **Amber with a warning** | A server the network can still reach, typically one you started yourself: outside Kule's sandbox (in your terminal app, for example). Kule leaves yours alone. |
 | **Greyed out** (Linux) | A server inside the sandbox's own network, which this computer cannot reach. |
 
 A server the agent started ends with its run. One you started in the task's

@@ -76,7 +76,10 @@ dosya ayrıca adının söylediği şey olmalıdır: `notes.pdf` adlı bir betik
 açılmaz. Word, Excel, PowerPoint, OpenDocument ve CSV dosyaları kendi
 içinde kalmalıdır: makro, denetim ya da gömülü nesne yok; bir web sayfası ya
 da e-posta adresi dışında dosyanın dışına bağlantı yok; bir şey getiren ya
-da çalıştıran alan veya formül yok. Ayrıca ajan çalışırken bu işlem bekler.
+da çalıştıran alan veya formül yok. Bir PDF'te betik, başlatılacak bir
+program, kendini gönderen bir form, başka bir belge ya da ekli dosya, ya da
+açılırken çalışan bir şey olmamalıdır; şifreli bir PDF açılmaz. Ayrıca ajan
+çalışırken bu işlem bekler.
 
 :::
 

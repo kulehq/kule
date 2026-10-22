@@ -105,21 +105,21 @@ sandbox'ta çalışır; macOS'ta tek bir fark var, aşağıda.
   sürece:
   - Node, Python ve Ruby sunucuları, her adresi dinlemek istediklerinde
     loopback'e yönlendirilir;
-  - diğer programlar (Go, Rust, Java) için Kule, ajanın çalıştırması
-    sürdüğü sürece port'u **korur** (shield) ve etikette 🛡 görünür. Bir
-    terminal açıkken çalıştırma sürmez; bu yüzden görevin terminalinde
-    başlatılan böyle bir sunucu korunmaz: ağ ona erişebiliyorsa etiketi
-    kehribar olur;
-  - kendine ait bir ağ adresini dinleyen bir sunucu durdurulur ve Live
-    nedenini söyler.
+  - diğer programlar (Go, Rust, Java) için Kule port'u **korur** (shield) ve
+    etikette 🛡 görünür: ajanın çalıştırmalarında, görevin terminallerinde,
+    `kule exec`'te ve `kule shell`'de aynı şekilde; sunucu, onu ne başlatmış olursa olsun,
+    görevin sandbox'ından bulunur;
+  - kendine ait bir ağ adresini dinleyen bir sunucu durdurulur; Kule
+    bakmadan hemen önceki anda ağdan bir bağlantının ulaştığı bir sunucu da
+    durdurulur; Live nedenini söyler.
 
 Etiketler ayrıca neyin dikkatinizi gerektirdiğini de söyler:
 
 | Etiket | Anlamı |
 | --- | --- |
 | Düz, ↗ ile | Yalnızca bu bilgisayardaki bir sunucu. Açmak için tıklayın. |
-| 🛡 ile (macOS) | Port'unu Kule'nin, ajanın çalıştırması sürdüğü sürece ağdan koruduğu bir sunucu. |
-| **Uyarılı kehribar** | Ağın hâlâ erişebildiği bir sunucu; genellikle kendi başlattığınız bir sunucu: Kule'nin sandbox'ı dışında (örneğin terminal uygulamanızda) ya da macOS'ta görevin terminalinden bir Go, Rust veya Java sunucusu. Kule sizinkilere dokunmaz. |
+| 🛡 ile (macOS) | Port'unu Kule'nin ağdan koruduğu bir sunucu. |
+| **Uyarılı kehribar** | Ağın hâlâ erişebildiği bir sunucu; genellikle kendi başlattığınız bir sunucu: Kule'nin sandbox'ı dışında (örneğin terminal uygulamanızda). Kule sizinkilere dokunmaz. |
 | **Gri** (Linux) | Sandbox'ın kendi ağının içindeki, bu bilgisayarın erişemediği bir sunucu. |
 
 Ajanın başlattığı bir sunucu, çalıştırmasıyla birlikte sona erer. Görevin

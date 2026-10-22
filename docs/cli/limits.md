@@ -45,7 +45,7 @@ the next run. `kule run` and runs from the app are held to the same limits.
 | `memory` | GB, all of the run's processes together | The processes are **killed** at once and the run stops. |
 | `disk` | GB the copy, its temporary files and home changes may grow by since the task was made | The run **stops**. No single file can be written past it. |
 | `gpu` | `on` / `off` | `off`: on macOS Metal (and OpenCL) gets no device; on Linux the GPU's devices stay read-only. |
-| `servers` | `on` / `off` (`off` by default) | macOS: `off`, the run's programs do not listen for connections while its network goes through the proxy; `on`, they do, which is weaker isolation you accept: Node, Python and Ruby servers are pointed at this computer, and while an agent runs in the app Kule keeps the others off your network from outside the sandbox (see [kule isolation](isolation.md)). On Linux every server is held to this computer either way. |
+| `servers` | `on` / `off` (`off` by default) | macOS: `off`, the run's programs do not listen for connections while its network goes through the proxy; `on`, they do, which is weaker isolation you accept: Node, Python and Ruby servers are pointed at this computer, and Kule keeps the others off your network from outside the sandbox (see [kule isolation](isolation.md)). On Linux every server is held to this computer either way. |
 | `run` | minutes, one run | The run **stops**. Time waiting for your answers counts. |
 | `task` | hours, all of the task's runs added up | The run **stops**, and no new run starts until you raise it. |
 | `idle` | minutes doing nothing | The run **stops**. "Doing nothing" means no message, tool call, output, processor use or new process from the agent. A question waiting for you does not count. |

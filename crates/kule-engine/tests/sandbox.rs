@@ -1098,6 +1098,19 @@ fn answers_within(ip: std::net::IpAddr, port: u16, within: std::time::Duration) 
     }
 }
 
+/// The tests that shield ports, one at a time: a shield looks at every
+/// process the test binary started, and takes ports on this computer's
+/// network addresses, which the others look at.
+#[cfg(target_os = "macos")]
+static SHIELDING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[cfg(target_os = "macos")]
+fn shielding() -> std::sync::MutexGuard<'static, ()> {
+    SHIELDING
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 /// A test server, stopped when the test ends, however it ends.
 #[cfg(target_os = "macos")]
 struct Server(std::process::Child);
@@ -1139,6 +1152,7 @@ fn raw_server(sandbox: &Sandbox, host: &str) -> (Server, u16) {
 #[cfg(target_os = "macos")]
 #[test]
 fn the_shield_keeps_an_unhooked_server_off_the_network() {
+    let _one_at_a_time = shielding();
     use kule_engine::shield::{Shield, descendants};
     let Some(outward) = network_ip() else {
         eprintln!("no network address to try from; skipped");
@@ -1179,6 +1193,145 @@ fn the_shield_keeps_an_unhooked_server_off_the_network() {
         answers_within(outward, port, std::time::Duration::from_secs(60)),
         "released, the port is the server's again"
     );
+}
+
+/// A sandboxed server, `python3 -I`, that leaves its parent and its
+/// session first (as a daemon does) and listens on `host`; its pid and
+/// port, once it listens.
+#[cfg(target_os = "macos")]
+fn detached_server(s: &Setup, host: &str) -> (i32, u16) {
+    let copy = s.task.copy();
+    let _ = fs::remove_file(copy.join("server.txt"));
+    let code = format!(
+        "import os, socket, time\nif os.fork(): os._exit(0)\nos.setsid()\nif os.fork(): os._exit(0)\ns=socket.socket()\ns.bind(('{host}',0))\ns.listen()\nopen('server.tmp','w').write(f'{{os.getpid()}} {{s.getsockname()[1]}}')\nos.rename('server.tmp','server.txt')\nheld=[]\nwhile True:\n try: held.append(s.accept()[0])\n except OSError: pass"
+    );
+    // Its pipes would stay open as long as it runs.
+    let status = s
+        .sandbox()
+        .command("python3", &["-I".to_owned(), "-c".to_owned(), code])
+        .unwrap()
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .unwrap();
+    assert!(status.success());
+    for _ in 0..200 {
+        if let Ok(text) = fs::read_to_string(copy.join("server.txt")) {
+            let (pid, port) = text.split_once(' ').unwrap();
+            return (pid.parse().unwrap(), port.parse().unwrap());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    panic!("the server never listened");
+}
+
+/// A task's processes are found by its sandbox, whatever became of their
+/// parent: a server that left its own is shielded all the same, where
+/// looking for the run's descendants would miss it.
+#[cfg(target_os = "macos")]
+#[test]
+fn the_shield_finds_a_tasks_server_that_left_its_parent() {
+    let _one_at_a_time = shielding();
+    use kule_engine::shield::{Shield, descendants};
+    let s = Setup::new();
+    let (pid, port) = detached_server(&s, "0.0.0.0");
+    assert!(
+        !descendants().contains(&pid),
+        "the test should not find it by parent"
+    );
+    let found = Sandbox::processes_of(s.task.id());
+    assert!(found.contains(&pid), "{found:?} lacks {pid}");
+    let mut shield = Shield::new();
+    let guarded = shield.guard(&found);
+    assert!(guarded.shielded.contains(&port), "{guarded:?}");
+    shield.release();
+    Sandbox::end_all(&s.task).unwrap();
+}
+
+/// A connection the network made to a task's server in the moment before
+/// the shield looked stops the server: what came in does not stay.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_task_process_holding_a_connection_from_the_network_is_stopped() {
+    let _one_at_a_time = shielding();
+    use kule_engine::shield::Shield;
+    let Some(outward) = network_ip() else {
+        eprintln!("no network address to try from; skipped");
+        return;
+    };
+    let s = Setup::new();
+    let (pid, port) = detached_server(&s, "0.0.0.0");
+    let Ok(_connection) = std::net::TcpStream::connect_timeout(
+        &(outward, port).into(),
+        std::time::Duration::from_secs(5),
+    ) else {
+        eprintln!("the firewall held the connection; skipped");
+        Sandbox::end_all(&s.task).unwrap();
+        return;
+    };
+    // Accepted, held by the server.
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    let mut shield = Shield::new();
+    let guarded = shield.guard(&Sandbox::processes_of(s.task.id()));
+    let stopped = guarded.stopped.iter().find(|x| x.pid == pid as u32);
+    assert!(
+        stopped.is_some_and(|x| x.reached && x.port == port),
+        "{guarded:?}"
+    );
+    shield.release();
+    // SAFETY: probing a pid; signal 0 sends nothing.
+    let alive = |pid: i32| unsafe { libc::kill(pid, 0) == 0 };
+    for _ in 0..100 {
+        if !alive(pid) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(!alive(pid), "the server still runs");
+}
+
+/// Where no daemon looks, a command's own watch keeps its task's servers
+/// off the network: Kule holds their port on this computer's network
+/// addresses while it lasts, and lets go after.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_commands_own_watch_shields_its_tasks_servers() {
+    let _one_at_a_time = shielding();
+    let Some(outward) = network_ip() else {
+        eprintln!("no network address to try from; skipped");
+        return;
+    };
+    let s = Setup::new();
+    let (_, port) = detached_server(&s, "0.0.0.0");
+    let taken = || std::net::TcpListener::bind((outward, port)).is_err();
+    assert!(
+        !taken(),
+        "the port should be free on the network address first"
+    );
+    let watch = kule_engine::shield::Watch::start(s.task.id());
+    let mut held = false;
+    for _ in 0..100 {
+        if taken() {
+            held = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert!(held, "the watch never took the port");
+    drop(watch);
+    // Kule's sockets close once its last look at them is done: a poll of
+    // at most 100 ms holds them that long.
+    let mut free = false;
+    for _ in 0..25 {
+        if !taken() {
+            free = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert!(free, "the port is still held after the watch");
+    Sandbox::end_all(&s.task).unwrap();
 }
 
 /// On Linux, without a network of its own, any program's server is held to

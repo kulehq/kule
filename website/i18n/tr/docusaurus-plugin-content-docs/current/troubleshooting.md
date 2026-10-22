@@ -307,7 +307,7 @@ da bir kez söylenir.
 üzerinden ulaşılmayan belgeleri, resimleri, sesleri ve videoları, hiçbir
 ajan çalışmıyorken açar. Asla bir programı, bir betiği, bir web sayfasını,
 SVG'yi ya da makro içeren bir Office dosyasını açmaz: bunlar sandbox'ın
-dışında çalışırdı. Word, Excel, PowerPoint, OpenDocument ve CSV dosyaları,
+dışında çalışırdı. PDF, Word, Excel, PowerPoint, OpenDocument ve CSV dosyaları,
 başka bir yerden bir şey yükleyecek ya da bir şey çalıştıracak olduğunda
 reddedilir: mesaj neyin olduğunu söyler.
 
