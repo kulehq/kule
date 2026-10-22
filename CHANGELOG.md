@@ -1,6 +1,12 @@
 # Changes
 
-## Unreleased
+## 0.2.0-preview.3
+
+A security preview. Your terminals run in the task's sandbox, and the copy
+opens outside it only when you choose, after seeing what changed. Secrets
+you keep stay masked inside longer lines, and Kule's own files in a task's
+temporary folder go only where it means them to. Releases now carry what
+they are built from, and are checked before they are published.
 
 ### Security
 

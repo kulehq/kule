@@ -17,8 +17,8 @@ tauri-build = { version = "2.7.3", features = [] }
 
 [dependencies]
 base64 = "0.22.1"
-kule-daemon = { version = "0.2.0-preview.2", path = "../kule-daemon" }
-kule-ext = { version = "0.2.0-preview.2", path = "../kule-ext" }
+kule-daemon = { version = "0.2.0-preview.3", path = "../kule-daemon" }
+kule-ext = { version = "0.2.0-preview.3", path = "../kule-ext" }
 ureq = "3.4.2"
 libc = "0.2.190"
 serde.workspace = true
