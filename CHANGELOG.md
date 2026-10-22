@@ -4,6 +4,11 @@
 
 ### Security
 
+- The window lays out an agent's messages and Markdown files in time that
+  grows with their length, nests quotes at most 32 deep, and shows a
+  message or file it cannot lay out as plain text, so the stream, Review,
+  Files, Preview and Timeline keep working. A message is laid out once,
+  not again on every event of the run.
 - *Open with its app* looks inside PDFs too, the objects packed into
   compressed streams included, and opens none with a script, a program to
   start, a form that sends itself, another document or an attached file,

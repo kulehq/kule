@@ -120,7 +120,13 @@ async function loadPreview(task) {
   if (token !== preview.token || task.id !== state.current) return;
   const again = preview.view && preview.view.kind === view.kind;
   preview.view = view;
-  renderPreview(again);
+  try {
+    renderPreview(again);
+  } catch (err) {
+    // Not drawn: the file is read again on the next draw, not taken as shown.
+    preview.key = null;
+    throw err;
+  }
 }
 
 /** Draws the view; `keepScroll` keeps the place in a file read again. */
@@ -129,10 +135,18 @@ function renderPreview(keepScroll) {
   const body = $("preview");
   const before = body.querySelector(".preview-body");
   const at = keepScroll && before ? [before.scrollTop, before.scrollLeft] : null;
+  let shownBody;
+  try {
+    shownBody = previewBody(v);
+  } catch (err) {
+    // A file Kule cannot lay out is shown as text, or said so, and the
+    // rest of the window keeps working.
+    shownBody = typeof v.text === "string" ? previewLines(v.text) : h("p", { class: "preview-note" }, `Kule could not show this file: ${err}`);
+  }
   replace(
     body,
     previewHead(v),
-    previewBody(v),
+    shownBody,
     (v.kind === "text" || v.kind === "markdown") && v.cut
       ? h("p", { class: "preview-note" }, `Only the first 1 MB of ${sizeText(v.size)} is shown.`)
       : null
