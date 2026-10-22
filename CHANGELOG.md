@@ -1,9 +1,34 @@
 # Changes
 
-## Unreleased
+## 0.2.0-preview.6
+
+A security preview. An agent's output and the files it writes keep to
+limits: Kule's memory, disk and window stay in hand however much the agent
+says or writes, and nothing a run or `kule exec` started outlives it, nor
+escapes the run's limits. *Open with its app* looks inside PDFs too, and on
+macOS a task's servers are kept off your network wherever they run.
 
 ### Security
 
+- An agent keeps to what Kule can hold: a message longer than 16 MiB, or
+  more than 1024 tool calls left open at once, stops the run; a tool call's
+  title is cut to 200 characters; Kule runs at most 32 of its commands at
+  once. Its log keeps its last 8 MB, with the 8 MB before in
+  `agent.log.1`. What the daemon keeps of a task's runs for the window
+  stays near 32 MB.
+- Every run, from the app, `kule run` or an agent's trial, and `kule exec`
+  end whatever was left running in the sandbox, whatever became of its
+  parent; a run's limits count such a process while it runs.
+- A preview of a document, sheet or CSV holds at most 16 MB; JSON or XML
+  nested more than 256 levels deep is shown as written; a list marker
+  keeps to 64 characters.
+- Connections that have not shown the daemon's token yet never keep its
+  clients out.
+- The window lays out an agent's messages and Markdown files in time that
+  grows with their length, nests quotes at most 32 deep, and shows a
+  message or file it cannot lay out as plain text, so the stream, Review,
+  Files, Preview and Timeline keep working. A message is laid out once,
+  not again on every event of the run.
 - *Open with its app* looks inside PDFs too, the objects packed into
   compressed streams included, and opens none with a script, a program to
   start, a form that sends itself, another document or an attached file,

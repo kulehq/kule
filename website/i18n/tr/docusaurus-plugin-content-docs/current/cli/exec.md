@@ -48,7 +48,8 @@ Landlock ve namespace'ler. Varsayılan olarak:
 
 Sandbox kurulamazsa komut çalışmaz.
 
-Komut bittiğinde Kule kopyadaki değişiklikleri (yalnızca bu komutunkileri
+Komut bittiğinde sandbox'ta çalışır bıraktığı her şey de onunla biter;
+ebeveynine ne olmuş olursa olsun. Ardından Kule kopyadaki değişiklikleri (yalnızca bu komutunkileri
 değil, hepsini), yaptığı bağlantıları, ev dizinine yazmaları ve macOS'ta
 sandbox'ın reddettiklerini yazdırır. `kule exec` komutun kendi çıkış koduyla
 çıkar.

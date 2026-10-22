@@ -159,3 +159,110 @@ fn closed_lets_work_start_again() {
     s.ok(&["closed", &s.id], "");
     s.ok(&["exec", &s.id, "--", "true"], "");
 }
+
+/// What a command leaves running ends with `kule exec`, however it left
+/// the command's process group and parent.
+#[test]
+fn what_exec_leaves_running_ends_with_it() {
+    if !Command::new("python3")
+        .args(["-c", "pass"])
+        .status()
+        .is_ok_and(|s| s.success())
+    {
+        eprintln!("skipped: no python3");
+        return;
+    }
+    let s = Setup::new();
+    // The command ends once its stray has beaten.
+    let script = "import os, time\nif os.fork():\n  end=time.time()+10\n  while time.time()<end and not os.path.exists('beat'): time.sleep(0.01)\n  os._exit(0)\nos.setsid()\nif os.fork(): os._exit(0)\nfor fd in (0, 1, 2): os.close(fd)\nopen('pid','w').write(str(os.getpid()))\nwhile True:\n  open('beat','a').write('.')\n  time.sleep(0.02)";
+    s.ok(
+        &["exec", &s.id, "--no-network", "--", "python3", "-c", script],
+        "",
+    );
+    let (beat, pid) = (s.copy.join("beat"), s.copy.join("pid"));
+    let len = || fs::metadata(&beat).map_or(0, |m| m.len());
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let mut stopped = false;
+    while !stopped && std::time::Instant::now() < until {
+        let before = len();
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        stopped = before > 0 && len() == before;
+    }
+    // In a PID namespace of its own (Linux) it ended with the command, at
+    // once, and its pid is the namespace's.
+    if kule_engine::own_processes() {
+        assert!(stopped || len() == 0, "a process outlived kule exec");
+        return;
+    }
+    if let Some(pid) = fs::read_to_string(&pid)
+        .ok()
+        .and_then(|p| p.trim().parse::<i32>().ok())
+    {
+        // SAFETY: kill only sends a signal.
+        unsafe {
+            libc::kill(pid, libc::SIGKILL);
+        }
+    }
+    assert!(len() > 0, "it never beat");
+    assert!(stopped, "a process outlived kule exec");
+}
+
+/// On macOS, where a task's limits let its servers listen, `kule exec`
+/// keeps them off the network while the command runs: Kule holds their
+/// port on this computer's network addresses.
+#[cfg(target_os = "macos")]
+#[test]
+fn exec_shields_its_servers_while_it_runs() {
+    let outward = {
+        let probe = std::net::UdpSocket::bind("0.0.0.0:0").unwrap();
+        probe
+            .connect("192.0.2.1:9")
+            .ok()
+            .and_then(|()| probe.local_addr().ok())
+            .map(|a| a.ip())
+            .filter(|ip| !ip.is_loopback() && !ip.is_unspecified())
+    };
+    let Some(outward) = outward else {
+        eprintln!("no network address to try from; skipped");
+        return;
+    };
+    let s = Setup::new();
+    s.ok(&["limits", "--task", &s.id, "servers=on"], "");
+    // Listening servers in proxy mode are weaker isolation, taken knowingly.
+    s.ok(&["isolation", "--accept-weaker", "on"], "");
+    // Listens on every address until told it is done, a minute at most.
+    let script = "import os, socket, time\ns=socket.socket()\ns.bind(('0.0.0.0',0))\ns.listen()\nopen('port.tmp','w').write(str(s.getsockname()[1]))\nos.rename('port.tmp','port')\nend=time.time()+60\nwhile time.time()<end and not os.path.exists('done'): time.sleep(0.05)";
+    let exec = Command::new(env!("CARGO_BIN_EXE_kule"))
+        .args(["exec", &s.id, "--", "python3", "-I", "-c", script])
+        .env("KULE_HOME", s.home.path())
+        .env("HOME", s.person.path())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let port_file = s.copy.join("port");
+    let mut port = None;
+    // Starting takes its time on a busy machine.
+    for _ in 0..3000 {
+        if let Ok(text) = fs::read_to_string(&port_file) {
+            port = text.trim().parse::<u16>().ok();
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    let port = port.expect("the server never listened");
+    let mut held = false;
+    for _ in 0..100 {
+        if std::net::TcpListener::bind((outward, port)).is_err() {
+            held = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    fs::write(s.copy.join("done"), "").unwrap();
+    // Ended either way: when this test's own look held the port in the
+    // moment Kule went for it, Kule stops the server instead.
+    let _ = exec.wait_with_output();
+    assert!(held, "the port was never held");
+}

@@ -19,6 +19,11 @@ use crate::{Event, RunControl};
 
 /// The most output kept for one command, whatever the agent asks for.
 pub const MAX_TERMINAL_OUTPUT: usize = 1 << 20;
+/// The most commands an agent may have running at once, each with its
+/// threads, so a run cannot bury Kule in them.
+pub const MAX_TERMINALS: usize = 32;
+/// The most terminals an agent may hold unreleased, each with its output.
+pub const MAX_HELD_TERMINALS: usize = 256;
 /// How often output is passed on to the window while a command prints.
 const EVERY: Duration = Duration::from_millis(200);
 
@@ -122,6 +127,31 @@ impl Terminals {
         if let Some((name, _)) = env.iter().find(|(n, _)| refused_variable(n)) {
             return Err(format!("{name} is set by Kule's sandbox, not by the agent"));
         }
+        {
+            let terms = self
+                .terms
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if terms.len() >= MAX_HELD_TERMINALS {
+                return Err(format!(
+                    "the agent holds {MAX_HELD_TERMINALS} terminals it has not released, the most it may"
+                ));
+            }
+            let running = terms
+                .values()
+                .filter(|t| {
+                    t.exit
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .is_none()
+                })
+                .count();
+            if running >= MAX_TERMINALS {
+                return Err(format!(
+                    "the agent has {MAX_TERMINALS} commands running, the most it may"
+                ));
+            }
+        }
         let cwd = match cwd {
             None => self.copy.clone(),
             Some(dir) => {
@@ -211,8 +241,12 @@ impl Terminals {
         })
         .collect();
         let (term, events) = (Arc::clone(&term), self.events.clone());
+        let control = self.control.clone();
         std::thread::spawn(move || {
             let status = child.wait();
+            // Its pid may now name another process: no longer one the run
+            // looks from.
+            control.ended_command(term.group);
             // What it printed last is read first; but a process it left in
             // the background (a server) can hold the output open for good,
             // and the command has ended all the same.

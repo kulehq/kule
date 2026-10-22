@@ -53,7 +53,18 @@ bütçesi, grubununki ya da tüm görevler için olan günlük bütçe) tükendi
 ya da görev süresini doldurduğunda çalıştırma başlamaz. Çalışırken
 işlemci, bellek, disk, süre ve boşta kalma
 [sınırları](../concepts/budgets-and-limits.md), uygulamada olduğu gibi onu
-tutar.
+tutar. Sınırlar, çalıştırmanın başlattığı her süreci sayar; ajanın süreç
+ağacından ayrılmış olanı da.
+
+**Ajan, Kule'nin tutabileceği kadarıyla sınırlıdır.** Ajanın 16 MiB'tan uzun
+bir mesajı ya da aynı anda açık bıraktığı 1024'ten fazla araç çağrısı
+çalıştırmayı durdurur. Bir araç çağrısının başlığı 200 karaktere kısaltılır.
+Kule ajanın komutlarını onun yerine çalıştırdığında (uygulamada), aynı anda
+en çok 32 komut çalıştırır.
+
+**Başlattığı hiçbir şey çalıştırmadan uzun yaşamaz.** Çalıştırma nasıl
+biterse bitsin, ajanın sandbox'ında çalışır bıraktığı her şey de biter;
+ebeveynine ne olmuş olursa olsun.
 
 **Ajan neyin değiştiğini duyar.** Ajanın son çalıştırmasından bu yana
 [kule sync](sync.md) klasördeki değişiklikleri kopyaya aldıysa ya da
@@ -168,7 +179,9 @@ günlüğe kaydetmeyi kolaylaştırır.
 | `kule: an agent is at work in task <id> …` | Görev başına tek ajan. Bekleyin ya da başka bir görev açın. |
 | `kule: a terminal is open on task <id>'s copy …; close it first, then start work` | Görevde bir terminal (uygulamanınki ya da `kule shell`) açık. Önce onu kapatın. |
 | `kule: Kule opened task <id>'s copy in <app> outside the sandbox; …` | O terminal uygulamasını ya da editörü kapatın, sonra [kule closed](closed.md) `TASK` çalıştırın. |
-| `kule: <error> (see <home>/tasks/<id>/agent.log)` | Ajan başarısız oldu. Kendi mesajları `agent.log` içinde. |
+| `kule: <error> (see <home>/tasks/<id>/agent.log)` | Ajan başarısız oldu. Kendi mesajları `agent.log` içinde: son 8 MB'ı, ondan önceki 8 MB'ı da `agent.log.1` içinde. |
+| `kule: stopped: the agent sent a message larger than 16 MiB (see …)` | Ajan tek mesajda Kule'nin aldığından fazlasını söyledi. Daha dar bir istemle yeniden çalıştırın. |
+| `kule: stopped: the agent left more than 1024 tool calls open (see …)` | Ajan araç çağrılarını bitirmeden yenilerini başlattı. |
 | `kule: <agent> reported no cost, so the task's budget does not count this run` | Hata değil, bir uyarı: abonelikle oturum açmış ajanlar yalnızca token bildirebilir ve bütçe, bildirilmeyeni tutamaz. |
 
 Bazı Linux sistemlerinde, daha zayıf yalıtımı kabul edene kadar hiçbir ajan

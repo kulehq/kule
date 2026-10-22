@@ -1,8 +1,12 @@
 //! Text: what is text at all, which language a name says it is, and a
 //! formatted view of JSON or XML that came packed onto a line or two.
 
-/// Formatted views longer than this are not offered.
+/// Formatted views longer than this are not offered; formatting stops as
+/// soon as it passes this.
 const MAX_FORMATTED: usize = 4 << 20;
+/// JSON or XML nested deeper than this is not formatted: each line's
+/// indent grows with its depth.
+const MAX_DEPTH: usize = 256;
 
 /// `bytes` as text, or `None` for a binary file. `cut` says the bytes stop
 /// short of the file's end; a cut can fall inside a character, and what is
@@ -126,6 +130,9 @@ fn json(text: &str) -> Option<String> {
         out.extend(std::iter::repeat_n("  ", depth));
     };
     while let Some(c) = chars.next() {
+        if out.len() > MAX_FORMATTED {
+            return None;
+        }
         match c {
             '"' => {
                 out.push('"');
@@ -147,6 +154,9 @@ fn json(text: &str) -> Option<String> {
                     out.extend(chars.next());
                 } else {
                     depth += 1;
+                    if depth > MAX_DEPTH {
+                        return None;
+                    }
                     newline(&mut out, depth);
                 }
             }
@@ -182,6 +192,9 @@ fn xml(text: &str) -> Option<String> {
     // inside them.
     let mut pending = String::new();
     loop {
+        if writer.get_ref().len() > MAX_FORMATTED {
+            return None;
+        }
         let event = reader.read_event().ok()?;
         match &event {
             Event::Text(t) => {
@@ -209,6 +222,9 @@ fn xml(text: &str) -> Option<String> {
                 match &event {
                     Event::Start(_) => {
                         depth += 1;
+                        if depth > MAX_DEPTH {
+                            return None;
+                        }
                         elements += 1;
                     }
                     Event::End(_) => depth = depth.checked_sub(1)?,
@@ -284,5 +300,40 @@ mod tests {
         assert_eq!(formatted("x.xml", "<r><b></r>"), None);
         assert_eq!(formatted("x.xml", "<r><b>"), None);
         assert_eq!(formatted("x.xml", "just text"), None);
+    }
+
+    #[test]
+    fn what_is_nested_past_the_limit_is_not_formatted() {
+        let json = |n| format!("{}1{}", "[".repeat(n), "]".repeat(n));
+        let xml = |n| format!("{}{}", "<a>".repeat(n), "</a>".repeat(n));
+        assert!(formatted("x.json", &json(MAX_DEPTH)).is_some());
+        assert_eq!(formatted("x.json", &json(MAX_DEPTH + 1)), None);
+        assert!(formatted("x.xml", &xml(MAX_DEPTH)).is_some());
+        assert_eq!(formatted("x.xml", &xml(MAX_DEPTH + 1)), None);
+    }
+
+    #[test]
+    fn formatting_stops_once_it_is_too_long() {
+        // Within the depth limit, each line still carries a deep indent:
+        // a megabyte of text would format to hundreds of megabytes.
+        let deep = MAX_DEPTH - 1;
+        let many = crate::MAX_TEXT as usize / 2;
+        let json = format!(
+            "{}{}1{}",
+            "[".repeat(deep),
+            "1,".repeat(many),
+            "]".repeat(deep)
+        );
+        let xml = format!(
+            "{}{}{}",
+            "<a>".repeat(deep),
+            "<b/>".repeat(many / 2),
+            "</a>".repeat(deep)
+        );
+        for (path, text) in [("x.json", json), ("x.xml", xml)] {
+            let (pretty, held) = crate::tests::memory::peak(|| formatted(path, &text));
+            assert_eq!(pretty, None, "{path}");
+            assert!(held <= 4 * MAX_FORMATTED, "{path} held {held} bytes");
+        }
     }
 }

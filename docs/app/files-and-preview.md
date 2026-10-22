@@ -37,7 +37,11 @@ Click a file to open it in Preview. Right-click a file or folder for the
 | Anything else | Its size and why it is not shown. |
 
 The colours follow the theme in use. Excel and Word files are read in memory,
-never unpacked to disk, and each part is inflated only up to a cap.
+never unpacked to disk, and each part is inflated only up to a cap. A
+preview of a document, sheet or CSV holds at most 16 MB; past that it shows
+what fits and says it is cut. JSON or XML nested more than 256 levels deep
+is shown as written, not formatted. A Markdown file Kule cannot lay out is
+shown as text.
 
 ## Outside Kule
 

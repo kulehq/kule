@@ -1025,3 +1025,34 @@ fn work_waits_until_what_was_opened_outside_is_closed() {
     assert!(s.task.outside().unwrap().is_empty());
     assert!(s.task.agent_at_work().is_ok());
 }
+
+/// A task's id names its processes on the whole computer (its sandbox's
+/// mark), so tasks made at the same moment in different Kule homes never
+/// share one.
+#[test]
+fn tasks_made_at_once_in_different_homes_have_different_ids() {
+    let ws = TempDir::new().unwrap();
+    fs::write(ws.path().join("a.txt"), "a\n").unwrap();
+    let homes: Vec<TempDir> = (0..16).map(|_| TempDir::new().unwrap()).collect();
+    let mut ids = std::collections::HashSet::new();
+    let mut made = 0;
+    for _ in 0..20 {
+        let together = std::sync::Barrier::new(homes.len());
+        let round: Vec<String> = std::thread::scope(|s| {
+            let started: Vec<_> = homes
+                .iter()
+                .map(|home| {
+                    let (together, ws) = (&together, ws.path());
+                    s.spawn(move || {
+                        together.wait();
+                        Task::create(home.path(), ws).unwrap().id().to_owned()
+                    })
+                })
+                .collect();
+            started.into_iter().map(|t| t.join().unwrap()).collect()
+        });
+        made += round.len();
+        ids.extend(round);
+    }
+    assert_eq!(ids.len(), made, "tasks made at once shared an id");
+}

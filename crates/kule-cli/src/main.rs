@@ -717,6 +717,8 @@ fn run() -> Result<ExitCode> {
             let started = Instant::now();
             let mut used = None;
             let mut proxy = None;
+            // Held while the command runs.
+            let mut _watch = None;
             let mut child = if no_sandbox {
                 eprintln!("kule: running without the sandbox");
                 let mut child = Command::new(&command[0]);
@@ -758,7 +760,7 @@ fn run() -> Result<ExitCode> {
                 if network != Network::Allow {
                     warn_if_network_not_isolated(&task);
                 }
-                let _watch = (network != Network::Allow)
+                _watch = (network != Network::Allow)
                     .then(|| watch_servers(&task))
                     .flatten();
                 match &proxy {
@@ -773,6 +775,11 @@ fn run() -> Result<ExitCode> {
                 .env("KULE_TASK", task.id())
                 .status()
                 .with_context(|| format!("could not run {}", command[0]))?;
+            // What it left running, however it left, ends with it; what
+            // cannot be ended now, a commit ends or refuses over.
+            if let Some(sandbox) = &used {
+                let _ = sandbox.end_strays();
+            }
             // Cuts what the command left open and logs it, so the list below
             // is complete.
             if let Some(proxy) = proxy {
@@ -865,7 +872,10 @@ fn run() -> Result<ExitCode> {
                 mode.as_deref(),
                 limit,
                 &[],
-                None,
+                // What the agent leaves running ends with the run; the
+                // CLI runs no commands for it.
+                &sandbox,
+                false,
                 &control,
                 tx,
             ));

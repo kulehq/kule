@@ -962,10 +962,22 @@ impl Sandbox {
     /// included, before Kule reads what they wrote: an error when that
     /// cannot be done, and nothing is read beside them.
     pub fn end_all(task: &Task) -> Result<usize> {
+        Sandbox::finder(task)?.end_strays()
+    }
+
+    /// A sandbox of `task`'s, its home layer's included, only to find the
+    /// processes the task's sandboxes hold by: no command starts from it.
+    pub fn finder(task: &Task) -> Result<Sandbox> {
         let mut sandbox = Sandbox::new(task)?;
-        // Only to find them by: no command starts from this sandbox.
         sandbox.layer = Some(task.home_layer()).filter(|l| l.is_dir());
-        sandbox.end_strays()
+        Ok(sandbox)
+    }
+
+    /// What runs in this sandbox, or on macOS in any of the task's, now:
+    /// however it was started and whatever became of its parent (see
+    /// [`Sandbox::end_strays`]).
+    pub fn processes(&self) -> Vec<i32> {
+        self.strays()
     }
 
     /// Ends what still runs in this sandbox alone, not in the task's

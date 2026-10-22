@@ -104,7 +104,9 @@ mouse, consoles and terminals.
 On Linux, commands get processes of their own: a command sees and signals
 no other program, and what it leaves running ends with it. A server started
 in the background lives as long as the agent or terminal command that
-started it.
+started it. On every system, what an agent's run or `kule exec` left
+running in the sandbox ends when it does, whatever became of its parent,
+and a run's limits count it while it runs.
 
 Servers a task starts listen on **this computer only**, never on your
 network. On macOS, where the sandbox cannot tell a server's address, a

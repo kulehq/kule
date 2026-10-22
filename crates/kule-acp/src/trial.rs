@@ -25,6 +25,33 @@ const PROMPT: &str = "Kule is checking that you start. Reply with the single wor
 
 /// How much of the agent's error output a trial shows.
 const LOG_LINES: usize = 30;
+/// How much of the end of the agent's log a trial reads to find them.
+const LOG_END: u64 = 64 << 10;
+
+/// The last [`LOG_END`] bytes of the agent's log at `path`, from the one
+/// before it was turned over too when it holds less.
+fn log_end(path: &Path) -> String {
+    use std::io::{Read, Seek, SeekFrom};
+    let end = |path: &Path, max: u64| {
+        let mut bytes = Vec::new();
+        if let Ok(mut file) = std::fs::File::open(path) {
+            let len = file.metadata().map_or(0, |m| m.len());
+            let _ = file.seek(SeekFrom::Start(len.saturating_sub(max)));
+            let _ = file.take(max).read_to_end(&mut bytes);
+        }
+        bytes
+    };
+    let mut bytes = end(path, LOG_END);
+    if (bytes.len() as u64) < LOG_END {
+        let mut before = end(
+            &path.with_file_name("agent.log.1"),
+            LOG_END - bytes.len() as u64,
+        );
+        before.append(&mut bytes);
+        bytes = before;
+    }
+    String::from_utf8_lossy(&bytes).into_owned()
+}
 
 /// Directories that hold many tools' state: a suggestion names the tool's
 /// directory inside them, not the whole.
@@ -121,7 +148,14 @@ fn try_in(
         let ran = runtime.block_on(async {
             tokio::time::timeout(
                 TRIAL_TIME,
-                run(&task, launch.command, PROMPT, launch.mode.as_deref(), tx),
+                run(
+                    &task,
+                    launch.command,
+                    &launch.sandbox,
+                    PROMPT,
+                    launch.mode.as_deref(),
+                    tx,
+                ),
             )
             .await
         });
@@ -154,7 +188,7 @@ fn try_in(
         Ok::<_, Error>((reply, error, denials))
     })();
     let refused_connections = connections(&task).unwrap_or_default();
-    let log = std::fs::read_to_string(task.agent_log()).unwrap_or_default();
+    let log = log_end(&task.agent_log());
     let log: Vec<String> = log
         .lines()
         .rev()
@@ -271,6 +305,24 @@ mod tests {
     use kule_engine::Verdict;
 
     use super::*;
+
+    /// A trial reads the end of the agent's log, however long it grew,
+    /// across the turn it was last given.
+    #[test]
+    fn a_trial_reads_only_the_end_of_the_log() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let log = dir.path().join("agent.log");
+        std::fs::write(&log, format!("{}\nthe last line\n", "x".repeat(4 << 20))).unwrap();
+        let end = log_end(&log);
+        assert_eq!(end.len() as u64, LOG_END);
+        assert!(end.ends_with("the last line\n"));
+
+        std::fs::write(dir.path().join("agent.log.1"), "y".repeat(4 << 20)).unwrap();
+        std::fs::write(&log, "after it turned\n").unwrap();
+        let end = log_end(&log);
+        assert_eq!(end.len() as u64, LOG_END);
+        assert!(end.starts_with('y') && end.ends_with("after it turned\n"));
+    }
 
     fn denial(operation: &str, path: &str) -> Denial {
         Denial {

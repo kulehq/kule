@@ -41,7 +41,10 @@ eylemleri için bir dosyaya ya da klasöre sağ tıklayın.
 
 Renkler kullanılan temaya uyar. Excel ve Word dosyaları bellekte okunur,
 hiçbir zaman diske açılmaz; her parça yalnızca bir üst sınıra kadar açılır
-(inflate).
+(inflate). Bir belge, tablo ya da CSV önizlemesi en çok 16 MB tutar; ötesinde
+sığanı gösterir ve kesildiğini söyler. 256 düzeyden derin iç içe JSON ya da
+XML biçimlendirilmeden, yazıldığı gibi gösterilir. Kule'nin dizemediği bir
+Markdown dosyası düz metin olarak gösterilir.
 
 ## Kule dışında {#outside-kule}
 
