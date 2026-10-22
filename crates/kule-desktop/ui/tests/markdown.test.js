@@ -1,5 +1,5 @@
 // The window's Markdown renderer (../markdown.js), run under Node with
-// `node --test crates/kule-desktop/ui/tests/`. No packages: a small stand-in
+// `node --test crates/kule-desktop/ui/tests/*.test.js`. No packages: a small stand-in
 // for the DOM below gives the renderer what the window's `h` and
 // `highlighted` give it.
 "use strict";
