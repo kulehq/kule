@@ -825,7 +825,9 @@ fn run() -> Result<ExitCode> {
             let logged_before = connections(&task)?.len();
             warn_if_network_not_isolated();
             let policy = profile.open_hosts(load_policy(&home, &task)?)?;
-            let proxy = Proxy::start_with_keys(&task, policy, &profile.agent_keys())?;
+            let person = kule_engine::CacheSources::from_env().map(|s| s.home);
+            let proxy =
+                Proxy::start_with_keys(&task, policy, &profile.agent_keys(person.as_deref()))?;
             let kule_acp::Launch {
                 command,
                 sandbox,
@@ -2595,19 +2597,12 @@ fn agents_cmd(home: &Path, action: AgentsCmd) -> Result<()> {
             let joined = |items: &[String]| paint::plain_line(&items.join(", "));
             println!("suggested state: {}", joined(&trial.state));
             println!("suggested hosts: {}", joined(&trial.hosts));
-            println!("suggested read-only: {}", joined(&trial.protect));
             if cfg!(target_os = "linux") {
                 println!("(Linux does not report refused files: only hosts are suggested)");
             }
-            let nothing =
-                trial.state.is_empty() && trial.hosts.is_empty() && trial.protect.is_empty();
+            let nothing = trial.state.is_empty() && trial.hosts.is_empty();
             if apply && !nothing {
                 let mut profile = listed.profile.clone();
-                for path in trial.protect {
-                    if !profile.protected.contains(&path) {
-                        profile.protected.push(path);
-                    }
-                }
                 for state in trial.state {
                     if !profile.state.contains(&state) {
                         profile.state.push(state);
@@ -2646,9 +2641,34 @@ fn print_profile(profile: &kule_acp::Profile) {
     };
     println!("[[agent]]  {}", profile.name);
     println!("runs              {}", profile.command.join(" "));
-    println!("writes in ~/      {}", list(&profile.state));
+    if profile.state.is_empty() {
+        println!("writes in ~/      nothing");
+    } else {
+        println!(
+            "writes in ~/      {} (in the task's copy of your home, never your own)",
+            list(&profile.state)
+        );
+    }
     println!("its login         {}", list(&profile.login));
-    println!("read-only         {}", list(&profile.protected));
+    if !profile.outside.is_empty() {
+        println!(
+            "hidden from it    {} (only Kule reads there)",
+            list(&profile.outside)
+        );
+    }
+    if !profile.carry.is_empty() {
+        let carried: Vec<String> = profile.carry.values().cloned().collect();
+        println!(
+            "copied in         {} (at every start, read-only)",
+            list(&carried)
+        );
+    }
+    if !profile.protected.is_empty() {
+        println!(
+            "protected         {} (no longer needed: nothing it writes reaches your home)",
+            list(&profile.protected)
+        );
+    }
     if !profile.reveal_on_macos.is_empty() {
         println!("reveals (macOS)   {}", list(&profile.reveal_on_macos));
     }
@@ -2671,7 +2691,9 @@ fn print_profile(profile: &kule_acp::Profile) {
         println!("session mode      {mode}");
     }
     if let Some(var) = &profile.own_home {
-        println!("home of its own   ${var} points at Kule's folder for it; sign it in there once");
+        println!(
+            "home of its own   ${var} points at Kule's folder for it: what it writes in Kule stays there"
+        );
     }
 }
 

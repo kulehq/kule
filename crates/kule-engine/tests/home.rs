@@ -48,9 +48,15 @@ impl Setup {
         }
     }
 
-    /// Runs `script` in the sandbox with the home layer as `HOME`. How it
-    /// ended goes to the test's output, shown when the test fails.
+    /// Runs `script` in the sandbox with the home layer as `HOME`, for an
+    /// agent whose state is `.claude`. How it ended goes to the test's
+    /// output, shown when the test fails.
     fn run(&self, script: &str) -> String {
+        self.run_as(&[".claude"], script)
+    }
+
+    /// [`Setup::run`], for an agent whose state is `state`.
+    fn run_as(&self, state: &[&str], script: &str) -> String {
         let p = self.person.path();
         let mut sandbox = Sandbox::for_task_with(
             &self.task,
@@ -63,9 +69,9 @@ impl Setup {
         self.task
             .prepare_home(
                 p,
-                &[p.join(".claude")],
+                &state.iter().map(|s| p.join(s)).collect::<Vec<_>>(),
                 sandbox.hidden(),
-                &[".claude".to_owned()],
+                &state.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>(),
             )
             .unwrap();
         sandbox.use_home(&self.task, p).unwrap();
@@ -253,16 +259,25 @@ fn a_layer_with_changes_waiting_is_kept_for_the_next_run() {
     assert_eq!(out, "export A=1\nexport B=2\n");
 }
 
+/// The agent's state is a copy in the layer: it reads what the person has
+/// there and writes to it, and nothing of that reaches the person's home or
+/// is offered to be applied.
 #[test]
 fn the_agents_own_state_is_its_own() {
     let s = Setup::new();
     let layer = s.task.home_layer();
-    s.run("true");
-    let link = fs::read_link(layer.join(".claude")).unwrap();
-    assert_eq!(
-        fs::canonicalize(link).unwrap(),
-        fs::canonicalize(s.person.path().join(".claude")).unwrap()
+    let out = s.run(
+        r#"cat "$HOME/.claude/settings.json"; echo evil > "$HOME/.claude/settings.json"; mkdir -p "$HOME/.claude/shell-snapshots" && echo evil > "$HOME/.claude/shell-snapshots/s.sh" && echo wrote"#,
     );
+    assert_eq!(out, "{}\nwrote\n");
+    assert!(
+        !fs::symlink_metadata(layer.join(".claude"))
+            .unwrap()
+            .is_symlink()
+    );
+    assert_eq!(s.real(".claude/settings.json"), "{}\n");
+    assert!(!s.person.path().join(".claude/shell-snapshots").exists());
+    assert!(s.task.home_changes().unwrap().is_empty());
     assert!(!layer.join(".ssh").exists());
     assert!(!layer.join(".config/gh").exists());
     // The person's own files are hidden, and not in the layer either.
@@ -418,6 +433,52 @@ fn a_replaced_link_comes_back_a_link() {
         fs::read_link(p.join(".config/tool/settings.toml")).unwrap(),
         Path::new("real.toml")
     );
+}
+
+/// State deeper in the home is a copy too: each folder on the way becomes
+/// the layer's own, with the rest in it still the person's, read-only. State
+/// the person has none of yet is made in the layer, unoffered.
+#[test]
+fn state_deep_in_the_home_is_a_copy_and_the_rest_beside_it_the_persons() {
+    let s = Setup::new();
+    let p = s.person.path();
+    fs::create_dir_all(p.join(".local/state/tool")).unwrap();
+    fs::write(p.join(".local/state/tool/log"), "old\n").unwrap();
+    fs::create_dir_all(p.join(".local/share/other")).unwrap();
+    fs::write(p.join(".local/share/other/data"), "data\n").unwrap();
+    let out = s.run_as(
+        &[".local/state/tool", "Library/Caches/tool", ".claude"],
+        r#"cat "$HOME/.local/state/tool/log"
+echo new >> "$HOME/.local/state/tool/log" && echo state-written
+cat "$HOME/.local/share/other/data"
+(echo leak >> "$HOME/.local/share/other/data") 2>/dev/null || echo refused-beside
+mkdir -p "$HOME/Library/Caches/tool" && echo c > "$HOME/Library/Caches/tool/c" && echo cache-written"#,
+    );
+    assert_eq!(
+        out,
+        "old\nstate-written\ndata\nrefused-beside\ncache-written\n"
+    );
+    assert_eq!(s.real(".local/state/tool/log"), "old\n");
+    assert_eq!(s.real(".local/share/other/data"), "data\n");
+    assert!(!p.join("Library").exists());
+    assert!(s.task.home_changes().unwrap().is_empty());
+}
+
+/// A layer made for another agent holds none of what the first one wrote
+/// in its state, its login included.
+#[test]
+fn another_agents_layer_holds_nothing_of_the_first_ones_state() {
+    let s = Setup::new();
+    s.run(r#"echo token > "$HOME/.claude/.credentials.json""#);
+    let layer = s.task.home_layer();
+    assert!(layer.join(".claude/.credentials.json").exists());
+    s.run_as(&[".codex"], "true");
+    assert!(
+        fs::symlink_metadata(layer.join(".claude"))
+            .unwrap()
+            .is_symlink()
+    );
+    assert!(!s.person.path().join(".claude/.credentials.json").exists());
 }
 
 /// A layer holding changes one agent made waits for them to be reviewed:

@@ -29,7 +29,8 @@ ev katmanı (`<task>/home`) olarak görür:
 - diğer her kayıt sizin dosyanıza bir **bağlantıdır** (link), böylece araç
   zincirleri, önbellekler ve ayarlar her zamanki yerlerinde bulunur. Bir
   bağlantı üzerinden yazma, önceden olduğu gibi sandbox'a takılır;
-- ajanın kendi durumu bağlantıdır ve asla incelemeye sunulmaz;
+- ajanın kendi durumu da **klonlanır**: ajan oraya yazar; yazdıkları ev
+  dizininize hiç ulaşmaz ve asla incelemeye sunulmaz;
 - gizli yollar (`~/.ssh`, `~/.aws`, …) katmanda hiç yer almaz;
 - kabuk geçmişleri ve tamamlama (completion) dökümleri de sunulmaz.
 

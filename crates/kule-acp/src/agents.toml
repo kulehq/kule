@@ -6,9 +6,16 @@
 #
 #   name             how the agent is asked for (`kule run --agent <name>`)
 #   command          starts the agent speaking ACP on stdio
-#   state            paths under the home directory it writes its own state to
-#   protected        paths in that state that configure what runs outside the
-#                    sandbox later (hooks, MCP servers): readable, never writable
+#   own_home         the variable it reads its home or config folder from:
+#                    Kule points it at a folder of the agent's own, where what
+#                    it writes in Kule stays, never reaching it outside Kule
+#   outside          where it keeps its state outside Kule: hidden from it and
+#                    from every other agent; only Kule reads there
+#   carry            what Kule copies from outside into its own home at every
+#                    start (settings, instructions, skills), read-only while it
+#                    runs; whatever the agent left there before is gone
+#   state            other paths under the home directory it writes: cloned
+#                    into the task's home layer, never the person's home
 #   login            its login in that state, hidden from every other agent
 #   reveal_on_macos  default-hidden paths it needs to read (its keychain)
 #   mode             the ACP session mode to start in, when the agent offers it
@@ -17,6 +24,8 @@
 #   keys             the person's variables holding its API keys, each with the
 #                    hosts it is for: it gets a placeholder, the proxy puts the
 #                    key into requests to those hosts alone
+#   keychain         the same, for a key Kule reads in the macOS keychain
+#   login_file       the same, for a key Kule reads in a JSON file outside
 #   hosts            HTTPS hosts it needs beyond what the policy lets through,
 #                    open only while it runs
 #
@@ -29,40 +38,38 @@
 [[agent]]
 name = "claude-code"
 command = ["npx", "-y", "@agentclientprotocol/claude-agent-acp@0.92.0"]
-state = [".claude", ".claude.json", ".local/state/claude", "Library/Caches/claude-cli-nodejs"]
-login = [".claude/.credentials.json"]
-# What makes Claude Code run something, or follow instructions, the next
-# time it starts outside Kule: settings and hooks, plugins (which bring
-# hooks and MCP servers), skills, commands, subagents, and the instructions
-# it reads first.
-protected = [
-  ".claude/settings.json", ".claude/settings.local.json", ".claude/hooks", ".claude.json",
-  ".claude/plugins", ".claude/skills", ".claude/commands", ".claude/agents", ".claude/CLAUDE.md",
-  ".claude/statusline.sh", ".claude/output-styles",
-]
+# Its settings, history and transcripts in Kule are its own: Claude Code
+# run outside Kule never reads them.
+own_home = "CLAUDE_CONFIG_DIR"
+outside = [".claude", ".claude.json"]
+# Your settings and hooks, skills, commands, subagents, output styles and
+# the instructions it reads first, as they are outside, at every start.
+# Plugins are not: they bring code and marketplaces of their own.
+carry = { "settings.json" = ".claude/settings.json", "settings.local.json" = ".claude/settings.local.json", "CLAUDE.md" = ".claude/CLAUDE.md", "skills" = ".claude/skills", "commands" = ".claude/commands", "agents" = ".claude/agents", "output-styles" = ".claude/output-styles", "hooks" = ".claude/hooks", "statusline.sh" = ".claude/statusline.sh", ".claude.json" = ".claude.json" }
+state = [".local/state/claude", "Library/Caches/claude-cli-nodejs"]
 # Its sign-in tokens too: the agent works with placeholders, and the proxy
 # puts the token into what goes to Anthropic alone.
 keys = { ANTHROPIC_API_KEY = ["api.anthropic.com"], ANTHROPIC_AUTH_TOKEN = ["api.anthropic.com"], CLAUDE_CODE_OAUTH_TOKEN = ["api.anthropic.com"] }
-# On macOS its sign-in lives in the keychain, which stays hidden: Kule reads
-# the token there and hands the agent a placeholder for it instead.
+# On macOS its sign-in lives in the keychain, on Linux in a file outside:
+# Kule reads the token there and hands the agent a placeholder for it.
 keychain = { CLAUDE_CODE_OAUTH_TOKEN = { service = "Claude Code-credentials", json = "claudeAiOauth.accessToken", hosts = ["api.anthropic.com"] } }
+login_file = { CLAUDE_CODE_OAUTH_TOKEN = { path = ".claude/.credentials.json", json = "claudeAiOauth.accessToken", hosts = ["api.anthropic.com"] } }
 
 [[agent]]
 name = "gemini"
 command = ["gemini", "--acp"]
-state = [".gemini"]
-login = [".gemini/gemini-credentials.json", ".gemini/oauth_creds.json"]
-# Settings, extensions (which run code), custom commands, the folders it
-# trusts, and the instructions it reads first.
-protected = [
-  ".gemini/settings.json", ".gemini/extensions", ".gemini/commands",
-  ".gemini/trustedFolders.json", ".gemini/GEMINI.md", ".gemini/extension_integrity.json",
-  ".gemini/.env",
-]
+# GEMINI_CLI_HOME stands for the home folder: its state in Kule is the
+# .gemini folder in its own home.
+own_home = "GEMINI_CLI_HOME"
+outside = [".gemini"]
+# Your settings, extensions, custom commands, the folders you trust, the
+# instructions it reads first, and the API key saved in its own encrypted
+# file, as they are outside, at every start.
+carry = { ".gemini/settings.json" = ".gemini/settings.json", ".gemini/extensions" = ".gemini/extensions", ".gemini/extension_integrity.json" = ".gemini/extension_integrity.json", ".gemini/commands" = ".gemini/commands", ".gemini/trustedFolders.json" = ".gemini/trustedFolders.json", ".gemini/GEMINI.md" = ".gemini/GEMINI.md", ".gemini/.env" = ".gemini/.env", ".gemini/gemini-credentials.json" = ".gemini/gemini-credentials.json" }
 # The keychain only works for Gemini when it can write a probe item there,
-# which the sandbox refuses; its own encrypted file under ~/.gemini needs no
-# more than the state above. Save the API key once with
-# `GEMINI_FORCE_FILE_STORAGE=true gemini` and `/auth`.
+# which the sandbox refuses; its own encrypted file needs nothing more.
+# Save the API key once with `GEMINI_FORCE_FILE_STORAGE=true gemini` and
+# `/auth`.
 env = { GEMINI_FORCE_FILE_STORAGE = "true" }
 keys = { GEMINI_API_KEY = ["generativelanguage.googleapis.com"], GOOGLE_API_KEY = ["generativelanguage.googleapis.com"] }
 # With an API key it talks to the public API, which the policy lets through.
@@ -74,15 +81,13 @@ name = "codex"
 # cannot be set up inside Kule's; Kule's sandbox stands in.
 mode = "agent-full-access"
 command = ["npx", "-y", "@agentclientprotocol/codex-acp@2.2.2", "-c", "sandbox_mode=\"danger-full-access\""]
-state = [".codex"]
-login = [".codex/auth.json"]
-# Settings, the rules for which commands run unasked, plugins, skills,
-# prompts, and the instructions it reads first.
-protected = [
-  ".codex/config.toml", ".codex/rules", ".codex/plugins", ".codex/skills",
-  ".codex/prompts", ".codex/AGENTS.md", ".codex/AGENTS.override.md",
-]
-pass_env = ["CODEX_HOME"]
+own_home = "CODEX_HOME"
+outside = [".codex"]
+# Your settings, the rules for which commands run unasked, plugins, skills,
+# prompts and the instructions it reads first, as they are outside, at
+# every start. Not your sign-in: a ChatGPT sign-in is done once in its own
+# home (see Agents in the docs); an API key works through `keys`.
+carry = { "config.toml" = ".codex/config.toml", "rules" = ".codex/rules", "plugins" = ".codex/plugins", "skills" = ".codex/skills", "prompts" = ".codex/prompts", "AGENTS.md" = ".codex/AGENTS.md", "AGENTS.override.md" = ".codex/AGENTS.override.md" }
 keys = { OPENAI_API_KEY = ["api.openai.com"] }
 # A ChatGPT sign-in refreshes its token at auth.openai.com and reaches the
 # model through chatgpt.com, not the public API.

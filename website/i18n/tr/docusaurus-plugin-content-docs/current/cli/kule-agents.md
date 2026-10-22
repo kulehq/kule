@@ -33,7 +33,8 @@ kule agents [OPTIONS] [COMMAND]
 Kule, [Agent Client Protocol](https://agentclientprotocol.com) (ACP)
 konuşan ajanları çalıştırır. Her ajanın bir **profili** vardır: onu
 başlatan komut ve sandbox'ta görevin kopyasının ötesinde neleri
-açabileceği (kendi durum klasörü, oturum bilgisi, ihtiyaç duyduğu host'lar).
+açabileceği (Kule'de kendine ait bir ev dizini, oturum bilgisi, ihtiyaç
+duyduğu host'lar). Yazdığı hiçbir şey ev dizininize ulaşmaz.
 
 - **Yerleşik**: `claude-code`, `codex` ve `gemini`.
 - **Sizinkiler**: Kule'nin ev dizinindeki `agents.toml` içindeki profiller
@@ -96,31 +97,34 @@ Profili onaylayacağınız hâliyle yazar, ardından varsa uyarıları.
 $ kule agents show codex
 [[agent]]  codex
 runs              npx -y @agentclientprotocol/codex-acp@2.2.2 -c sandbox_mode="danger-full-access"
-writes in ~/      .codex
-its login         .codex/auth.json
-read-only         .codex/config.toml, .codex/rules, .codex/plugins, .codex/skills, .codex/prompts, .codex/AGENTS.md, .codex/AGENTS.override.md
-sees your env     CODEX_HOME
+writes in ~/      nothing
+its login         nothing
+hidden from it    .codex (only Kule reads there)
+copied in         .codex/AGENTS.md, .codex/AGENTS.override.md, .codex/config.toml, .codex/plugins, .codex/prompts, .codex/rules, .codex/skills (at every start, read-only)
+sees your env     nothing
 also connects to  https://auth.openai.com, https://chatgpt.com
 session mode      agent-full-access
+home of its own   $CODEX_HOME points at Kule's folder for it: what it writes in Kule stays there
+its own home      /Users/you/Library/Application Support/Kule/agents/codex
 
 warning: Kule puts your OPENAI_API_KEY into what codex sends to api.openai.com.
-
-warning: codex sees your CODEX_HOME as it is.
 ```
 
 | Satır | Anlamı |
 | --- | --- |
 | `runs` | Ajanı ACP üzerinden başlatan komut. |
-| `writes in ~/` | Ajanın yazabileceği, ev dizininizin altındaki klasörler ve dosyalar: kendi durumu. |
+| `writes in ~/` | Ajanın durumunu yazdığı, ev dizininizin altındaki klasörler ve dosyalar. Ajan bunları görevin ev dizini kopyasına yazar; hiçbiri sizinkine ulaşmaz. |
 | `its login` | Oturum bilgisi; diğer her ajandan gizlenir. |
-| `read-only` | Durumunun okuyabildiği ama değiştiremediği kısımları: ayarlar, hook'lar, eklentiler, yetenekler (skills), talimatlar. Bunlar yazılabilir olsaydı, ajanı bir dahaki sefere Kule dışında başlattığınızda bir şey çalıştırmasına yol açabilirdi. |
+| `hidden from it` | Ajanı Kule olmadan çalıştırdığınızda durumunu tuttuğu yer. Orayı yalnızca Kule okur. |
+| `copied in` | Her başlangıçta Kule'deki ev dizinine kopyalanan ayarlarınız, hook'larınız, skill'leriniz ve talimatlarınız; ajan çalışırken salt okunurdur. |
+| `protected` | Eski profillerden; artık gerekmiyor, çünkü yazdığı hiçbir şey ev dizininize ulaşmaz. |
 | `reveals (macOS)` | macOS'ta okuyabildiği gizli yollar, örneğin bir anahtar zinciri. |
 | `sees your env` | Olduğu gibi gördüğü ortam değişkenleriniz. |
 | `sets env` | Kule'nin onu başlatırken verdiği değişkenler. |
 | `also connects to` | Çalışırken politikanın ötesinde ulaştığı HTTPS host'ları. |
 | `session mode` | Kule'nin ajanı başlattığı, sandbox işini Kule'ye bırakan ajanın kendi modu. |
 | `its own home` / `home of its own` | Kule'de ona ait bir klasör (bkz. [Ajanlar](../using-agents.md) sayfasındaki `own_home`). |
-| `warning:` | Onaylamadan önce bilmeniz gereken bir şey; örneğin Kule'nin onun için doldurduğu bir anahtar ya da yazılabilir bırakılmış bir durum. |
+| `warning:` | Onaylamadan önce bilmeniz gereken bir şey; örneğin Kule'nin onun için doldurduğu bir anahtar. |
 
 Buradaki sandbox codex'in kendisininki değildir:
 `sandbox_mode="danger-full-access"`, codex'in kendi sandbox'ını Kule'ninkinin
@@ -191,13 +195,13 @@ refused  file-write-create /Users/you/.qwen/settings.json (node)
 refused  connect example-model-api.com:443 (no-rule-lets-it-pass)
 suggested state: .qwen
 suggested hosts: example-model-api.com
-suggested read-only: .qwen/settings.json
 added to qwen-code; review it with kule agents show qwen-code, then approve it
 ```
 
-`suggested read-only`, durumu içinde ajanın açılırken bir şey çalıştırmasına
-ya da talimat izlemesine yol açacak dosyaları adlandırır; Kule bunları
-okunabilir ama yazılamaz tutar.
+Ajanın önerilen durumda yazdıkları her görevin ev dizini kopyasına gider,
+asla sizinkine. Durumunun yerini bir değişkenden okuyan bir ajana bunun
+yerine görevler boyunca tutulan kendine ait bir ev dizini (`own_home`)
+verilebilir.
 
 :::note
 

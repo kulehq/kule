@@ -28,7 +28,8 @@ your real home:
 - every other entry is a **link** to your own, so toolchains, caches and
   settings are found where they always are. A write through a link meets
   the sandbox as before;
-- the agent's own state is linked and never offered for review;
+- the agent's own state is **cloned** too: the agent writes there, and
+  what it writes never reaches your home and is never offered for review;
 - hidden paths (`~/.ssh`, `~/.aws`, …) are not in the layer at all;
 - shell histories and completion dumps are not offered either.
 

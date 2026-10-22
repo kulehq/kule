@@ -822,6 +822,121 @@ pub(crate) fn put_beneath(root: &Path, rel: &str, bytes: &[u8], mode: u32) -> Re
     put_at(&dir, name, bytes, mode, &root.join(rel))
 }
 
+/// The most entries [`carry`] copies.
+const CARRY_ENTRIES: usize = 20_000;
+/// The most bytes [`carry`] copies.
+const CARRY_BYTES: u64 = 64 * 1024 * 1024;
+
+/// Makes `rel` under `root` exactly what `from` is: a copy of the file,
+/// folder or link there, or nothing where there is none. `root` is a place a
+/// sandbox writes to (an agent's home of its own): the copy is made aside
+/// and renamed into place through folders opened as [`kept_dir`] opens them,
+/// so nothing put on the way leads it elsewhere, and whatever stood at `rel`
+/// is replaced, a link never written through. Links in `from` are copied as
+/// links. More than 20,000 entries or 64 MB is refused.
+pub fn carry(from: &Path, root: &Path, rel: &str) -> Result<()> {
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let shown = root.join(rel);
+    let (parent, name) = rel.rsplit_once('/').unwrap_or(("", rel));
+    let dir = kept_dir(root, parent)?;
+    let Some(stamp) = Stamp::of(from)? else {
+        return remove_tree_at(&dir, name).at(&shown);
+    };
+    let (mut entries, mut bytes) = (0, 0);
+    for entry in WalkDir::new(from).follow_links(false) {
+        let entry = entry.map_err(|e| Error::Invalid(format!("{}: {e}", from.display())))?;
+        entries += 1;
+        if entry.file_type().is_file() {
+            bytes += entry.metadata().map(|m| m.len()).unwrap_or(0);
+        }
+        if entries > CARRY_ENTRIES || bytes > CARRY_BYTES {
+            return Err(Error::Invalid(format!(
+                "{} is too large to copy (more than {CARRY_ENTRIES} entries or {} MB)",
+                from.display(),
+                CARRY_BYTES / 1024 / 1024
+            )));
+        }
+    }
+    let n = NEXT.fetch_add(1, Ordering::Relaxed);
+    let aside = format!(".kule-carry-{}-{n}", std::process::id());
+    remove_tree_at(&dir, &aside).at(&shown)?;
+    let made = copy_at(from, stamp.kind, &dir, &aside, &shown).and_then(|()| {
+        // Something put at `name` in between is taken out again.
+        for _ in 0..KEPT_TRIES {
+            remove_tree_at(&dir, name).at(&shown)?;
+            match rename_at(&dir, &aside, name) {
+                Ok(()) => return Ok(()),
+                Err(e)
+                    if matches!(
+                        e.raw_os_error(),
+                        Some(libc::ENOTEMPTY | libc::EEXIST | libc::ENOTDIR | libc::EISDIR)
+                    ) => {}
+                Err(e) => return Err(e).at(&shown),
+            }
+        }
+        Err(Error::Invalid(format!(
+            "{} kept being replaced while Kule copied it",
+            shown.display()
+        )))
+    });
+    if made.is_err() {
+        let _ = remove_tree_at(&dir, &aside);
+    }
+    made
+}
+
+/// Removes `rel` under `root`, a whole folder included, through folders
+/// opened as [`kept_dir`] opens them: nothing a sandbox put on the way, or
+/// in it, is followed.
+pub fn remove_beneath(root: &Path, rel: &str) -> Result<()> {
+    let (parent, name) = rel.rsplit_once('/').unwrap_or(("", rel));
+    let dir = kept_dir(root, parent)?;
+    remove_tree_at(&dir, name).at(&root.join(rel))
+}
+
+/// Copies `from`, which is a `kind`, to `name` in `dir`, nothing in `dir`
+/// followed; `shown` names it in errors.
+fn copy_at(from: &Path, kind: Kind, dir: &File, name: &str, shown: &Path) -> Result<()> {
+    use std::os::fd::AsRawFd;
+    match kind {
+        Kind::Symlink => {
+            let target = fs::read_link(from).at(from)?;
+            let ctarget = std::ffi::CString::new(target.as_os_str().as_encoded_bytes())
+                .map_err(|_| Error::Invalid(format!("{}: a link with a NUL", from.display())))?;
+            let cname = plain_name(name).at(shown)?;
+            // SAFETY: both strings are NUL-terminated; `dir` is a descriptor we own.
+            if unsafe { libc::symlinkat(ctarget.as_ptr(), dir.as_raw_fd(), cname.as_ptr()) } == -1 {
+                return Err(io::Error::last_os_error()).at(shown);
+            }
+            Ok(())
+        }
+        Kind::File => {
+            let bytes = fs::read(from).at(from)?;
+            let mode = fs::symlink_metadata(from).at(from)?.permissions().mode() & 0o777;
+            put_at(dir, name, &bytes, mode, shown)
+        }
+        Kind::Dir => {
+            let made = kept_child(dir, name, shown)?;
+            let mut children: Vec<_> = fs::read_dir(from)
+                .at(from)?
+                .filter_map(|e| e.ok())
+                .map(|e| e.file_name())
+                .collect();
+            children.sort();
+            for child in children {
+                let Some(child) = child.to_str() else {
+                    continue;
+                };
+                let from = from.join(child);
+                if let Some(stamp) = Stamp::of(&from)? {
+                    copy_at(&from, stamp.kind, &made, child, &shown.join(child))?;
+                }
+            }
+            Ok(())
+        }
+    }
+}
+
 /// How many times a kept folder is made again when something keeps taking
 /// its place.
 const KEPT_TRIES: usize = 8;

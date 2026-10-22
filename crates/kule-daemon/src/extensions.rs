@@ -52,6 +52,7 @@ pub fn agent_dirs(home: &Path, person: Option<&Path>) -> Result<Vec<std::path::P
         p.state
             .iter()
             .chain(&p.login)
+            .chain(&p.outside)
             .cloned()
             .chain(p.own_home.as_ref().map(|_| p.own_home_path()))
             .map(|rel| person.join(rel))

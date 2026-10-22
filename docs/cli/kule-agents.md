@@ -31,8 +31,8 @@ kule agents [OPTIONS] [COMMAND]
 
 Kule runs agents that speak the [Agent Client Protocol](https://agentclientprotocol.com)
 (ACP). Each agent has a **profile**: the command that starts it, and what it
-may open in the sandbox beyond a task's copy (its own state folder, its
-login, the hosts it needs).
+may open in the sandbox beyond a task's copy (a home of its own in Kule, its
+login, the hosts it needs). Nothing it writes reaches your home.
 
 - **Built in**: `claude-code`, `codex` and `gemini`.
 - **Yours**: profiles in `agents.toml` in Kule's home (`~/.kule/agents.toml`).
@@ -92,31 +92,34 @@ Prints the profile as you would approve it, then any warnings.
 $ kule agents show codex
 [[agent]]  codex
 runs              npx -y @agentclientprotocol/codex-acp@2.2.2 -c sandbox_mode="danger-full-access"
-writes in ~/      .codex
-its login         .codex/auth.json
-read-only         .codex/config.toml, .codex/rules, .codex/plugins, .codex/skills, .codex/prompts, .codex/AGENTS.md, .codex/AGENTS.override.md
-sees your env     CODEX_HOME
+writes in ~/      nothing
+its login         nothing
+hidden from it    .codex (only Kule reads there)
+copied in         .codex/AGENTS.md, .codex/AGENTS.override.md, .codex/config.toml, .codex/plugins, .codex/prompts, .codex/rules, .codex/skills (at every start, read-only)
+sees your env     nothing
 also connects to  https://auth.openai.com, https://chatgpt.com
 session mode      agent-full-access
+home of its own   $CODEX_HOME points at Kule's folder for it: what it writes in Kule stays there
+its own home      /Users/you/Library/Application Support/Kule/agents/codex
 
 warning: Kule puts your OPENAI_API_KEY into what codex sends to api.openai.com.
-
-warning: codex sees your CODEX_HOME as it is.
 ```
 
 | Line | Meaning |
 | --- | --- |
 | `runs` | The command that starts the agent over ACP. |
-| `writes in ~/` | Folders and files under your home the agent may write: its own state. |
+| `writes in ~/` | Folders and files under your home the agent writes its state to. It writes them in the task's copy of your home; none of it reaches your own. |
 | `its login` | Its sign-in, hidden from every other agent. |
-| `read-only` | Parts of its state it may read but not change: settings, hooks, plugins, skills, instructions, which would otherwise make it run something the next time you start it outside Kule. |
+| `hidden from it` | Where it keeps its state when you run it without Kule. Only Kule reads there. |
+| `copied in` | Your settings, hooks, skills and instructions, copied into its home in Kule at every start, read-only while it runs. |
+| `protected` | From older profiles; no longer needed, since nothing it writes reaches your home. |
 | `reveals (macOS)` | Hidden paths it may read on macOS, such as a keychain. |
 | `sees your env` | Your environment variables it sees as they are. |
 | `sets env` | Variables Kule starts it with. |
 | `also connects to` | HTTPS hosts it reaches while it runs, beyond the policy. |
 | `session mode` | The agent's own mode Kule starts it in, which leaves sandboxing to Kule. |
 | `its own home` / `home of its own` | A folder of its own in Kule (see `own_home` in [Agents](../using-agents.md)). |
-| `warning:` | Something to know before you approve, for example a key Kule fills in for it, or state left writable. |
+| `warning:` | Something to know before you approve, for example a key Kule fills in for it. |
 
 The sandbox is not codex's own: `sandbox_mode="danger-full-access"` turns
 off codex's sandbox *inside* Kule's, which is the one that holds.
@@ -185,13 +188,13 @@ refused  file-write-create /Users/you/.qwen/settings.json (node)
 refused  connect example-model-api.com:443 (no-rule-lets-it-pass)
 suggested state: .qwen
 suggested hosts: example-model-api.com
-suggested read-only: .qwen/settings.json
 added to qwen-code; review it with kule agents show qwen-code, then approve it
 ```
 
-`suggested read-only` names files in its state that would make it run
-something or follow instructions when it starts; Kule keeps those readable
-but not writable.
+What it writes in the suggested state goes to each task's copy of your
+home, never your own. An agent that reads where its state lives from a
+variable can have a home of its own instead (`own_home`), kept across
+tasks.
 
 :::note
 
