@@ -30,7 +30,12 @@ eksikleri gösterir; `--accept-weaker on` komutların bilgisayarın
 verebildiğiyle çalışmasına izin verir. Seçiminiz Kule'nin evinde
 (`isolation.json`) saklanır.
 
-macOS'ta eksik yoktur.
+macOS'ta tek eksik, `servers` [sınırının](limits.md) dinlemelerine izin
+verdiği görevin sunucularıdır: macOS sandbox'ı bir sunucunun dinlediği
+port'u görür ama adresini görmez; bu yüzden Kule böyle sunucuları,
+sandbox'ın dışından, ağınızdan uzak tutar. `kule isolation`, her görevin
+sınırları sunuculara izin verdiğinde bunu gösterir; sunuculara kendi başına
+izin veren bir görev ya da gruba bu, çalıştığında söylenir.
 
 ## Seçenekler {#options}
 

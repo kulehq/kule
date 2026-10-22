@@ -26,8 +26,12 @@ Komut görevin kopyasında (çalışma dizini kopyadır), işletim sisteminin
 sandbox'ı (yalıtılmış ortamı) içinde çalışır: macOS'ta Seatbelt, Linux'ta
 Landlock ve namespace'ler. Varsayılan olarak:
 
-- **Yalnızca şunlara yazabilir:** kopya, görevin kendi `TMPDIR`'ı, `/tmp`
-  ve görevin kendi paket önbellekleri.
+- **Yalnızca şunlara yazabilir:** kopya, görevin kendi `TMPDIR`'ı, paket
+  önbellekleri ve Linux'ta görevin kendine ait olan `/tmp` (macOS'ta `/tmp`
+  sisteme aittir, bu yüzden kapalı kalır).
+- **Bağlantıları yalnızca bu bilgisayarda dinler.** Sandbox'ın bir sunucunun
+  adresini ayırt edemediği macOS'ta, ağ trafiği proxy'den geçerken, görevin
+  `servers` [sınırı](limits.md) izin vermedikçe hiç dinlemez.
 - **Şunları okuyamaz:** kimlik bilgileriniz (`~/.ssh`, `~/.aws`,
   `~/.npmrc`, cargo'nun registry token'ı ve daha birçoğu), kendi
   klasörleriniz (Documents, Desktop, Downloads, Pictures, bulut depolama),

@@ -24,9 +24,10 @@ Yalnızca şunlara:
 
 - görevin **kopyasına**;
 - görevin kendi `TMPDIR`'ına ve paket önbelleklerine;
-- `/tmp`'ye (Linux'ta her görevin kendine ait bir `/tmp`'si vardır;
-  macOS'ta ise görevler sistemin `/tmp`'sini paylaşır, çünkü macOS
-  sandbox'ı bir yolu taşıyamaz).
+- Linux'ta, görevin kendine ait olan `/tmp`'ye. macOS'ta sandbox bir yolu
+  taşıyamaz; bu yüzden `/tmp` sistemin `/tmp`'si olurdu, diğer
+  programlarınız ve görevlerinizle paylaşılırdı: komutlar oraya yazmaz ve
+  `TMPDIR` (ve zsh'nin `TMPPREFIX`'i) görevin kendisininkini gösterir.
 
 Geri kalan her şey salt okunur ya da gizlidir.
 
@@ -109,7 +110,9 @@ programı görmez ve ona sinyal gönderemez; arkasında çalışır bıraktığ�
 başlatan ajan ya da terminal komutu yaşadığı sürece yaşar.
 
 Bir görevin başlattığı sunucular **yalnızca bu bilgisayarda** dinler, asla
-ağınızda değil. Bkz. [Terminaller ve sunucular](../app/terminals-and-servers.md).
+ağınızda değil. Sandbox'ın bir sunucunun adresini ayırt edemediği macOS'ta,
+bir görevin programları ancak onun için sunuculara izin verdiğinizde
+dinler; bu, kabul ettiğiniz daha zayıf yalıtımdır. Bkz. [Terminaller ve sunucular](../app/terminals-and-servers.md).
 
 ## Ekrana ihtiyaç duyan programlar
 

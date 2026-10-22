@@ -33,7 +33,10 @@ net: example.com:443 · refused, would wait for approval; the command line asks 
 ```
 
 Proxy bağlandığı adresi de denetler ve özel (private) adresleri erişim
-dışında tutar.
+dışında tutar. IPv6'da yalnızca global unicast aralığı genel (public)
+sayılır; bir IPv6 adresinin içinde taşınan bir IPv4 adresi (mapped, NAT64,
+6to4) kendisi olarak değerlendirilir. Bir ad küçük harfle ve sondaki nokta
+olmadan değerlendirilir; yani `Example.com.`, `example.com`'dur.
 
 ## Sorular
 
@@ -75,7 +78,18 @@ kule exec TASK --open-network -- ./fetch.sh # her yere bağlan: proxy yok, polit
 ## HTTPS ve gizli değerler
 
 Proxy normalde HTTPS'i yalnızca tünelden geçirir: içeriği değil, host'u ve
-portu görür. Bir [gizli değerin (secret)](secrets.md) ait olduğu host'lar
+portu görür. Bir tünel devam etmeden önce istemcinin TLS hello'sunu okur:
+istediği ad, tünelin açıldığı host olmalıdır (bir adres için hiçbir ad
+olmamalıdır); yoksa tünel, host'a tek bir bayt ulaşmadan kesilir, çünkü
+birçok host tek bir adresi paylaşır ve bir hello hangi adı isterse onu
+sunar. Adını gizleyen bir hello (Encrypted Client Hello) da kesilir;
+Chromium tabanlı araçlarda bunu
+`--disable-features=EncryptedClientHello` ile kapatın. Port 443 TLS'ten
+başka bir şey taşımaz. Düz `http://` istekleri tek tek okunur ve her biri,
+geçirildiği host için olmalıdır. Kesilen bir bağlantı, nedeniyle birlikte
+`cut` olarak günlüğe yazılır.
+
+Bir [gizli değerin (secret)](secrets.md) ait olduğu host'lar
 için ise, gizli değeri isteğe yerleştirmek üzere TLS'in içine bakar. Bunun
 için her çalıştırmada yalnızca o host'lar için geçerli kendi sertifika
 otoritesini üretir ve `SSL_CERT_FILE`, `NODE_EXTRA_CA_CERTS`,

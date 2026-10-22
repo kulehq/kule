@@ -53,6 +53,7 @@ Bir ajan profili kendininkileri `pass_env` altında adlandırır.
 | `HOME` | `<task>/home` | Görevin [ev katmanı](../concepts/home-layer.md): oraya yazılanlar inceleme için yakalanır. |
 | `XDG_CONFIG_HOME` | `<task>/home/.config` | Yalnızca sizinki gerçek `~/.config` dizininizi gösteriyorduysa. |
 | `TMPDIR` | `<task>/tmp` | Görevin kendi geçici dizini. |
+| `TMPPREFIX` | `<task>/tmp/zsh` | zsh'nin here-document'ların ve `=(…)`'nin dosyalarını koyduğu yer; varsayılan olarak `/tmp`. |
 | `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY` (ve küçük harfli hâlleri) | `http://127.0.0.1:<port>` | Her bağlantıyı değerlendirip kaydeden görevin proxy'si. `NO_PROXY` kaldırılır. |
 | `NODE_USE_ENV_PROXY` | `1` | Node'un yerleşik `fetch`'inin proxy'yi kullanmasını sağlar. |
 | `SSL_CERT_FILE`, `CURL_CA_BUNDLE`, `REQUESTS_CA_BUNDLE`, `PIP_CERT`, `GIT_SSL_CAINFO`, `CARGO_HTTP_CAINFO`, `AWS_CA_BUNDLE` | `<task>/tmp/kule-ca-bundle.pem` | Sistemin kök sertifikaları artı görevin kendi sertifika yetkilisi; proxy bunu [gizli değerleri](../concepts/secrets.md) host'ları için doldurmakta kullanır. |

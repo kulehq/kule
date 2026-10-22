@@ -55,8 +55,26 @@ tutucu olarak kalır:
 - başka bir host'a gönderildiğinde hiçbir şeyi açmayan bir metindir.
 
 O host'a, Kule'nin onun için tutmadığı kimlik bilgileri taşıyan bir istek
-reddedilir (403). Değeri geri yansıtan bir yanıtta değer, proxy'nin
-okuyabildiği ölçüde `*` ile karartılır.
+reddedilir (403); böylece sizin olmayan bir hesap adına hiçbir şey dışarı
+çıkmaz:
+
+- bir kimlik bilgisi başlığı, bir çerez (cookie) ya da kimlik bilgisi gibi
+  adlandırılmış bir başlık veya URL parametresi (`token`, `key`, `secret`,
+  `password`, `auth`, `session` ve benzerleri, hangi yazımla olursa olsun:
+  `private_token`, `JOB-TOKEN`, `apiKey`) yalnızca Kule'nin yer tutucusunu
+  taşır;
+- `Basic` ile yer tutucu, herhangi bir kullanıcı adı altında paroladır ya da
+  parolasız kullanıcı adıdır;
+- alanları olan bir gövde (bir form, JSON, çok parçalı (multipart) bir form,
+  metin) 1 MB'a kadar bütünüyle okunur ve aynısı onun alanları için de,
+  JSON'un en üst düzeyinde ve nesnelerin içindeki nesnelerde geçerlidir;
+  okunamayacak kadar büyük ya da parçalı (chunked) olan bir gövde
+  reddedilir.
+
+Proxy o host'tan yalnızca bütün yanıtlar ister (`Range` yok). Değeri geri
+yansıtan bir yanıtta değer, proxy'nin okuyabildiği ölçüde `*` ile
+karartılır: olduğu gibi, JSON'un ya da bir URL'nin yazdığı gibi kaçışlı
+(escaped) hâliyle ya da base64'te, parçalar arasında bölünmüş olsa bile.
 
 Bağlantı kaydı, giden gizli değerlerin adını verir:
 

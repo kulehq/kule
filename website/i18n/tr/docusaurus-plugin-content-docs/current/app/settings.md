@@ -147,8 +147,10 @@ için her alan, değerinin nereden geldiğini söyler:
 | One task | Miras aldığı değer (grubu o alanı ayarlıyorsa **From group …**, yoksa **From every task**), **No limit** ya da **Its own** değeri. |
 
 Alanlar şunlardır: işlemci (çekirdek), bellek (GB), disk (GB), **GPU may be
-used** (açık ya da kapalı), tek bir çalıştırma (dakika), bir görevin tüm
-çalıştırmaları (saat) ve hiçbir şey yapmama (dakika). *Groups and tasks
+used** (açık ya da kapalı), **Servers (macOS) may listen** (varsayılan olarak
+kapalı; bkz. [Terminaller ve sunucular](terminals-and-servers.md)), tek bir
+çalıştırma (dakika), bir görevin tüm çalıştırmaları (saat) ve hiçbir şey
+yapmama (dakika). *Groups and tasks
 with limits of their own*, bir şey ayarlayan her kapsamı listeler. Süren bir
 çalıştırma, başladığı sınırları korur. Her birinin nasıl ölçüldüğü için bkz.
 [Bütçeler ve sınırlar](../concepts/budgets-and-limits.md).
