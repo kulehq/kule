@@ -328,7 +328,7 @@ pub fn openable(root: &Path, rel: &str, opened: &Path) -> Result<PathBuf> {
     };
     let looked_inside = kule_view::opens::LOOKED_INSIDE.contains(&ext.as_str());
     let (file, size) = open_file(root, rel)?;
-    if looked_inside && size > kule_view::office::MAX_FILE as u64 {
+    if looked_inside && size > kule_view::opens::max_size(&ext) {
         return Err(format!(
             "{rel}: too large for Kule to look inside, so it does not open it with its app"
         ));
@@ -711,6 +711,11 @@ mod tests {
             "a,b\n1,=IMAGE(\"https://example.com/p\")\n",
         )
         .unwrap();
+        std::fs::write(
+            root.join("script.pdf"),
+            b"%PDF-1.7\n1 0 obj\n<< /Type /Catalog /OpenAction << /S /JavaScript /JS (app.alert(1)) >> >>\nendobj\n",
+        )
+        .unwrap();
         // Kinds Kule does not look inside, whatever they hold.
         std::fs::write(root.join("letter.rtf"), b"{\\rtf1 hi}").unwrap();
         std::fs::write(
@@ -725,6 +730,7 @@ mod tests {
             "linked.xlsx",
             "picture.xlsx",
             "sums.csv",
+            "script.pdf",
             "letter.rtf",
             "book.epub",
             "deck.key",

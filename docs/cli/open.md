@@ -37,7 +37,11 @@ each one first:
   an email address you would click (a template, a picture, another workbook,
   a data connection); a Word field that fetches, includes or runs something;
   a formula that reaches the network or another program; and a CSV cell
-  that a spreadsheet app would read as a formula.
+  that a spreadsheet app would read as a formula. In a PDF, every object is
+  read, those packed into compressed streams too: one with a script, a
+  program to start, a form that sends itself, another document or a file
+  it carries, media that runs, or an action that runs by itself as it opens
+  is refused, as is an encrypted PDF. Links you click stay.
 - **It is reached without a link,** inside the copy, and has only one name on
   disk.
 - **No agent is at work** in the task.
@@ -108,7 +112,7 @@ Nothing when the file opens. With `--dry-run`, the absolute path of Kule's copy.
 | `kule: <file>: Kule opens documents, pictures, sound and video with their app, not this kind of file; …` | By design. Look at the file in a text viewer, or with [kule exec](exec.md) inside the sandbox. |
 | `kule: <file>: it is not the .<ext> file its name says, so Kule does not open it` | The content does not match the name. Treat the file with suspicion. |
 | `kule: <file>: Kule does not open it with its app: …` | The file would run something or reach outside itself; the rest of the message says what. Look at it in the Preview, or inside the sandbox. |
-| `kule: <file>: too large for Kule to look inside, …` | Word, Excel, PowerPoint, OpenDocument and CSV files over 20 MB are not opened. |
+| `kule: <file>: too large for Kule to look inside, …` | Word, Excel, PowerPoint, OpenDocument and CSV files over 20 MB, and PDFs over 100 MB, are not opened. |
 | `kule: <file>: a path inside the copy, without ..` | Use a path relative to the copy's top. |
 | `kule: an agent is at work in task <id> (process <pid>); wait until it is done` | Wait for the run to end. |
 

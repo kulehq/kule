@@ -70,8 +70,10 @@ outside the sandbox. A file must also be what its name says: a script named
 `notes.pdf` is not opened. Word, Excel, PowerPoint, OpenDocument and CSV
 files must keep to themselves: no macros, controls or embedded objects, no
 link to anything outside the file but a web page or an email address, no
-field or formula that fetches or runs something. And it waits while the
-agent is at work.
+field or formula that fetches or runs something. A PDF must hold no script,
+no program to start, no form that sends itself, no other document or
+attached file, and nothing that runs as it opens; an encrypted one is not
+opened. And it waits while the agent is at work.
 
 :::
 
