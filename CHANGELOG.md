@@ -1,6 +1,12 @@
 # Changes
 
-## Unreleased
+## 0.2.0-preview.6
+
+A security preview. An agent's output and the files it writes keep to
+limits: Kule's memory, disk and window stay in hand however much the agent
+says or writes, and nothing a run or `kule exec` started outlives it, nor
+escapes the run's limits. *Open with its app* looks inside PDFs too, and on
+macOS a task's servers are kept off your network wherever they run.
 
 ### Security
 

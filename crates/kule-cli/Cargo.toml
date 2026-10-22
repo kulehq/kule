@@ -17,13 +17,13 @@ path = "src/main.rs"
 [dependencies]
 anyhow.workspace = true
 clap.workspace = true
-kule-engine = { version = "0.2.0-preview.5", path = "../kule-engine" }
-kule-ext = { version = "0.2.0-preview.5", path = "../kule-ext" }
+kule-engine = { version = "0.2.0-preview.6", path = "../kule-engine" }
+kule-ext = { version = "0.2.0-preview.6", path = "../kule-ext" }
 serde.workspace = true
 serde_json.workspace = true
 futures = "0.3.34"
-kule-acp = { version = "0.2.0-preview.5", path = "../kule-acp" }
-kule-daemon = { version = "0.2.0-preview.5", path = "../kule-daemon" }
+kule-acp = { version = "0.2.0-preview.6", path = "../kule-acp" }
+kule-daemon = { version = "0.2.0-preview.6", path = "../kule-daemon" }
 tokio = { version = "1.53.3", features = ["rt-multi-thread"] }
 libc = "0.2.190"
 
