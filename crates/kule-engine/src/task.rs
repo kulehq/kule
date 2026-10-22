@@ -1791,11 +1791,17 @@ fn trash_dir(home: &Path) -> PathBuf {
 }
 
 fn new_task_dir(tasks: &Path) -> Result<(String, PathBuf)> {
-    let seed = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |d| d.as_nanos());
-    for attempt in 0..64u128 {
-        let id = format!("{:08x}", (seed + attempt) as u32);
+    // At random, not by the clock: an id names the task's processes on the
+    // whole computer (its sandbox's mark), and tasks made at the same
+    // moment in other Kule homes must not share it.
+    let random = Path::new("/dev/urandom");
+    let mut bytes = [0u8; 4];
+    fs::File::open(random)
+        .and_then(|mut f| std::io::Read::read_exact(&mut f, &mut bytes))
+        .at(random)?;
+    let seed = u32::from_le_bytes(bytes);
+    for attempt in 0..64u32 {
+        let id = format!("{:08x}", seed.wrapping_add(attempt));
         let dir = tasks.join(&id);
         match fs::create_dir(&dir) {
             Ok(()) => return Ok((id, dir)),
