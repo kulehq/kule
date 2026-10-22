@@ -47,7 +47,7 @@ Süren bir çalıştırma, başladığı sınırları korur. Bir değişiklik bi
 | `memory` | GB, çalıştırmanın tüm süreçleri birlikte | Süreçler hemen **öldürülür** ve çalıştırma durur. |
 | `disk` | Görev oluşturulduğundan beri kopyanın, geçici dosyalarının ve ev dizini değişikliklerinin büyüyebileceği GB | Çalıştırma **durur**. Hiçbir dosya bunun ötesine yazılamaz. |
 | `gpu` | `on` / `off` | `off`: macOS'ta Metal'e (ve OpenCL'e) hiçbir aygıt verilmez; Linux'ta GPU aygıtları salt okunur kalır. |
-| `servers` | `on` / `off` (varsayılan `off`) | macOS: `off`, ağ trafiği proxy'den geçerken çalıştırmanın programları bağlantı dinlemez; `on`, dinlerler ve Kule onları sandbox'ın dışından ağınızdan uzak tutar; bu, kabul ettiğiniz daha zayıf yalıtımdır (bkz. [kule isolation](isolation.md)). Linux'ta her sunucu her durumda bu bilgisayarla sınırlı tutulur. |
+| `servers` | `on` / `off` (varsayılan `off`) | macOS: `off`, ağ trafiği proxy'den geçerken çalıştırmanın programları bağlantı dinlemez; `on`, dinlerler; bu, kabul ettiğiniz daha zayıf yalıtımdır: Node, Python ve Ruby sunucuları bu bilgisayara yönlendirilir, uygulamada bir ajan çalışırken de Kule diğerlerini sandbox'ın dışından ağınızdan uzak tutar (bkz. [kule isolation](isolation.md)). Linux'ta her sunucu her durumda bu bilgisayarla sınırlı tutulur. |
 | `run` | dakika, tek bir çalıştırma | Çalıştırma **durur**. Yanıtlarınızı beklerken geçen süre de sayılır. |
 | `task` | saat, görevin tüm çalıştırmalarının toplamı | Çalıştırma **durur** ve siz artırana kadar yeni çalıştırma başlamaz. |
 | `idle` | hiçbir şey yapmadan geçen dakika | Çalıştırma **durur**. "Hiçbir şey yapmamak", ajandan hiç mesaj, araç çağrısı, çıktı, işlemci kullanımı ya da yeni süreç gelmemesi demektir. Sizi bekleyen bir soru sayılmaz. |
@@ -159,8 +159,8 @@ limits for TASK 1046fb30 only (in group 1 "clients"):
   söyler: `(its own)` (kendisinin), `(the group's)` / `(group "clients")`
   (grubun) ya da `(every task's)` (tüm görevlerin).
 - `no limit` o alanı hiçbir şeyin sınırlamadığı anlamına gelir; `may be used`
-  GPU'nun açık olduğu anlamına gelir; `may listen, held off the network from
-  outside` sunuculara izin verildiği anlamına gelir.
+  GPU'nun açık olduğu anlamına gelir; `may listen (weaker isolation)` sunuculara izin
+  verildiği anlamına gelir.
 
 ## Hatalar ve çözümler {#errors-and-fixes}
 

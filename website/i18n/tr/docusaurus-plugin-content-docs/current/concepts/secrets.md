@@ -60,7 +60,7 @@ reddedilir (403); böylece sizin olmayan bir hesap adına hiçbir şey dışarı
 
 - bir kimlik bilgisi başlığı, bir çerez (cookie) ya da kimlik bilgisi gibi
   adlandırılmış bir başlık veya URL parametresi (`token`, `key`, `secret`,
-  `password`, `auth`, `session` ve benzerleri, hangi yazımla olursa olsun:
+  `password`, `auth`, `credential` ve benzerleri, hangi yazımla olursa olsun:
   `private_token`, `JOB-TOKEN`, `apiKey`) yalnızca Kule'nin yer tutucusunu
   taşır;
 - `Basic` ile yer tutucu, herhangi bir kullanıcı adı altında paroladır ya da

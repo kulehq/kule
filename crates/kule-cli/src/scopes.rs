@@ -144,7 +144,7 @@ const SWITCHES: [Switch; 2] = [
     Switch {
         key: "servers",
         name: "servers (macOS)",
-        on: "may listen, held off the network from outside",
+        on: "may listen (weaker isolation)",
         off: "do not listen",
     },
 ];

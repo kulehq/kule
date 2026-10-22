@@ -1347,9 +1347,9 @@ fn tmp_is_the_tasks_own_or_closed() {
     }
     let own = sh(
         &sandbox,
-        "echo y > \"$TMPDIR/t\" && cat \"$TMPDIR/t\" && case \"$TMPPREFIX\" in \"$TMPDIR\"/*) echo inside;; esac",
+        "echo y > \"$TMPDIR/t\" && cat \"$TMPDIR/t\" && case \"$TMPPREFIX\" in \"$TMPDIR\"/*) echo inside;; esac && [ \"$CLAUDE_CODE_TMPDIR\" = \"$TMPDIR\" ] && echo same",
     );
-    assert_eq!(text(&own), "y\ninside", "{own:?}");
+    assert_eq!(text(&own), "y\ninside\nsame", "{own:?}");
 }
 
 /// On macOS a task's programs listen for connections only where its

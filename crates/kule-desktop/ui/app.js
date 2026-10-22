@@ -2427,7 +2427,7 @@ function serversText(on) {
 
 /** What the servers limit means, for its field's title. */
 const SERVERS_HELP =
-  "macOS: whether the run's programs may listen for connections while its network goes through the proxy. The macOS sandbox sees the port a server listens on, never the address, so Kule keeps such servers off your network from outside the sandbox: weaker isolation, which you accept under Policy. On Linux every server is held to this computer whatever this says.";
+  "macOS: whether the run's programs may listen for connections while its network goes through the proxy. The macOS sandbox sees the port a server listens on, never the address, so allowing them is weaker isolation, which you accept under Policy: Node, Python and Ruby servers are pointed at this computer, and while an agent runs here Kule keeps the others off your network from outside the sandbox. On Linux every server is held to this computer whatever this says.";
 
 /** The limits in force for a task, said in a line. */
 function limitsSummary(limits) {

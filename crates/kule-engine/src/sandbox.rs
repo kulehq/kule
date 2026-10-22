@@ -1155,11 +1155,14 @@ impl Sandbox {
                 command.env(&name, value);
             }
         }
-        // zsh's here-documents and `=(…)` go to TMPPREFIX, /tmp by default.
+        // zsh's here-documents and `=(…)` go to TMPPREFIX, and Claude
+        // Code's own files to CLAUDE_CODE_TMPDIR: /tmp by default, whatever
+        // TMPDIR says.
         command
             .current_dir(&self.copy)
             .env("TMPDIR", &self.tmp)
-            .env("TMPPREFIX", self.tmp.join("zsh"));
+            .env("TMPPREFIX", self.tmp.join("zsh"))
+            .env("CLAUDE_CODE_TMPDIR", &self.tmp);
         command.envs(self.env.iter().map(|(k, v)| (k, v)));
         // Servers listen on this computer only (see `loopback`).
         let set: Vec<(OsString, OsString)> = command

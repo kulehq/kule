@@ -54,6 +54,7 @@ profile names its own under `pass_env`.
 | `XDG_CONFIG_HOME` | `<task>/home/.config` | Only when yours pointed at your real `~/.config`. |
 | `TMPDIR` | `<task>/tmp` | The task's own temporary directory. |
 | `TMPPREFIX` | `<task>/tmp/zsh` | Where zsh puts the files of here-documents and `=(…)`, `/tmp` by default. |
+| `CLAUDE_CODE_TMPDIR` | `<task>/tmp` | Where Claude Code keeps its own temporary files, `/tmp` by default. |
 | `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY` (and lower-case) | `http://127.0.0.1:<port>` | The task's proxy, which judges and logs every connection. `NO_PROXY` is removed. |
 | `NODE_USE_ENV_PROXY` | `1` | Makes Node's built-in `fetch` use the proxy. |
 | `SSL_CERT_FILE`, `CURL_CA_BUNDLE`, `REQUESTS_CA_BUNDLE`, `PIP_CERT`, `GIT_SSL_CAINFO`, `CARGO_HTTP_CAINFO`, `AWS_CA_BUNDLE` | `<task>/tmp/kule-ca-bundle.pem` | The system's roots plus the task's own certificate authority, which the proxy uses to fill in [secrets](../concepts/secrets.md) for their hosts. |

@@ -1020,6 +1020,9 @@ fn percent_decoded(text: &str) -> String {
 }
 
 /// Words a field or header is named with when it carries a credential.
+/// Not `session`: agents name their conversations so
+/// (`X-Claude-Code-Session-Id`), and a session's credential travels in a
+/// cookie, which is refused on its own.
 const CREDENTIAL_WORDS: &[&str] = &[
     "token",
     "key",
@@ -1032,8 +1035,6 @@ const CREDENTIAL_WORDS: &[&str] = &[
     "authorization",
     "credential",
     "credentials",
-    "session",
-    "sessionid",
     "jwt",
     "bearer",
 ];
@@ -2250,6 +2251,12 @@ mod tests {
                 base64::engine::general_purpose::STANDARD.encode(format!("{p}:x-oauth-basic"))
             ),
             "Idempotency-Key: 6f1c2a9e-0b7d-4e2f-9a51-3c8d7e6f5a4b".to_owned(),
+            // What the agents send beside their key.
+            "X-Claude-Code-Session-Id: 0c0e8a52-49b7-4d1a-9f3e-2b6c1d7e8f90".to_owned(),
+            "session_id: 0199e2b4-7c3a-7f21-8a6d-5e4f3c2b1a09".to_owned(),
+            "x-stainless-retry-count: 0".to_owned(),
+            "anthropic-beta: claude-code-20250219,oauth-2025-04-20".to_owned(),
+            "x-goog-api-client: gl-node/22.11.0".to_owned(),
             "X-Max-Tokens: 4096".to_owned(),
         ] {
             let fine = format!(

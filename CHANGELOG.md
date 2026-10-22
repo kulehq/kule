@@ -16,12 +16,15 @@
   not listen for connections unless you allow servers for it: the new
   `servers` limit (Settings → Limits, `kule limits servers=on`), off by
   default. The macOS sandbox sees the port a server listens on but not its
-  address, so allowed servers are kept off your network from outside it,
-  which is weaker isolation you accept under Policy. A refused server is
+  address, so allowing servers is weaker isolation you accept under
+  Policy: Node, Python and Ruby servers are pointed at this computer, and
+  while an agent runs in the app the others are kept off your network from
+  outside the sandbox. A refused server is
   listed after the command, with how to allow it.
 - On macOS a task's commands no longer write to the system's `/tmp`, which
-  your other programs and tasks share: `TMPDIR`, and now zsh's `TMPPREFIX`,
-  point at the task's own temporary directory.
+  your other programs and tasks share: `TMPDIR`, and now zsh's `TMPPREFIX`
+  and Claude Code's `CLAUDE_CODE_TMPDIR`, point at the task's own temporary
+  directory.
 - A tunnel the proxy does not look inside goes on only once the client's
   TLS hello asks for the host it was opened to, without hiding the name it
   asks for; port 443 carries nothing but TLS. Plain `http://` requests are

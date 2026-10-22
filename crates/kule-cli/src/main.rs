@@ -1514,9 +1514,14 @@ fn warn_if_network_not_isolated(task: &Task) {
     let servers = task.limits_in_force().is_ok_and(|l| l.servers);
     let gaps = kule_engine::isolation_gaps(Network::Proxy(0), servers);
     if !gaps.is_empty() {
+        // Ubuntu's user namespaces are most of what Linux can be missing.
+        let fix = if cfg!(target_os = "linux") {
+            " On Ubuntu, sysctl kernel.apparmor_restrict_unprivileged_userns=0 closes most of it."
+        } else {
+            ""
+        };
         eprintln!(
-            "kule: weaker isolation on this computer: the command goes without {}. \
-             On Ubuntu, sysctl kernel.apparmor_restrict_unprivileged_userns=0 closes most of it.",
+            "kule: weaker isolation on this computer: the command goes without {}.{fix}",
             gaps.join("; nor ")
         );
     }

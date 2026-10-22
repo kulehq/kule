@@ -56,7 +56,7 @@ A request to that host carrying credentials Kule does not hold for it is
 refused (403), so nothing goes out under an account that is not yours:
 
 - a credential header, a cookie, or a header or URL parameter named as a
-  credential (`token`, `key`, `secret`, `password`, `auth`, `session` and
+  credential (`token`, `key`, `secret`, `password`, `auth`, `credential` and
   the like, by any spelling: `private_token`, `JOB-TOKEN`, `apiKey`) holds
   only Kule's placeholder;
 - with `Basic`, the placeholder is the password, under any user name, or

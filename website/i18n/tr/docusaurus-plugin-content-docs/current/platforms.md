@@ -71,8 +71,10 @@ okunur olarak bağlanır (mount). Kullanıcı ad alanları yoksa ve bağlantı
   kullanır. `/tmp`'ye sabit bir yolla yazan bir araç reddedilir ve ret bunu
   söyler.
 - **macOS**'ta sandbox bir sunucunun dinlediği adresi ayırt edemez; bu
-  yüzden bir görevin sunucuları ancak siz onlara izin verdiğinizde dinler ve
-  o zaman sandbox'ın dışından ağdan uzak tutulur.
+  yüzden bir görevin sunucuları ancak siz onlara izin verdiğinizde dinler.
+  O zaman Node, Python ve Ruby sunucuları bu bilgisayara yönlendirilir,
+  diğerleri de uygulamada bir ajan çalışırken sandbox'ın dışından ağdan uzak
+  tutulur.
 - **macOS**'ta, bir görevin ağ trafiği proxy'den geçerken sistemin sertifika
   hizmeti görevin komutlarına kapalı kalır. Sertifikaları yalnızca bu hizmet
   üzerinden doğrulayan bir araç, bir görevde HTTPS kullanamaz. pip 24.2 ve
