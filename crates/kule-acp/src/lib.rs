@@ -114,6 +114,18 @@ pub enum Event {
 
 /// The most of one tool call's output kept.
 pub const MAX_OUTPUT: usize = 64 << 10;
+/// The longest message an agent may send. ACP is a message a line, and a
+/// line is held whole before it is read, so one longer ends the run.
+pub const MAX_MESSAGE: usize = 16 << 20;
+/// The most tool calls an agent may leave open at once; Kule keeps what it
+/// needs of each until it ends.
+pub const MAX_OPEN_CALLS: usize = 1024;
+/// The longest tool call title shown and kept as a step's name, in
+/// characters.
+pub const MAX_TITLE: usize = 200;
+/// How long the agent's log grows before it is turned over: the one
+/// before is kept beside it, as `agent.log.1`.
+pub const MAX_LOG: u64 = 8 << 20;
 /// How often output that comes in pieces is passed on.
 const PRINT_EVERY: Duration = Duration::from_millis(150);
 
@@ -256,17 +268,20 @@ fn error(e: impl std::fmt::Display) -> Error {
     Error(e.to_string())
 }
 
-/// Runs one prompt: starts `agent` (a command the sandbox prepared), opens an
+/// Runs one prompt: starts `agent` (a command `sandbox` prepared), opens an
 /// ACP session in the task's copy, sends `prompt`, and reports events until
-/// the turn ends. The agent's stderr goes to the task's `agent.log`.
+/// the turn ends. The agent's stderr goes to the task's `agent.log`. When
+/// the run ends, however it ends, whatever the agent left running in its
+/// sandbox ends too.
 pub async fn run(
     task: &Task,
     agent: Command,
+    sandbox: &kule_engine::Sandbox,
     prompt: &str,
     mode: Option<&str>,
     events: UnboundedSender<Event>,
 ) -> Result<String, Error> {
-    run_limited(task, agent, prompt, mode, None, events).await
+    run_limited(task, agent, sandbox, prompt, mode, None, events).await
 }
 
 /// [`run`], stopped once what the agent reports it cost reaches `limit`
@@ -275,19 +290,22 @@ pub async fn run(
 pub async fn run_limited(
     task: &Task,
     agent: Command,
+    sandbox: &kule_engine::Sandbox,
     prompt: &str,
     mode: Option<&str>,
     limit: Option<Cost>,
     events: UnboundedSender<Event>,
 ) -> Result<String, Error> {
-    run_with(task, agent, prompt, mode, limit, &[], events).await
+    run_with(task, agent, sandbox, prompt, mode, limit, &[], events).await
 }
 
 /// [`run_limited`], with MCP servers offered to the agent's session (it
 /// starts them itself, in its sandbox).
+#[allow(clippy::too_many_arguments)]
 pub async fn run_with(
     task: &Task,
     agent: Command,
+    sandbox: &kule_engine::Sandbox,
     prompt: &str,
     mode: Option<&str>,
     limit: Option<Cost>,
@@ -303,7 +321,8 @@ pub async fn run_with(
         mode,
         limit,
         mcp,
-        None,
+        sandbox,
+        false,
         &control,
         events,
     )
@@ -319,10 +338,11 @@ pub struct Picture {
 
 /// [`run_with`], with pictures after the prompt's text for an agent that
 /// says it takes pictures; one that does not gets the text alone, and the
-/// run notes that the pictures were left out. With `sandbox` (the agent's
-/// own), Kule offers to run the agent's commands for it there, so their
-/// output comes as they print (see [`terminals`]). `control` stops the run
-/// from outside (see [`RunControl::stop`]), and names its processes.
+/// run notes that the pictures were left out. With `terminals`, Kule
+/// offers to run the agent's commands for it in `sandbox` (the agent's
+/// own), so their output comes as they print (see [`terminals`]).
+/// `control` stops the run from outside (see [`RunControl::stop`]), and
+/// names its processes.
 #[allow(clippy::too_many_arguments)]
 pub async fn run_pictured(
     task: &Task,
@@ -332,7 +352,8 @@ pub async fn run_pictured(
     mode: Option<&str>,
     limit: Option<Cost>,
     mcp: &[McpCommand],
-    sandbox: Option<kule_engine::Sandbox>,
+    sandbox: &kule_engine::Sandbox,
+    terminals: bool,
     control: &RunControl,
     events: UnboundedSender<Event>,
 ) -> Result<String, Error> {
@@ -341,10 +362,9 @@ pub async fn run_pictured(
     if let Some(reason) = control.reason() {
         return Err(Error(reason));
     }
-    let strays = sandbox.clone();
-    let terminals = sandbox.map(|s| {
+    let terminals = terminals.then(|| {
         Arc::new(terminals::Terminals::new(
-            s,
+            sandbox.clone(),
             task.copy(),
             events.clone(),
             control.clone(),
@@ -372,18 +392,23 @@ pub async fn run_pictured(
         .spawn()
         .map_err(|e| Error(format!("could not start the agent: {e}")))?;
     if let Some(stderr) = child.stderr.take() {
+        let path = task.agent_log();
         std::thread::spawn(move || {
-            let mut log = futures::io::AllowStdIo::new(log);
+            let mut log = futures::io::AllowStdIo::new(TurnedLog::new(path, log));
             let _ = futures::executor::block_on(futures::io::copy(stderr, &mut log));
         });
     }
     // The sandbox starts the agent in a session of its own; when the run
     // ends, however it ends, everything the agent left running in it goes
     // too, so nothing keeps changing the copy behind the person's review.
-    let _group = Group(child.id() as i32, strays);
+    let _group = Group(child.id() as i32, sandbox.clone());
     control.started_agent(child.id() as i32);
     let stdin = child.stdin.take().ok_or_else(|| error("no stdin"))?;
-    let stdout = child.stdout.take().ok_or_else(|| error("no stdout"))?;
+    let stdout = Capped {
+        inner: child.stdout.take().ok_or_else(|| error("no stdout"))?,
+        line: 0,
+        control: control.clone(),
+    };
 
     let cwd = task.copy();
     let prompt = prompt.to_owned();
@@ -396,6 +421,7 @@ pub async fn run_pictured(
         kinds: HashMap::new(),
         outputs: HashMap::new(),
         printing: HashMap::new(),
+        ended: std::collections::VecDeque::new(),
         terminals: terminals.clone(),
         limit: limit.clone(),
         control: control.clone(),
@@ -660,9 +686,9 @@ pub async fn run_pictured(
 /// How long a stopped agent has to end its turn.
 const STOP_GRACE: Duration = Duration::from_secs(10);
 
-/// The agent's process group, killed when dropped, and with the sandbox,
-/// whatever left the group but still runs in the task's sandbox.
-struct Group(i32, Option<kule_engine::Sandbox>);
+/// The agent's process group, killed when dropped, and with it whatever
+/// left the group but still runs in the task's sandbox.
+struct Group(i32, kule_engine::Sandbox);
 
 impl Drop for Group {
     fn drop(&mut self) {
@@ -674,9 +700,95 @@ impl Drop for Group {
             }
         }
         // What it cannot end now, a commit ends or refuses over.
-        if let Some(sandbox) = &self.1 {
-            let _ = sandbox.end_strays();
+        let _ = self.1.end_strays();
+    }
+}
+
+/// What the agent says, a line a message, ended at a line longer than
+/// [`MAX_MESSAGE`] before the line is held whole: the run stops with why.
+struct Capped<R> {
+    inner: R,
+    /// How long the line read so far is.
+    line: usize,
+    control: RunControl,
+}
+
+impl<R: futures::io::AsyncRead + Unpin> futures::io::AsyncRead for Capped<R> {
+    fn poll_read(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut [u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        let this = &mut *self;
+        let read = std::task::ready!(std::pin::Pin::new(&mut this.inner).poll_read(cx, buf))?;
+        this.line = match buf[..read].iter().rposition(|&b| b == b'\n') {
+            Some(at) => read - at - 1,
+            None => this.line + read,
+        };
+        if this.line > MAX_MESSAGE {
+            this.control.stop(format!(
+                "stopped: the agent sent a message larger than {} MiB",
+                MAX_MESSAGE >> 20
+            ));
+            return std::task::Poll::Ready(Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "message too large",
+            )));
         }
+        std::task::Poll::Ready(Ok(read))
+    }
+}
+
+/// The agent's log, turned over at [`MAX_LOG`]: what it held becomes
+/// `agent.log.1`, in place of the one before, so the log keeps its end
+/// and never more than twice that. Kule writes it, outside the task's
+/// limits.
+struct TurnedLog {
+    path: std::path::PathBuf,
+    file: Option<std::fs::File>,
+    len: u64,
+}
+
+impl TurnedLog {
+    fn new(path: std::path::PathBuf, file: std::fs::File) -> TurnedLog {
+        let len = file.metadata().map_or(0, |m| m.len());
+        TurnedLog {
+            path,
+            file: Some(file),
+            len,
+        }
+    }
+
+    fn turn(&mut self) -> std::io::Result<()> {
+        use std::os::unix::fs::OpenOptionsExt;
+        self.file = None;
+        std::fs::rename(&self.path, self.path.with_file_name("agent.log.1"))?;
+        self.file = Some(
+            std::fs::OpenOptions::new()
+                .create_new(true)
+                .append(true)
+                .mode(0o600)
+                .open(&self.path)?,
+        );
+        self.len = 0;
+        Ok(())
+    }
+}
+
+impl std::io::Write for TurnedLog {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        if self.len >= MAX_LOG {
+            self.turn()?;
+        }
+        let room = (MAX_LOG - self.len).min(buf.len() as u64) as usize;
+        let file = self.file.as_mut().ok_or(std::io::ErrorKind::BrokenPipe)?;
+        let wrote = file.write(&buf[..room])?;
+        self.len += wrote as u64;
+        Ok(wrote)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.file.as_mut().map_or(Ok(()), std::io::Write::flush)
     }
 }
 
@@ -691,6 +803,9 @@ struct Watcher {
     /// For a call printing in pieces: all it printed, and when it was last
     /// passed on.
     printing: HashMap<String, (String, Instant)>,
+    /// The calls that ended last, at most [`MAX_OPEN_CALLS`]: what comes
+    /// for them after is left out.
+    ended: std::collections::VecDeque<String>,
     /// The commands Kule runs for the agent, whose output goes to the tool
     /// call that shows them.
     terminals: Option<Arc<terminals::Terminals>>,
@@ -717,11 +832,15 @@ impl Watcher {
             }
             SessionUpdate::ToolCall(call) => {
                 let id = call.tool_call_id.to_string();
-                self.titles.insert(id.clone(), call.title.clone());
+                if !self.opens(&id) {
+                    return;
+                }
+                let title = clip(call.title);
+                self.titles.insert(id.clone(), title.clone());
                 self.kinds.insert(id.clone(), call.kind);
                 self.send(Event::ToolCall {
                     id: id.clone(),
-                    title: call.title,
+                    title,
                 });
                 self.attach(&id, &call.content);
                 self.output(&id, shown(Some(&call.content), call.raw_output.as_ref()));
@@ -730,8 +849,11 @@ impl Watcher {
             }
             SessionUpdate::ToolCallUpdate(update) => {
                 let id = update.tool_call_id.to_string();
+                if !self.opens(&id) {
+                    return;
+                }
                 if let Some(title) = update.fields.title {
-                    self.titles.insert(id.clone(), title);
+                    self.titles.insert(id.clone(), clip(title));
                 }
                 if let Some(kind) = update.fields.kind {
                     self.kinds.insert(id.clone(), kind);
@@ -780,6 +902,26 @@ impl Watcher {
             }
             _ => {}
         }
+    }
+
+    /// Whether Kule takes what comes for tool call `id`: one open, or a
+    /// new one while fewer than [`MAX_OPEN_CALLS`] are open (past that the
+    /// run stops); not one that just ended.
+    fn opens(&mut self, id: &str) -> bool {
+        if self.titles.contains_key(id) {
+            return true;
+        }
+        if self.ended.iter().any(|e| e == id) {
+            return false;
+        }
+        if self.titles.len() >= MAX_OPEN_CALLS {
+            self.control.stop(format!(
+                "stopped: the agent left more than {MAX_OPEN_CALLS} tool calls open"
+            ));
+            return false;
+        }
+        self.titles.insert(id.to_owned(), String::new());
+        true
     }
 
     /// A command Kule runs, shown in tool call `id`: its output goes there.
@@ -851,12 +993,19 @@ impl Watcher {
             _ => return,
         };
         self.flush(&id);
-        let title = self.titles.get(&id).cloned().unwrap_or_default();
+        // Ended: nothing more is kept of it.
+        let title = self.titles.remove(&id).unwrap_or_default();
+        let kind = self.kinds.remove(&id);
+        self.outputs.remove(&id);
+        if self.ended.len() == MAX_OPEN_CALLS {
+            self.ended.pop_front();
+        }
+        self.ended.push_back(id.clone());
         // A call that only looks or thinks takes no step: what changed while
         // it ran belongs to a call that can change files and is still going,
         // such as an edit waiting on a review.
         let looks = matches!(
-            self.kinds.get(&id),
+            kind,
             Some(
                 ToolKind::Read
                     | ToolKind::Search
@@ -890,6 +1039,14 @@ impl Watcher {
 
     fn send(&self, event: Event) {
         let _ = self.events.unbounded_send(event);
+    }
+}
+
+/// `title` cut to [`MAX_TITLE`] characters, marked when cut.
+fn clip(title: String) -> String {
+    match title.char_indices().nth(MAX_TITLE) {
+        Some((at, _)) => format!("{}…", &title[..at]),
+        None => title,
     }
 }
 

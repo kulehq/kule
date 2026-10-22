@@ -34,6 +34,10 @@ pub struct Measured {
 const SLICE: Duration = Duration::from_millis(100);
 /// The tree of processes is looked for again this often.
 const TREE_EVERY: Duration = Duration::from_millis(500);
+/// How often Linux looks through every process for the task's own, which
+/// takes longer than following the run's processes from where they began.
+#[cfg(not(target_os = "macos"))]
+const STRAYS_EVERY: Duration = Duration::from_secs(2);
 /// What is measured is reported this often.
 const REPORT_EVERY: Duration = Duration::from_secs(2);
 /// Processor use above this share of a core counts as the agent at work,
@@ -109,6 +113,7 @@ pub fn govern(task: &Task, plan: Plan, control: RunControl, watch: Watch) -> Joi
     // Measured with or without a limit: what the run takes is shown.
     let disk = Arc::new(AtomicU64::new(u64::MAX));
     measure_disk(task, Arc::clone(&disk), control.clone());
+    let strays = Strays::new(task);
     std::thread::spawn(move || {
         Governor {
             deadline: plan.deadline(),
@@ -116,6 +121,7 @@ pub fn govern(task: &Task, plan: Plan, control: RunControl, watch: Watch) -> Joi
             control,
             watch,
             disk,
+            strays,
             pids: Vec::new(),
             cpu: HashMap::new(),
             reaped: HashMap::new(),
@@ -126,6 +132,59 @@ pub fn govern(task: &Task, plan: Plan, control: RunControl, watch: Watch) -> Joi
         }
         .run()
     })
+}
+
+/// The run's processes that left those it started, a parent gone (a
+/// double fork into a session of its own): found by the task's sandbox,
+/// so the limits count them too.
+struct Strays {
+    #[cfg(target_os = "macos")]
+    finder: kule_engine::ProcessFinder,
+    #[cfg(target_os = "macos")]
+    task: String,
+    /// None where the sandbox's PID namespace holds them all, so they are
+    /// followed from where they began.
+    #[cfg(not(target_os = "macos"))]
+    sandbox: Option<kule_engine::Sandbox>,
+    #[cfg(not(target_os = "macos"))]
+    found: (Instant, Vec<i32>),
+}
+
+impl Strays {
+    fn new(task: &Task) -> Strays {
+        #[cfg(target_os = "macos")]
+        return Strays {
+            finder: kule_engine::ProcessFinder::new(),
+            task: task.id().to_owned(),
+        };
+        #[cfg(not(target_os = "macos"))]
+        return Strays {
+            sandbox: (!kule_engine::own_processes())
+                .then(|| kule_engine::Sandbox::finder(task).ok())
+                .flatten(),
+            found: (Instant::now() - STRAYS_EVERY, Vec::new()),
+        };
+    }
+
+    fn find(&mut self) -> Vec<i32> {
+        #[cfg(target_os = "macos")]
+        return self
+            .finder
+            .find(std::slice::from_ref(&self.task))
+            .into_iter()
+            .map(|(pid, _)| pid)
+            .collect();
+        #[cfg(not(target_os = "macos"))]
+        {
+            let Some(sandbox) = &self.sandbox else {
+                return Vec::new();
+            };
+            if self.found.0.elapsed() >= STRAYS_EVERY {
+                self.found = (Instant::now(), sandbox.processes());
+            }
+            self.found.1.clone()
+        }
+    }
 }
 
 /// A time limit as a person set it: in minutes or hours, or seconds below
@@ -177,6 +236,7 @@ struct Governor {
     watch: Watch,
     /// What the folders grew by, as last measured; `u64::MAX` until then.
     disk: Arc<AtomicU64>,
+    strays: Strays,
     pids: Vec<i32>,
     /// Each process's processor time as last read.
     cpu: HashMap<i32, Duration>,
@@ -208,7 +268,11 @@ impl Governor {
             }
             if tree_at.elapsed() >= TREE_EVERY {
                 tree_at = Instant::now();
-                let pids = resources::tree(&self.control.roots());
+                let mut pids = resources::tree(&self.control.roots());
+                // And what left them, its parent gone.
+                pids.extend(self.strays.find());
+                pids.sort_unstable();
+                pids.dedup();
                 // Processes coming and going are work too (a build's
                 // compilers), however short each one's life.
                 if pids.iter().any(|p| !self.pids.contains(p)) {

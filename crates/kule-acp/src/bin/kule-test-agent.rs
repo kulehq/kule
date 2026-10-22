@@ -27,6 +27,11 @@
 //!   (ACP `terminal/*`) shown in a tool call, and says `exit <code>:
 //!   <output>`, `refused: <why>`, or `no terminals` when the client offers
 //!   none; `shell-env NAME=value <script>` asks for the variable too;
+//! - `terminals <n>`: has the client start `n` commands in terminals at
+//!   once, none of them released, and says `made <k>`, then `, refused:
+//!   <why>` when the client refused one;
+//! - `calls <n> <open|done>`: `n` tool calls that read, left open or each
+//!   ended; `titled <n>`: a command's tool call titled with `n` bytes;
 //! - `echo`: a message of the whole prompt as it came, and nothing after
 //!   it is run (what Kule adds to a prompt is not a command);
 //! - `pictures`: a message naming the pictures that came with the prompt,
@@ -218,6 +223,16 @@ async fn main() -> agent_client_protocol::Result<()> {
                             stream(&connection, &session, n, pieces, deltas).await?;
                             continue;
                         }
+                        if let Some(count) = command.strip_prefix("terminals ") {
+                            let said = if terminals.load(Ordering::SeqCst) {
+                                open_terminals(&connection, &session, count.parse().unwrap_or(0))
+                                    .await
+                            } else {
+                                "no terminals".to_owned()
+                            };
+                            perform(&connection, &session, &dir, n, &format!("say {said}")).await?;
+                            continue;
+                        }
                         if command.starts_with("shell ") || command.starts_with("shell-env ") {
                             let said = if terminals.load(Ordering::SeqCst) {
                                 shell(&connection, &session, n, command).await?
@@ -385,6 +400,24 @@ async fn shell(
     ))
 }
 
+/// Has the client start `count` commands that sleep, released never;
+/// returns what to say: how many it made, and why it refused one.
+async fn open_terminals(cx: &ConnectionTo<Client>, session: &SessionId, count: usize) -> String {
+    for made in 0..count {
+        let created = cx
+            .send_request(
+                CreateTerminalRequest::new(session.clone(), "/bin/sh")
+                    .args(vec!["-c".to_owned(), "sleep 30".to_owned()]),
+            )
+            .block_task()
+            .await;
+        if let Err(e) = created {
+            return format!("made {made}, refused: {e}");
+        }
+    }
+    format!("made {count}")
+}
+
 async fn perform(
     cx: &ConnectionTo<Client>,
     session: &SessionId,
@@ -508,6 +541,48 @@ async fn perform(
                 ))?;
             }
             Ok(())
+        }
+        "calls" => {
+            let (count, how) = rest.split_once(' ').unwrap_or((rest, "open"));
+            for k in 0..count.parse().unwrap_or(0) {
+                let id = format!("call-{n}-{k}");
+                cx.send_notification(SessionNotification::new(
+                    session.clone(),
+                    SessionUpdate::ToolCall(
+                        ToolCall::new(id.clone(), format!("read {k}"))
+                            .kind(ToolKind::Read)
+                            .status(ToolCallStatus::InProgress),
+                    ),
+                ))?;
+                if how == "done" {
+                    cx.send_notification(SessionNotification::new(
+                        session.clone(),
+                        SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
+                            id,
+                            ToolCallUpdateFields::new().status(ToolCallStatus::Completed),
+                        )),
+                    ))?;
+                }
+            }
+            Ok(())
+        }
+        "titled" => {
+            let id = format!("call-{n}");
+            cx.send_notification(SessionNotification::new(
+                session.clone(),
+                SessionUpdate::ToolCall(
+                    ToolCall::new(id.clone(), "x".repeat(rest.parse().unwrap_or(0)))
+                        .kind(ToolKind::Execute)
+                        .status(ToolCallStatus::InProgress),
+                ),
+            ))?;
+            cx.send_notification(SessionNotification::new(
+                session.clone(),
+                SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
+                    id,
+                    ToolCallUpdateFields::new().status(ToolCallStatus::Completed),
+                )),
+            ))
         }
         "cost" => cx.send_notification(SessionNotification::new(
             session.clone(),

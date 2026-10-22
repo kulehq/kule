@@ -865,7 +865,10 @@ fn run() -> Result<ExitCode> {
                 mode.as_deref(),
                 limit,
                 &[],
-                None,
+                // What the agent leaves running ends with the run; the
+                // CLI runs no commands for it.
+                &sandbox,
+                false,
                 &control,
                 tx,
             ));

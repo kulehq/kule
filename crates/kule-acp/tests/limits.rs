@@ -77,7 +77,8 @@ impl Setup {
                 None,
                 None,
                 &[],
-                None,
+                &sandbox,
+                false,
                 control,
                 tx,
             ))
@@ -295,4 +296,143 @@ fn a_slowed_run_that_goes_quiet_runs_on() {
     assert_eq!(ran.outcome.as_deref(), Ok("endturn"));
     assert!(ran.took < Duration::from_secs(8), "{:?}", ran.took);
     assert!(s.task.copy().join("done").exists());
+}
+
+/// ACP is a message a line, and a line is held whole before it is read:
+/// one past the limit ends the run before it can fill Kule's memory.
+#[test]
+fn a_message_past_its_limit_ends_the_run() {
+    let s = Setup::new();
+    let ran = s.run(
+        "exec head -c 104857600 /dev/zero | tr '\\0' x",
+        Plan {
+            run: Some(Duration::from_secs(60)),
+            ..Plan::default()
+        },
+    );
+    stopped(&ran, "the agent sent a message larger than 16 MiB");
+    assert!(ran.took < Duration::from_secs(30), "{:?}", ran.took);
+}
+
+/// What the agent prints for itself goes to its log, which Kule writes
+/// outside the task's limits; it keeps the end of it, not all of it.
+#[test]
+fn the_agent_s_log_keeps_its_end_within_a_limit() {
+    let s = Setup::new();
+    let ran = s.run(
+        "exec head -c 41943040 /dev/zero >&2; exec echo the-end >&2",
+        Plan::default(),
+    );
+    assert_eq!(ran.outcome.as_deref(), Ok("endturn"));
+    let log = s.task.agent_log();
+    let older = log.with_file_name("agent.log.1");
+    // The log is written apart from the run: given a moment to catch up.
+    let until = Instant::now() + Duration::from_secs(20);
+    while !fs::read(&log).unwrap_or_default().ends_with(b"the-end\n") && Instant::now() < until {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(
+        fs::read(&log).unwrap().ends_with(b"the-end\n"),
+        "the end was lost"
+    );
+    let len = |p: &std::path::Path| fs::metadata(p).map_or(0, |m| m.len());
+    assert!(
+        len(&log) + len(&older) <= 16 << 20,
+        "{} + {}",
+        len(&log),
+        len(&older)
+    );
+    use std::os::unix::fs::PermissionsExt;
+    assert_eq!(
+        fs::metadata(&older).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+}
+
+/// A process that left the agent's group and session, its parent gone.
+/// It beats into `beat` and holds `mb` megabytes; its pid is in `pid`.
+fn escaped(mb: usize) -> String {
+    format!(
+        "exec python3 -c \"import os, time\nif os.fork(): os._exit(0)\nos.setsid()\nif os.fork(): os._exit(0)\nopen('pid','w').write(str(os.getpid()))\nb=b'x'*({mb}*1024*1024)\nwhile True:\n  open('beat','a').write('.')\n  time.sleep(0.02)\" > /dev/null 2>&1"
+    )
+}
+
+/// Ends what [`escaped`] left, whatever the test found.
+struct Reaped(std::path::PathBuf);
+
+impl Drop for Reaped {
+    fn drop(&mut self) {
+        if let Some(pid) = fs::read_to_string(&self.0)
+            .ok()
+            .and_then(|p| p.trim().parse::<i32>().ok())
+        {
+            // SAFETY: kill only sends a signal.
+            unsafe {
+                libc::kill(pid, libc::SIGKILL);
+            }
+        }
+    }
+}
+
+/// Whether what adds to `file` stops within a few seconds.
+fn stops_beating(file: &std::path::Path) -> bool {
+    let len = || fs::metadata(file).map_or(0, |m| m.len());
+    let until = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < until {
+        let before = len();
+        std::thread::sleep(Duration::from_millis(300));
+        if len() == before {
+            return true;
+        }
+    }
+    false
+}
+
+/// However a process leaves the agent's group, it ends with the run, so
+/// nothing keeps changing the copy behind the person's review.
+#[test]
+fn a_process_that_left_the_agent_ends_with_the_run() {
+    if !python() {
+        eprintln!("skipped: no python3");
+        return;
+    }
+    let s = Setup::new();
+    let _reaped = Reaped(s.task.copy().join("pid"));
+    let beat = s.task.copy().join("beat");
+    let ran = s.run(&format!("{}; wait 500", escaped(0)), Plan::default());
+    assert_eq!(ran.outcome.as_deref(), Ok("endturn"));
+    assert!(beat.exists(), "it never beat");
+    assert!(stops_beating(&beat), "a process outlived the run");
+}
+
+/// The run's limits count a process that left the agent too.
+#[test]
+fn a_process_that_left_the_agent_counts_toward_its_memory_limit() {
+    if !python() {
+        eprintln!("skipped: no python3");
+        return;
+    }
+    let s = Setup::new();
+    let _reaped = Reaped(s.task.copy().join("pid"));
+    let ran = s.run(
+        &format!("{}; wait 15000", escaped(400)),
+        Plan {
+            memory: Some(150 * 1024 * 1024),
+            ..Plan::default()
+        },
+    );
+    stopped(&ran, "over its memory limit of 150 MB");
+    assert!(ran.took < Duration::from_secs(12), "{:?}", ran.took);
+}
+
+/// Kule keeps what it needs of each tool call while it is open: an agent
+/// cannot open them without end, and those that end are let go.
+#[test]
+fn tool_calls_left_open_without_end_stop_the_run() {
+    let s = Setup::new();
+    let ran = s.run("calls 5000 done", Plan::default());
+    assert_eq!(ran.outcome.as_deref(), Ok("endturn"));
+    // Stopped as it goes on.
+    let ran = s.run("calls 5000 open; wait 10000", Plan::default());
+    stopped(&ran, "the agent left more than 1024 tool calls open");
 }

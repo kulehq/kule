@@ -404,6 +404,35 @@ pub enum TaskChange {
 
 /// How many events of a task's runs are kept for a window that opens later.
 const KEPT_EVENTS: usize = 2000;
+/// How much of what they say is kept, about: well within what a window
+/// takes in one answer.
+const KEPT_BYTES: usize = 32 << 20;
+/// The longest a message is kept as one; past that its next piece starts
+/// another.
+const KEPT_MESSAGE: usize = 1 << 20;
+
+/// About how much a kept event takes: what it says.
+fn weight(event: &RunEvent) -> usize {
+    use kule_acp::Event;
+    const EACH: usize = 128;
+    EACH + match event {
+        RunEvent::Prompt { text, .. } | RunEvent::Preparing { text } => text.len(),
+        RunEvent::Agent { event } => match event {
+            Event::Message { text, .. }
+            | Event::Thought { text, .. }
+            | Event::ToolOutput { text, .. }
+            | Event::Note { text } => text.len(),
+            Event::ToolCall { title, .. } | Event::ToolDone { title, .. } => title.len(),
+            Event::Permission { title, chosen, .. } => title.len() + chosen.len(),
+            Event::Plan { entries } => entries.iter().map(String::len).sum(),
+            _ => 0,
+        },
+        RunEvent::Finished { error, denials } => {
+            error.as_ref().map_or(0, String::len) + denials.len() * EACH
+        }
+        RunEvent::Resources { .. } => 0,
+    }
+}
 
 type Subscribers = Arc<Mutex<Vec<Sender<Notice>>>>;
 
@@ -620,7 +649,7 @@ impl Service {
                 RunEvent::Agent {
                     event: kule_acp::Event::Message { text, id },
                 },
-            ) if kept_id == id => {
+            ) if kept_id == id && kept_text.len() + text.len() <= KEPT_MESSAGE => {
                 kept_text.push_str(text);
                 *last = seq;
                 true
@@ -658,6 +687,10 @@ impl Service {
                 seq,
                 event: event.clone(),
             });
+        }
+        let mut size: usize = kept.iter().map(|s| weight(&s.event)).sum();
+        while size > KEPT_BYTES && kept.len() > 1 {
+            size -= kept.pop_front().map_or(0, |s| weight(&s.event));
         }
         notify(
             &self.subscribers,
@@ -1788,8 +1821,9 @@ impl Service {
             limit,
             &mcp,
             // The agent's commands, when it asks Kule to run them, run in
-            // its own sandbox.
-            Some(launch.sandbox.clone()),
+            // its own sandbox, and what it leaves running ends with the run.
+            &launch.sandbox,
+            true,
             control,
             tx,
         ));
@@ -2882,6 +2916,36 @@ mod tests {
         assert!(kept.windows(2).all(|w| w[0].seq < w[1].seq));
         assert_eq!(kept[0].event, output("b", "other"));
         assert_eq!(kept[1].event, output("a", "last"));
+    }
+
+    /// What is kept of a task's runs for a window that opens later stays
+    /// within what a window takes in one answer, however much the agent
+    /// says; the newest is what stays.
+    #[test]
+    fn what_is_kept_of_runs_keeps_to_a_size() {
+        let s = Setup::new();
+        let (id, _) = s.task();
+        let piece = RunEvent::Agent {
+            event: kule_acp::Event::Message {
+                text: "x".repeat(1 << 20),
+                id: Some("m".into()),
+            },
+        };
+        for _ in 0..100 {
+            s.app.emit(&id, piece.clone());
+        }
+        let last = RunEvent::Agent {
+            event: kule_acp::Event::Message {
+                text: "the end".into(),
+                id: None,
+            },
+        };
+        s.app.emit(&id, last.clone());
+        let kept = s.app.stream(&id);
+        let size = serde_json::to_vec(&kept).unwrap().len();
+        assert!(size <= KEPT_BYTES + (1 << 20), "{size}");
+        assert!(size >= KEPT_BYTES / 2, "{size}");
+        assert_eq!(kept.last().unwrap().event, last);
     }
 
     /// The pieces of one message are kept as one; a piece of another

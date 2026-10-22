@@ -39,7 +39,9 @@ impl Setup {
         let (tx, rx) = mpsc::unbounded();
         let runtime = tokio::runtime::Runtime::new().unwrap();
         runtime.block_on(async {
-            run(&self.task, agent, script, None, tx).await.unwrap();
+            run(&self.task, agent, &sandbox, script, None, tx)
+                .await
+                .unwrap();
         });
         runtime.block_on(rx.collect::<Vec<_>>())
     }
@@ -57,6 +59,7 @@ impl Setup {
             .block_on(run_limited(
                 &self.task,
                 agent,
+                &sandbox,
                 script,
                 None,
                 Some(limit),
@@ -420,7 +423,8 @@ impl Setup {
                 None,
                 None,
                 &[],
-                terminals.then_some(sandbox),
+                &sandbox,
+                terminals,
                 &kule_acp::RunControl::new(),
                 tx,
             ))
@@ -461,7 +465,7 @@ fn kule_runs_the_agent_s_commands_and_passes_their_output_on() {
         shown.is_some_and(|t| t.contains("out") && t.contains("err")),
         "{events:?}"
     );
-    // Without a sandbox to run them in, Kule offers no terminals.
+    // Unless it is to, Kule offers no terminals.
     assert_eq!(said_of(&s, "shell echo hi", false), ["no terminals"]);
 }
 
@@ -540,7 +544,8 @@ fn pictures_go_only_to_an_agent_that_takes_them() {
                 None,
                 None,
                 &[],
-                None,
+                &sandbox,
+                false,
                 &kule_acp::RunControl::new(),
                 tx,
             ))
@@ -608,6 +613,7 @@ fn the_session_is_given_the_mcp_servers_it_is_offered() {
         .block_on(kule_acp::run_with(
             &s.task,
             agent,
+            &sandbox,
             "mcp",
             None,
             None,
@@ -632,4 +638,37 @@ fn the_session_is_given_the_mcp_servers_it_is_offered() {
         }),
         "{events:?}"
     );
+}
+
+/// The agent can keep only so many commands going at once in Kule's
+/// terminals, each with its threads and output held.
+#[test]
+fn the_agent_has_only_so_many_terminals_at_once() {
+    let s = Setup::new();
+    let said = said_of(&s, "terminals 40", true);
+    assert_eq!(said.len(), 1, "{said:?}");
+    assert!(said[0].starts_with("made 32, refused: "), "{said:?}");
+    assert!(said[0].contains("32 commands"), "{said:?}");
+}
+
+/// A tool call's title is shown and kept as its step's name: cut to a
+/// length a person reads.
+#[test]
+fn a_long_title_is_cut() {
+    let s = Setup::new();
+    let events = s.run("titled 100000");
+    let titles: Vec<&String> = events
+        .iter()
+        .filter_map(|e| match e {
+            Event::ToolCall { title, .. } | Event::ToolDone { title, .. } => Some(title),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(titles.len(), 2, "{events:?}");
+    for title in titles {
+        assert_eq!(title.chars().count(), 201, "{}", title.len());
+        assert!(title.ends_with('…'));
+    }
+    let steps = s.task.steps().unwrap();
+    assert_eq!(steps.last().unwrap().label.chars().count(), 201);
 }

@@ -19,6 +19,11 @@ use crate::{Event, RunControl};
 
 /// The most output kept for one command, whatever the agent asks for.
 pub const MAX_TERMINAL_OUTPUT: usize = 1 << 20;
+/// The most commands an agent may have running at once, each with its
+/// threads, so a run cannot bury Kule in them.
+pub const MAX_TERMINALS: usize = 32;
+/// The most terminals an agent may hold unreleased, each with its output.
+pub const MAX_HELD_TERMINALS: usize = 256;
 /// How often output is passed on to the window while a command prints.
 const EVERY: Duration = Duration::from_millis(200);
 
@@ -121,6 +126,31 @@ impl Terminals {
     ) -> Result<String, String> {
         if let Some((name, _)) = env.iter().find(|(n, _)| refused_variable(n)) {
             return Err(format!("{name} is set by Kule's sandbox, not by the agent"));
+        }
+        {
+            let terms = self
+                .terms
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if terms.len() >= MAX_HELD_TERMINALS {
+                return Err(format!(
+                    "the agent holds {MAX_HELD_TERMINALS} terminals it has not released, the most it may"
+                ));
+            }
+            let running = terms
+                .values()
+                .filter(|t| {
+                    t.exit
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .is_none()
+                })
+                .count();
+            if running >= MAX_TERMINALS {
+                return Err(format!(
+                    "the agent has {MAX_TERMINALS} commands running, the most it may"
+                ));
+            }
         }
         let cwd = match cwd {
             None => self.copy.clone(),
@@ -308,10 +338,13 @@ impl Terminals {
         {
             stop(term.group);
         }
-        self.released
+        let mut released = self
+            .released
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .push(term.group);
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // Those with nothing left running have nothing to stop.
+        released.retain(|group| alive(-group));
+        released.push(term.group);
         Ok(())
     }
 
@@ -365,6 +398,12 @@ fn send(events: &UnboundedSender<Event>, out: &mut Output) {
         text
     };
     let _ = events.unbounded_send(Event::ToolOutput { id: call, text });
+}
+
+/// Whether `pid` (a negative one: a process group) still has a process.
+pub(crate) fn alive(pid: i32) -> bool {
+    // SAFETY: signal 0 only checks that the process exists.
+    unsafe { libc::kill(pid, 0) == 0 }
 }
 
 fn stop(group: i32) {
