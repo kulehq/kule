@@ -108,7 +108,7 @@ jobs:
           node-version: 24
           package-manager-cache: false
       - name: The window's Markdown renderer (node --test, no packages)
-        run: node --test crates/kule-desktop/ui/tests/
+        run: node --test crates/kule-desktop/ui/tests/*.test.js
       - name: Real projects install, build and test in a task (scripts/release-gate.sh)
         run: scripts/release-gate.sh project
       - name: Weaker isolation runs only once accepted (user namespaces refused)
