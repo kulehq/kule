@@ -173,7 +173,8 @@ fn what_exec_leaves_running_ends_with_it() {
         return;
     }
     let s = Setup::new();
-    let script = "import os, time\nif os.fork(): os._exit(0)\nos.setsid()\nif os.fork(): os._exit(0)\nfor fd in (0, 1, 2): os.close(fd)\nopen('pid','w').write(str(os.getpid()))\nwhile True:\n  open('beat','a').write('.')\n  time.sleep(0.02)";
+    // The command ends once its stray has beaten.
+    let script = "import os, time\nif os.fork():\n  end=time.time()+10\n  while time.time()<end and not os.path.exists('beat'): time.sleep(0.01)\n  os._exit(0)\nos.setsid()\nif os.fork(): os._exit(0)\nfor fd in (0, 1, 2): os.close(fd)\nopen('pid','w').write(str(os.getpid()))\nwhile True:\n  open('beat','a').write('.')\n  time.sleep(0.02)";
     s.ok(
         &["exec", &s.id, "--no-network", "--", "python3", "-c", script],
         "",
@@ -186,6 +187,12 @@ fn what_exec_leaves_running_ends_with_it() {
         let before = len();
         std::thread::sleep(std::time::Duration::from_millis(300));
         stopped = before > 0 && len() == before;
+    }
+    // In a PID namespace of its own (Linux) it ended with the command, at
+    // once, and its pid is the namespace's.
+    if kule_engine::own_processes() {
+        assert!(stopped || len() == 0, "a process outlived kule exec");
+        return;
     }
     if let Some(pid) = fs::read_to_string(&pid)
         .ok()

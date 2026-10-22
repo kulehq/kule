@@ -29,9 +29,11 @@
 //!   none; `shell-env NAME=value <script>` asks for the variable too;
 //! - `terminals <n>`: has the client start `n` commands in terminals at
 //!   once, none of them released, and says `made <k>`, then `, refused:
-//!   <why>` when the client refused one;
-//! - `calls <n> <open|done>`: `n` tool calls that read, left open or each
-//!   ended; `titled <n>`: a command's tool call titled with `n` bytes;
+//!   <why>` when the client refused one; `terminals <n> exit`: the same,
+//!   each waited for until it exits;
+//! - `calls <n> <open|done|late>`: `n` tool calls that read, left open,
+//!   each ended, or each ended and then shown more; `titled <n>`: a
+//!   command's tool call titled with `n` bytes;
 //! - `echo`: a message of the whole prompt as it came, and nothing after
 //!   it is run (what Kule adds to a prompt is not a command);
 //! - `pictures`: a message naming the pictures that came with the prompt,
@@ -223,10 +225,16 @@ async fn main() -> agent_client_protocol::Result<()> {
                             stream(&connection, &session, n, pieces, deltas).await?;
                             continue;
                         }
-                        if let Some(count) = command.strip_prefix("terminals ") {
+                        if let Some(rest) = command.strip_prefix("terminals ") {
+                            let (count, how) = rest.split_once(' ').unwrap_or((rest, ""));
                             let said = if terminals.load(Ordering::SeqCst) {
-                                open_terminals(&connection, &session, count.parse().unwrap_or(0))
-                                    .await
+                                open_terminals(
+                                    &connection,
+                                    &session,
+                                    count.parse().unwrap_or(0),
+                                    how == "exit",
+                                )
+                                .await
                             } else {
                                 "no terminals".to_owned()
                             };
@@ -400,19 +408,33 @@ async fn shell(
     ))
 }
 
-/// Has the client start `count` commands that sleep, released never;
-/// returns what to say: how many it made, and why it refused one.
-async fn open_terminals(cx: &ConnectionTo<Client>, session: &SessionId, count: usize) -> String {
+/// Has the client start `count` commands, released never: commands that
+/// sleep, or with `exit` that end, each waited for; returns what to say:
+/// how many it made, and why it refused one.
+async fn open_terminals(
+    cx: &ConnectionTo<Client>,
+    session: &SessionId,
+    count: usize,
+    exit: bool,
+) -> String {
+    let script = if exit { "true" } else { "sleep 30" };
     for made in 0..count {
         let created = cx
             .send_request(
                 CreateTerminalRequest::new(session.clone(), "/bin/sh")
-                    .args(vec!["-c".to_owned(), "sleep 30".to_owned()]),
+                    .args(vec!["-c".to_owned(), script.to_owned()]),
             )
             .block_task()
             .await;
-        if let Err(e) = created {
-            return format!("made {made}, refused: {e}");
+        let terminal = match created {
+            Ok(created) => created.terminal_id,
+            Err(e) => return format!("made {made}, refused: {e}"),
+        };
+        if exit {
+            let _ = cx
+                .send_request(WaitForTerminalExitRequest::new(session.clone(), terminal))
+                .block_task()
+                .await;
         }
     }
     format!("made {count}")
@@ -554,12 +576,23 @@ async fn perform(
                             .status(ToolCallStatus::InProgress),
                     ),
                 ))?;
-                if how == "done" {
+                if how == "done" || how == "late" {
+                    cx.send_notification(SessionNotification::new(
+                        session.clone(),
+                        SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
+                            id.clone(),
+                            ToolCallUpdateFields::new().status(ToolCallStatus::Completed),
+                        )),
+                    ))?;
+                }
+                if how == "late" {
                     cx.send_notification(SessionNotification::new(
                         session.clone(),
                         SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
                             id,
-                            ToolCallUpdateFields::new().status(ToolCallStatus::Completed),
+                            ToolCallUpdateFields::new().content(vec![ToolCallContent::from(
+                                ContentBlock::Text(TextContent::new("more".to_owned())),
+                            )]),
                         )),
                     ))?;
                 }

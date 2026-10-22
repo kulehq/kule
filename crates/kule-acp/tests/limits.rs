@@ -350,10 +350,11 @@ fn the_agent_s_log_keeps_its_end_within_a_limit() {
 }
 
 /// A process that left the agent's group and session, its parent gone.
-/// It beats into `beat` and holds `mb` megabytes; its pid is in `pid`.
+/// It beats into `beat` and holds `mb` megabytes; its pid is in `pid`. The
+/// command ends once it has beaten.
 fn escaped(mb: usize) -> String {
     format!(
-        "exec python3 -c \"import os, time\nif os.fork(): os._exit(0)\nos.setsid()\nif os.fork(): os._exit(0)\nopen('pid','w').write(str(os.getpid()))\nb=b'x'*({mb}*1024*1024)\nwhile True:\n  open('beat','a').write('.')\n  time.sleep(0.02)\" > /dev/null 2>&1"
+        "exec python3 -c \"import os, time\nif os.fork():\n  end=time.time()+10\n  while time.time()<end and not os.path.exists('beat'): time.sleep(0.01)\n  os._exit(0)\nos.setsid()\nif os.fork(): os._exit(0)\nopen('pid','w').write(str(os.getpid()))\nb=b'x'*({mb}*1024*1024)\nwhile True:\n  open('beat','a').write('.')\n  time.sleep(0.02)\" > /dev/null 2>&1"
     )
 }
 
@@ -362,6 +363,11 @@ struct Reaped(std::path::PathBuf);
 
 impl Drop for Reaped {
     fn drop(&mut self) {
+        // In a PID namespace of its own the pid is the namespace's, and
+        // the namespace ended it.
+        if kule_engine::own_processes() {
+            return;
+        }
         if let Some(pid) = fs::read_to_string(&self.0)
             .ok()
             .and_then(|p| p.trim().parse::<i32>().ok())
@@ -431,6 +437,9 @@ fn a_process_that_left_the_agent_counts_toward_its_memory_limit() {
 fn tool_calls_left_open_without_end_stop_the_run() {
     let s = Setup::new();
     let ran = s.run("calls 5000 done", Plan::default());
+    assert_eq!(ran.outcome.as_deref(), Ok("endturn"));
+    // What comes for a call after it ended does not open it again.
+    let ran = s.run("calls 5000 late; wait 2000", Plan::default());
     assert_eq!(ran.outcome.as_deref(), Ok("endturn"));
     // Stopped as it goes on.
     let ran = s.run("calls 5000 open; wait 10000", Plan::default());

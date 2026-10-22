@@ -104,14 +104,11 @@ impl RunControl {
     }
 
     pub(crate) fn started_command(&self, pid: i32) {
-        let mut commands = self
-            .0
+        self.0
             .commands
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        // Those that ended name nothing to look from.
-        commands.retain(|pid| crate::terminals::alive(*pid));
-        commands.push(pid);
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(pid);
         self.touch();
     }
 

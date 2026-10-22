@@ -338,13 +338,10 @@ impl Terminals {
         {
             stop(term.group);
         }
-        let mut released = self
-            .released
+        self.released
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        // Those with nothing left running have nothing to stop.
-        released.retain(|group| alive(-group));
-        released.push(term.group);
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(term.group);
         Ok(())
     }
 
@@ -398,12 +395,6 @@ fn send(events: &UnboundedSender<Event>, out: &mut Output) {
         text
     };
     let _ = events.unbounded_send(Event::ToolOutput { id: call, text });
-}
-
-/// Whether `pid` (a negative one: a process group) still has a process.
-pub(crate) fn alive(pid: i32) -> bool {
-    // SAFETY: signal 0 only checks that the process exists.
-    unsafe { libc::kill(pid, 0) == 0 }
 }
 
 fn stop(group: i32) {

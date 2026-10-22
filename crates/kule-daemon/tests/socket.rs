@@ -366,8 +366,22 @@ fn connections_that_say_nothing_are_let_go() {
 /// wait.
 #[test]
 fn connections_not_yet_proven_leave_room_for_the_app() {
+    use std::io::BufRead;
     let home = TempDir::new().unwrap();
     daemon(home.path());
+    // A client that showed the token before the crowd came keeps its place.
+    let token = fs::read_to_string(token_path(home.path())).unwrap();
+    let request = format!("{{\"id\":1,\"token\":\"{token}\",\"method\":\"tasks\"}}\n");
+    let mut shown = UnixStream::connect(socket_path(home.path())).unwrap();
+    shown
+        .set_read_timeout(Some(Duration::from_secs(10)))
+        .unwrap();
+    let mut answers = std::io::BufReader::new(shown.try_clone().unwrap());
+    let mut answer = String::new();
+    shown.write_all(request.as_bytes()).unwrap();
+    answers.read_line(&mut answer).unwrap();
+    assert!(answer.contains("\"result\""), "{answer}");
+
     let _silent: Vec<UnixStream> = (0..100)
         .map(|_| UnixStream::connect(socket_path(home.path())).unwrap())
         .collect();
@@ -381,6 +395,10 @@ fn connections_not_yet_proven_leave_room_for_the_app() {
         "{:?}",
         started.elapsed()
     );
+    answer.clear();
+    shown.write_all(request.as_bytes()).unwrap();
+    answers.read_line(&mut answer).unwrap();
+    assert!(answer.contains("\"result\""), "{answer}");
 }
 
 /// Neither a line given a byte at a time nor lines that are not requests

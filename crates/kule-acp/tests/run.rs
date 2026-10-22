@@ -649,6 +649,10 @@ fn the_agent_has_only_so_many_terminals_at_once() {
     assert_eq!(said.len(), 1, "{said:?}");
     assert!(said[0].starts_with("made 32, refused: "), "{said:?}");
     assert!(said[0].contains("32 commands"), "{said:?}");
+    // Nor hold the output of more that ended, unreleased.
+    let said = said_of(&s, "terminals 300 exit", true);
+    assert_eq!(said.len(), 1, "{said:?}");
+    assert!(said[0].starts_with("made 256, refused: "), "{said:?}");
 }
 
 /// A tool call's title is shown and kept as its step's name: cut to a
