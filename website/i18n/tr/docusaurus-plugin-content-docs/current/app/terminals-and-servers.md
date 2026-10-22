@@ -93,7 +93,16 @@ sandbox'ta çalışır; macOS'ta tek bir fark var, aşağıda.
 
 - **Linux**'ta Kule, program ne olursa olsun her dinleme adresini
   loopback'e çevirir.
-- **macOS**'ta:
+- **macOS**'ta sandbox, bir sunucunun dinlediği port'u görür ama adresini
+  asla görmez; bu yüzden onu bu bilgisayarla sınırlı tutamaz. Bir görevin ağ
+  trafiği proxy'den geçerken, onun için sunuculara izin vermediğiniz sürece
+  programları **hiç dinlemez**: bu, Settings → Limits'te ya da
+  `kule limits --task ID servers=on` ile ayarlanan `servers`
+  [sınırıdır](../concepts/budgets-and-limits.md). Reddedilen bir sunucu,
+  komuttan sonra, ona nasıl izin verileceğiyle birlikte listelenir.
+  Sunuculara izin vermek daha zayıf yalıtımdır; bunu Policy altında kabul
+  edersiniz (bkz. [`kule isolation`](../cli/isolation.md)). İzin verildikleri
+  sürece:
   - Node, Python ve Ruby sunucuları, her adresi dinlemek istediklerinde
     loopback'e yönlendirilir;
   - diğer programlar (Go, Rust, Java) için Kule, ajanın çalıştırması

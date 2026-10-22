@@ -292,6 +292,7 @@ mod tests {
             outcome: "refused".into(),
             answer: None,
             secrets: Vec::new(),
+            cut: None,
         }
     }
 

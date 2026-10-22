@@ -20,10 +20,10 @@ planlanıyor.
 | Sandbox'ın reddettikleri listelenir | Evet, komuttan sonra ve `sandbox.jsonl` içinde | Hayır (Landlock yalnızca denetim kaydına (audit log) bildirir); komut yine de bir izin hatası alır |
 | Görevin kopyası | APFS klonu: neredeyse hiç yer kaplamaz | Btrfs ve XFS'te reflink; ext4'te tam kopya |
 | Başlangıçta paket önbellekleri | npm ve cargo sizinkilerden klonlanır | Boş: ilk kurulum yeniden indirir |
-| `/tmp` | Sistemle ortak | Her görevin kendine ait |
+| `/tmp` | Kapalı: `TMPDIR` görevin kendine ait | Her görevin kendine ait |
 | Kendine ait süreçler | – | Evet: bir komut başka hiçbir programı görmez ve ona sinyal gönderemez |
 | Kendine ait ağ ad alanı | – | Evet, erişebildiği tek şey proxy |
-| Sunucular bu bilgisayarla sınırlı | Node, Python ve Ruby loopback'e yönlendirilir; diğer programların portları korunur (shield) | Dinlenen her adres loopback'e çevrilir |
+| Sunucular bu bilgisayarla sınırlı | Görevin `servers` sınırı izin vermedikçe hiçbiri dinlemez (kabul ettiğiniz daha zayıf yalıtım); izin verildiğinde Node, Python ve Ruby loopback'e yönlendirilir, diğer programların portları korunur (shield) | Dinlenen her adres loopback'e çevrilir |
 | GPU kapalıyken | Metal (ve OpenCL) hiçbir aygıt alamaz | `/dev/dri` ve NVIDIA aygıtları salt okunur |
 | Gizli değer deposunun anahtarı | Keychain | Secret Service |
 | Dosya yöneticisinde göster | Finder | Files (D-Bus `FileManager1`) |
@@ -66,8 +66,15 @@ okunur olarak bağlanır (mount). Kullanıcı ad alanları yoksa ve bağlantı
 - **Windows**.
 - Proxy üzerinden **HTTP/2** (istemciler HTTP/1.1'e geri döner) ve
   WebSocket yükseltmeleri.
-- **macOS**'ta görevler sistemin `/tmp`'sini paylaşır: macOS sandbox'ı bir
-  yolu taşıyamaz.
+- **macOS**'ta bir görevin kendine ait bir `/tmp`'si yoktur: macOS sandbox'ı
+  bir yolu taşıyamaz, bu yüzden `/tmp` kapalı kalır ve araçlar `TMPDIR`'ı
+  kullanır. `/tmp`'ye sabit bir yolla yazan bir araç reddedilir ve ret bunu
+  söyler.
+- **macOS**'ta sandbox bir sunucunun dinlediği adresi ayırt edemez; bu
+  yüzden bir görevin sunucuları ancak siz onlara izin verdiğinizde dinler.
+  O zaman Node, Python ve Ruby sunucuları bu bilgisayara yönlendirilir,
+  diğerleri de uygulamada bir ajan çalışırken sandbox'ın dışından ağdan uzak
+  tutulur.
 - **macOS**'ta, bir görevin ağ trafiği proxy'den geçerken sistemin sertifika
   hizmeti görevin komutlarına kapalı kalır. Sertifikaları yalnızca bu hizmet
   üzerinden doğrulayan bir araç, bir görevde HTTPS kullanamaz. pip 24.2 ve

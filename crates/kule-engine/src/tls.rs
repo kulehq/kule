@@ -125,9 +125,10 @@ impl Interceptor {
         &self.ca_pem
     }
 
-    /// Whether the proxy looks inside a connection to `host` on `port`.
+    /// Whether the proxy looks inside a connection to `host` on `port`,
+    /// however the name is cased or ends.
     pub fn wants(&self, host: &str, port: u16) -> bool {
-        port == 443 && self.hosts.contains(host)
+        port == 443 && self.hosts.contains(&crate::network::normal_host(host))
     }
 
     fn leaf(&self, host: &str) -> Result<(CertificateDer<'static>, Vec<u8>)> {
@@ -210,7 +211,7 @@ impl Interceptor {
             };
             // A head read one way here and another way by the host could
             // hide a second request, or another host, from the checks below.
-            if let Err(why) = plain_head(&head, host) {
+            if let Err(why) = plain_head(&head, host, 443) {
                 let said = format!("Kule refused this request: {why}.\n");
                 write!(
                     client.stream,
@@ -236,20 +237,24 @@ impl Interceptor {
                     format!("Kule refused this request: its {header} is not a credential Kule holds for {host}.\n")
                 })
             };
-            // A form to a host Kule keeps credentials for is read whole
-            // first, and its fields checked as the head's are.
+            // A body with fields to a host Kule keeps credentials for (a
+            // form, JSON, a multipart form, text) is read whole first, and
+            // its fields checked as the head's are.
             let mut form = None;
-            if refused.is_none() && self.vault.holds_for(host) && is_form(&head) {
+            if refused.is_none()
+                && self.vault.holds_for(host)
+                && let Some(kind) = fielded(&head, request.framing)
+            {
                 match read_form(&mut client, request.framing).map_err(io)? {
                     Some(body) => {
-                        refused = self.vault.foreign_in_form(host, &body).map(|field| {
+                        refused = self.vault.foreign_in_body(host, &kind, &body).map(|field| {
                             format!("Kule refused this request: its {field} is not a credential Kule holds for {host}.\n")
                         });
                         form = Some(body);
                     }
                     None => {
                         refused = Some(format!(
-                            "Kule refused this request: a form to {host} is checked whole, and this one is chunked or over {MAX_FORM} bytes.\n"
+                            "Kule refused this request: a body to {host} is checked whole, and this one is chunked or over {MAX_FORM} bytes.\n"
                         ));
                     }
                 }
@@ -264,7 +269,15 @@ impl Interceptor {
                 client.stream.flush().map_err(io)?;
                 break;
             }
-            let (head, names) = self.vault.fill(host, &forward(&head, request.close));
+            // A part of a response is a part of a secret it repeats, which
+            // blanking cannot tell: to a host Kule fills, whole ones only.
+            let head = forward(&head, request.close);
+            let head = if self.vault.holds_for(host) {
+                without_headers(&head, &["range", "if-range"])
+            } else {
+                head
+            };
+            let (head, names) = self.vault.fill(host, &head);
             // The body as it came: a secret goes in the credentials alone.
             // Noted once written: a host that fails the handshake got none.
             upstream.stream.write_all(head.as_bytes()).map_err(io)?;
@@ -283,13 +296,15 @@ impl Interceptor {
                     return Err(Error::Invalid(format!("{host}: closed without a response")));
                 };
                 let response = Response::of(&String::from_utf8_lossy(&head), &request.method);
+                let values = self.vault.values();
                 let mut out = Blanked {
-                    blank: Blank::new(self.vault.values()),
+                    blank: Blank::new(values.clone()),
                     to: &mut client.stream,
                 };
                 out.write_all(&head).map_err(io)?;
-                relay(response.framing, &mut upstream, &mut out, true).map_err(io)?;
                 out.finish().map_err(io)?;
+                relay_blanked(response.framing, &mut upstream, &mut client.stream, values)
+                    .map_err(io)?;
                 if !response.interim {
                     break response.close;
                 }
@@ -540,6 +555,16 @@ fn forward(head: &str, close: bool) -> String {
     out
 }
 
+/// `head` without the headers named in `names` (lower case).
+fn without_headers(head: &str, names: &[&str]) -> String {
+    head.split_inclusive("\r\n")
+        .filter(|line| {
+            let name = line.split(':').next().unwrap_or("").trim();
+            !names.iter().any(|n| name.eq_ignore_ascii_case(n))
+        })
+        .collect()
+}
+
 /// Every value of the header `wanted`.
 fn headers<'a>(head: &'a str, wanted: &'a str) -> impl Iterator<Item = &'a str> + 'a {
     head.split("\r\n").skip(1).filter_map(move |line| {
@@ -557,18 +582,31 @@ fn connection_has(head: &str, token: &str) -> bool {
         .any(|t| t.trim().eq_ignore_ascii_case(token))
 }
 
-/// The largest form Kule reads whole to check it.
+/// The largest body Kule reads whole to check it.
 const MAX_FORM: u64 = 1 << 20;
 
-/// Whether the request's body is a form (`application/x-www-form-urlencoded`).
-fn is_form(head: &str) -> bool {
-    headers(head, "content-type").any(|v| {
-        v.split(';')
-            .next()
-            .unwrap_or_default()
-            .trim()
-            .eq_ignore_ascii_case("application/x-www-form-urlencoded")
-    })
+/// The type of the request's body when it is one a host reads fields from
+/// (a form, JSON, a multipart form, text, or a body of no stated type,
+/// which a host may read as any of them); `None` for no body, or another
+/// type (a file, a git pack).
+fn fielded(head: &str, framing: Framing) -> Option<String> {
+    if framing == Framing::Empty {
+        return None;
+    }
+    let kind = headers(head, "content-type").next().unwrap_or_default();
+    let essence = kind
+        .split(';')
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+    let read = essence.is_empty()
+        || essence == "application/x-www-form-urlencoded"
+        || essence == "multipart/form-data"
+        || essence == "application/json"
+        || essence.ends_with("+json")
+        || essence.starts_with("text/");
+    read.then(|| kind.to_owned())
 }
 
 /// A request's body read whole, when its framing says how long it is and
@@ -600,8 +638,15 @@ enum Framing {
 fn content_length(head: &str) -> io::Result<Option<u64>> {
     let mut length = None;
     for value in headers(head, "content-length").flat_map(|v| v.split(',')) {
+        let value = value.trim();
+        // Digits alone: Rust reads `+5` as 5, which another reader need not.
+        if value.is_empty() || !value.bytes().all(|b| b.is_ascii_digit()) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "bad Content-Length",
+            ));
+        }
         let n = value
-            .trim()
             .parse::<u64>()
             .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "bad Content-Length"))?;
         if length.is_some_and(|l| l != n) {
@@ -666,11 +711,12 @@ impl Request {
 const METHODS: &[&str] = &["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"];
 
 /// Whether `head`, a request head ending in an empty line, can be read
-/// only one way, and goes to `host`: lines end in CRLF and hold no other CR
-/// or LF, a method from [`METHODS`], a path (not another host's address),
-/// HTTP/1.1 or 1.0, header names that are tokens right up to the colon, no
-/// folded lines or control characters, and one `Host`, the tunnel's.
-fn plain_head(head: &str, host: &str) -> std::result::Result<(), String> {
+/// only one way, and goes to `host` on `port`: lines end in CRLF and hold
+/// no other CR or LF, a method from [`METHODS`], a path (not another host's
+/// address), HTTP/1.1 or 1.0, header names that are tokens right up to the
+/// colon, no folded lines or control characters, and one `Host`, the
+/// connection's.
+fn plain_head(head: &str, host: &str, port: u16) -> std::result::Result<(), String> {
     let body = head
         .strip_suffix("\r\n\r\n")
         .ok_or("its head does not end as HTTP says")?;
@@ -712,10 +758,7 @@ fn plain_head(head: &str, host: &str) -> std::result::Result<(), String> {
             hosts.push(value.trim());
         }
     }
-    let ours = |h: &str| {
-        let h = h.strip_suffix(":443").unwrap_or(h);
-        h.eq_ignore_ascii_case(host)
-    };
+    let ours = |h: &str| authority_is(h, host, port);
     match hosts[..] {
         [one] if ours(one) => Ok(()),
         [one] => Err(format!(
@@ -723,6 +766,135 @@ fn plain_head(head: &str, host: &str) -> std::result::Result<(), String> {
         )),
         _ => Err("it needs one Host header".to_owned()),
     }
+}
+
+/// Whether `authority` (a `Host` header, or a URL's `host:port`) names
+/// `host`, already normal (see `network::normal_host`), on `port`: the
+/// port may be left out where it is the scheme's own.
+fn authority_is(authority: &str, host: &str, port: u16) -> bool {
+    let (name, given) = match authority.rsplit_once(':') {
+        // An IPv6 address without brackets has colons and no port.
+        Some((name, p)) if !name.contains(':') || name.ends_with(']') => (name, Some(p)),
+        _ => (authority, None),
+    };
+    let port_ok = match given {
+        Some(p) => p.parse::<u16>() == Ok(port) && p.bytes().all(|b| b.is_ascii_digit()),
+        None => port == 443 || port == 80,
+    };
+    port_ok
+        && crate::network::normal_host(name.trim_matches(['[', ']']))
+            == host.trim_matches(['[', ']'])
+}
+
+/// Serves plain HTTP to `host` on `port` over a connection the proxy let
+/// through, `head` its first request with the target cut to the path:
+/// each request on it, read as [`plain_head`] reads one, must be for
+/// `host`, and later ones, which name their host in the request line
+/// (`GET http://host/path`), too. A request for another host behind the
+/// same address is answered here, never passed on; why, returned.
+pub(crate) fn serve_plain(
+    host: &str,
+    port: u16,
+    head: String,
+    tunnel: lonca_net::Tunnel,
+) -> std::result::Result<(), String> {
+    let io = |e: io::Error| format!("{host}: {e}");
+    let _ = tunnel
+        .client
+        .set_read_timeout(Some(Duration::from_secs(600)));
+    let _ = tunnel
+        .upstream
+        .set_read_timeout(Some(Duration::from_secs(600)));
+    let mut client = Conn::new(Early {
+        early: Cursor::new(tunnel.early),
+        inner: tunnel.client,
+    });
+    let mut upstream = Conn::new(tunnel.upstream);
+    let mut next = Some(head.into_bytes());
+    loop {
+        let head = match next.take() {
+            Some(head) => head,
+            None => match client.head() {
+                Ok(Some(head)) => head,
+                Ok(None) => return Ok(()),
+                Err(e) if quiet(&e) => return Ok(()),
+                Err(e) => return Err(io(e)),
+            },
+        };
+        let checked = String::from_utf8(head)
+            .map_err(|_| "a request head that is not text".to_owned())
+            .and_then(|head| to_path(&head, host, port))
+            .and_then(|head| plain_head(&head, host, port).map(|()| head));
+        let head = match checked {
+            Ok(head) => head,
+            Err(why) => {
+                let said = format!("Kule refused this request: {why}.\n");
+                let _ = write!(
+                    client.stream,
+                    "HTTP/1.1 400 Bad Request\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{said}",
+                    said.len()
+                );
+                let _ = client.stream.flush();
+                return Err(why);
+            }
+        };
+        let request = Request::of(&head).map_err(io)?;
+        upstream
+            .stream
+            .write_all(forward(&head, request.close).as_bytes())
+            .map_err(io)?;
+        relay(request.framing, &mut client, &mut upstream.stream, false).map_err(io)?;
+        upstream.stream.flush().map_err(io)?;
+        let last = loop {
+            let Some(head) = upstream.head().map_err(io)? else {
+                return Err(format!("{host}: closed without a response"));
+            };
+            let response = Response::of(&String::from_utf8_lossy(&head), &request.method);
+            client.stream.write_all(&head).map_err(io)?;
+            relay(response.framing, &mut upstream, &mut client.stream, true).map_err(io)?;
+            client.stream.flush().map_err(io)?;
+            if !response.interim {
+                break response.close;
+            }
+        };
+        if last || request.close {
+            return Ok(());
+        }
+    }
+}
+
+/// A plain request's head with its target cut to the path, where it names
+/// its host as a proxy is asked (`GET http://host/path`): that host must
+/// be `host` on `port`. A head that names a path already stays as it is.
+fn to_path(head: &str, host: &str, port: u16) -> std::result::Result<String, String> {
+    let (line, rest) = head.split_once("\r\n").unwrap_or((head, ""));
+    let mut parts = line.splitn(3, ' ');
+    let (method, target, version) = (
+        parts.next().unwrap_or_default(),
+        parts.next().unwrap_or_default(),
+        parts.next().unwrap_or_default(),
+    );
+    let Some(url) = target
+        .get(..7)
+        .filter(|scheme| scheme.eq_ignore_ascii_case("http://"))
+        .map(|_| &target[7..])
+    else {
+        return Ok(head.to_owned());
+    };
+    let (authority, path) = url.split_at(url.find(['/', '?']).unwrap_or(url.len()));
+    if !authority_is(authority, host, port) {
+        return Err(format!(
+            "it asks for {authority}, and this connection is to {host}"
+        ));
+    }
+    let path = if path.is_empty() {
+        "/".to_owned()
+    } else if path.starts_with('?') {
+        format!("/{path}")
+    } else {
+        path.to_owned()
+    };
+    Ok(format!("{method} {path} {version}\r\n{rest}"))
 }
 
 /// What may go to a registry: reading, and npm's audit of what is installed
@@ -788,6 +960,106 @@ impl Response {
     }
 }
 
+/// The size a chunk's line gives: one reading of where each chunk ends,
+/// hex digits, then any extension, then CRLF and nothing else.
+fn chunk_size(line: &[u8]) -> io::Result<u64> {
+    let bad = || io::Error::new(io::ErrorKind::InvalidData, "bad chunk size");
+    let text = std::str::from_utf8(&line[..line.len() - 2]).map_err(|_| bad())?;
+    if text.contains(['\r', '\n']) {
+        return Err(bad());
+    }
+    let size = text
+        .split(';')
+        .next()
+        .unwrap_or_default()
+        .trim_end_matches([' ', '\t']);
+    if size.is_empty() || size.len() > 16 || !size.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(bad());
+    }
+    u64::from_str_radix(size, 16).map_err(|_| bad())
+}
+
+/// Passes a response's body on with each of `values` blanked out (see
+/// [`Blank`]). A chunked one is read out of its chunks first and framed
+/// anew, so a value split between two chunks is blanked as one; its
+/// trailers are blanked too.
+fn relay_blanked<S: Read>(
+    framing: Framing,
+    from: &mut Conn<S>,
+    to: &mut impl Write,
+    values: Vec<String>,
+) -> io::Result<()> {
+    if framing != Framing::Chunked {
+        let mut out = Blanked {
+            blank: Blank::new(values),
+            to,
+        };
+        relay(framing, from, &mut out, true)?;
+        return out.finish();
+    }
+    let mut chunks = Chunks { to };
+    let mut out = Blanked {
+        blank: Blank::new(values.clone()),
+        to: &mut chunks,
+    };
+    loop {
+        let size = chunk_size(&from.line()?)?;
+        if size == 0 {
+            break;
+        }
+        if io::copy(&mut from.by_ref().take(size), &mut out)? < size {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "chunk cut short",
+            ));
+        }
+        let mut end = [0u8; 2];
+        from.read_exact(&mut end)?;
+        if &end != b"\r\n" {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "a chunk longer than its size",
+            ));
+        }
+    }
+    out.finish()?;
+    // The last chunk, then the trailers up to the empty line, blanked as
+    // a whole.
+    let mut trailers = Blank::new(values);
+    let mut text = b"0\r\n".to_vec();
+    loop {
+        let line = from.line()?;
+        let done = line == b"\r\n";
+        text.extend(trailers.pass(&line));
+        if done {
+            break;
+        }
+    }
+    text.extend(trailers.finish());
+    to.write_all(&text)?;
+    to.flush()
+}
+
+/// A writer that sends each piece written to it as a chunk of its own.
+struct Chunks<'a, W: Write> {
+    to: &'a mut W,
+}
+
+impl<W: Write> Write for Chunks<'_, W> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        if !buf.is_empty() {
+            write!(self.to, "{:x}\r\n", buf.len())?;
+            self.to.write_all(buf)?;
+            self.to.write_all(b"\r\n")?;
+        }
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.to.flush()
+    }
+}
+
 /// Passes a message's body on, as its framing says it is; trailers after a
 /// chunked body only where `trailers` (a response).
 fn relay<S: Read>(
@@ -811,22 +1083,7 @@ fn relay<S: Read>(
         Framing::Chunked => loop {
             let bad = |why: &str| io::Error::new(io::ErrorKind::InvalidData, why.to_owned());
             let line = from.line()?;
-            // One reading of where each chunk ends: hex digits, then any
-            // extension, then CRLF and nothing else.
-            let text =
-                std::str::from_utf8(&line[..line.len() - 2]).map_err(|_| bad("bad chunk size"))?;
-            if text.contains(['\r', '\n']) {
-                return Err(bad("bad chunk size"));
-            }
-            let size = text
-                .split(';')
-                .next()
-                .unwrap_or_default()
-                .trim_end_matches([' ', '\t']);
-            if size.is_empty() || size.len() > 16 || !size.bytes().all(|b| b.is_ascii_hexdigit()) {
-                return Err(bad("bad chunk size"));
-            }
-            let size = u64::from_str_radix(size, 16).map_err(|_| bad("bad chunk size"))?;
+            let size = chunk_size(&line)?;
             to.write_all(&line)?;
             if size == 0 {
                 // Trailers, up to the empty line: a request's carry none,
@@ -1257,6 +1514,70 @@ mod tests {
         assert!(reply.contains("q=kule&page=2"), "{reply}");
     }
 
+    /// JSON and multipart bodies to a host Kule holds a secret for are
+    /// checked whole as forms are: a credential field that is not Kule's
+    /// goes nowhere, nor a body too long or chunked to check, nor JSON that
+    /// does not read; plain ones go through as they came.
+    #[test]
+    fn a_json_or_multipart_body_with_credentials_kule_does_not_hold_is_refused() {
+        let host = echo_host();
+        let home = TempDir::new().unwrap();
+        let (interceptor, _) = interceptor(&home, host.roots);
+        let request = |kind: &str, body: &str| {
+            format!(
+                "POST /v1/x HTTP/1.1\r\nHost: {HOST}\r\nContent-Type: {kind}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            )
+        };
+        let multipart = |name: &str, value: &str| {
+            format!(
+                "--b0\r\nContent-Disposition: form-data; name=\"note\"\r\n\r\nhello\r\n--b0\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n{value}\r\n--b0--\r\n"
+            )
+        };
+        for (kind, body) in [
+            (
+                "application/json",
+                r#"{"token":"someone-elses"}"#.to_owned(),
+            ),
+            (
+                "application/json; charset=utf-8",
+                r#"{"auth":{"private_token":"someone-elses"}}"#.to_owned(),
+            ),
+            (
+                "application/vnd.api+json",
+                r#"{"apiKey":"someone-elses"}"#.to_owned(),
+            ),
+            ("application/json", r#"{"token":"#.to_owned()),
+            (
+                "multipart/form-data; boundary=b0",
+                multipart("job_token", "someone-elses"),
+            ),
+            ("text/plain", r#"{"token":"someone-elses"}"#.to_owned()),
+        ] {
+            let (reply, _) = ask(&interceptor, host.port, HOST, &request(kind, &body));
+            let reply = reply.unwrap_or_default();
+            assert!(reply.starts_with("HTTP/1.1 403"), "{kind} {body}: {reply}");
+            assert!(!reply.contains("someone"), "{reply}");
+        }
+        let chunked = format!(
+            "POST /v1/x HTTP/1.1\r\nHost: {HOST}\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n2\r\n{{}}\r\n0\r\n\r\n"
+        );
+        let (reply, _) = ask(&interceptor, host.port, HOST, &chunked);
+        assert!(reply.unwrap_or_default().starts_with("HTTP/1.1 403"));
+        for (kind, body) in [
+            (
+                "application/json",
+                r#"{"title":"Kule","body":"a token is not this","pageToken":"CgVhYmNkZRAB","max_tokens":1024,"messages":[{"content":[{"input":{"token":"a-tools-input"}}]}]}"#.to_owned(),
+            ),
+            ("multipart/form-data; boundary=b0", multipart("title", "hi")),
+        ] {
+            let (reply, _) = ask(&interceptor, host.port, HOST, &request(kind, &body));
+            let reply = reply.unwrap();
+            assert!(reply.starts_with("HTTP/1.1 200"), "{reply}");
+            assert!(reply.contains(&body), "{reply}");
+        }
+    }
+
     /// A head the host could read apart from Kule, or one for another host
     /// behind the same address, goes nowhere: the second request it could
     /// hide would pass no check.
@@ -1392,6 +1713,100 @@ mod tests {
         assert!(used.is_empty());
     }
 
+    /// A host Kule fills for is looked into however its name is written,
+    /// and asked for whole responses only: a part of one could be a part
+    /// of a secret it repeats, which blanking cannot tell.
+    #[test]
+    fn a_host_kule_fills_for_is_known_by_any_spelling_and_sent_no_range() {
+        let host = echo_host();
+        let home = TempDir::new().unwrap();
+        let (interceptor, _) = interceptor(&home, host.roots);
+        for spelling in [HOST, "API.Test.Example", "api.test.example."] {
+            assert!(interceptor.wants(spelling, 443), "{spelling}");
+        }
+        assert!(!interceptor.wants(HOST, 8443));
+        let sent = format!(
+            "GET /file HTTP/1.1\r\nHost: {HOST}\r\nRange: bytes=0-3\r\nIf-Range: \"x\"\r\nConnection: close\r\n\r\n"
+        );
+        let (reply, _) = ask(&interceptor, host.port, HOST, &sent);
+        let reply = reply.unwrap();
+        assert!(reply.starts_with("HTTP/1.1 200"), "{reply}");
+        assert!(!reply.to_ascii_lowercase().contains("range"), "{reply}");
+    }
+
+    /// A plain request that names its host in its request line must name
+    /// the connection's, on its port; it goes on with the path alone.
+    #[test]
+    fn a_plain_request_names_its_own_host_or_none() {
+        let head = |line: &str| format!("{line}\r\nHost: a.example\r\n\r\n");
+        assert_eq!(
+            to_path(&head("GET http://A.Example./x?y HTTP/1.1"), "a.example", 80).unwrap(),
+            head("GET /x?y HTTP/1.1")
+        );
+        assert_eq!(
+            to_path(
+                &head("GET http://a.example:8080 HTTP/1.1"),
+                "a.example",
+                8080
+            )
+            .unwrap(),
+            head("GET / HTTP/1.1")
+        );
+        assert_eq!(
+            to_path(&head("GET /x HTTP/1.1"), "a.example", 80).unwrap(),
+            head("GET /x HTTP/1.1")
+        );
+        for line in [
+            "GET http://b.example/x HTTP/1.1",
+            "GET http://a.example:81/x HTTP/1.1",
+            "GET http://a.example.b.example/x HTTP/1.1",
+        ] {
+            assert!(to_path(&head(line), "a.example", 80).is_err(), "{line}");
+        }
+    }
+
+    /// A secret split between two chunks is blanked as one: the body is
+    /// read out of its chunks first, and framed anew; trailers too.
+    #[test]
+    fn a_secret_split_between_chunks_is_blanked() {
+        let body = b"5\r\nkey s\r\n4\r\n3cre\r\n9;x=1\r\nt-value!!\r\n0\r\nX-Echo: s3cret-value\r\n\r\nnext";
+        let mut from = Conn::new(Cursor::new(body.to_vec()));
+        let mut out = Vec::new();
+        relay_blanked(
+            Framing::Chunked,
+            &mut from,
+            &mut out,
+            vec!["s3cret-value".into()],
+        )
+        .unwrap();
+        let text = String::from_utf8(out.clone()).unwrap();
+        assert!(!text.contains("s3cr") && !text.contains("value"), "{text}");
+        // What it frames reads back as the body with the secret blanked.
+        let mut again = Conn::new(Cursor::new(out));
+        let mut data = Vec::new();
+        relay(Framing::Chunked, &mut again, &mut data, true).unwrap();
+        let mut plain = Conn::new(Cursor::new(data));
+        let mut unchunked = Vec::new();
+        loop {
+            let size = chunk_size(&plain.line().unwrap()).unwrap();
+            if size == 0 {
+                break;
+            }
+            let mut piece = vec![0u8; size as usize + 2];
+            plain.read_exact(&mut piece).unwrap();
+            unchunked.extend_from_slice(&piece[..size as usize]);
+        }
+        assert_eq!(String::from_utf8(unchunked).unwrap(), "key ************!!");
+        assert!(
+            text.ends_with("0\r\nX-Echo: ************\r\n\r\n"),
+            "{text}"
+        );
+        // The next message is left where it starts.
+        let mut rest = String::new();
+        from.read_to_string(&mut rest).unwrap();
+        assert_eq!(rest, "next");
+    }
+
     #[test]
     fn a_repeated_secret_is_blanked_even_split_between_reads() {
         let mut blank = Blank::new(vec!["s3cret-value".into()]);
@@ -1421,6 +1836,9 @@ mod tests {
         assert!(of("Content-Length: 3\r\nContent-Length: 4\r\n").is_err());
         assert!(of("Content-Length: 3, 4\r\n").is_err());
         assert!(of("Content-Length: x\r\n").is_err());
+        // Only digits: Rust reads `+5` as 5, which a host need not.
+        assert!(of("Content-Length: +5\r\n").is_err());
+        assert!(of("Content-Length: 0x5\r\n").is_err());
         assert!(of("Transfer-Encoding: gzip\r\n").is_err());
         assert_eq!(
             of("Content-Length: 3, 3\r\n").unwrap().framing,

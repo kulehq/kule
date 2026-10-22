@@ -20,10 +20,10 @@ version.
 | Sandbox refusals listed | Yes, after the command and in `sandbox.jsonl` | No (Landlock reports only to the audit log); the command still gets a permission error |
 | The task's copy | APFS clone: almost no space | Reflinks on Btrfs and XFS; a full copy on ext4 |
 | Package caches at start | npm and cargo cloned from yours | Empty: the first install downloads again |
-| `/tmp` | Shared with the system | Each task's own |
+| `/tmp` | Closed: `TMPDIR` is the task's own | Each task's own |
 | Processes of its own | – | Yes: a command sees and signals no other program |
 | Network namespace of its own | – | Yes, with only the proxy in reach |
-| Servers held to this computer | Node, Python and Ruby pointed at loopback; other programs' ports shielded | Every listening address turned into loopback |
+| Servers held to this computer | None listen unless the task's `servers` limit allows them (weaker isolation you accept); then Node, Python and Ruby are pointed at loopback and other programs' ports shielded | Every listening address turned into loopback |
 | GPU off | Metal (and OpenCL) gets no device | `/dev/dri` and NVIDIA's devices read-only |
 | Secret store key | Keychain | Secret Service |
 | Show in file manager | Finder | Files (D-Bus `FileManager1`) |
@@ -63,8 +63,13 @@ put-back replaces is moved to `~/.kule/kept/replaced`, never lost.
 - **Windows**.
 - **HTTP/2** through the proxy (clients fall back to HTTP/1.1), and
   WebSocket upgrades.
-- On **macOS**, tasks share the system's `/tmp`: the macOS sandbox cannot
-  move a path.
+- On **macOS**, a task has no `/tmp` of its own: the macOS sandbox cannot
+  move a path, so `/tmp` stays closed and tools use `TMPDIR`. A tool that
+  writes to `/tmp` by a fixed path is refused, and the refusal says so.
+- On **macOS**, the sandbox cannot tell the address a server listens on, so
+  a task's servers listen only once you allow them. Then Node, Python and
+  Ruby servers are pointed at this computer, and others are kept off the
+  network from outside the sandbox while an agent runs in the app.
 - On **macOS**, while a task's network goes through the proxy, the system's
   certificate service stays closed to its commands. A tool that checks
   certificates only through it cannot use HTTPS in a task. pip 24.2 and

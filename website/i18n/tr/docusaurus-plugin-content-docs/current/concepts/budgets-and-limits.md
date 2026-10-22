@@ -94,6 +94,7 @@ kule limits cpu=none                       # işlemci sınırı yok
 | `memory` | GB, çalıştırmanın tüm süreçleri birlikte | Süreçler **hemen öldürülür**; çalıştırma durur. |
 | `disk` | Görev açıldığından beri kopyanın, geçici dosyalarının ve ev değişikliklerinin büyüyebileceği GB | Çalıştırma **durur**. Hiçbir dosya bunun ötesine yazılamaz. |
 | `gpu` | `on` / `off` | Kapalıyken: macOS'ta Metal'e (ve OpenCL'e) hiçbir aygıt verilmez; Linux'ta `/dev/dri` ve NVIDIA'nın aygıtları salt okunur kalır. |
+| `servers` | `on` / `off` (varsayılan olarak kapalı) | macOS: kapalıyken, ağ trafiği proxy'den geçerken çalıştırmanın programları bağlantı dinlemez; açıkken dinlerler; bu, kabul ettiğiniz daha zayıf yalıtımdır: Node, Python ve Ruby sunucuları bu bilgisayara yönlendirilir, uygulamada bir ajan çalışırken de Kule diğerlerini sandbox'ın dışından ağınızdan uzak tutar (bkz. [`kule isolation`](../cli/isolation.md)). Linux'ta her sunucu, ne derse desin bu bilgisayarla sınırlı tutulur. |
 | `run` | dakika, tek çalıştırma | Çalıştırma **durur**. |
 | `task` | saat, bir görevin tüm çalıştırmaları birlikte | Çalıştırma **durur** ve siz yükseltene kadar hiçbiri başlamaz. |
 | `idle` | hiçbir şey yapmadan geçen dakika | Çalıştırma **durur**. |
@@ -113,6 +114,8 @@ Nasıl sayıldıklarına dair notlar:
   süresini sayar.
 - Hiçbir sistem GPU'nun bir payının ayarlanmasına izin vermez; bu yüzden
   `gpu` yalnızca açık ya da kapalıdır.
+- macOS sandbox'ı bir sunucunun dinlediği port'u görür ama adresini görmez;
+  bu yüzden `servers` de yalnızca açık ya da kapalıdır.
 - Bir çalıştırma başladığı sınırları korur; bir değişiklik bir sonraki
   çalıştırmadan itibaren geçerlidir.
 - Terminalden `kule run` da aynı sınırlara tabidir.

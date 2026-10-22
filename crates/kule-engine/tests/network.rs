@@ -688,3 +688,173 @@ fn links_left_in_the_tasks_tmp_lead_kules_writes_nowhere() {
         );
     }
 }
+
+/// An upstream that keeps all it is sent, for the test to look at, and
+/// answers nothing.
+fn keeping_upstream() -> (u16, std::sync::Arc<std::sync::Mutex<Vec<u8>>>) {
+    use std::io::Read;
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let kept = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let into = std::sync::Arc::clone(&kept);
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let (mut stream, into) = (stream.unwrap(), std::sync::Arc::clone(&into));
+            std::thread::spawn(move || {
+                let mut buf = [0u8; 4096];
+                while let Ok(n) = stream.read(&mut buf) {
+                    if n == 0 {
+                        break;
+                    }
+                    into.lock().unwrap().extend_from_slice(&buf[..n]);
+                }
+            });
+        }
+    });
+    (port, kept)
+}
+
+/// The first bytes a TLS client sends to `name`: its hello, made by rustls.
+fn client_hello(name: &str) -> Vec<u8> {
+    let roots = rustls::RootCertStore::empty();
+    let config = rustls::ClientConfig::builder_with_provider(std::sync::Arc::new(
+        rustls::crypto::ring::default_provider(),
+    ))
+    .with_safe_default_protocol_versions()
+    .unwrap()
+    .with_root_certificates(roots)
+    .with_no_client_auth();
+    let name = rustls::pki_types::ServerName::try_from(name.to_owned()).unwrap();
+    let mut conn = rustls::ClientConnection::new(std::sync::Arc::new(config), name).unwrap();
+    let mut out = Vec::new();
+    conn.write_tls(&mut out).unwrap();
+    out
+}
+
+/// Opens a tunnel through `proxy` to `target`, sends `first` down it, and
+/// returns what came back once the proxy is done with it.
+fn tunnel_with(proxy: u16, target: &str, first: &[u8]) -> String {
+    use std::io::Read;
+    let mut s = TcpStream::connect(("127.0.0.1", proxy)).unwrap();
+    write!(s, "CONNECT {target} HTTP/1.1\r\nHost: {target}\r\n\r\n").unwrap();
+    s.write_all(first).unwrap();
+    s.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+    let mut reply = Vec::new();
+    let _ = s.read_to_end(&mut reply);
+    String::from_utf8_lossy(&reply).into_owned()
+}
+
+fn kept_after(kept: &std::sync::Mutex<Vec<u8>>, wait: Duration) -> Vec<u8> {
+    std::thread::sleep(wait);
+    kept.lock().unwrap().clone()
+}
+
+/// A tunnel Kule does not look inside goes on only once its TLS hello asks
+/// for the host it was opened to: one asking for another host behind the
+/// same address (as a CDN serves many) is cut before a byte reaches it, and
+/// the log says why.
+#[test]
+fn a_tunnel_whose_tls_asks_for_another_host_is_cut() {
+    let (home, ws) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+    let task = Task::create(home.path(), ws.path()).unwrap();
+    let proxy = Proxy::start(&task, policy()).unwrap();
+
+    // To an address: a hello that names a host could reach any behind it.
+    let (up, kept) = keeping_upstream();
+    let reply = tunnel_with(
+        proxy.port(),
+        &format!("127.0.0.1:{up}"),
+        &client_hello("other.example"),
+    );
+    assert!(reply.contains("200 Connection established"), "{reply}");
+    assert!(
+        kept_after(&kept, Duration::from_millis(300)).is_empty(),
+        "the hello reached the host"
+    );
+    let cut = loop {
+        if let Some(c) = connections(&task)
+            .unwrap()
+            .into_iter()
+            .find(|c| c.port == up)
+        {
+            break c;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    assert_eq!(cut.outcome, "cut");
+    assert!(
+        cut.cut
+            .as_deref()
+            .unwrap_or_default()
+            .contains("other.example"),
+        "{cut:?}"
+    );
+
+    // One that names none passes, and reaches the host as it was sent.
+    let (up, kept) = keeping_upstream();
+    let hello = client_hello("127.0.0.1");
+    tunnel_with(proxy.port(), &format!("127.0.0.1:{up}"), &hello);
+    assert_eq!(kept_after(&kept, Duration::from_millis(300)), hello);
+}
+
+/// A plain request goes only to the host it was let through to: a second
+/// one on the same connection for another host behind the address, or a
+/// first whose Host says another, is answered by Kule and never reaches it.
+#[test]
+fn a_plain_request_for_another_host_never_reaches_it() {
+    use std::io::Read;
+    let (home, ws) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+    let task = Task::create(home.path(), ws.path()).unwrap();
+    let proxy = Proxy::start(&task, policy()).unwrap();
+    let answering = || {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let kept = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let into = std::sync::Arc::clone(&kept);
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let mut stream = stream.unwrap();
+                let mut reader = std::io::BufReader::new(stream.try_clone().unwrap());
+                loop {
+                    let mut line = String::new();
+                    if std::io::BufRead::read_line(&mut reader, &mut line).unwrap_or(0) == 0 {
+                        break;
+                    }
+                    if line.starts_with("GET") {
+                        into.lock().unwrap().push(line.trim().to_owned());
+                        let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok");
+                    }
+                }
+            }
+        });
+        (port, kept)
+    };
+    let ask = |text: String| {
+        let mut s = TcpStream::connect(("127.0.0.1", proxy.port())).unwrap();
+        s.write_all(text.as_bytes()).unwrap();
+        s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        let mut reply = String::new();
+        let _ = s.read_to_string(&mut reply);
+        reply
+    };
+
+    let (up, kept) = answering();
+    let reply = ask(format!(
+        "GET http://127.0.0.1:{up}/a HTTP/1.1\r\nHost: 127.0.0.1:{up}\r\n\r\n\
+         GET http://other.example/b HTTP/1.1\r\nHost: other.example\r\n\r\n"
+    ));
+    assert!(reply.starts_with("HTTP/1.1 200"), "{reply}");
+    assert!(
+        reply.contains("400 Bad Request") && reply.contains("other.example"),
+        "{reply}"
+    );
+    assert_eq!(*kept.lock().unwrap(), ["GET /a HTTP/1.1"]);
+
+    let (up, kept) = answering();
+    let reply = ask(format!(
+        "GET http://127.0.0.1:{up}/a HTTP/1.1\r\nHost: other.example\r\n\r\n"
+    ));
+    assert!(reply.starts_with("HTTP/1.1 400"), "{reply}");
+    std::thread::sleep(Duration::from_millis(200));
+    assert!(kept.lock().unwrap().is_empty());
+}

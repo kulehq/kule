@@ -45,6 +45,7 @@ the next run. `kule run` and runs from the app are held to the same limits.
 | `memory` | GB, all of the run's processes together | The processes are **killed** at once and the run stops. |
 | `disk` | GB the copy, its temporary files and home changes may grow by since the task was made | The run **stops**. No single file can be written past it. |
 | `gpu` | `on` / `off` | `off`: on macOS Metal (and OpenCL) gets no device; on Linux the GPU's devices stay read-only. |
+| `servers` | `on` / `off` (`off` by default) | macOS: `off`, the run's programs do not listen for connections while its network goes through the proxy; `on`, they do, which is weaker isolation you accept: Node, Python and Ruby servers are pointed at this computer, and while an agent runs in the app Kule keeps the others off your network from outside the sandbox (see [kule isolation](isolation.md)). On Linux every server is held to this computer either way. |
 | `run` | minutes, one run | The run **stops**. Time waiting for your answers counts. |
 | `task` | hours, all of the task's runs added up | The run **stops**, and no new run starts until you raise it. |
 | `idle` | minutes doing nothing | The run **stops**. "Doing nothing" means no message, tool call, output, processor use or new process from the agent. A question waiting for you does not count. |
@@ -55,7 +56,7 @@ the next run. `kule run` and runs from the app are held to the same limits.
 | --- | --- |
 | a number above 0 | The limit, in the field's unit (`memory=4`, `cpu=1.5`, `run=30`). |
 | `none` | No limit for this field at this scope. |
-| `on`, `off` | For `gpu` only. |
+| `on`, `off` | For `gpu` and `servers` only. |
 | `inherit` | With `--group` or `--task` only: drop this scope's own value and take the one from the scope above again. |
 
 ## Arguments
@@ -89,6 +90,7 @@ limits for EVERY TASK (where its group and the task set none of their own):
   all of a task's runs   no limit
   doing nothing          no limit
   GPU                    may be used
+  servers (macOS)        do not listen
 ```
 
 Hold every task to 1.5 cores and 4 GB, stop runs that sit idle for 10
@@ -104,6 +106,7 @@ limits for EVERY TASK (where its group and the task set none of their own):
   all of a task's runs   no limit
   doing nothing          10 min
   GPU                    off
+  servers (macOS)        do not listen
 ```
 
 Tighter limits for each task in group 1:
@@ -118,6 +121,7 @@ limits for EACH TASK IN GROUP 1 "clients" (1 task), where a task sets none of it
   all of a task's runs   no limit (every task's)
   doing nothing          10 min (every task's)
   GPU                    off (every task's)
+  servers (macOS)        do not listen (every task's)
 ```
 
 One task in that group needs more memory:
@@ -132,6 +136,7 @@ limits for TASK 1046fb30 only (in group 1 "clients"):
   all of a task's runs   no limit (every task's)
   doing nothing          10 min (every task's)
   GPU                    off (every task's)
+  servers (macOS)        do not listen (every task's)
 ```
 
 Give it back to the group's value:
@@ -151,16 +156,16 @@ limits for TASK 1046fb30 only (in group 1 "clients"):
 - At a group or task scope, the brackets say where each value comes from:
   `(its own)`, `(the group's)` / `(group "clients")`, or `(every task's)`.
 - `no limit` means nothing holds that field; `may be used` means the GPU is
-  on.
+  on; `may listen (weaker isolation)` means servers are allowed.
 
 ## Errors and fixes
 
 | Message | What to do |
 | --- | --- |
 | `kule: memory: write a limit as FIELD=VALUE, such as memory=4` | Add `=` and a value. |
-| `kule: foo: a limit is cpu, memory, disk, gpu, run, task or idle` | Use one of these field names. |
+| `kule: foo: a limit is cpu, memory, disk, gpu, servers, run, task or idle` | Use one of these field names. |
 | `kule: memory=0: a number of GB above 0, or none` | Use a positive number; `none` removes the limit. |
-| `kule: gpu: on, off or inherit` | `gpu` takes only these words. |
+| `kule: gpu: on, off or inherit` | `gpu` and `servers` take only these words. |
 | ``kule: memory: `inherit` is for --group or --task; the limits for every task have nothing above them`` | At the every-task scope, use a value or `none`. |
 | `error: the argument '--group <GROUP>' cannot be used with '--task <TASK>'` | Pick one scope. |
 | `kule: no group 9` / `kule: no task …` | Check the id with `kule group` or `kule list`. |

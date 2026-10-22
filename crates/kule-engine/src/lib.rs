@@ -21,6 +21,7 @@ mod beside;
 mod bind_filter;
 mod caches;
 mod checkpoint;
+mod clienthello;
 mod clock;
 mod effects;
 mod error;

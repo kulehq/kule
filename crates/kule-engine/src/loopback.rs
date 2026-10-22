@@ -6,11 +6,16 @@
 //!
 //! The hooks travel through the environment (`NODE_OPTIONS`, `PYTHONPATH`,
 //! `RUBYOPT`), which passes through every shell on the way, unlike the
-//! `DYLD_*` variables macOS strips at the first system binary. Seatbelt
-//! cannot do this itself: its rules see a listening port, but not the
-//! address. On Linux the network namespace, or where there is none the
-//! bind filter (see `bind_filter`), holds every program to loopback; these
-//! hooks keep the servers working there too.
+//! `DYLD_*` variables macOS strips at the first system binary. They are a
+//! convenience, never a boundary: the program they load into can skip them
+//! (`python3 -S`). Seatbelt cannot hold a server to loopback itself: its
+//! rules see a listening port, but not the address. So on macOS, while a
+//! task's network goes through the proxy, nothing it runs listens unless
+//! the person allows servers for it (`Limits::servers`), and then Kule
+//! keeps them off the network from outside (see `shield`), which the person
+//! accepts as weaker isolation. On Linux the network namespace, or where
+//! there is none the bind filter (see `bind_filter`), holds every program
+//! to loopback; these hooks keep the servers working there too.
 
 use std::ffi::OsString;
 use std::io::Read;

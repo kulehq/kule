@@ -24,8 +24,10 @@ Only to:
 
 - the task's **copy**;
 - the task's own `TMPDIR` and package caches;
-- `/tmp` (on Linux each task has its own; on macOS tasks share the system's
-  `/tmp`, because the macOS sandbox cannot move a path).
+- on Linux, `/tmp`, which is the task's own. On macOS the sandbox cannot
+  move a path, so `/tmp` would be the system's, shared with your other
+  programs and tasks: commands do not write there, and `TMPDIR` (and zsh's
+  `TMPPREFIX`) point at the task's own.
 
 Everything else is read-only or hidden.
 
@@ -105,7 +107,9 @@ in the background lives as long as the agent or terminal command that
 started it.
 
 Servers a task starts listen on **this computer only**, never on your
-network. See [Terminals and servers](../app/terminals-and-servers.md).
+network. On macOS, where the sandbox cannot tell a server's address, a
+task's programs listen only once you allow servers for it, which is weaker
+isolation you accept. See [Terminals and servers](../app/terminals-and-servers.md).
 
 ## Programs that need the screen
 

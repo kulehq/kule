@@ -57,16 +57,21 @@ which it shows only in part, *Open with its app* is there too.
 ### Open with its app
 
 Opens documents, pictures, sound and video with the app your computer uses
-for them: PDF, Word, Excel, PowerPoint, OpenDocument, Pages, Numbers,
-Keynote, EPUB, RTF, CSV, plain text, and the common picture, sound and video
-kinds.
+for them: PDF, Word, Excel, PowerPoint, OpenDocument, CSV, plain text, and
+the common picture, sound and video kinds. What opens is Kule's own copy of
+the file, made before it is checked: changes you make in the app stay in
+that copy, not in the task's.
 
 :::warning What Kule will not open
 
 Never a program, a script, a web page or SVG, a link file, or an Office file
 with macros. The agent wrote them, and they would run on your computer,
 outside the sandbox. A file must also be what its name says: a script named
-`notes.pdf` is not opened. And it waits while the agent is at work.
+`notes.pdf` is not opened. Word, Excel, PowerPoint, OpenDocument and CSV
+files must keep to themselves: no macros, controls or embedded objects, no
+link to anything outside the file but a web page or an email address, no
+field or formula that fetches or runs something. And it waits while the
+agent is at work.
 
 :::
 
@@ -134,4 +139,4 @@ says so. Live shows a prompt's places as chips over it.
 in it, is on disk (`cd "$(kule path TASK)"`), and
 [`kule open TASK FILE`](../cli/open.md) opens a file of the copy with its
 app, held to the same kinds and checks (`--dry-run` checks it and prints
-where it is).
+where Kule's copy of it is).

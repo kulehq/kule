@@ -31,6 +31,11 @@ pub struct Limits {
     /// Whether the run's processes may use the GPU.
     #[serde(default = "allowed")]
     pub gpu: bool,
+    /// Whether, on macOS, the run's programs may listen for connections
+    /// while its network goes through the proxy. Elsewhere they always
+    /// may, held to this computer.
+    #[serde(default)]
+    pub servers: bool,
     /// How long one run may take.
     #[serde(default)]
     pub run_minutes: Option<u64>,
@@ -55,6 +60,7 @@ impl Default for Limits {
             memory_mb: None,
             disk_mb: None,
             gpu: true,
+            servers: false,
             run_minutes: None,
             task_minutes: None,
             idle_minutes: None,
@@ -86,6 +92,8 @@ pub struct TaskLimits {
     pub disk_mb: Option<Option<u64>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gpu: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub servers: Option<bool>,
     #[serde(
         default,
         deserialize_with = "set",
@@ -141,6 +149,7 @@ impl Limits {
             memory_mb: task.memory_mb.unwrap_or(self.memory_mb),
             disk_mb: task.disk_mb.unwrap_or(self.disk_mb),
             gpu: task.gpu.unwrap_or(self.gpu),
+            servers: task.servers.unwrap_or(self.servers),
             run_minutes: task.run_minutes.unwrap_or(self.run_minutes),
             task_minutes: task.task_minutes.unwrap_or(self.task_minutes),
             idle_minutes: task.idle_minutes.unwrap_or(self.idle_minutes),

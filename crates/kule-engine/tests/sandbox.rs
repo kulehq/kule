@@ -260,7 +260,7 @@ fn each_task_has_a_tmp_of_its_own() {
 fn weaker_isolation_runs_only_once_accepted() {
     let s = Setup::new();
     let network = Network::Proxy(9);
-    if kule_engine::isolation_gaps(network).is_empty() {
+    if kule_engine::isolation_gaps(network, false).is_empty() {
         // CI's second run says it took user namespaces away.
         assert!(
             std::env::var_os("KULE_TEST_EXPECT_GAPS").is_none(),
@@ -1322,10 +1322,13 @@ fn refusals_are_reported_where_the_platform_allows() {
     assert_eq!(bystander.denials(window).unwrap(), Some(Vec::new()));
 }
 
-/// Shells and tools write to /tmp by hard-coded path; the default sandbox
-/// lets them, the bare one does not.
+/// Shells and tools write to /tmp by hard-coded path. On Linux the
+/// default sandbox lets them, into a /tmp of the task's own; on macOS,
+/// where /tmp would be the system's, shared with the person's programs
+/// and other tasks, it does not, and the shell's own temporary files go
+/// to the task's tmp with the rest. The bare sandbox lets neither.
 #[test]
-fn the_default_sandbox_lets_commands_use_tmp() {
+fn tmp_is_the_tasks_own_or_closed() {
     let s = Setup::new();
     let name = format!("kule-tmp-test-{}", std::process::id());
     let script = format!("echo x > /tmp/{name} && cat /tmp/{name} && rm /tmp/{name}");
@@ -1333,9 +1336,76 @@ fn the_default_sandbox_lets_commands_use_tmp() {
     let bare = sh(&s.sandbox(), &script);
     assert!(!ok(&bare), "the bare sandbox let /tmp through");
 
-    let default = sh(&Sandbox::for_task_with(&s.task, None).unwrap(), &script);
-    assert!(ok(&default), "{default:?}");
-    assert_eq!(text(&default), "x");
+    let sandbox = Sandbox::for_task_with(&s.task, None).unwrap();
+    let default = sh(&sandbox, &script);
+    if cfg!(target_os = "linux") {
+        assert!(ok(&default), "{default:?}");
+        assert_eq!(text(&default), "x");
+    } else {
+        assert!(!ok(&default), "the system's /tmp was written: {default:?}");
+        assert!(!Path::new("/tmp").join(&name).exists());
+    }
+    let own = sh(
+        &sandbox,
+        "echo y > \"$TMPDIR/t\" && cat \"$TMPDIR/t\" && case \"$TMPPREFIX\" in \"$TMPDIR\"/*) echo inside;; esac && [ \"$CLAUDE_CODE_TMPDIR\" = \"$TMPDIR\" ] && echo same",
+    );
+    assert_eq!(text(&own), "y\ninside\nsame", "{own:?}");
+}
+
+/// On macOS a task's programs listen for connections only where its
+/// limits allow servers while its network goes through the proxy:
+/// Seatbelt tells a listening port, never its address, so one on every
+/// address cannot be held to this computer from inside. Allowed, servers
+/// are kept off the network from outside, which is weaker isolation the
+/// person accepts.
+#[cfg(target_os = "macos")]
+#[test]
+fn servers_listen_on_macos_only_where_the_task_allows_them() {
+    let s = Setup::new();
+    // `-S`: no hook reaches it, as none reaches a compiled program.
+    let listen = |host: &str| {
+        format!(
+            "python3 -S -c \"import socket; s=socket.socket(); s.bind(('{host}', 0)); s.listen(); print('listening')\""
+        )
+    };
+    let proxied = |task: &Task| {
+        let mut sandbox = Sandbox::for_task_with(task, None).unwrap();
+        sandbox.set_network(Network::Proxy(9));
+        sandbox
+    };
+    assert!(kule_engine::isolation_gaps(Network::Proxy(9), false).is_empty());
+    let held = proxied(&s.task);
+    for host in ["0.0.0.0", "::", "127.0.0.1"] {
+        let out = sh(&held, &listen(host));
+        assert!(!ok(&out), "{host}: {out:?}");
+    }
+    let c = sh(
+        &held,
+        "python3 -S -c \"import socket; s=socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.bind(('0.0.0.0', 0))\"",
+    );
+    assert!(!ok(&c), "a datagram socket listened: {c:?}");
+
+    s.task
+        .set_limits(&kule_engine::TaskLimits {
+            servers: Some(true),
+            ..Default::default()
+        })
+        .unwrap();
+    assert!(!kule_engine::isolation_gaps(Network::Proxy(9), true).is_empty());
+    let error = proxied(&s.task)
+        .command("true", &[])
+        .expect_err("servers listened without the person accepting it");
+    assert!(error.to_string().contains("weaker isolation"), "{error}");
+    kule_engine::set_isolation(
+        s._home.path(),
+        &kule_engine::Isolation {
+            accept_weaker: true,
+        },
+    )
+    .unwrap();
+    let out = sh(&proxied(&s.task), &listen("127.0.0.1"));
+    assert!(ok(&out), "{out:?}");
+    assert_eq!(text(&out), "listening");
 }
 
 /// What a package manager finds in the person's caches it builds or

@@ -47,6 +47,7 @@ Süren bir çalıştırma, başladığı sınırları korur. Bir değişiklik bi
 | `memory` | GB, çalıştırmanın tüm süreçleri birlikte | Süreçler hemen **öldürülür** ve çalıştırma durur. |
 | `disk` | Görev oluşturulduğundan beri kopyanın, geçici dosyalarının ve ev dizini değişikliklerinin büyüyebileceği GB | Çalıştırma **durur**. Hiçbir dosya bunun ötesine yazılamaz. |
 | `gpu` | `on` / `off` | `off`: macOS'ta Metal'e (ve OpenCL'e) hiçbir aygıt verilmez; Linux'ta GPU aygıtları salt okunur kalır. |
+| `servers` | `on` / `off` (varsayılan `off`) | macOS: `off`, ağ trafiği proxy'den geçerken çalıştırmanın programları bağlantı dinlemez; `on`, dinlerler; bu, kabul ettiğiniz daha zayıf yalıtımdır: Node, Python ve Ruby sunucuları bu bilgisayara yönlendirilir, uygulamada bir ajan çalışırken de Kule diğerlerini sandbox'ın dışından ağınızdan uzak tutar (bkz. [kule isolation](isolation.md)). Linux'ta her sunucu her durumda bu bilgisayarla sınırlı tutulur. |
 | `run` | dakika, tek bir çalıştırma | Çalıştırma **durur**. Yanıtlarınızı beklerken geçen süre de sayılır. |
 | `task` | saat, görevin tüm çalıştırmalarının toplamı | Çalıştırma **durur** ve siz artırana kadar yeni çalıştırma başlamaz. |
 | `idle` | hiçbir şey yapmadan geçen dakika | Çalıştırma **durur**. "Hiçbir şey yapmamak", ajandan hiç mesaj, araç çağrısı, çıktı, işlemci kullanımı ya da yeni süreç gelmemesi demektir. Sizi bekleyen bir soru sayılmaz. |
@@ -57,7 +58,7 @@ Süren bir çalıştırma, başladığı sınırları korur. Bir değişiklik bi
 | --- | --- |
 | 0'dan büyük bir sayı | Alanın biriminde sınır (`memory=4`, `cpu=1.5`, `run=30`). |
 | `none` | Bu kapsamda bu alan için sınır yok. |
-| `on`, `off` | Yalnızca `gpu` için. |
+| `on`, `off` | Yalnızca `gpu` ve `servers` için. |
 | `inherit` | Yalnızca `--group` ya da `--task` ile: bu kapsamın kendi değerini bırakır ve yeniden üstteki kapsamın değerini alır. |
 
 ## Argümanlar {#arguments}
@@ -91,6 +92,7 @@ limits for EVERY TASK (where its group and the task set none of their own):
   all of a task's runs   no limit
   doing nothing          no limit
   GPU                    may be used
+  servers (macOS)        do not listen
 ```
 
 Her görevi 1,5 çekirdek ve 4 GB ile sınırlayın, 10 dakika boşta kalan
@@ -106,6 +108,7 @@ limits for EVERY TASK (where its group and the task set none of their own):
   all of a task's runs   no limit
   doing nothing          10 min
   GPU                    off
+  servers (macOS)        do not listen
 ```
 
 1 numaralı gruptaki her görev için daha sıkı sınırlar:
@@ -120,6 +123,7 @@ limits for EACH TASK IN GROUP 1 "clients" (1 task), where a task sets none of it
   all of a task's runs   no limit (every task's)
   doing nothing          10 min (every task's)
   GPU                    off (every task's)
+  servers (macOS)        do not listen (every task's)
 ```
 
 O gruptaki bir görevin daha fazla belleğe ihtiyacı var:
@@ -134,6 +138,7 @@ limits for TASK 1046fb30 only (in group 1 "clients"):
   all of a task's runs   no limit (every task's)
   doing nothing          10 min (every task's)
   GPU                    off (every task's)
+  servers (macOS)        do not listen (every task's)
 ```
 
 Grubun değerine geri döndürün:
@@ -154,16 +159,17 @@ limits for TASK 1046fb30 only (in group 1 "clients"):
   söyler: `(its own)` (kendisinin), `(the group's)` / `(group "clients")`
   (grubun) ya da `(every task's)` (tüm görevlerin).
 - `no limit` o alanı hiçbir şeyin sınırlamadığı anlamına gelir; `may be used`
-  GPU'nun açık olduğu anlamına gelir.
+  GPU'nun açık olduğu anlamına gelir; `may listen (weaker isolation)` sunuculara izin
+  verildiği anlamına gelir.
 
 ## Hatalar ve çözümler {#errors-and-fixes}
 
 | Mesaj | Ne yapmalı |
 | --- | --- |
 | `kule: memory: write a limit as FIELD=VALUE, such as memory=4` | `=` ve bir değer ekleyin. |
-| `kule: foo: a limit is cpu, memory, disk, gpu, run, task or idle` | Bu alan adlarından birini kullanın. |
+| `kule: foo: a limit is cpu, memory, disk, gpu, servers, run, task or idle` | Bu alan adlarından birini kullanın. |
 | `kule: memory=0: a number of GB above 0, or none` | Pozitif bir sayı kullanın; `none` sınırı kaldırır. |
-| `kule: gpu: on, off or inherit` | `gpu` yalnızca bu sözcükleri alır. |
+| `kule: gpu: on, off or inherit` | `gpu` ve `servers` yalnızca bu sözcükleri alır. |
 | ``kule: memory: `inherit` is for --group or --task; the limits for every task have nothing above them`` | Tüm görevler kapsamında bir değer ya da `none` kullanın. |
 | `error: the argument '--group <GROUP>' cannot be used with '--task <TASK>'` | Tek bir kapsam seçin. |
 | `kule: no group 9` / `kule: no task …` | Kimliği `kule group` ya da `kule list` ile kontrol edin. |

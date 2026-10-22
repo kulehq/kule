@@ -126,8 +126,55 @@ fn amount_text(field: &Field, stored: Option<u64>) -> String {
     }
 }
 
-fn gpu_text(allowed: bool) -> &'static str {
-    if allowed { "may be used" } else { "off" }
+/// A limit that is on or off: `key=on|off`.
+struct Switch {
+    key: &'static str,
+    name: &'static str,
+    on: &'static str,
+    off: &'static str,
+}
+
+const SWITCHES: [Switch; 2] = [
+    Switch {
+        key: "gpu",
+        name: "GPU",
+        on: "may be used",
+        off: "off",
+    },
+    Switch {
+        key: "servers",
+        name: "servers (macOS)",
+        on: "may listen (weaker isolation)",
+        off: "do not listen",
+    },
+];
+
+fn switch_text(switch: &Switch, on: bool) -> &'static str {
+    if on { switch.on } else { switch.off }
+}
+
+fn every_switch(l: &Limits, key: &str) -> bool {
+    if key == "gpu" { l.gpu } else { l.servers }
+}
+
+fn set_every_switch(l: &mut Limits, key: &str, on: bool) {
+    if key == "gpu" {
+        l.gpu = on;
+    } else {
+        l.servers = on;
+    }
+}
+
+fn own_switch(l: &TaskLimits, key: &str) -> Option<bool> {
+    if key == "gpu" { l.gpu } else { l.servers }
+}
+
+fn set_own_switch(l: &mut TaskLimits, key: &str, on: Option<bool>) {
+    if key == "gpu" {
+        l.gpu = on;
+    } else {
+        l.servers = on;
+    }
 }
 
 /// What a person wrote for one limit, at a scope that may take the one
@@ -138,14 +185,14 @@ enum Said {
     /// No limit.
     None,
     Value(u64),
-    Gpu(bool),
+    Switch(bool),
 }
 
 fn parse(setting: &str, inherits: bool) -> Result<(&'static str, Said)> {
     let (key, value) = setting
         .split_once('=')
         .ok_or_else(|| anyhow!("{setting}: write a limit as FIELD=VALUE, such as memory=4"))?;
-    let keys = "cpu, memory, disk, gpu, run, task or idle";
+    let keys = "cpu, memory, disk, gpu, servers, run, task or idle";
     if value == "inherit" {
         if !inherits {
             bail!(
@@ -155,18 +202,21 @@ fn parse(setting: &str, inherits: bool) -> Result<(&'static str, Said)> {
         let key = FIELDS
             .iter()
             .map(|f| f.key)
-            .chain(["gpu"])
+            .chain(SWITCHES.iter().map(|s| s.key))
             .find(|k| *k == key)
             .ok_or_else(|| anyhow!("{key}: a limit is {keys}"))?;
         return Ok((key, Said::Inherit));
     }
-    if key == "gpu" {
-        let allowed = match value {
+    if let Some(switch) = SWITCHES.iter().find(|s| s.key == key) {
+        let on = match value {
             "on" => true,
             "off" => false,
-            _ => bail!("gpu: on, off{}", if inherits { " or inherit" } else { "" }),
+            _ => bail!(
+                "{key}: on, off{}",
+                if inherits { " or inherit" } else { "" }
+            ),
         };
-        return Ok(("gpu", Said::Gpu(allowed)));
+        return Ok((switch.key, Said::Switch(on)));
     }
     let field = FIELDS
         .iter()
@@ -195,13 +245,14 @@ fn parse(setting: &str, inherits: bool) -> Result<(&'static str, Said)> {
 /// Applies `settings` to the scope's own limits, field by field.
 fn apply_own(own: &mut TaskLimits, settings: &[String]) -> Result<()> {
     for setting in settings {
-        match parse(setting, true)? {
-            ("gpu", Said::Inherit) => own.gpu = None,
-            ("gpu", Said::Gpu(allowed)) => own.gpu = Some(allowed),
-            (key, Said::Inherit) => set_own_value(own, key, None)?,
-            (key, Said::None) => set_own_value(own, key, Some(None))?,
-            (key, Said::Value(v)) => set_own_value(own, key, Some(Some(v)))?,
-            (_, Said::Gpu(_)) => unreachable!("gpu is parsed on its own"),
+        let (key, said) = parse(setting, true)?;
+        let switch = SWITCHES.iter().any(|s| s.key == key);
+        match said {
+            Said::Inherit if switch => set_own_switch(own, key, None),
+            Said::Switch(on) => set_own_switch(own, key, Some(on)),
+            Said::Inherit => set_own_value(own, key, None)?,
+            Said::None => set_own_value(own, key, Some(None))?,
+            Said::Value(v) => set_own_value(own, key, Some(Some(v)))?,
         }
     }
     Ok(())
@@ -243,7 +294,7 @@ pub fn limits_cmd(
             let mut limits = every;
             for setting in settings {
                 match parse(setting, false)? {
-                    ("gpu", Said::Gpu(allowed)) => limits.gpu = allowed,
+                    (key, Said::Switch(on)) => set_every_switch(&mut limits, key, on),
                     (key, Said::None) => set_every_value(&mut limits, key, None)?,
                     (key, Said::Value(v)) => set_every_value(&mut limits, key, Some(v))?,
                     _ => unreachable!("every task's limits take no inherit"),
@@ -260,7 +311,13 @@ pub fn limits_cmd(
                     amount_text(f, every_value(&limits, f.key))
                 );
             }
-            println!("  {:<22} {}", "GPU", gpu_text(limits.gpu));
+            for sw in &SWITCHES {
+                println!(
+                    "  {:<22} {}",
+                    sw.name,
+                    switch_text(sw, every_switch(&limits, sw.key))
+                );
+            }
         }
         (Some(id), None) => {
             let mut group = group_named(home, id)?;
@@ -287,12 +344,18 @@ pub fn limits_cmd(
                     amount_text(f, every_value(&in_force, f.key))
                 );
             }
-            let from = if group.limits.gpu.is_some() {
-                "the group's"
-            } else {
-                "every task's"
-            };
-            println!("  {:<22} {} ({from})", "GPU", gpu_text(in_force.gpu));
+            for sw in &SWITCHES {
+                let from = if own_switch(&group.limits, sw.key).is_some() {
+                    "the group's"
+                } else {
+                    "every task's"
+                };
+                println!(
+                    "  {:<22} {} ({from})",
+                    sw.name,
+                    switch_text(sw, every_switch(&in_force, sw.key))
+                );
+            }
         }
         (None, Some(id)) => {
             let task = Task::open(home, &id)?;
@@ -329,13 +392,17 @@ pub fn limits_cmd(
                     source(own_value(&own, f.key).is_some(), group_set)
                 );
             }
-            let group_set = group.as_ref().is_some_and(|g| g.limits.gpu.is_some());
-            println!(
-                "  {:<22} {} ({})",
-                "GPU",
-                gpu_text(in_force.gpu),
-                source(own.gpu.is_some(), group_set)
-            );
+            for sw in &SWITCHES {
+                let group_set = group
+                    .as_ref()
+                    .is_some_and(|g| own_switch(&g.limits, sw.key).is_some());
+                println!(
+                    "  {:<22} {} ({})",
+                    sw.name,
+                    switch_text(sw, every_switch(&in_force, sw.key)),
+                    source(own_switch(&own, sw.key).is_some(), group_set)
+                );
+            }
         }
     }
     Ok(())
@@ -484,12 +551,16 @@ pub fn put_in_group(home: &Path, id: &str, group: Option<u64>) -> Result<()> {
             ));
         }
     }
-    if limits.gpu != after.gpu {
-        changed.push(format!(
-            "GPU {} → {}",
-            gpu_text(limits.gpu),
-            gpu_text(after.gpu)
-        ));
+    for sw in &SWITCHES {
+        let (a, b) = (every_switch(&limits, sw.key), every_switch(&after, sw.key));
+        if a != b {
+            changed.push(format!(
+                "{} {} → {}",
+                sw.name,
+                switch_text(sw, a),
+                switch_text(sw, b)
+            ));
+        }
     }
     if !changed.is_empty() {
         println!("  its limits: {}", changed.join(", "));

@@ -43,6 +43,10 @@ pub struct Connection {
     /// The secrets the proxy put into the request.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub secrets: Vec<String>,
+    /// Why Kule cut a connection it had let through, once it saw what went
+    /// over it: a TLS hello for another host, a request for another host.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cut: Option<String>,
 }
 
 /// The proxy of one task, serving until it is dropped. Dropping it closes
@@ -268,12 +272,15 @@ struct Gate {
 }
 
 /// A judged connection waiting for its outcome: the person's answer if one
-/// was asked, and the secrets put into it.
-type Pending = (Judgement, Option<Answer>, Vec<String>);
+/// was asked, the secrets put into it, and why Kule cut it, if it did.
+type Pending = (Judgement, Option<Answer>, Vec<String>, Option<String>);
 
 impl lonca_net::Gate for Gate {
     fn decide(&self, request: &lonca_net::Request<'_>) -> lonca_net::Verdict {
-        let judgement = self.policy.judge_connection(request.host, request.port);
+        // `Host.` and `HOST` are the host: judged, asked about and looked
+        // into as one.
+        let host = normal_host(request.host);
+        let judgement = self.policy.judge_connection(&host, request.port);
         let rules = judgement.rules.join(", ");
         // Each connection has its own thread, so waiting here holds only
         // this one.
@@ -281,7 +288,7 @@ impl lonca_net::Gate for Gate {
             (Some(asker), Verdict::Ask) => Some(asker.approvals.ask(
                 asker.source,
                 &asker.task,
-                request.host,
+                &host,
                 request.port,
                 &judgement.rules,
                 asker.timeout,
@@ -302,12 +309,12 @@ impl lonca_net::Gate for Gate {
         // rest of the LAN stays out of reach. Before anything connects, the
         // name is resolved here too and judged by Kule's own stricter
         // check (see `relay` for the address actually reached).
-        let allow_private = allow && loopback_by_name(request.host);
-        if allow && !allow_private && !resolves_public(request.host, request.port) {
+        let allow_private = allow && loopback_by_name(&host);
+        if allow && !allow_private && !resolves_public(&host, request.port) {
             allow = false;
             reason = "addresses on this computer or its network are not reachable".to_owned();
         }
-        lock(&self.pending).insert(request.peer, (judgement, answer, Vec::new()));
+        lock(&self.pending).insert(request.peer, (judgement, answer, Vec::new(), None));
         lonca_net::Verdict {
             allow,
             allow_private,
@@ -322,7 +329,8 @@ impl lonca_net::Gate for Gate {
     ) -> Option<lonca_net::Tunnel> {
         // The address the proxy connected to, judged before a byte goes
         // either way: a name may answer differently the second time.
-        if !may_reach(request.host, &tunnel.upstream) {
+        let host = normal_host(request.host);
+        if !may_reach(&host, &tunnel.upstream) {
             let _ = tunnel.upstream.shutdown(std::net::Shutdown::Both);
             let _ = tunnel.client.shutdown(std::net::Shutdown::Both);
             return None;
@@ -330,23 +338,50 @@ impl lonca_net::Gate for Gate {
         let Some(interceptor) = self
             .interceptor
             .as_ref()
-            .filter(|i| i.wants(request.host, request.port))
+            .filter(|i| i.wants(&host, request.port))
         else {
-            return Some(tunnel);
+            // Not looked into: its TLS hello must ask for the host it was
+            // opened to (see `clienthello`).
+            if let Err(why) = pass_checked(&host, request.port, tunnel) {
+                self.note_cut(request, why);
+            }
+            return None;
         };
         // A request that fails here fails for the client too; nothing is
         // passed on half filled.
         // What went in before an error went out all the same.
         let mut used = std::collections::BTreeSet::new();
-        let _ = interceptor.serve_noting(request.host, tunnel, &mut used);
+        let _ = interceptor.serve_noting(&host, tunnel, &mut used);
         if let Some(pending) = lock(&self.pending).get_mut(&request.peer) {
             pending.2 = used.into_iter().collect();
         }
         None
     }
 
+    fn relay_plain(
+        &self,
+        request: &lonca_net::Request<'_>,
+        head: String,
+        tunnel: lonca_net::Tunnel,
+    ) -> Option<(String, lonca_net::Tunnel)> {
+        let host = normal_host(request.host);
+        // As a tunnel's: the address reached, judged before a byte goes.
+        if !may_reach(&host, &tunnel.upstream) {
+            let _ = tunnel.upstream.shutdown(std::net::Shutdown::Both);
+            let _ = tunnel.client.shutdown(std::net::Shutdown::Both);
+            return None;
+        }
+        // Every request on the connection is read, and each must be for
+        // the host it was let through to.
+        if let Err(why) = crate::tls::serve_plain(&host, request.port, head, tunnel) {
+            self.note_cut(request, why);
+        }
+        None
+    }
+
     fn finished(&self, request: &lonca_net::Request<'_>, outcome: lonca_net::Outcome) {
-        let Some((judgement, answer, secrets)) = lock(&self.pending).remove(&request.peer) else {
+        let Some((judgement, answer, secrets, cut)) = lock(&self.pending).remove(&request.peer)
+        else {
             return;
         };
         let record = Connection {
@@ -357,15 +392,127 @@ impl lonca_net::Gate for Gate {
             port: request.port,
             verdict: judgement.verdict,
             rules: judgement.rules,
-            outcome: format!("{outcome:?}").to_lowercase(),
+            outcome: if cut.is_some() {
+                "cut".to_owned()
+            } else {
+                format!("{outcome:?}").to_lowercase()
+            },
             answer,
             secrets,
+            cut,
         };
         if let Ok(mut line) = serde_json::to_vec(&record) {
             line.push(b'\n');
             let _ = lock(&self.log).write_all(&line);
         }
     }
+}
+
+impl Gate {
+    fn note_cut(&self, request: &lonca_net::Request<'_>, why: String) {
+        if let Some(pending) = lock(&self.pending).get_mut(&request.peer) {
+            pending.3 = Some(why);
+        }
+    }
+}
+
+/// A host as the proxy judges it: in lower case, without the dot a fully
+/// qualified name may end in.
+pub(crate) fn normal_host(host: &str) -> String {
+    host.trim_end_matches('.').to_ascii_lowercase()
+}
+
+/// Whether a tunnel to `host` on `port` may go on, by what its client
+/// sent first: `read` of it so far. `None` while the hello is not whole.
+/// TLS must ask for `host` by name (none for an address), and not hide the
+/// name it asks for; port 443 carries nothing but TLS. Elsewhere what is
+/// not TLS (ssh, say) goes on.
+fn judge_first(
+    host: &str,
+    port: u16,
+    read: &crate::clienthello::Read,
+) -> Option<std::result::Result<(), String>> {
+    use crate::clienthello::Read;
+    Some(match read {
+        Read::More => return None,
+        Read::NotTls if port == 443 => Err(format!(
+            "what it sent to {host}:443 is not TLS, which Kule passes there unread"
+        )),
+        Read::NotTls => Ok(()),
+        Read::Bad(why) => Err(format!("its TLS hello to {host} has {why}")),
+        Read::Hello(hello) if hello.hidden => Err(format!(
+            "its TLS hello to {host} hides the name it asks for (Encrypted Client Hello), which Kule cannot check; in Chromium, turn it off with --disable-features=EncryptedClientHello"
+        )),
+        Read::Hello(hello) => {
+            let address = host.trim_matches(['[', ']']).parse::<IpAddr>().is_ok();
+            match &hello.names[..] {
+                [] if address => Ok(()),
+                [one] if !address && normal_host(one) == host => Ok(()),
+                [] => Err(format!(
+                    "its TLS hello to {host} asks for no name, so the host could serve any"
+                )),
+                names => Err(format!(
+                    "its TLS hello asks for {}, and this tunnel is to {host}",
+                    names.join(", ")
+                )),
+            }
+        }
+    })
+}
+
+/// Relays a tunnel to `host` Kule does not look inside, once what its
+/// client sends first passes [`judge_first`]: nothing of it reaches the
+/// host before. What the host sends goes back from the start, as some
+/// protocols speak first. Cut, and why, otherwise.
+fn pass_checked(
+    host: &str,
+    port: u16,
+    tunnel: lonca_net::Tunnel,
+) -> std::result::Result<(), String> {
+    use std::io::Read;
+    use std::net::Shutdown;
+    let lonca_net::Tunnel {
+        client,
+        upstream,
+        early,
+    } = tunnel;
+    let cut = |why: String| {
+        let _ = client.shutdown(Shutdown::Both);
+        let _ = upstream.shutdown(Shutdown::Both);
+        Err(why)
+    };
+    let (Ok(mut from_host), Ok(mut to_client)) = (upstream.try_clone(), client.try_clone()) else {
+        return cut(format!("the tunnel to {host} could not be relayed"));
+    };
+    let back = std::thread::spawn(move || {
+        let _ = std::io::copy(&mut from_host, &mut to_client);
+        let _ = to_client.shutdown(Shutdown::Write);
+    });
+    let mut first = early;
+    let judged = loop {
+        if let Some(judged) = judge_first(host, port, &crate::clienthello::read(&first)) {
+            break judged;
+        }
+        let mut chunk = [0u8; 4096];
+        match (&client).read(&mut chunk) {
+            Ok(n) if n > 0 => first.extend_from_slice(&chunk[..n]),
+            // Gone before it said anything: nothing to pass on.
+            _ if first.is_empty() => break Ok(()),
+            _ => break Err(format!("its TLS hello to {host} was cut short")),
+        }
+    };
+    if let Err(why) = judged {
+        let result = cut(why);
+        let _ = back.join();
+        return result;
+    }
+    let mut to_host = &upstream;
+    if !first.is_empty() && to_host.write_all(&first).is_ok() {
+        let _ = std::io::copy(&mut &client, &mut to_host);
+    }
+    let _ = upstream.shutdown(Shutdown::Write);
+    let _ = back.join();
+    Ok(())
 }
 
 /// A poisoned lock only means another connection's thread panicked; the
@@ -376,9 +523,12 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 
 /// Whether `ip` is on the public internet: not this computer, its network,
 /// a link, a documentation or benchmarking range, multicast or reserved,
-/// nor any of those inside an IPv6 address (mapped, NAT64, or the old
-/// IPv4-compatible form). Stricter than the proxy library's own check,
-/// which Kule's comes before and after.
+/// nor any of those inside an IPv6 address (mapped, NAT64, 6to4). For IPv6
+/// only the global unicast range (`2000::/3`) is public, less what the
+/// IETF keeps there: its protocol assignments (Teredo among them, which
+/// carries another address), documentation, and 6to4, judged by the IPv4
+/// address it carries. Stricter than the proxy library's own check, which
+/// Kule's comes before and after.
 pub fn public_ip(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(v4) => public_v4(v4),
@@ -387,20 +537,23 @@ pub fn public_ip(ip: IpAddr) -> bool {
                 return public_v4(v4);
             }
             let s = v6.segments();
+            let v4_at = |i: usize| {
+                let [a, b] = s[i].to_be_bytes();
+                let [c, d] = s[i + 1].to_be_bytes();
+                Ipv4Addr::new(a, b, c, d)
+            };
             // NAT64 (64:ff9b::/96) carries an IPv4 address at its end.
             if s[..6] == [0x64, 0xff9b, 0, 0, 0, 0] {
-                let [a, b] = s[6].to_be_bytes();
-                let [c, d] = s[7].to_be_bytes();
-                return public_v4(Ipv4Addr::new(a, b, c, d));
+                return public_v4(v4_at(6));
             }
-            !(v6.is_unspecified()
-                || v6.is_loopback()
-                || v6.is_multicast()
-                || (s[0] & 0xfe00) == 0xfc00 // unique local
-                || (s[0] & 0xffc0) == 0xfe80 // link local
-                || (s[0] & 0xffc0) == 0xfec0 // site local
-                || (s[0] == 0x2001 && s[1] == 0x0db8) // documentation
-                || s[..6] == [0, 0, 0, 0, 0, 0]) // IPv4-compatible, deprecated
+            // 6to4 (2002::/16) carries one after its prefix.
+            if s[0] == 0x2002 {
+                return public_v4(v4_at(1));
+            }
+            (s[0] & 0xe000) == 0x2000 // global unicast
+                && !(s[0] == 0x2001 && s[1] < 0x0200) // IETF protocol assignments
+                && !(s[0] == 0x2001 && s[1] == 0x0db8) // documentation
+                && !(s[0] == 0x3fff && s[1] < 0x1000) // documentation
         }
     }
 }
@@ -447,6 +600,55 @@ fn loopback_by_name(host: &str) -> bool {
 mod tests {
     use super::*;
 
+    /// What a client sends first decides whether a tunnel Kule does not
+    /// look inside goes on: TLS asking for its host by name (any case, a
+    /// final dot or not), none for an address; never a hidden name; on
+    /// 443 nothing but TLS.
+    #[test]
+    fn a_tunnel_goes_on_only_where_its_hello_asks_for_its_host() {
+        use crate::clienthello::{Hello, Read};
+        let hello = |names: &[&str], hidden| {
+            Read::Hello(Hello {
+                names: names.iter().map(|n| (*n).to_owned()).collect(),
+                hidden,
+            })
+        };
+        let ok = |host: &str, port, read: Read| judge_first(host, port, &read) == Some(Ok(()));
+        assert!(ok(
+            "registry.npmjs.org",
+            443,
+            hello(&["Registry.NPMJS.org."], false)
+        ));
+        assert!(ok("93.184.216.34", 443, hello(&[], false)));
+        assert!(ok("github.com", 22, Read::NotTls));
+        assert!(!ok(
+            "registry.npmjs.org",
+            443,
+            hello(&["evil.example"], false)
+        ));
+        assert!(!ok("registry.npmjs.org", 443, hello(&[], false)));
+        assert!(!ok("93.184.216.34", 443, hello(&["evil.example"], false)));
+        assert!(!ok(
+            "registry.npmjs.org",
+            443,
+            hello(&["registry.npmjs.org"], true)
+        ));
+        assert!(!ok(
+            "registry.npmjs.org",
+            443,
+            hello(&["registry.npmjs.org", "evil.example"], false)
+        ));
+        assert!(!ok("registry.npmjs.org", 443, Read::NotTls));
+        assert!(!ok(
+            "registry.npmjs.org",
+            8443,
+            hello(&["evil.example"], false)
+        ));
+        assert!(!ok("registry.npmjs.org", 443, Read::Bad("x")));
+        assert_eq!(judge_first("a.example", 443, &Read::More), None);
+        assert_eq!(normal_host("Registry.NPMJS.org."), "registry.npmjs.org");
+    }
+
     /// A tunnel that ended up on this computer goes nowhere unless this
     /// computer is what it asked for by name.
     #[test]
@@ -487,6 +689,17 @@ mod tests {
             "64:ff9b::a00:1",
             "64:ff9b::7f00:1",
             "::127.0.0.1",
+            // IPv4 inside IPv6 by 6to4 and Teredo, NAT64 for local use,
+            // the discard prefix, and the IETF's own ranges.
+            "2002:7f00:1::1",
+            "2002:a00:1::1",
+            "2001:0:4136:e378:8000:63bf:80ff:fffe",
+            "2001:2::1",
+            "64:ff9b:1::a00:1",
+            "100::1",
+            "3fff::1",
+            "4000::1",
+            "1000::1",
         ] {
             assert!(!public_ip(ip.parse().unwrap()), "{ip}");
         }
@@ -494,8 +707,10 @@ mod tests {
             "1.1.1.1",
             "93.184.216.34",
             "2606:4700:4700::1111",
+            "2a00:1450:4001:80b::200e",
             "::ffff:8.8.8.8",
             "64:ff9b::808:808",
+            "2002:808:808::1",
         ] {
             assert!(public_ip(ip.parse().unwrap()), "{ip}");
         }

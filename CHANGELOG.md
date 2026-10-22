@@ -1,5 +1,52 @@
 # Changes
 
+## 0.2.0-preview.5
+
+A security preview. What an agent wrote opens with its app only as Kule's
+own checked copy, keeping to itself. On macOS a task's servers listen only
+where you allow them, and the system's `/tmp` stays closed to it. The proxy
+passes a tunnel only to the host it was opened to, and on hosts Kule holds
+a secret for, only your credentials.
+
+### Security
+
+- *Open with its app* opens Kule's own copy of the file, made before it is
+  checked and readable only by you, without the file's extended attributes,
+  and on macOS marked as downloaded. Kule looks inside Word, Excel,
+  PowerPoint, OpenDocument and CSV files first, and opens none that holds
+  macros, controls or embedded objects, links to anything outside the file
+  but a web page or an email address, or has a field, formula or CSV cell
+  that fetches or runs something. Pages, Numbers, Keynote, EPUB and RTF
+  files are no longer opened with their app.
+- On macOS, while a task's network goes through the proxy, its programs do
+  not listen for connections unless you allow servers for it: the new
+  `servers` limit (Settings → Limits, `kule limits servers=on`), off by
+  default. The macOS sandbox sees the port a server listens on but not its
+  address, so allowing servers is weaker isolation you accept under
+  Policy: Node, Python and Ruby servers are pointed at this computer, and
+  while an agent runs in the app the others are kept off your network from
+  outside the sandbox. A refused server is
+  listed after the command, with how to allow it.
+- On macOS a task's commands no longer write to the system's `/tmp`, which
+  your other programs and tasks share: `TMPDIR`, and now zsh's `TMPPREFIX`
+  and Claude Code's `CLAUDE_CODE_TMPDIR`, point at the task's own temporary
+  directory.
+- A tunnel the proxy does not look inside goes on only once the client's
+  TLS hello asks for the host it was opened to, without hiding the name it
+  asks for; port 443 carries nothing but TLS. Plain `http://` requests are
+  read one by one, each for the host it was let through to. A cut
+  connection is logged as `cut`, with why.
+- On a host Kule holds a secret for, a request carries no credentials but
+  Kule's: headers and URL parameters named as credentials by any spelling,
+  `Basic` with the placeholder as the password, and the fields of JSON and
+  multipart bodies as well as forms. That host is asked for whole responses
+  only, and a response that repeats a secret has it blanked in more of the
+  forms it can take (base64, escapes in either case), even split between
+  chunks.
+- For IPv6, only the global unicast range counts as public, with the IPv4
+  address inside 6to4 judged as itself. Host names are judged in lower
+  case and without a final dot. `Content-Length` takes digits alone.
+
 ## 0.2.0-preview.4
 
 A security preview. Nothing an agent writes in Kule reaches your home:

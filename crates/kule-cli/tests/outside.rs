@@ -102,21 +102,31 @@ fn open_lets_through_documents_that_are_what_their_name_says() {
     fs::write(ws.path().join("a.txt"), "a\n").unwrap();
     let (id, copy) = task(home.path(), ws.path());
     fs::write(copy.join("summary.pdf"), b"%PDF-1.7\n").unwrap();
-    fs::write(copy.join("march.xlsx"), b"PK\x03\x04rest").unwrap();
-    for file in ["summary.pdf", "march.xlsx"] {
-        assert_eq!(
-            ok(home.path(), &["open", "--dry-run", &id, file]).trim(),
-            copy.join(file).to_str().unwrap()
+    fs::write(copy.join("march.csv"), "day,sum\n1,3\n").unwrap();
+    for file in ["summary.pdf", "march.csv"] {
+        // Kule's own copy of it, never the agent's file.
+        let at = PathBuf::from(ok(home.path(), &["open", "--dry-run", &id, file]).trim());
+        assert!(
+            at.starts_with(home.path().join("opened")),
+            "{}",
+            at.display()
         );
+        assert_eq!(fs::read(&at).unwrap(), fs::read(copy.join(file)).unwrap());
     }
 
     fs::write(copy.join("rename.command"), "#!/bin/sh\n").unwrap();
     fs::write(copy.join("notes.pdf"), "#!/bin/sh\n").unwrap();
+    fs::write(
+        copy.join("sums.csv"),
+        "a\n=IMAGE(\"https://example.com/p\")\n",
+    )
+    .unwrap();
     fs::write(outside.path().join("real.pdf"), b"%PDF-1.7").unwrap();
     std::os::unix::fs::symlink(outside.path().join("real.pdf"), copy.join("linked.pdf")).unwrap();
     for file in [
         "rename.command",
         "notes.pdf",
+        "sums.csv",
         "linked.pdf",
         "../a.pdf",
         "docs",
