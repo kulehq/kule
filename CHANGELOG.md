@@ -67,6 +67,12 @@
   tools. It stays masked where the key names a secret, where a part of it
   is no path or looks like a token, and where a secret Kule keeps or
   masked elsewhere is in it.
+- A file you save in your home while Kule makes a task's home layer is
+  compared with its clone once the disk's clock has moved on, as the
+  workspace copy already is, and cloned again when they differ. On a disk
+  whose clock is coarse, a same-size save then could go unseen: the layer
+  held what the file was before, and an apply wrote over your save. Each
+  file's stamp is now read by the clock of the disk the file is on.
 
 ### Development
 

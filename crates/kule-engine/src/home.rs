@@ -27,7 +27,7 @@ use walkdir::WalkDir;
 use crate::effects::Change;
 use crate::error::{Error, IoContext, Result};
 use crate::fsops::{self, read_json, write_json};
-use crate::manifest::{Entry, Kind, Stamp, scan};
+use crate::manifest::{Entry, Kind, Stamp, Tree, scan};
 use crate::secrets::{self, TaskSecrets};
 use crate::task::Task;
 use crate::textdiff::{self, TextDiff};
@@ -251,7 +251,14 @@ impl Task {
         };
         let linked: Vec<PathBuf> = linked.iter().map(canonical).collect();
         let hidden: Vec<PathBuf> = hidden.iter().map(canonical).collect();
-        let clock = crate::clock::Clock::new(self.dir(), &dir)?;
+        // The person's files are stamped by the clock of the real home's
+        // disk, the clones by the layer's.
+        let real_clock = self.clock(&real)?;
+        let layer_clock = self.clock(&dir)?;
+        let start = real_clock.now()?;
+        // Files the person wrote within the tick their stamps were read in,
+        // which a write in that tick could leave as they were.
+        let mut racy = Vec::new();
         let mut names: Vec<_> = fs::read_dir(&real)
             .at(&real)?
             .filter_map(|e| e.ok())
@@ -281,6 +288,9 @@ impl Task {
                     if let Some(work) = fsops::clone_entry(&from, &to)?
                         && let Some(copy) = Stamp::of(&to)?
                     {
+                        if work.ctime >= start {
+                            racy.push(text.clone());
+                        }
                         layer.entries.insert(text, Entry { work, copy });
                     }
                 }
@@ -314,6 +324,9 @@ impl Task {
                                 match fsops::clone_entry(&from, &to) {
                                     Ok(Some(work)) => {
                                         if let Some(copy) = Stamp::of(&to)? {
+                                            if work.ctime >= start {
+                                                racy.push(rel.clone());
+                                            }
                                             layer.entries.insert(rel.clone(), Entry { work, copy });
                                         }
                                         true
@@ -325,7 +338,7 @@ impl Task {
                                 }
                             }
                             Kind::Dir if capturable(&from) => {
-                                match fsops::clone_tree(&from, &to, &clock) {
+                                match fsops::clone_tree(&from, &to, &real_clock) {
                                     Ok(taken) => {
                                         let made = scan(&to)?;
                                         if let Some(copy) = Stamp::of(&to)? {
@@ -392,6 +405,32 @@ impl Task {
                 }
             }
         }
+        // Each is compared with its clone once the clock has moved on, before
+        // masking changes the clones (see `fsops::clone_tree`).
+        racy.retain(|rel| layer.entries.contains_key(rel));
+        let mut taken: Tree = racy
+            .iter()
+            .map(|rel| (rel.clone(), layer.entries[rel].work.clone()))
+            .collect();
+        fsops::pin_racy(&real, &dir, &mut taken, racy.clone(), &real_clock)?;
+        for rel in racy {
+            let (from, to) = (real.join(&rel), dir.join(&rel));
+            match (taken.remove(&rel), Stamp::of(&to)?) {
+                (Some(work), Some(copy)) if work.kind == Kind::File => {
+                    layer.entries.insert(rel, Entry { work, copy });
+                }
+                // Gone meanwhile, or no longer a file: what is there now
+                // is the person's own, as any entry not caught.
+                (taken, _) => {
+                    layer.entries.remove(&rel);
+                    fsops::remove(&to)?;
+                    if taken.is_some() {
+                        std::os::unix::fs::symlink(&from, &to).at(&to)?;
+                        layer.links.insert(rel);
+                    }
+                }
+            }
+        }
         self.mask_layer(&mut layer, None)?;
         // A write within the same tick of the clock as the clone would
         // leave the stamp as it was.
@@ -401,7 +440,7 @@ impl Task {
             .map(|e| e.copy.ctime)
             .max()
             .unwrap_or_default();
-        if !clock.wait_past(latest)? {
+        if !layer_clock.wait_past(latest)? {
             for entry in layer.entries.values_mut() {
                 if entry.copy.ctime == latest {
                     entry.copy = entry.copy.clone().unknown();

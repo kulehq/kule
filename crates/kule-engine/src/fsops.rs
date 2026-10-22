@@ -37,17 +37,40 @@ use crate::manifest::{Kind, Stamp, Tree, relative, scan, vanished};
 /// clone once the clock has moved on and cloned again when they differ; one
 /// that is never pinned down gets a stamp that matches nothing.
 pub(crate) fn clone_tree(src: &Path, dst: &Path, clock: &Clock) -> Result<Tree> {
-    const ROUNDS: usize = 5;
     let start = clock.now()?;
     let Cloned {
         mut taken,
         mut dirs,
-        mut racy,
+        racy,
     } = match clone_at_once(src, dst, start)? {
         Some(cloned) => cloned,
         None => clone_one_by_one(src, dst, start)?,
     };
+    dirs.extend(pin_racy(src, dst, &mut taken, racy, clock)?);
 
+    for (dir, stamp) in dirs.iter().rev() {
+        finish(dir, stamp)?;
+    }
+    if let Some(root) = Stamp::of(src)? {
+        finish(dst, &root)?;
+    }
+    Ok(taken)
+}
+
+/// Pins down the `racy` files of `taken`, cloned from `src` to `dst` within
+/// the tick of `clock` their stamps were read in: each is compared with its
+/// clone once the clock has moved on, and cloned again when they differ. One
+/// that is never pinned down keeps a stamp that matches nothing. Returns the
+/// directories that took a file's place meanwhile, whose times are set last.
+pub(crate) fn pin_racy(
+    src: &Path,
+    dst: &Path,
+    taken: &mut Tree,
+    mut racy: Vec<String>,
+    clock: &Clock,
+) -> Result<Vec<(PathBuf, Stamp)>> {
+    const ROUNDS: usize = 5;
+    let mut dirs = Vec::new();
     for round in 1..=ROUNDS {
         let Some(latest) = racy.iter().map(|rel| taken[rel].ctime).max() else {
             break;
@@ -62,7 +85,7 @@ pub(crate) fn clone_tree(src: &Path, dst: &Path, clock: &Clock) -> Result<Tree> 
                 continue;
             }
             if round == ROUNDS {
-                // The workspace has moved past a stamp that changed; one that
+                // The source has moved past a stamp that changed; one that
                 // did not may hide a write the clone missed.
                 if same(&from)? {
                     let unknown = stamp.clone().unknown();
@@ -87,14 +110,7 @@ pub(crate) fn clone_tree(src: &Path, dst: &Path, clock: &Clock) -> Result<Tree> 
         }
         racy = again;
     }
-
-    for (dir, stamp) in dirs.iter().rev() {
-        finish(dir, stamp)?;
-    }
-    if let Some(root) = Stamp::of(src)? {
-        finish(dst, &root)?;
-    }
-    Ok(taken)
+    Ok(dirs)
 }
 
 /// What a first pass of [`clone_tree`] made: the stamp of each entry it
