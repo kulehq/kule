@@ -80,7 +80,8 @@ pub fn run(home: &Path, task: &str, shell: &str) -> Result<(Option<i32>, Vec<Den
             &mut follower,
             std::ptr::null_mut(),
             std::ptr::null_mut(),
-            &mut ws,
+            // Mutable on macOS, read-only on Linux.
+            std::ptr::addr_of_mut!(ws),
         )
     };
     if made != 0 {
