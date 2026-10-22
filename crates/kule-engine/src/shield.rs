@@ -1,6 +1,9 @@
 //! macOS: what a task runs is kept off the network even where it listens on
 //! every address, for programs no hook reaches (Go, Rust, Java and the like;
-//! see `loopback`).
+//! see `loopback`). Only where the person allows servers for a task do its
+//! programs listen at all; this keeps them off the network from outside the
+//! sandbox, which is weaker than holding them inside it, and the person
+//! accepts it as such (see `isolation_gaps`).
 //!
 //! Seatbelt sees a listening port but not its address, so the address is
 //! dealt with from outside the sandbox. Where a process of a run listens on

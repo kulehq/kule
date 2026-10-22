@@ -368,6 +368,10 @@ pub struct Sandbox {
     layer: Option<PathBuf>,
     /// Whether commands may use the GPU.
     gpu: bool,
+    /// Whether commands may listen for connections while their network
+    /// goes through the proxy (macOS; elsewhere they always may, held to
+    /// this computer).
+    servers: bool,
     /// Devices given beyond those every command gets (Linux; see
     /// [`Sandbox::allow_device`]).
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
@@ -444,6 +448,22 @@ fn hint(operation: &str, path: &str) -> Option<String> {
              .docx)."
                 .to_owned(),
         ),
+        ("network-bind", _) => Some(
+            "A program wanted to listen for connections. On macOS a task's \
+             programs do not while its network goes through the proxy: the \
+             sandbox sees the port a server listens on, never the address, so \
+             it cannot hold one to this computer. The person can allow servers \
+             for the task (Settings → Limits, or `kule limits --task ID \
+             servers=on`), which is weaker isolation they accept; a Unix socket \
+             in the copy or its tmp works without."
+                .to_owned(),
+        ),
+        (op, path) if op.starts_with("file-write") && path.starts_with("/private/tmp/") => Some(
+            "On macOS a task's /tmp would be the system's, shared with the \
+             person's programs and the other tasks, so its commands do not write \
+             there. Write under $TMPDIR, the task's own temporary directory."
+                .to_owned(),
+        ),
         _ => None,
     }
 }
@@ -497,6 +517,7 @@ impl Sandbox {
             kept: task.home().join("kept"),
             layer: None,
             gpu: true,
+            servers: false,
             devices: Vec::new(),
             keychain: false,
             file_size: None,
@@ -517,10 +538,14 @@ impl Sandbox {
         self.platform_denials(window)
     }
 
-    /// [`Sandbox::new`] plus the defaults: `/tmp` writable, package caches
-    /// of the task's own, credentials in the home directory hidden. Shells
-    /// and tools write to `/tmp` by hard-coded path, whatever `TMPDIR`
-    /// says, and nothing there belongs to the workspace.
+    /// [`Sandbox::new`] plus the defaults: on Linux `/tmp` writable (a
+    /// `/tmp` of the task's own; see [`Sandbox::platform_command`]), package
+    /// caches of the task's own, credentials in the home directory hidden.
+    /// Shells and tools write to `/tmp` by hard-coded path, whatever
+    /// `TMPDIR` says, and nothing there belongs to the workspace. On macOS
+    /// `/tmp` would be the system's, shared with the person's programs and
+    /// the other tasks, so it stays closed: `TMPDIR` and `TMPPREFIX` point
+    /// at the task's own.
     pub fn for_task(task: &Task) -> Result<Sandbox> {
         Sandbox::for_task_with(task, Sources::from_env())
     }
@@ -533,12 +558,15 @@ impl Sandbox {
         if !limits.gpu {
             sandbox.deny_gpu();
         }
+        if limits.servers {
+            sandbox.allow_servers();
+        }
         // No one file outgrows the disk limit between two measures of it.
         if let Some(mb) = limits.disk_mb {
             sandbox.limit_file_size(mb.saturating_mul(1024 * 1024));
         }
         let tmp = Path::new("/tmp");
-        if tmp.is_dir() {
+        if cfg!(target_os = "linux") && tmp.is_dir() {
             sandbox.allow_write(tmp)?;
         }
         if let Some(sources) = sources {
@@ -590,6 +618,16 @@ impl Sandbox {
     /// devices stay out of reach, as every device not given is.
     pub fn deny_gpu(&mut self) {
         self.gpu = false;
+    }
+
+    /// Commands may listen for connections while their network goes
+    /// through the proxy. On macOS that is weaker isolation, which the
+    /// person accepts (see [`crate::isolation_gaps`]): Seatbelt cannot hold
+    /// a server to this computer, so Kule keeps it off the network from
+    /// outside (see `shield`). Elsewhere every server is held to loopback
+    /// whatever this says.
+    pub fn allow_servers(&mut self) {
+        self.servers = true;
     }
 
     /// Gives commands `path`, a device or a folder of them under `/dev`,
@@ -1097,7 +1135,7 @@ impl Sandbox {
     /// `TMPDIR` pointing at the task's temporary directory.
     pub fn command(&self, program: &str, args: &[String]) -> Result<Command> {
         // Less isolated than meant only with the person's say.
-        let gaps = crate::isolation::isolation_gaps(self.network);
+        let gaps = crate::isolation::isolation_gaps(self.network, self.servers);
         if !gaps.is_empty() && !self.accept_weaker {
             return Err(Error::Invalid(format!(
                 "this computer cannot give the command {}. Kule does not run it less isolated \
@@ -1117,7 +1155,11 @@ impl Sandbox {
                 command.env(&name, value);
             }
         }
-        command.current_dir(&self.copy).env("TMPDIR", &self.tmp);
+        // zsh's here-documents and `=(…)` go to TMPPREFIX, /tmp by default.
+        command
+            .current_dir(&self.copy)
+            .env("TMPDIR", &self.tmp)
+            .env("TMPPREFIX", self.tmp.join("zsh"));
         command.envs(self.env.iter().map(|(k, v)| (k, v)));
         // Servers listen on this computer only (see `loopback`).
         let set: Vec<(OsString, OsString)> = command
@@ -1541,6 +1583,13 @@ impl Sandbox {
                 text.push_str(&format!(
                     "(deny network-outbound (remote ip) {tag})\n(allow network-outbound (remote ip \"localhost:{port}\"))\n"
                 ));
+                // Seatbelt sees the port a program listens on, never the
+                // address: `localhost:*` lets every address through. Only
+                // where the person allows servers do they listen, kept off
+                // the network from outside (see `shield`).
+                if !self.servers {
+                    text.push_str(&format!("(deny network-bind (local ip) {tag})\n"));
+                }
             }
         }
         // The GPU's user clients: Apple silicon's (`AGXDeviceUserClient` is
@@ -2257,6 +2306,24 @@ mod tests {
             parse_denial("Sandbox: Python(4242) deny(1) mach-lookup com.apple.lsd.mapdb\nkule-1-2")
                 .unwrap();
         assert_eq!(other.hint, None);
+    }
+
+    /// A server refused, or a write to the system's /tmp, says why and
+    /// what works instead.
+    #[test]
+    fn a_refused_server_or_tmp_write_says_what_to_do() {
+        let server =
+            parse_denial("Sandbox: node(63452) deny(1) network-bind local:*:3000\nkule-1-2")
+                .unwrap();
+        assert!(server.hint.unwrap().contains("servers=on"));
+        let tmp = parse_denial(
+            "Sandbox: bash(63451) deny(1) file-write-create /private/tmp/kprobe-f\nkule-1-2",
+        )
+        .unwrap();
+        assert!(tmp.hint.unwrap().contains("$TMPDIR"));
+        let elsewhere =
+            parse_denial("Sandbox: bash(1) deny(1) file-write-create /Users/me/x\nkule-1-2").unwrap();
+        assert_eq!(elsewhere.hint, None);
     }
 
     /// LibreOffice (soffice) aborts when the window server is refused, even

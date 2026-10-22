@@ -90,7 +90,14 @@ one difference on macOS, below.
 
 - On **Linux**, Kule turns every listening address into loopback, whatever
   the program.
-- On **macOS**:
+- On **macOS**, the sandbox sees the port a server listens on but never its
+  address, so it cannot hold one to this computer. While a task's network
+  goes through the proxy, its programs **do not listen at all** unless you
+  allow servers for it: the `servers` [limit](../concepts/budgets-and-limits.md),
+  in Settings → Limits or with `kule limits --task ID servers=on`. A refused
+  server is listed after the command, with how to allow it. Allowing servers
+  is weaker isolation, which you accept under Policy (see
+  [`kule isolation`](../cli/isolation.md)). While they are allowed:
   - Node, Python and Ruby servers are pointed at loopback when they ask for
     every address;
   - for any other program (Go, Rust, Java), Kule **shields** the port while

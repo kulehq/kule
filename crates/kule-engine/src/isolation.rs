@@ -36,11 +36,14 @@ pub fn set_isolation(home: &Path, isolation: &Isolation) -> Result<()> {
 }
 
 /// What a command with `network` would go without on this computer, said
-/// for a person; empty where nothing is missing (macOS, and Linux with
-/// unprivileged user namespaces and a recent Landlock).
-pub fn isolation_gaps(network: Network) -> Vec<String> {
+/// for a person; empty where nothing is missing (Linux with unprivileged
+/// user namespaces and a recent Landlock, and macOS while the run's limits
+/// keep its servers off). `servers` is the run's limit that lets its
+/// programs listen on macOS (see [`crate::Limits::servers`]).
+pub fn isolation_gaps(network: Network, servers: bool) -> Vec<String> {
     #[cfg(target_os = "linux")]
     {
+        let _ = servers;
         gaps(
             network,
             crate::namespace::available(),
@@ -53,7 +56,22 @@ pub fn isolation_gaps(network: Network) -> Vec<String> {
     }
     #[cfg(not(target_os = "linux"))]
     {
-        let _ = network;
+        macos_gaps(network, servers)
+    }
+}
+
+/// macOS: Seatbelt sees a listening port but not its address, so where a
+/// run's servers may listen while its network goes through the proxy, Kule
+/// keeps them off the network from outside (see `shield`), looking at what
+/// they listen on 50 times a second.
+#[cfg_attr(target_os = "linux", allow(dead_code))]
+pub(crate) fn macos_gaps(network: Network, servers: bool) -> Vec<String> {
+    if servers && matches!(network, Network::Proxy(_)) {
+        vec![
+            "its servers held to this computer from inside: Kule keeps them off your network from outside, looking every 50 ms, and a connection in that moment could reach one"
+                .to_owned(),
+        ]
+    } else {
         Vec::new()
     }
 }
@@ -161,6 +179,16 @@ mod tests {
         assert!(gaps(Network::Allow, true, true, true, true, 6, true).is_empty());
         // System V IPC of its own, which nothing else stands in for.
         assert_eq!(gaps(proxy, true, true, true, false, 9, true).len(), 1);
+    }
+
+    #[test]
+    fn servers_on_macos_are_a_gap_only_where_the_proxy_holds_the_network() {
+        assert!(macos_gaps(Network::Proxy(1), false).is_empty());
+        assert_eq!(macos_gaps(Network::Proxy(1), true).len(), 1);
+        // No network: nothing listens whatever the limit says.
+        assert!(macos_gaps(Network::Deny, true).is_empty());
+        // The person's own network, opened as such.
+        assert!(macos_gaps(Network::Allow, true).is_empty());
     }
 
     #[test]

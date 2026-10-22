@@ -1564,7 +1564,11 @@ impl Service {
     /// proxy, so a network of their own counts.
     pub fn isolation(&self) -> Result<IsolationView> {
         Ok(IsolationView {
-            gaps: kule_engine::isolation_gaps(kule_engine::Network::Proxy(0)),
+            // As every task's limits have it (see `kule isolation`).
+            gaps: kule_engine::isolation_gaps(
+                kule_engine::Network::Proxy(0),
+                kule_engine::limits(&self.home).map_err(text)?.servers,
+            ),
             accept_weaker: kule_engine::isolation(&self.home)
                 .map_err(text)?
                 .accept_weaker,

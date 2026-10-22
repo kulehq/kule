@@ -28,7 +28,12 @@ commands and agents, and says what is missing. `kule isolation` shows the
 gaps, and `--accept-weaker on` lets commands run with what the computer
 gives. Your choice is kept in Kule's home (`isolation.json`).
 
-On macOS there are no gaps.
+On macOS the one gap is the task's servers, where the `servers`
+[limit](limits.md) lets them listen: the macOS sandbox sees the port a
+server listens on but not its address, so Kule keeps such servers off your
+network from outside it. `kule isolation` shows it when every task's limits
+allow servers; a task or group that allows them on its own is told when it
+runs.
 
 ## Options
 

@@ -131,8 +131,9 @@ says where its value comes from:
 | One task | What it inherits (**From group …** when its group sets that field, else **From every task**), **No limit**, or **Its own** value. |
 
 The fields are processor (cores), memory (GB), disk (GB), **GPU may be used**
-(on or off), one run (minutes), all of a task's runs (hours) and doing
-nothing (minutes). *Groups and tasks with limits of their own* lists every
+(on or off), **Servers (macOS) may listen** (off by default; see
+[Terminals and servers](terminals-and-servers.md)), one run (minutes), all
+of a task's runs (hours) and doing nothing (minutes). *Groups and tasks with limits of their own* lists every
 scope that sets something. A run going on keeps the limits it started with.
 See [Budgets and limits](../concepts/budgets-and-limits.md) for how each is
 measured.

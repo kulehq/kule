@@ -91,6 +91,7 @@ kule limits cpu=none                       # no processor limit
 | `memory` | GB, all the run's processes together | The processes are **killed at once**; the run stops. |
 | `disk` | GB the copy, its temporary files and home changes may grow by since the task was made | The run **stops**. No single file can be written past it. |
 | `gpu` | `on` / `off` | Off: Metal (and OpenCL) gets no device on macOS; `/dev/dri` and NVIDIA's devices stay read-only on Linux. |
+| `servers` | `on` / `off` (off by default) | macOS: off, the run's programs do not listen for connections while its network goes through the proxy; on, they do, and Kule keeps them off your network from outside the sandbox, which is weaker isolation you accept (see [`kule isolation`](../cli/isolation.md)). On Linux every server is held to this computer whatever it says. |
 | `run` | minutes, one run | The run **stops**. |
 | `task` | hours, all of a task's runs together | The run **stops**, and none starts until you raise it. |
 | `idle` | minutes doing nothing | The run **stops**. |
@@ -108,6 +109,8 @@ Notes on how they count:
 - **One run** counts all of the run's time, including waiting for your
   answers.
 - No system lets a share of a GPU be set, so `gpu` is only on or off.
+- The macOS sandbox sees the port a server listens on but not its
+  address, so `servers` is on or off too.
 - A run keeps the limits it started with; a change holds from the next run.
 - `kule run` from a terminal is held to the same limits.
 

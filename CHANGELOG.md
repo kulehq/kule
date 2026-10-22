@@ -12,6 +12,16 @@
   but a web page or an email address, or has a field, formula or CSV cell
   that fetches or runs something. Pages, Numbers, Keynote, EPUB and RTF
   files are no longer opened with their app.
+- On macOS, while a task's network goes through the proxy, its programs do
+  not listen for connections unless you allow servers for it: the new
+  `servers` limit (Settings → Limits, `kule limits servers=on`), off by
+  default. The macOS sandbox sees the port a server listens on but not its
+  address, so allowed servers are kept off your network from outside it,
+  which is weaker isolation you accept under Policy. A refused server is
+  listed after the command, with how to allow it.
+- On macOS a task's commands no longer write to the system's `/tmp`, which
+  your other programs and tasks share: `TMPDIR`, and now zsh's `TMPPREFIX`,
+  point at the task's own temporary directory.
 
 ## 0.2.0-preview.4
 

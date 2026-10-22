@@ -25,8 +25,13 @@ The command runs in the task's copy (its working directory is the copy),
 inside the operating system's sandbox: Seatbelt on macOS, Landlock and
 namespaces on Linux. By default:
 
-- **It can write** only to the copy, the task's own `TMPDIR`, `/tmp`, and the
-  task's own package caches.
+- **It can write** only to the copy, the task's own `TMPDIR`, its package
+  caches, and on Linux `/tmp`, which is the task's own (on macOS `/tmp` is
+  the system's, so it stays closed).
+- **It listens** for connections on this computer only. On macOS, where the
+  sandbox cannot tell a server's address, it does not listen at all while
+  its network goes through the proxy, unless the task's `servers`
+  [limit](limits.md) allows it.
 - **It cannot read** your credentials (`~/.ssh`, `~/.aws`, `~/.npmrc`,
   cargo's registry token and many more), your own folders (Documents,
   Desktop, Downloads, Pictures, cloud storage), Kule's home, or the projects

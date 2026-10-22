@@ -1106,6 +1106,7 @@ function heldChanges(impact) {
     (f) => `${f.label.toLowerCase()} ${limitText(f, now[f.key])} → ${limitText(f, then[f.key])}`
   );
   if (now.gpu !== then.gpu) limits.push(`GPU ${now.gpu ? "may be used" : "off"} → ${then.gpu ? "may be used" : "off"}`);
+  if (!!now.servers !== !!then.servers) limits.push(`servers ${serversText(now.servers)} → ${serversText(then.servers)}`);
   if (limits.length) lines.push(`Its limits: ${limits.join(", ")}`);
   const groupBudgets = (list) =>
     list
@@ -2419,10 +2420,20 @@ function bytesText(n) {
   return `${Math.round(n / 1024 ** 2)} MB`;
 }
 
+/** Whether a run's servers listen, as a limit says it (macOS). */
+function serversText(on) {
+  return on ? "may listen" : "do not listen";
+}
+
+/** What the servers limit means, for its field's title. */
+const SERVERS_HELP =
+  "macOS: whether the run's programs may listen for connections while its network goes through the proxy. The macOS sandbox sees the port a server listens on, never the address, so Kule keeps such servers off your network from outside the sandbox: weaker isolation, which you accept under Policy. On Linux every server is held to this computer whatever this says.";
+
 /** The limits in force for a task, said in a line. */
 function limitsSummary(limits) {
   const set = LIMIT_FIELDS.filter((f) => limits[f.key] != null).map((f) => `${f.label.toLowerCase()} ${limitText(f, limits[f.key])}`);
   if (limits.gpu === false) set.push("no GPU");
+  if (limits.servers === true) set.push("servers may listen");
   return set.length ? set.join(" · ") : "no limits";
 }
 
@@ -2510,6 +2521,17 @@ function everyLimits(every) {
           h("input", { id: "limit-gpu", "data-key": "limit:gpu", type: "checkbox", checked: every.gpu !== false, onchange: setEveryLimits }),
           "may be used"
         )
+      ),
+      h(
+        "label",
+        { class: "limit-field", title: SERVERS_HELP },
+        h("span", { class: "limit-label" }, "Servers (macOS)"),
+        h(
+          "span",
+          { class: "limit-value" },
+          h("input", { id: "limit-servers", "data-key": "limit:servers", type: "checkbox", checked: every.servers === true, onchange: setEveryLimits }),
+          "may listen"
+        )
       )
     ),
     h("span", { class: "muted" }, "Empty for no limit.")
@@ -2517,7 +2539,7 @@ function everyLimits(every) {
 }
 
 async function setEveryLimits() {
-  const limits = { gpu: $("limit-gpu").checked };
+  const limits = { gpu: $("limit-gpu").checked, servers: $("limit-servers").checked };
   for (const f of LIMIT_FIELDS) {
     const text = $(`limit-${f.key}`).value.trim();
     limits[f.key] = text === "" ? null : f.to(Number(text));
@@ -2536,7 +2558,7 @@ async function setEveryLimits() {
 function layered(base, own) {
   const out = { ...base };
   for (const [key, value] of Object.entries(own || {})) {
-    if (!(key === "gpu" && value == null)) out[key] = value;
+    if (!((key === "gpu" || key === "servers") && value == null)) out[key] = value;
   }
   return out;
 }
@@ -2548,6 +2570,8 @@ function ownSummary(own) {
   );
   if (own.gpu === false) set.push("no GPU");
   if (own.gpu === true) set.push("GPU may be used");
+  if (own.servers === true) set.push("servers may listen");
+  if (own.servers === false) set.push("servers do not listen");
   return set.join(" · ");
 }
 
@@ -2605,9 +2629,23 @@ function ownLimitsGrid(prefix, own, inherited, from, ownWord, save) {
     h("option", { value: "yes", selected: gpuChoice === "yes" }, "May be used"),
     h("option", { value: "no", selected: gpuChoice === "no" }, "Off")
   );
+  const serversChoice = own.servers === undefined || own.servers === null ? "inherit" : own.servers ? "yes" : "no";
+  const servers = h(
+    "select",
+    { "data-key": `${prefix}:servers`, "data-field": "servers", "aria-label": "Servers (macOS)", onchange: () => save(grid) },
+    h("option", { value: "inherit", selected: serversChoice === "inherit" }, `${from("servers")}: ${serversText(inherited.servers)}`),
+    h("option", { value: "yes", selected: serversChoice === "yes" }, "May listen"),
+    h("option", { value: "no", selected: serversChoice === "no" }, "Do not listen")
+  );
   grid.append(
     ...fields,
-    h("label", { class: `limit-field${gpuChoice === "inherit" ? " inherited" : ""}` }, h("span", { class: "limit-label" }, "GPU"), h("span", { class: "limit-value" }, gpu))
+    h("label", { class: `limit-field${gpuChoice === "inherit" ? " inherited" : ""}` }, h("span", { class: "limit-label" }, "GPU"), h("span", { class: "limit-value" }, gpu)),
+    h(
+      "label",
+      { class: `limit-field${serversChoice === "inherit" ? " inherited" : ""}`, title: SERVERS_HELP },
+      h("span", { class: "limit-label" }, "Servers (macOS)"),
+      h("span", { class: "limit-value" }, servers)
+    )
   );
   return grid;
 }
@@ -2618,8 +2656,8 @@ function readOwnLimits(grid) {
   const limits = {};
   for (const select of grid.querySelectorAll("select[data-field]")) {
     const key = select.dataset.field;
-    if (key === "gpu") {
-      if (select.value !== "inherit") limits.gpu = select.value === "yes";
+    if (key === "gpu" || key === "servers") {
+      if (select.value !== "inherit") limits[key] = select.value === "yes";
       continue;
     }
     const f = LIMIT_FIELDS.find((x) => x.key === key);
@@ -2657,7 +2695,7 @@ async function setGroupLimits(group, grid, every) {
 function taskLimitsCard(task, every) {
   const group = groupOf(task);
   const groupOwn = group?.limits || {};
-  const fromGroup = (key) => Boolean(group) && Object.prototype.hasOwnProperty.call(groupOwn, key) && !(key === "gpu" && groupOwn.gpu == null);
+  const fromGroup = (key) => Boolean(group) && Object.prototype.hasOwnProperty.call(groupOwn, key) && !((key === "gpu" || key === "servers") && groupOwn[key] == null);
   const from = (key) => (fromGroup(key) ? `From group ${group.name}` : "From every task");
   const grid = ownLimitsGrid(`limit:task:${task.id}`, task.own_limits || {}, layered(every, groupOwn), from, "Its own", (g) => setTaskLimits(task, g));
   const used = task.time_used_secs ? `Its runs took ${durationText(task.time_used_secs)}.` : "No runs yet.";

@@ -431,7 +431,9 @@ enum Cmd {
     /// for EACH task in a group (--group ID), or for ONE task (--task ID).
     /// Each line says which of the three a limit comes from: a task's own
     /// stand over its group's, and a group's over every task's. Set with
-    /// FIELD=VALUE: cpu (cores), memory (GB), disk (GB), gpu (on/off), run
+    /// FIELD=VALUE: cpu (cores), memory (GB), disk (GB), gpu (on/off),
+    /// servers (on/off: on macOS, whether programs may listen while the
+    /// network goes through the proxy, which is weaker isolation), run
     /// (minutes), task (hours, all of a task's runs), idle (minutes); `none`
     /// is no limit, and with --group or --task `inherit` takes the one
     /// above again. A run going on keeps the limits it started with.
@@ -753,7 +755,7 @@ fn run() -> Result<ExitCode> {
                     Network::Proxy(port)
                 };
                 if network != Network::Allow {
-                    warn_if_network_not_isolated();
+                    warn_if_network_not_isolated(&task);
                 }
                 match &proxy {
                     Some(proxy) => sandbox.use_proxy(proxy),
@@ -825,7 +827,7 @@ fn run() -> Result<ExitCode> {
                 ..RunUsage::default()
             };
             let logged_before = connections(&task)?.len();
-            warn_if_network_not_isolated();
+            warn_if_network_not_isolated(&task);
             let policy = profile.open_hosts(load_policy(&home, &task)?)?;
             let person = kule_engine::CacheSources::from_env().map(|s| s.home);
             let proxy =
@@ -930,7 +932,10 @@ fn run() -> Result<ExitCode> {
                 )?,
                 Some(other) => bail!("{other}: on or off"),
             }
-            let gaps = kule_engine::isolation_gaps(Network::Proxy(0));
+            // As every task's limits have it; a task or group may allow
+            // servers on its own, and is told when it runs.
+            let servers = kule_engine::limits(&home)?.servers;
+            let gaps = kule_engine::isolation_gaps(Network::Proxy(0), servers);
             if gaps.is_empty() {
                 println!("this computer gives a sandboxed command all of its isolation");
             } else {
@@ -1505,8 +1510,9 @@ fn plain_event(mut event: kule_acp::Event) -> kule_acp::Event {
     event
 }
 
-fn warn_if_network_not_isolated() {
-    let gaps = kule_engine::isolation_gaps(Network::Proxy(0));
+fn warn_if_network_not_isolated(task: &Task) {
+    let servers = task.limits_in_force().is_ok_and(|l| l.servers);
+    let gaps = kule_engine::isolation_gaps(Network::Proxy(0), servers);
     if !gaps.is_empty() {
         eprintln!(
             "kule: weaker isolation on this computer: the command goes without {}. \
