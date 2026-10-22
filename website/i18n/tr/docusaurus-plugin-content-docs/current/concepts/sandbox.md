@@ -107,7 +107,10 @@ reddeder.
 Linux'ta komutlar kendilerine ait süreçler alır: bir komut başka hiçbir
 programı görmez ve ona sinyal gönderemez; arkasında çalışır bıraktığı her
 şey de onunla birlikte biter. Arka planda başlatılan bir sunucu, onu
-başlatan ajan ya da terminal komutu yaşadığı sürece yaşar.
+başlatan ajan ya da terminal komutu yaşadığı sürece yaşar. Her sistemde,
+bir ajan çalıştırmasının ya da `kule exec`'in sandbox'ta çalışır bıraktığı
+her şey, ebeveynine ne olmuş olursa olsun, o bitince biter; çalıştırma
+sürerken de sınırları onu sayar.
 
 Bir görevin başlattığı sunucular **yalnızca bu bilgisayarda** dinler, asla
 ağınızda değil. Sandbox'ın bir sunucunun adresini ayırt edemediği macOS'ta,

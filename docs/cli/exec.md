@@ -47,7 +47,8 @@ namespaces on Linux. By default:
 
 If the sandbox cannot be set up, the command does not run.
 
-When the command ends, Kule prints the copy's changes (all of them, not only
+When the command ends, what it left running in the sandbox ends with it,
+whatever became of its parent. Kule then prints the copy's changes (all of them, not only
 this command's), the connections it made, home writes, and on macOS what the
 sandbox refused. `kule exec` exits with the command's own exit code.
 

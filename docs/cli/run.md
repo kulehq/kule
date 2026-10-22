@@ -50,7 +50,17 @@ the agent again first: changes pile up in the copy until you decide.
 budgets is spent (its own, its group's, or the daily one for every task), or
 once the task has used up its time. While it runs, the
 [limits](../concepts/budgets-and-limits.md) on processor, memory, disk, time
-and idling hold it, as they do in the app.
+and idling hold it, as they do in the app. They count every process the
+run started, also one that left the agent's process tree.
+
+**The agent keeps to what Kule can hold.** A message from the agent longer
+than 16 MiB, or more than 1024 tool calls left open at once, stops the run.
+A tool call's title is cut to 200 characters. Where Kule runs the agent's
+commands for it (in the app), it runs 32 at once at most.
+
+**Nothing it started outlives the run.** When the run ends, however it ends,
+whatever the agent left running in its sandbox ends too, whatever became of
+its parent.
 
 **The agent hears what changed.** If [kule sync](sync.md) brought the folder's
 changes into the copy since the agent's last run, or the sandbox refused it
@@ -165,7 +175,9 @@ which is easier to log.
 | `kule: an agent is at work in task <id> …` | One agent per task. Wait, or make another task. |
 | `kule: a terminal is open on task <id>'s copy …; close it first, then start work` | A terminal on the task (the app's, or `kule shell`) is open. Close it first. |
 | `kule: Kule opened task <id>'s copy in <app> outside the sandbox; …` | Close that terminal app or editor, then run [kule closed](closed.md) `TASK`. |
-| `kule: <error> (see <home>/tasks/<id>/agent.log)` | The agent failed. Its own messages are in `agent.log`. |
+| `kule: <error> (see <home>/tasks/<id>/agent.log)` | The agent failed. Its own messages are in `agent.log`: its last 8 MB, and the 8 MB before them in `agent.log.1`. |
+| `kule: stopped: the agent sent a message larger than 16 MiB (see …)` | The agent said more in one message than Kule takes. Run it again with a narrower prompt. |
+| `kule: stopped: the agent left more than 1024 tool calls open (see …)` | The agent started tool calls without ending them. |
 | `kule: <agent> reported no cost, so the task's budget does not count this run` | A warning, not an error: agents signed in with a subscription may report tokens only, and a budget cannot hold what is not reported. |
 
 On some Linux systems no agent runs until you accept weaker isolation; see
