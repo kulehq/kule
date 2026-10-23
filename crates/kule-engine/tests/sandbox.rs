@@ -194,11 +194,12 @@ fn histories_browsers_and_credentials_in_the_home_are_hidden() {
         );
         assert!(!ok(&out), "{path} was readable");
     }
+    // Like everything else at the top of the home but its settings.
     let out = sh(
         &sandbox,
         &format!("cat '{}'", sources.home.join("notes/plain.txt").display()),
     );
-    assert!(ok(&out), "{out:?}");
+    assert!(!ok(&out), "{out:?}");
 }
 
 /// Kule's home where it is by default is the task's own as most people use
@@ -1795,7 +1796,7 @@ fn the_persons_own_folders_and_the_other_projects_are_hidden() {
         &sandbox,
         &format!("cat README.md '{}'", home.join("notes/plain.txt").display()),
     );
-    assert!(ok(&out), "{out:?}");
+    assert!(!ok(&out), "{out:?}");
 
     // A project the workspace builds from, revealed: read, never written.
     let other = home.join("code/other");
@@ -1876,7 +1877,9 @@ fn a_tool_or_a_worktrees_repository_beside_the_workspace_stays_readable() {
 #[test]
 fn folders_where_toolchains_live_stay_readable() {
     for (workspace, beside) in [
-        ("proj", "notes.txt"),
+        // At the top of the home the settings stay readable; the rest is
+        // the person's own (see the tests in reads.rs).
+        ("proj", ".tool.txt"),
         (".local/proj", ".local/share/tool.txt"),
         ("Library/Developer/proj", "Library/Developer/tool.txt"),
     ] {

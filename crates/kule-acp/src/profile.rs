@@ -1411,6 +1411,15 @@ impl Profile {
         let mut sandbox = Sandbox::for_task_with(task, person)?;
         let mut own_home = None;
         if let Some(home) = home {
+            // Started from the package Kule installed: read-only, where
+            // the person's apps keep their data, which stays hidden.
+            let packages = home.join(packages::PACKAGES);
+            if args
+                .first()
+                .is_some_and(|a| Path::new(a).starts_with(&packages))
+            {
+                sandbox.reveal(&packages)?;
+            }
             own_home = self.make_own_home(&home)?;
             self.apply(&mut sandbox, &home)?;
             if let Some(dir) = &own_home {
@@ -1435,7 +1444,7 @@ impl Profile {
                     self.state.iter().map(|s| home.join(s)).collect();
                 let ignored: Vec<String> =
                     self.state.iter().chain(&self.outside).cloned().collect();
-                task.prepare_home(&home, &state, sandbox.hidden(), &ignored)?;
+                task.prepare_home(&home, &state, sandbox.hidden(), sandbox.shown(), &ignored)?;
                 sandbox.use_home(task, &home)?;
             }
         }
@@ -2532,6 +2541,82 @@ hosts = ["openrouter.ai"]
                 .iter()
                 .any(|w| w.contains("no longer needed"))
         );
+    }
+
+    /// An agent Kule installed starts from its package, which lies where
+    /// the person's apps keep their data: read there, never written, while
+    /// the rest of that place stays hidden.
+    #[test]
+    fn an_agent_starts_from_the_package_kule_installed() {
+        if !std::process::Command::new("node")
+            .arg("--version")
+            .output()
+            .is_ok_and(|o| o.status.success())
+        {
+            eprintln!("skipped: no node");
+            return;
+        }
+        let (tasks, ws, person) = (
+            TempDir::new().unwrap(),
+            TempDir::new().unwrap(),
+            TempDir::new().unwrap(),
+        );
+        let task = Task::create(tasks.path(), ws.path()).unwrap();
+        let person = std::fs::canonicalize(person.path()).unwrap();
+        let packages = person.join(packages::PACKAGES);
+        let dir = packages.join("npm/@kule+fake-agent@1.0.0");
+        let package = dir.join("node_modules/@kule/fake-agent");
+        std::fs::create_dir_all(&package).unwrap();
+        std::fs::write(dir.join(".kule-complete"), "@kule/fake-agent@1.0.0").unwrap();
+        std::fs::write(package.join("package.json"), r#"{"bin": "run.js"}"#).unwrap();
+        std::fs::write(
+            package.join("run.js"),
+            "require('fs').writeFileSync(process.env.TOOL_HOME + '/ran', 'ran')\n",
+        )
+        .unwrap();
+        let beside = person
+            .join(packages::PACKAGES)
+            .parent()
+            .unwrap()
+            .join("beside");
+        std::fs::write(&beside, "canary\n").unwrap();
+        let agents_file = r#"
+[[agent]]
+name = "tool"
+command = ["npx", "-y", "@kule/fake-agent@1.0.0"]
+own_home = "TOOL_HOME"
+"#;
+        let kule = kule_home(agents_file);
+        Agents::approve(kule.path(), "tool").unwrap();
+        let agents = Agents::load(kule.path()).unwrap();
+        let tool = agents.get("tool").unwrap();
+        let own = person.join(tool.own_home_path());
+        let sources = Some(CacheSources {
+            home: person.clone(),
+            cargo_home: person.join(".cargo"),
+        });
+        let proxy = Proxy::start(&task, Policy::builtin()).unwrap();
+        let mut launch = tool.launch_for(&task, &proxy, sources).unwrap();
+        let status = launch.command.status().unwrap();
+        drop(launch);
+        assert!(status.success(), "{status:?}");
+        assert_eq!(std::fs::read_to_string(own.join("ran")).unwrap(), "ran");
+
+        // The rest of the place it lies in stays hidden.
+        let sandbox = Sandbox::for_task_with(
+            &task,
+            Some(CacheSources {
+                home: person.clone(),
+                cargo_home: person.join(".cargo"),
+            }),
+        )
+        .unwrap();
+        let out = sandbox
+            .command("cat", &[beside.to_string_lossy().into_owned()])
+            .unwrap()
+            .output()
+            .unwrap();
+        assert!(!out.status.success(), "{out:?}");
     }
 
     /// The person's settings and instructions reach an agent's home of its

@@ -32,7 +32,7 @@ impl Setup {
             fs::write(path, text).unwrap();
         };
         write(".zshrc", "export A=1\n");
-        write(".config/tool/settings.toml", "x = 1\n");
+        write(".config/git/settings.toml", "x = 1\n");
         write(".config/gh/hosts.yml", "token: secret\n");
         write(".ssh/id_ed25519", "private\n");
         write("Documents/notes.txt", "notes\n");
@@ -71,6 +71,7 @@ impl Setup {
                 p,
                 &state.iter().map(|s| p.join(s)).collect::<Vec<_>>(),
                 sandbox.hidden(),
+                sandbox.shown(),
                 &state.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>(),
             )
             .unwrap();
@@ -106,14 +107,14 @@ fn change(path: &str, change: Change, kind: Kind) -> HomeChange {
 
 const SCRIPT: &str = r#"
 echo 'export B=2' >> "$HOME/.zshrc"
-echo 'y = 2' >> "$HOME/.config/tool/settings.toml"
+echo 'y = 2' >> "$HOME/.config/git/settings.toml"
 mkdir -p "$HOME/.config/new" && echo n > "$HOME/.config/new/n.toml"
 echo hi > "$HOME/.newrc"
 echo state > "$HOME/.claude.json.tmp.1"
 (echo leak >> "$HOME/Documents/notes.txt") 2>/dev/null || echo refused-documents
 cat "$HOME/.config/gh/hosts.yml" 2>/dev/null || echo no-gh
 ls "$HOME/.ssh" 2>/dev/null || echo no-ssh
-cat "$HOME/.config/tool/settings.toml"
+cat "$HOME/.config/git/settings.toml"
 "#;
 
 #[test]
@@ -124,15 +125,15 @@ fn writes_in_the_home_are_caught_and_the_real_one_untouched() {
         assert!(out.contains(expected), "{expected} in {out}");
     }
     assert_eq!(s.real(".zshrc"), "export A=1\n");
-    assert_eq!(s.real(".config/tool/settings.toml"), "x = 1\n");
+    assert_eq!(s.real(".config/git/settings.toml"), "x = 1\n");
     assert_eq!(s.real("Documents/notes.txt"), "notes\n");
     assert!(!s.person.path().join(".newrc").exists());
     assert_eq!(
         s.task.home_changes().unwrap(),
         [
+            change(".config/git/settings.toml", Change::Modified, Kind::File),
             change(".config/new", Change::Created, Kind::Dir),
             change(".config/new/n.toml", Change::Created, Kind::File),
-            change(".config/tool/settings.toml", Change::Modified, Kind::File),
             change(".newrc", Change::Created, Kind::File),
             change(".zshrc", Change::Modified, Kind::File),
         ]
@@ -158,20 +159,13 @@ fn applied_changes_reach_the_real_home_and_what_they_replaced_is_kept() {
     assert_eq!(s.task.home_changes().unwrap().len(), 3);
 
     // A file the person changed meanwhile is not overwritten.
-    fs::write(
-        s.person.path().join(".config/tool/settings.toml"),
-        "x = 9\n",
-    )
-    .unwrap();
+    fs::write(s.person.path().join(".config/git/settings.toml"), "x = 9\n").unwrap();
     let e = s
         .task
-        .apply_home(&[".config/tool/settings.toml".into()])
+        .apply_home(&[".config/git/settings.toml".into()])
         .unwrap_err();
-    assert!(
-        e.to_string().contains("~/.config/tool/settings.toml"),
-        "{e}"
-    );
-    assert_eq!(s.real(".config/tool/settings.toml"), "x = 9\n");
+    assert!(e.to_string().contains("~/.config/git/settings.toml"), "{e}");
+    assert_eq!(s.real(".config/git/settings.toml"), "x = 9\n");
 }
 
 // Filesystems keep time in ticks (milliseconds on Linux ext4, two seconds on
@@ -210,7 +204,7 @@ fn a_same_size_save_while_the_layer_is_made_is_not_overwritten() {
         // Right after the first save, so the clone reads its stamp within
         // the same tick where the clock is coarse.
         s.task
-            .prepare_home(p, &[p.join(".claude")], &[], &[".claude".to_owned()])
+            .prepare_home(p, &[p.join(".claude")], &[], &[], &[".claude".to_owned()])
             .unwrap();
         writer.join().unwrap();
         let layer = s.task.home_layer();
@@ -280,26 +274,27 @@ fn the_agents_own_state_is_its_own() {
     assert!(s.task.home_changes().unwrap().is_empty());
     assert!(!layer.join(".ssh").exists());
     assert!(!layer.join(".config/gh").exists());
-    // The person's own files are hidden, and not in the layer either.
+    // The person's own files are hidden, and not in the layer either: what
+    // lies at the top of the home but its settings too.
     assert!(!layer.join("Documents").exists());
-    assert!(Path::new(&layer.join("work")).is_symlink());
+    assert!(fs::symlink_metadata(layer.join("work")).is_err());
 }
 
 #[test]
 fn a_directory_the_person_cannot_read_is_linked_and_the_rest_caught() {
     use std::os::unix::fs::PermissionsExt;
     let s = Setup::new();
-    let locked = s.person.path().join(".config/locked");
+    let locked = s.person.path().join(".config/fish");
     fs::create_dir(&locked).unwrap();
     fs::write(locked.join("x"), "x\n").unwrap();
     fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
-    let out = s.run("echo 'y = 2' >> \"$HOME/.config/tool/settings.toml\" && echo done");
+    let out = s.run("echo 'y = 2' >> \"$HOME/.config/git/settings.toml\" && echo done");
     fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
     assert!(out.contains("done"), "{out}");
     assert_eq!(
         s.task.home_changes().unwrap(),
         [change(
-            ".config/tool/settings.toml",
+            ".config/git/settings.toml",
             Change::Modified,
             Kind::File
         )]
@@ -309,7 +304,7 @@ fn a_directory_the_person_cannot_read_is_linked_and_the_rest_caught() {
 #[test]
 fn what_shells_rewrite_on_their_own_is_not_offered() {
     let s = Setup::new();
-    s.run(r#"echo dump > "$HOME/.zcompdump-host-5.9"; echo ls >> "$HOME/.zsh_history"; mkdir -p "$HOME/.config/tool" && touch "$HOME/.config/tool/.DS_Store""#);
+    s.run(r#"echo dump > "$HOME/.zcompdump-host-5.9"; echo ls >> "$HOME/.zsh_history"; mkdir -p "$HOME/.config/git" && touch "$HOME/.config/git/.DS_Store""#);
     assert!(s.task.home_changes().unwrap().is_empty());
 }
 
@@ -420,17 +415,19 @@ fn an_undo_never_takes_what_the_person_changed_since() {
 fn a_replaced_link_comes_back_a_link() {
     let s = Setup::new();
     let p = s.person.path();
-    fs::write(p.join(".config/tool/real.toml"), "r\n").unwrap();
-    fs::remove_file(p.join(".config/tool/settings.toml")).unwrap();
-    std::os::unix::fs::symlink("real.toml", p.join(".config/tool/settings.toml")).unwrap();
-    s.run("rm \"$HOME/.config/tool/settings.toml\" && echo own > \"$HOME/.config/tool/settings.toml\"");
+    fs::write(p.join(".config/git/real.toml"), "r\n").unwrap();
+    fs::remove_file(p.join(".config/git/settings.toml")).unwrap();
+    std::os::unix::fs::symlink("real.toml", p.join(".config/git/settings.toml")).unwrap();
+    s.run(
+        "rm \"$HOME/.config/git/settings.toml\" && echo own > \"$HOME/.config/git/settings.toml\"",
+    );
     s.task
-        .apply_home(&[".config/tool/settings.toml".into()])
+        .apply_home(&[".config/git/settings.toml".into()])
         .unwrap();
-    assert!(!p.join(".config/tool/settings.toml").is_symlink());
+    assert!(!p.join(".config/git/settings.toml").is_symlink());
     s.task.undo_home().unwrap();
     assert_eq!(
-        fs::read_link(p.join(".config/tool/settings.toml")).unwrap(),
+        fs::read_link(p.join(".config/git/settings.toml")).unwrap(),
         Path::new("real.toml")
     );
 }
@@ -444,14 +441,14 @@ fn state_deep_in_the_home_is_a_copy_and_the_rest_beside_it_the_persons() {
     let p = s.person.path();
     fs::create_dir_all(p.join(".local/state/tool")).unwrap();
     fs::write(p.join(".local/state/tool/log"), "old\n").unwrap();
-    fs::create_dir_all(p.join(".local/share/other")).unwrap();
-    fs::write(p.join(".local/share/other/data"), "data\n").unwrap();
+    fs::create_dir_all(p.join(".local/share/uv")).unwrap();
+    fs::write(p.join(".local/share/uv/data"), "data\n").unwrap();
     let out = s.run_as(
         &[".local/state/tool", "Library/Caches/tool", ".claude"],
         r#"cat "$HOME/.local/state/tool/log"
 echo new >> "$HOME/.local/state/tool/log" && echo state-written
-cat "$HOME/.local/share/other/data"
-(echo leak >> "$HOME/.local/share/other/data") 2>/dev/null || echo refused-beside
+cat "$HOME/.local/share/uv/data"
+(echo leak >> "$HOME/.local/share/uv/data") 2>/dev/null || echo refused-beside
 mkdir -p "$HOME/Library/Caches/tool" && echo c > "$HOME/Library/Caches/tool/c" && echo cache-written"#,
     );
     assert_eq!(
@@ -459,7 +456,7 @@ mkdir -p "$HOME/Library/Caches/tool" && echo c > "$HOME/Library/Caches/tool/c" &
         "old\nstate-written\ndata\nrefused-beside\ncache-written\n"
     );
     assert_eq!(s.real(".local/state/tool/log"), "old\n");
-    assert_eq!(s.real(".local/share/other/data"), "data\n");
+    assert_eq!(s.real(".local/share/uv/data"), "data\n");
     assert!(!p.join("Library").exists());
     assert!(s.task.home_changes().unwrap().is_empty());
 }
@@ -494,7 +491,7 @@ fn a_layer_with_changes_waiting_is_never_given_to_another_agent() {
     let p = s.person.path();
     let other = s
         .task
-        .prepare_home(p, &[p.join(".codex")], &[], &[".codex".to_owned()]);
+        .prepare_home(p, &[p.join(".codex")], &[], &[], &[".codex".to_owned()]);
     assert!(other.unwrap_err().to_string().contains("apply or discard"));
 }
 
@@ -552,23 +549,23 @@ fn a_link_in_the_layer_shows_where_it_leads() {
 #[test]
 fn nothing_is_applied_through_a_link_in_the_real_home() {
     let s = Setup::new();
-    s.run("echo y = 2 > \"$HOME/.config/tool/new.toml\"");
+    s.run("echo y = 2 > \"$HOME/.config/git/new.toml\"");
     assert!(
         s.task
             .home_changes()
             .unwrap()
             .iter()
-            .any(|c| c.path == ".config/tool/new.toml")
+            .any(|c| c.path == ".config/git/new.toml")
     );
     // The folder becomes a link to somewhere else meanwhile.
     let elsewhere = TempDir::new().unwrap();
-    let tool = s.person.path().join(".config/tool");
-    fs::rename(&tool, s.person.path().join(".config/tool.old")).unwrap();
+    let tool = s.person.path().join(".config/git");
+    fs::rename(&tool, s.person.path().join(".config/git.old")).unwrap();
     std::os::unix::fs::symlink(elsewhere.path(), &tool).unwrap();
 
     let refused = s
         .task
-        .apply_home(&[".config/tool/new.toml".to_owned()])
+        .apply_home(&[".config/git/new.toml".to_owned()])
         .unwrap_err();
     assert!(refused.to_string().contains("is a link"), "{refused}");
     assert!(!elsewhere.path().join("new.toml").exists());

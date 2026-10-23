@@ -42,17 +42,44 @@ A command cannot read:
 - **credentials**: `~/.ssh`, `~/.aws`, `~/.npmrc`, cargo's registry token
   and the like;
 - **your own files**: Documents, Desktop, Downloads, Pictures, Movies,
-  Music, iCloud Drive and cloud storage folders;
+  Music, iCloud Drive and cloud storage folders, and everything else at the
+  top of your home but its settings (a name starting with `.`, and
+  `~/Library`): your other projects, whether Kule opened them or not, and
+  your files there. A link at the top of your home is left as it is;
 - **the projects beside the workspace**: the folder your workspace lies in,
   when that folder is in your home (not the home itself, a dot folder or
   `~/Library`);
+- **every other project Kule opened**, wherever it lies, in your home or
+  outside it, with the projects beside it as for the workspace's own;
+- **where apps and tools keep settings and data**: `~/.config`,
+  `~/.local/share`, `~/Library/Application Support` and
+  `~/Library/Preferences`, an app's sign-in and a new tool's settings
+  included. What toolchains, shells and prompts read there stays readable:
+  the settings of git, jj, uv, pip, Poetry (not its `auth.toml`), Ruff,
+  mise, Go, Flutter, Matplotlib, fish, zsh, Nushell, Starship and direnv,
+  and what uv, mise, pnpm, fnm and pipx keep in `~/.local/share`, with man
+  pages and fonts;
+- **sign-ins of other tools**: GitHub Copilot, Firebase and the tools that
+  keep their settings with it, Wrangler, Fly, Doppler, SOPS, Podman's
+  `auth.json`, Yarn's and Bun's settings in your home, NuGet's own
+  `NuGet.Config`;
+- **editors' stores** of signed-in sessions and extension secrets (VS Code,
+  its Insiders build, Cursor, Windsurf, VSCodium), and **saved shell
+  sessions** (`~/.zsh_sessions`, `~/.bash_sessions`) beside the histories;
 - **Kule's home** (`~/.kule`): other tasks, settings, secrets, the signing
   key;
 - **other agents' logins and transcripts**.
 
 Inside those hidden folders, a few things stay readable because tools need
-them: the workspace's git directory (a worktree's repository next to it)
-and the folders your `PATH` and SDK variables name.
+them: the workspace's git directory (a worktree's repository next to it),
+the folders your `PATH` and SDK variables name, and the folder a program on
+your `PATH` leads to when it is a link (Claude Code's native install, uv's
+tools). On macOS a program that reads preferences through the system keeps
+to the same: a hidden app's preferences stay out of reach that way too.
+
+To let one command read something hidden, run it with `--reveal PATH`
+(see [`kule exec`](../cli/exec.md)): what Kule hides inside it stays
+hidden.
 
 ## What a command gets from its environment
 

@@ -1,5 +1,37 @@
 # Changes
 
+## 0.2.0-preview.7
+
+A security preview. A task's commands read neither the other projects on
+your computer that Kule opened or that lie at the top of your home, nor
+where apps and tools keep their settings, sign-ins and data, but for what
+toolchains, shells and prompts need there.
+
+### Security
+
+- A task's commands no longer read the other projects Kule opened,
+  wherever they lie, in your home or outside it, nor the projects beside
+  them; nor anything at the top of your home but its settings (dot folders
+  and `~/Library`), so your projects there, opened in Kule or not, and your
+  files there are hidden as your own. The tools your `PATH` names stay
+  readable, and *builds from* opens one of those projects read-only.
+- Where apps and tools keep settings and data (`~/.config`,
+  `~/.local/share`, `~/Library/Application Support`,
+  `~/Library/Preferences`) is hidden from a task's commands, but for what
+  toolchains, shells and prompts read there (git, uv, pip, Poetry, Ruff,
+  mise, Go, fish, Starship and the like) and the folders of the tools on
+  your `PATH`, links into them included. An app's sign-in, and what a new
+  app keeps there, stay hidden; on macOS also through the system's
+  preferences service. The task's home layer holds only what is shown.
+- Also hidden: other tools' sign-ins (GitHub Copilot, Firebase, Wrangler,
+  Fly, Doppler, SOPS, Podman's `auth.json`, Poetry's `auth.toml`, Yarn's and
+  Bun's settings in your home, NuGet's own `NuGet.Config`), the stores of
+  editors built on VS Code (Insiders, Cursor, Windsurf, VSCodium), and saved
+  shell sessions.
+- A task whose home layer holds changes waiting for review asks you to
+  apply or discard them before the next run, once, as the layer is made
+  anew for what is hidden now.
+
 ## 0.2.0-preview.6
 
 A security preview. An agent's output and the files it writes keep to

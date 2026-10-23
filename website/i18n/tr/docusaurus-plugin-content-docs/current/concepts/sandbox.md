@@ -35,24 +35,54 @@ Geri kalan her şey salt okunur ya da gizlidir.
 --global`) reddedilmez: görevin [ev katmanına](home-layer.md) düşer ve
 incelemenizi bekler.
 
-## Neler gizlenir
+## Neler gizlenir {#what-is-hidden}
 
 Bir komut şunları okuyamaz:
 
 - **kimlik bilgileri**: `~/.ssh`, `~/.aws`, `~/.npmrc`, cargo'nun depo
   token'ı ve benzerleri;
 - **kendi dosyalarınız**: Documents, Desktop, Downloads, Pictures, Movies,
-  Music, iCloud Drive ve bulut depolama klasörleri;
+  Music, iCloud Drive ve bulut depolama klasörleri ile ev dizininizin en
+  üstündeki, ayarları dışında kalan her şey (`.` ile başlayan adlar ve
+  `~/Library` dışındakiler): Kule'nin açtığı ya da açmadığı diğer
+  projeleriniz ve oradaki dosyalarınız. Ev dizininizin en üstündeki bir
+  bağlantı olduğu gibi bırakılır;
 - **çalışma klasörünün yanındaki projeler**: çalışma klasörünüzün içinde
   bulunduğu klasör, o klasör ev dizininizdeyse (ev dizininin kendisi, bir
   nokta klasörü ya da `~/Library` değilse);
+- **Kule'nin açtığı diğer her proje**, nerede olursa olsun, ev dizininizde
+  ya da dışında; çalışma klasörünün kendisinde olduğu gibi yanındaki
+  projelerle birlikte;
+- **uygulamaların ve araçların ayarlarını ve verilerini tuttuğu yerler**:
+  `~/.config`, `~/.local/share`, `~/Library/Application Support` ve
+  `~/Library/Preferences`; bir uygulamanın oturumu ve yeni bir aracın
+  ayarları da. Araç zincirlerinin, kabukların ve istemlerin orada okuduğu
+  okunabilir kalır: git, jj, uv, pip, Poetry (`auth.toml` hariç), Ruff,
+  mise, Go, Flutter, Matplotlib, fish, zsh, Nushell, Starship ve direnv
+  ayarları; uv, mise, pnpm, fnm ve pipx'in `~/.local/share` içinde
+  tuttukları, man sayfaları ve fontlarla birlikte;
+- **diğer araçların oturumları**: GitHub Copilot, Firebase ve ayarlarını
+  onunla birlikte tutan araçlar, Wrangler, Fly, Doppler, SOPS, Podman'ın
+  `auth.json` dosyası, Yarn'ın ve Bun'ın ev dizininizdeki ayarları,
+  NuGet'in kendi `NuGet.Config` dosyası;
+- **editörlerin** oturum ve eklenti gizli değerleri depoları (VS Code,
+  Insiders sürümü, Cursor, Windsurf, VSCodium) ve geçmişlerin yanında
+  **kaydedilmiş kabuk oturumları** (`~/.zsh_sessions`, `~/.bash_sessions`);
 - **Kule'nin ev klasörü** (`~/.kule`): diğer görevler, ayarlar, gizli
   değerler, imzalama anahtarı;
 - **diğer ajanların oturumları ve konuşma kayıtları**.
 
 Bu gizli klasörlerin içinde, araçlar ihtiyaç duyduğu için birkaç şey
 okunabilir kalır: çalışma klasörünün git dizini (bir worktree'nin yanındaki
-deposu) ve `PATH` ile SDK değişkenlerinizin gösterdiği klasörler.
+deposu), `PATH` ile SDK değişkenlerinizin gösterdiği klasörler ve
+`PATH`'inizdeki bir program bir bağlantıysa gösterdiği klasör (Claude
+Code'un yerel kurulumu, uv'nin araçları). macOS'ta tercihleri sistem
+üzerinden okuyan bir program da aynı sınıra uyar: gizli bir uygulamanın
+tercihlerine o yoldan da ulaşılmaz.
+
+Gizli bir şeyi tek bir komutun okumasına izin vermek için komutu
+`--reveal YOL` ile çalıştırın (bkz. [`kule exec`](../cli/exec.md)): Kule'nin
+onun içinde gizlediği gizli kalır.
 
 ## Bir komut ortamından ne alır
 

@@ -75,14 +75,30 @@ fn passes(name: &str) -> bool {
 }
 
 /// The folders [`Sandbox::hide_personal`] hides for `workspace` (resolved)
-/// in `home`: [`PERSONAL_IN_HOME`], and the folder the workspace lies in
-/// where that is one of the person's own.
+/// in `home`: [`PERSONAL_IN_HOME`], everything else at the top of the home
+/// but its settings (a name starting with `.`, or `Library`), where the
+/// person keeps projects and files of their own, and the folder the
+/// workspace lies in where that is one of the person's own. A link at the
+/// top is left as it is: what it leads to may be a toolchain's.
 pub(crate) fn personal_folders(workspace: &Path, home: &Path) -> Result<Vec<PathBuf>> {
     let home = real_or_planned(home)?;
     let mut folders: Vec<PathBuf> = PERSONAL_IN_HOME
         .iter()
         .map(|name| real_or_planned(&home.join(name)))
         .collect::<Result<_>>()?;
+    if let Ok(entries) = std::fs::read_dir(&home) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if !name.starts_with('.')
+                && name != "Library"
+                && entry.file_type().is_ok_and(|t| !t.is_symlink())
+                && !folders.contains(&entry.path())
+            {
+                folders.push(entry.path());
+            }
+        }
+    }
     if let Some(parent) = workspace.parent()
         && let Ok(within) = parent.strip_prefix(&home)
         && let Some(first) = within.components().next()
@@ -112,6 +128,39 @@ fn tools_from_env() -> Vec<PathBuf> {
     );
     tools.retain(|t| t.is_absolute());
     tools
+}
+
+/// `tools` resolved, and not the home directory or above it: that would
+/// leave everything.
+fn tool_dirs(tools: &[PathBuf], home: &Path) -> Vec<PathBuf> {
+    tools
+        .iter()
+        .filter(|t| t.is_absolute())
+        .filter_map(|t| std::fs::canonicalize(t).ok())
+        .filter(|t| !home.starts_with(t))
+        .collect()
+}
+
+/// Where the programs in the tool folders under `home` lead, when they
+/// are links: the folder each one is in. Those outside the home (the
+/// system's, Homebrew's) lead nowhere the sandbox hides.
+fn linked_tools(tools: &[PathBuf], home: &Path) -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    for dir in tools.iter().filter(|t| t.starts_with(home)) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            if entry.file_type().is_ok_and(|t| t.is_symlink())
+                && let Ok(target) = std::fs::canonicalize(entry.path())
+                && let Some(parent) = target.parent()
+                && !home.starts_with(parent)
+            {
+                found.push(parent.to_owned());
+            }
+        }
+    }
+    found
 }
 
 /// The git directories of a workspace that is a linked worktree or keeps
@@ -169,8 +218,25 @@ pub const HIDDEN_IN_HOME: &[&str] = &[
     ".databrickscfg",
     ".cache/huggingface/token",
     ".huggingface/token",
+    ".config/github-copilot",
+    ".config/configstore",
+    ".config/containers/auth.json",
+    ".config/fly",
+    ".fly",
+    ".config/doppler",
+    ".config/sops",
+    ".config/.wrangler",
+    "Library/Preferences/.wrangler",
+    ".wrangler",
+    ".config/pypoetry/auth.toml",
+    "Library/Application Support/pypoetry/auth.toml",
+    ".yarnrc.yml",
+    ".bunfig.toml",
+    ".nuget/NuGet/NuGet.Config",
     // What the person typed, in shells and other tools.
     ".zsh_history",
+    ".zsh_sessions",
+    ".bash_sessions",
     ".bash_history",
     ".python_history",
     ".node_repl_history",
@@ -199,6 +265,14 @@ pub const HIDDEN_IN_HOME: &[&str] = &[
     // Editors' stores of signed-in sessions and extension secrets.
     "Library/Application Support/Code/User/globalStorage",
     ".config/Code/User/globalStorage",
+    "Library/Application Support/Code - Insiders/User/globalStorage",
+    ".config/Code - Insiders/User/globalStorage",
+    "Library/Application Support/Cursor/User/globalStorage",
+    ".config/Cursor/User/globalStorage",
+    "Library/Application Support/Windsurf/User/globalStorage",
+    ".config/Windsurf/User/globalStorage",
+    "Library/Application Support/VSCodium/User/globalStorage",
+    ".config/VSCodium/User/globalStorage",
     // Agents' logins; an agent's profile shows it its own.
     ".claude/.credentials.json",
     ".codex/auth.json",
@@ -206,10 +280,63 @@ pub const HIDDEN_IN_HOME: &[&str] = &[
     ".gemini/oauth_creds.json",
 ];
 
+/// Where tools and apps keep their settings and data under the home
+/// directory, hidden from every command but for what [`SETTINGS_READ`]
+/// names and the tools on `PATH` (see [`Sandbox::hide_settings`]): an app's
+/// sign-in, tokens and history lie there beside a toolchain's settings, and
+/// what a new app keeps there stays hidden until it is named.
+pub const SETTINGS_IN_HOME: &[&str] = &[
+    ".config",
+    ".local/share",
+    "Library/Application Support",
+    "Library/Preferences",
+];
+
+/// What toolchains, shells and prompts read in [`SETTINGS_IN_HOME`]:
+/// readable there, never writable; what is hidden inside stays hidden. A
+/// name ending in `*` stands for every entry beginning so. On macOS many
+/// tools keep their settings in `Library/Application Support` instead.
+pub const SETTINGS_READ: &[&str] = &[
+    ".config/git",
+    ".config/jj",
+    ".config/uv",
+    ".config/pip",
+    ".config/pypoetry",
+    ".config/ruff",
+    ".config/mise",
+    ".config/go",
+    ".config/flutter",
+    ".config/matplotlib",
+    ".config/fish",
+    ".config/zsh",
+    ".config/nushell",
+    ".config/starship.toml",
+    ".config/direnv",
+    ".local/share/uv",
+    ".local/share/mise",
+    ".local/share/pnpm",
+    ".local/share/fnm",
+    ".local/share/pipx",
+    ".local/share/man",
+    ".local/share/fonts",
+    ".local/share/direnv",
+    ".local/share/fish",
+    "Library/Application Support/go",
+    "Library/Application Support/pip",
+    "Library/Application Support/pypoetry",
+    "Library/Application Support/ruff",
+    "Library/Application Support/jj",
+    "Library/Application Support/fnm",
+    "Library/Preferences/.GlobalPreferences.plist",
+    "Library/Preferences/.GlobalPreferences_m.plist",
+    "Library/Preferences/ByHost/.GlobalPreferences.*",
+];
+
 /// The person's own files under the home directory, and those kept in step
 /// with other computers, hidden from every command: a task works on its
 /// copy. A folder of tools inside one stays readable (see
-/// [`Sandbox::hide_personal`]).
+/// [`Sandbox::hide_personal`]). Whatever else lies at the top of the home
+/// but its settings is hidden the same way (see `personal_folders`).
 pub const PERSONAL_IN_HOME: &[&str] = &[
     "Desktop",
     "Documents",
@@ -349,6 +476,10 @@ pub struct Sandbox {
     see_through: Vec<PathBuf>,
     /// The folders hidden as the person's own, among `hidden`.
     personal: Vec<PathBuf>,
+    /// Where apps and tools keep settings and data, among `hidden` (see
+    /// [`Sandbox::hide_settings`]): a writable root inside one, such as an
+    /// agent's home of its own in Kule's folder there, stays writable.
+    stores: Vec<PathBuf>,
     /// The links next to the copy to the projects opened beside it, which
     /// commands may look at (macOS; what they lead to is in `see_through`).
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
@@ -508,6 +639,7 @@ impl Sandbox {
             ],
             see_through: Vec::new(),
             personal: Vec::new(),
+            stores: Vec::new(),
             beside_links: Vec::new(),
             workspace: real_or_planned(task.workspace())?,
             protected: Vec::new(),
@@ -582,7 +714,16 @@ impl Sandbox {
             if !own_home.starts_with(&default_home) && !default_home.starts_with(&own_home) {
                 sandbox.hide(&default_home)?;
             }
-            sandbox.hide_personal(&sources.home, &tools_from_env())?;
+            let tools = tools_from_env();
+            sandbox.hide_personal(&sources.home, &tools)?;
+            sandbox.hide_settings(&sources.home, &tools)?;
+            // Every other project Kule opened, wherever it lies, with the
+            // projects beside it as for the task's own.
+            let workspaces: Vec<PathBuf> = Task::list(&task.home())?
+                .into_iter()
+                .map(|info| info.workspace)
+                .collect();
+            sandbox.hide_projects(&workspaces, &sources.home, &tools)?;
             // The projects beside the workspace the person opened for its
             // tasks; checked again here, so one that changed stays closed.
             // A list that cannot be read stops the command.
@@ -773,9 +914,9 @@ impl Sandbox {
         Ok(())
     }
 
-    /// Hides the person's own files under `home` ([`PERSONAL_IN_HOME`]) and
-    /// the folder the workspace lies in, with the other projects beside
-    /// it. That folder stays readable where it is `home` itself, outside
+    /// Hides the person's own files under `home` ([`PERSONAL_IN_HOME`], and
+    /// whatever else lies at its top but its settings) and the folder the
+    /// workspace lies in, with the other projects beside it. That folder stays readable where it is `home` itself, outside
     /// `home`, or among the settings in it (a name starting with `.`, or
     /// `Library`), where toolchains live. Inside a hidden folder, the
     /// workspace's git directory (a linked worktree's repository beside
@@ -785,20 +926,106 @@ impl Sandbox {
     pub fn hide_personal(&mut self, home: &Path, tools: &[PathBuf]) -> Result<()> {
         let home = real_or_planned(home)?;
         let folders = personal_folders(&self.workspace, &home)?;
-        // Not the home directory or above it: that would leave everything.
-        let tools: Vec<PathBuf> = tools
+        let tools = tool_dirs(tools, &home);
+        self.hide_folders(folders, &tools);
+        Ok(())
+    }
+
+    /// Hides each of `workspaces` (projects Kule opened for other tasks)
+    /// as the person's own, wherever it lies, and in `home` the folder it
+    /// lies in where [`Sandbox::hide_personal`] would hide the task's own:
+    /// the projects beside it. One that holds the home, Kule's home or the
+    /// task's copy is left, since hiding it would take those away.
+    pub fn hide_projects(
+        &mut self,
+        workspaces: &[PathBuf],
+        home: &Path,
+        tools: &[PathBuf],
+    ) -> Result<()> {
+        let home = real_or_planned(home)?;
+        let tools = tool_dirs(tools, &home);
+        let kept = [
+            home.clone(),
+            real_or_planned(&self.copy)?,
+            real_or_planned(&self.tmp)?,
+        ];
+        let mut folders = Vec::new();
+        for workspace in workspaces {
+            let Ok(workspace) = std::fs::canonicalize(workspace) else {
+                continue;
+            };
+            if workspace == self.workspace || kept.iter().any(|k| k.starts_with(&workspace)) {
+                continue;
+            }
+            folders.extend(personal_folders(&workspace, &home)?);
+            folders.push(workspace);
+        }
+        folders.sort();
+        folders.dedup();
+        folders.retain(|f| !self.personal.contains(f));
+        self.hide_folders(folders, &tools);
+        Ok(())
+    }
+
+    /// Hides [`SETTINGS_IN_HOME`] in `home`, where tools and apps keep their
+    /// settings and data, but for what toolchains read there
+    /// ([`SETTINGS_READ`]) and the folders of the tools on `tools` (`PATH`
+    /// and an SDK's variables): a tool's folder whole, also where a program
+    /// on `PATH` is a link into one, as a native install or uv's tools are.
+    /// Each stays readable as the person's own folders do, never writable.
+    pub fn hide_settings(&mut self, home: &Path, tools: &[PathBuf]) -> Result<()> {
+        let home = real_or_planned(home)?;
+        let mut tools = tool_dirs(tools, &home);
+        tools.extend(linked_tools(&tools, &home));
+        let stores: Vec<PathBuf> = SETTINGS_IN_HOME
             .iter()
-            .filter(|t| t.is_absolute())
-            .filter_map(|t| std::fs::canonicalize(t).ok())
-            .filter(|t| !home.starts_with(t))
-            .collect();
+            .map(|store| real_or_planned(&home.join(store)))
+            .collect::<Result<_>>()?;
+        let mut read = Vec::new();
+        for name in SETTINGS_READ {
+            let path = home.join(name);
+            match name.strip_suffix('*') {
+                None => read.push(path),
+                Some(prefix) => {
+                    let prefix = home.join(prefix);
+                    let (Some(dir), Some(start)) = (prefix.parent(), prefix.file_name()) else {
+                        continue;
+                    };
+                    let start = start.to_string_lossy();
+                    if let Ok(entries) = std::fs::read_dir(dir) {
+                        read.extend(
+                            entries
+                                .flatten()
+                                .filter(|e| e.file_name().to_string_lossy().starts_with(&*start))
+                                .map(|e| e.path()),
+                        );
+                    }
+                }
+            }
+        }
+        for path in read {
+            if std::fs::symlink_metadata(&path).is_ok()
+                && let Ok(path) = real_or_planned(&path)
+                && stores.iter().any(|store| path.starts_with(store))
+            {
+                self.see_through.push(path);
+            }
+        }
+        self.stores.extend(stores.iter().cloned());
+        self.hide_folders(stores, &tools);
+        Ok(())
+    }
+
+    /// Hides `folders` as the person's own: but for the folders of `tools`
+    /// inside one, and the workspace's git directory, each readable.
+    fn hide_folders(&mut self, folders: Vec<PathBuf>, tools: &[PathBuf]) {
         let git = git_dirs(&self.workspace);
         for folder in folders {
             // A folder a tool is in, or on the way to one, is left alone.
             if tools.iter().any(|t| folder.starts_with(t)) {
                 continue;
             }
-            for tool in &tools {
+            for tool in tools {
                 if let Ok(within) = tool.strip_prefix(&folder)
                     && let Some(first) = within.components().next()
                 {
@@ -813,7 +1040,6 @@ impl Sandbox {
         }
         self.see_through.sort();
         self.see_through.dedup();
-        Ok(())
     }
 
     /// Takes `path` off the hidden list, for a command that needs it (an
@@ -926,6 +1152,13 @@ impl Sandbox {
 
     pub fn hidden(&self) -> &[PathBuf] {
         &self.hidden
+    }
+
+    /// What commands may read inside hidden paths (see
+    /// [`Sandbox::hide_personal`]): the home layer holds these of the
+    /// person's settings it would otherwise leave out.
+    pub fn shown(&self) -> &[PathBuf] {
+        &self.see_through
     }
 
     /// Ends what still runs in this sandbox: a process that left its
@@ -1772,6 +2005,26 @@ impl Sandbox {
                 ));
             }
         }
+        // A writable root where apps keep their data (an agent's home of
+        // its own) comes back, but for what is hidden inside it.
+        let opened: Vec<&PathBuf> = self
+            .writable
+            .iter()
+            .filter(|w| self.stores.iter().any(|s| w.starts_with(s)))
+            .collect();
+        for (i, path) in opened.iter().enumerate() {
+            text.push_str(&format!(
+                "(allow file-read* file-write* (subpath (param \"O{i}\")))\n"
+            ));
+            params.push((format!("O{i}"), path.as_path()));
+        }
+        for (i, path) in self.hidden.iter().enumerate() {
+            if opened.iter().any(|o| path.starts_with(o) && path != *o) {
+                text.push_str(&format!(
+                    "(deny file-read* file-write* (subpath (param \"H{i}\")) {tag})\n"
+                ));
+            }
+        }
         // The copy and tmp sit in Kule's home, which is hidden: they come back
         // last, so a hidden path never takes them away. So does the home
         // layer, which is the task's too.
@@ -1816,6 +2069,7 @@ impl Sandbox {
             .chain(self.tmp.ancestors().skip(1))
             .chain(self.layer.iter().flat_map(|l| l.ancestors().skip(1)))
             .chain(self.see_through.iter().flat_map(|s| s.ancestors().skip(1)))
+            .chain(opened.iter().flat_map(|o| o.ancestors().skip(1)))
             .chain(self.beside_links.iter().map(PathBuf::as_path))
             .collect();
         for (i, dir) in ancestors.into_iter().enumerate() {
@@ -2103,16 +2357,22 @@ impl Sandbox {
         // back after the carving, as on macOS.
         // A root that is a link gets no rule: Landlock would open it and
         // allow what it points to (see `allow_write_here`).
-        let mut writable = carve_all(
-            self.writable
-                .iter()
-                .filter(|root| !self.protected.iter().any(|p| root.starts_with(p)))
-                .filter(|root| {
-                    std::fs::symlink_metadata(root).is_ok_and(|m| !m.file_type().is_symlink())
-                })
-                .cloned()
-                .collect(),
-        );
+        // One inside where apps keep their data (an agent's home of its
+        // own) is carved by what is hidden but that place.
+        let mut writable: Vec<PathBuf> = self
+            .writable
+            .iter()
+            .filter(|root| !self.protected.iter().any(|p| root.starts_with(p)))
+            .filter(|root| {
+                std::fs::symlink_metadata(root).is_ok_and(|m| !m.file_type().is_symlink())
+            })
+            .flat_map(|root| {
+                self.hidden
+                    .iter()
+                    .filter(|h| !(self.stores.contains(h) && root.starts_with(h)))
+                    .fold(vec![root.clone()], |roots, hidden| carve(roots, hidden))
+            })
+            .collect();
         writable.extend([self.copy.clone(), self.tmp.clone()]);
         writable.extend(self.layer.clone());
         // Not `/dev/pts`: the person's other terminals are there. A command
