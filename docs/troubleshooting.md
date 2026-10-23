@@ -267,8 +267,8 @@ have not saved is lost.
 
 ### Nothing starts: Kule cannot mask a settings file
 
-**Symptom:** "Kule cannot mask the secrets in .env.local (not UTF-8), so no
-command may read it" (or *larger than 1 MB*, *cannot be read*) when you
+**Symptom:** "the secrets in .env.local cannot be masked (it is not UTF-8), so
+no command may read it" (or *larger than 1 MB*, *unreadable*) when you
 start a run, `kule exec`, `kule shell` or a terminal.
 
 **Cause:** a `.env`-style file in the task's copy is not UTF-8 (one Latin-1
@@ -280,7 +280,7 @@ starts.
 of the folder), bring it in with Sync, then try again.
 
 A file like that in your home is not refused but withheld: the run's notes
-say *Kule hid ~/.bashrc from the commands here*. Save it as UTF-8 to give
+say *~/.bashrc is hidden from the commands here*. Save it as UTF-8 to give
 it back.
 
 ### A run is refused after opening the copy in an app

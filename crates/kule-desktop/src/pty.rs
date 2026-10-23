@@ -93,6 +93,8 @@ fn openpty(cols: u16, rows: u16) -> Result<(OwnedFd, OwnedFd), String> {
 pub struct Opened {
     pub id: u64,
     pub shell: String,
+    /// What Kule withheld from the shell, for the window to say first.
+    pub notes: Vec<String>,
 }
 
 /// The name of the shell [`shell`] starts: `zsh`, `bash`.
@@ -123,11 +125,17 @@ impl Terminals {
         task: &str,
         cols: u16,
         rows: u16,
-    ) -> Result<u64, String> {
+    ) -> Result<(u64, Vec<String>), String> {
         let (program, args) = shell();
-        self.start(home, task, &program, &args, cols, rows, move |event| {
+        let id = self.start(home, task, &program, &args, cols, rows, move |event| {
             let _ = app.emit("terminal", event);
-        })
+        })?;
+        // Handed back with the id rather than sent as output: what is sent
+        // before the window knows the id is never shown.
+        let notes = kule_daemon::shell::Task::open(home, task)
+            .and_then(|t| t.home_withheld_notes())
+            .unwrap_or_default();
+        Ok((id, notes))
     }
 
     /// Starts `program` with `args` in a pseudo-terminal, in task `task`'s
@@ -185,14 +193,6 @@ impl Terminals {
                 },
             );
         let tell = std::sync::Arc::new(tell);
-        // Said in the terminal before anything the shell writes.
-        for note in sandboxed.notes() {
-            let b64 = base64::engine::general_purpose::STANDARD;
-            tell(Event::Output {
-                id,
-                data: b64.encode(format!("kule: {note}\r\n")),
-            });
-        }
         let (read_out, all_read) = std::sync::mpsc::channel::<()>();
         let output = std::sync::Arc::clone(&tell);
         std::thread::spawn(move || {

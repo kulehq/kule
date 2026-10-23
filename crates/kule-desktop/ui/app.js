@@ -3125,6 +3125,13 @@ function absorb(id, event) {
   }
 }
 
+/** Kule's own words for a terminal, with no control character left in
+ * them: a file name they carry cannot move the cursor, set a title or
+ * reach the clipboard. */
+function terminalText(text) {
+  return text.replace(/[\u0000-\u001f\u007f-\u009f]/g, "");
+}
+
 /** A command's output without terminal escapes (colours, cursor moves);
  * a carriage return keeps what was written after it, as a terminal does. */
 function stripAnsi(text) {
@@ -5148,6 +5155,20 @@ function terminalTabs(name) {
       "+"
     )
   );
+  // In the tab bar, not over the shell's lines: why a path outside the copy
+  // is "not permitted" there.
+  if (shown && tabs.list.length) {
+    items.push(
+      h(
+        "span",
+        {
+          class: "terminal-note",
+          title: "Your shell in the task's copy, in its sandbox, as the agent's commands run; what it changes is reviewed like the agent's work.",
+        },
+        "in the sandbox"
+      )
+    );
+  }
   return items;
 }
 
@@ -6030,9 +6051,10 @@ async function newTerminal(taskId = state.current) {
     const opened = await call("terminal_open", { task: taskId, cols: term.cols, rows: term.rows });
     entry.id = opened.id;
     entry.shell = opened.shell;
+    for (const note of opened.notes || []) term.write(`\x1b[33mkule: ${terminalText(note)}\x1b[0m\r\n`);
   } catch (err) {
     entry.ended = true;
-    term.write(`\x1b[31m${String(err)}\x1b[0m\r\n`);
+    term.write(`\x1b[31m${terminalText(String(err))}\x1b[0m\r\n`);
   }
   renderTerminals(taskId);
   term.focus();

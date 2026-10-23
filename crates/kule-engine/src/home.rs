@@ -903,7 +903,7 @@ impl Task {
             .into_iter()
             .map(|(path, why)| {
                 format!(
-                    "Kule hid ~/{path} from the commands here: it is {why}, so its secrets \
+                    "~/{path} is hidden from the commands here: it is {why}, so its secrets \
                      could not be masked"
                 )
             })
@@ -1236,11 +1236,11 @@ fn capturable(dir: &Path) -> bool {
 /// following a link; why not, where it cannot be masked.
 fn read_settings(dir: &Path, rel: &str) -> std::result::Result<String, &'static str> {
     let Ok(fsops::Beneath::File(file)) = fsops::beneath(dir, rel) else {
-        return Err("cannot be read");
+        return Err("unreadable");
     };
     let mut bytes = Vec::new();
     std::io::Read::read_to_end(&mut std::io::Read::take(file, MAX_MASKED + 1), &mut bytes)
-        .map_err(|_| "cannot be read")?;
+        .map_err(|_| "unreadable")?;
     if bytes.len() as u64 > MAX_MASKED {
         return Err("larger than 1 MB");
     }

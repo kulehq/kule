@@ -15,6 +15,8 @@
 - A connection whose name led to an address on this computer or its
   network is logged as `cut`, with why, rather than as a tunnel that went
   through.
+- The messages Kule writes into the app's terminal carry no control
+  characters, so a file name in them cannot steer the terminal.
 
 ## 0.2.0-preview.8
 

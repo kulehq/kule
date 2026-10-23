@@ -316,7 +316,7 @@ impl Task {
         // reads the copy starts until it can be.
         if let Some((path, why)) = self.unmaskable(&baseline).into_iter().next() {
             return Err(Error::Invalid(format!(
-                "Kule cannot mask the secrets in {path} ({why}), so no command may read it: \
+                "the secrets in {path} cannot be masked (it is {why}), so no command may read it: \
                  save it as UTF-8 under 1 MB, or move it out of the folder, then try again"
             )));
         }
@@ -341,7 +341,7 @@ impl Task {
                     &mut bytes,
                 );
                 let why = if read.is_err() {
-                    "cannot be read"
+                    "unreadable"
                 } else if bytes.len() as u64 > MAX_SETTINGS {
                     "larger than 1 MB"
                 } else if std::str::from_utf8(&bytes).is_err() {

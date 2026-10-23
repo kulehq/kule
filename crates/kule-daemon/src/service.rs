@@ -3205,7 +3205,7 @@ mod tests {
         assert_eq!(
             notes,
             [RunEvent::Preparing {
-                text: "Kule hid ~/.bashrc from the commands here: it is not UTF-8, so its \
+                text: "~/.bashrc is hidden from the commands here: it is not UTF-8, so its \
                        secrets could not be masked"
                     .into()
             }]

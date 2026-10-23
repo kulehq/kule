@@ -282,8 +282,8 @@ yeniden deneyin.
 ### Hiçbir şey başlamıyor: Kule bir ayar dosyasını maskeleyemiyor
 
 **Belirti:** bir çalıştırma, `kule exec`, `kule shell` ya da bir terminal
-başlatırken "Kule cannot mask the secrets in .env.local (not UTF-8), so no
-command may read it" (ya da *larger than 1 MB*, *cannot be read*) mesajı.
+başlatırken "the secrets in .env.local cannot be masked (it is not UTF-8),
+so no command may read it" (ya da *larger than 1 MB*, *unreadable*) mesajı.
 
 **Neden:** görevin kopyasındaki `.env` türü bir dosya UTF-8 değil (tek bir
 Latin-1 baytı ya da Windows'taki bir editörün kaydettiği UTF-16 bir dosya
@@ -294,7 +294,7 @@ onları okuyacak hiçbir şey başlamaz.
 da klasörden çıkarın), Sync ile içeri alın, sonra yeniden deneyin.
 
 Ev dizininizdeki böyle bir dosya reddedilmez, saklanır: çalıştırmanın
-notları *Kule hid ~/.bashrc from the commands here* der. Geri vermek için
+notları *~/.bashrc is hidden from the commands here* der. Geri vermek için
 UTF-8 olarak kaydedin.
 
 ### Kopyayı bir uygulamada açtıktan sonra çalıştırma reddediliyor
