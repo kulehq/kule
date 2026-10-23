@@ -1411,6 +1411,15 @@ impl Profile {
         let mut sandbox = Sandbox::for_task_with(task, person)?;
         let mut own_home = None;
         if let Some(home) = home {
+            // Started from the package Kule installed: read-only, where
+            // the person's apps keep their data, which stays hidden.
+            let packages = home.join(packages::PACKAGES);
+            if args
+                .first()
+                .is_some_and(|a| Path::new(a).starts_with(&packages))
+            {
+                sandbox.reveal(&packages)?;
+            }
             own_home = self.make_own_home(&home)?;
             self.apply(&mut sandbox, &home)?;
             if let Some(dir) = &own_home {
@@ -1435,7 +1444,7 @@ impl Profile {
                     self.state.iter().map(|s| home.join(s)).collect();
                 let ignored: Vec<String> =
                     self.state.iter().chain(&self.outside).cloned().collect();
-                task.prepare_home(&home, &state, sandbox.hidden(), &ignored)?;
+                task.prepare_home(&home, &state, sandbox.hidden(), sandbox.shown(), &ignored)?;
                 sandbox.use_home(task, &home)?;
             }
         }

@@ -2723,7 +2723,9 @@ mod tests {
         let person = TempDir::new().unwrap();
         fs::write(person.path().join(".zshrc"), "a\n").unwrap();
         let task = s.app.open(&id).unwrap();
-        let layer = task.prepare_home(person.path(), &[], &[], &[]).unwrap();
+        let layer = task
+            .prepare_home(person.path(), &[], &[], &[], &[])
+            .unwrap();
         fs::write(layer.join(".zshrc"), "a\nb\n").unwrap();
 
         let review = s.app.review(&id, false).unwrap();

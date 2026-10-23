@@ -198,12 +198,15 @@ fn on_the_way(ignored: &[String], rel: &str) -> bool {
 /// Each folder on the way the layer holds as a link to the person's becomes
 /// a folder of its own, whose other entries stay links. State too large or
 /// unreadable to clone for every run, or behind a link of the person's own,
-/// stays a link: the sandbox refuses the agent's writes there.
+/// stays a link: the sandbox refuses the agent's writes there. A hidden
+/// entry on the way is left out, unless something in it is `shown`: then
+/// it is a link too, and the sandbox lets only that be read.
 fn capture_state(
     real: &Path,
     dir: &Path,
     rel: &str,
     hidden: &[PathBuf],
+    shown: &[PathBuf],
     layer: &mut Layer,
     clock: &Clock,
 ) -> Result<()> {
@@ -229,7 +232,9 @@ fn capture_state(
                 for child in children {
                     let Some(name) = child.to_str() else { continue };
                     let from = from.join(&child);
-                    if name == parts[depth] || hidden.contains(&from) {
+                    let concealed =
+                        hidden.contains(&from) && !shown.iter().any(|s| s.starts_with(&from));
+                    if name == parts[depth] || concealed {
                         continue;
                     }
                     let target = if fs::symlink_metadata(&from).at(&from)?.is_symlink() {
@@ -308,14 +313,16 @@ impl Task {
     /// while it holds changes no one has looked at. `state` are paths under
     /// `real` an agent writes its own state to: cloned into the layer, so
     /// what it writes there never reaches the person's home. `hidden` ones
-    /// are left out; `ignored` paths (relative to `real`) are the agent's
-    /// own business, never offered. Returns the layer, to be the commands'
-    /// `HOME`.
+    /// are left out, but for what `shown` names inside a hidden directory
+    /// the layer clones (`.config`); `ignored` paths (relative to `real`)
+    /// are the agent's own business, never offered. Returns the layer, to
+    /// be the commands' `HOME`.
     pub fn prepare_home(
         &self,
         real: &Path,
         state: &[PathBuf],
         hidden: &[PathBuf],
+        shown: &[PathBuf],
         ignored: &[String],
     ) -> Result<PathBuf> {
         let given = real.to_path_buf();
@@ -360,6 +367,10 @@ impl Task {
             ..Layer::default()
         };
         let hidden: Vec<PathBuf> = hidden.iter().map(canonical).collect();
+        let shown: Vec<PathBuf> = shown.iter().map(canonical).collect();
+        // Inside a directory hidden whole, what is shown there, or holds
+        // what is, alone.
+        let shows = |path: &Path| shown.iter().any(|s| s.starts_with(path));
         // The person's files are stamped by the clock of the real home's
         // disk, the clones by the layer's.
         let real_clock = self.clock(&real)?;
@@ -379,7 +390,9 @@ impl Task {
                 continue;
             };
             let (from, to) = (real.join(&name), dir.join(&name));
-            if hidden.contains(&from) {
+            let captured = CAPTURED_DIRS.contains(&text.as_str());
+            let hidden_dir = hidden.contains(&from);
+            if hidden_dir && !(captured && shows(&from)) {
                 continue;
             }
             let Some(stamp) = Stamp::of(&from)? else {
@@ -402,7 +415,7 @@ impl Task {
                         layer.entries.insert(text, Entry { work, copy });
                     }
                 }
-                Kind::Dir if CAPTURED_DIRS.contains(&text.as_str()) => {
+                Kind::Dir if captured => {
                     fs::create_dir(&to).at(&to)?;
                     if let Some(copy) = Stamp::of(&to)? {
                         layer
@@ -425,8 +438,9 @@ impl Task {
                         let Some(stamp) = Stamp::of(&from)? else {
                             continue;
                         };
+                        let concealed = hidden.contains(&from) || (hidden_dir && !shows(&from));
                         let caught = match stamp.kind {
-                            _ if hidden.contains(&from) => false,
+                            _ if concealed => false,
                             Kind::File if stamp.size <= MAX_FILE => {
                                 match fsops::clone_entry(&from, &to) {
                                     Ok(Some(work)) => {
@@ -478,7 +492,7 @@ impl Task {
                             }
                             _ => false,
                         };
-                        if !caught && !hidden.contains(&from) {
+                        if !caught && !concealed {
                             let target = if stamp.kind == Kind::Symlink {
                                 fs::read_link(&from).at(&from)?
                             } else {
@@ -509,7 +523,7 @@ impl Task {
         }
         for path in state {
             if let Some(rel) = under(&given, path).or_else(|| under(&real, path)) {
-                capture_state(&real, &dir, &rel, &hidden, &mut layer, &real_clock)?;
+                capture_state(&real, &dir, &rel, &hidden, &shown, &mut layer, &real_clock)?;
             }
         }
         // Each is compared with its clone once the clock has moved on, before
