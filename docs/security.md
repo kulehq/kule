@@ -60,6 +60,27 @@ Nothing is trusted by default:
 | Extensions ↔ Kule | Sandboxed frames on their own origin; every call checked against the permissions you approved; network only to approved public hosts. |
 | Release ↔ you | Checksums, build provenance and a CycloneDX SBOM for every file, from a pinned toolchain (`rust-toolchain.toml`); on macOS signed ad hoc, never notarized, as its notes say. No job of the release workflow holds a secret, and publishing waits in an environment for a maintainer's approval: nothing is published before it. |
 
+### What a task's commands can still read {#what-a-tasks-commands-can-still-read}
+
+Reads are refused by default where your projects, sign-ins and apps' data
+lie (see [The sandbox](concepts/sandbox.md#what-is-hidden)); the rest of the
+computer stays readable, since tools need it:
+
+- the system: `/usr`, `/bin`, `/sbin`, `/etc`, `/opt`, `/Library`,
+  `/System`, `/Applications` and the like;
+- toolchains in your home: dot folders such as `~/.cargo`, `~/.rustup`,
+  `~/.nvm`, `~/.pyenv`, `~/.dotnet` and `~/.gradle`, but for the
+  credentials Kule hides inside them;
+- the rest of `~/Library` (`Caches`, `Developer`, …) but for what is listed
+  as hidden;
+- the files and folders at the top of your home that are none of the
+  above, and folders your `PATH` names;
+- the task's own copy, temporary folder and home layer.
+
+A project outside your home that Kule never opened is readable too. Keep a
+project you work on with agents in your home, or open it in Kule, so it is
+hidden from the others.
+
 ## What Kule does not cover
 
 Kule holds back only the effects it can keep from the world until you

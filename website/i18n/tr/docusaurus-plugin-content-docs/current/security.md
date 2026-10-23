@@ -61,6 +61,27 @@ Varsayılan olarak hiçbir şeye güvenilmez:
 | Eklentiler ↔ Kule | Kendi origin'lerinde sandbox'lı çerçeveler; her çağrı onayladığınız izinlere karşı denetlenir; ağ yalnızca onaylanmış herkese açık host'lara. |
 | Sürüm ↔ siz | Her dosya için checksum'lar, derleme kaynağı kanıtı (build provenance) ve bir CycloneDX SBOM; sabitlenmiş bir araç zincirinden (`rust-toolchain.toml`); macOS'ta, notlarında da söylendiği gibi ad hoc imzalı, hiçbir zaman noter onaylı (notarized) değil. Sürüm workflow'unun hiçbir işi (job) gizli bir değer tutmaz; yayımlama bir bakımcının onayını bekleyen bir ortamda çalışır ve ondan önce hiçbir şey yayımlanmaz. |
 
+### Bir görevin komutlarının hâlâ okuyabildikleri {#what-a-tasks-commands-can-still-read}
+
+Projelerinizin, oturumlarınızın ve uygulamaların verilerinin bulunduğu
+yerlerde okuma varsayılan olarak reddedilir (bkz. [Sandbox](concepts/sandbox.md#what-is-hidden));
+bilgisayarın geri kalanı, araçlar ihtiyaç duyduğu için okunabilir kalır:
+
+- sistem: `/usr`, `/bin`, `/sbin`, `/etc`, `/opt`, `/Library`, `/System`,
+  `/Applications` ve benzerleri;
+- ev dizininizdeki araç zincirleri: `~/.cargo`, `~/.rustup`, `~/.nvm`,
+  `~/.pyenv`, `~/.dotnet` ve `~/.gradle` gibi nokta klasörleri, Kule'nin
+  içlerinde gizlediği kimlik bilgileri hariç;
+- `~/Library`'nin geri kalanı (`Caches`, `Developer`, …), gizli olarak
+  listelenenler hariç;
+- ev dizininizin en üstündeki, yukarıdakilerin hiçbiri olmayan dosya ve
+  klasörler ile `PATH`'inizin gösterdiği klasörler;
+- görevin kendi kopyası, geçici klasörü ve ev katmanı.
+
+Ev dizininizin dışında olup Kule'nin hiç açmadığı bir proje de okunabilir.
+Ajanlarla üzerinde çalıştığınız bir projeyi ev dizininizde tutun ya da
+Kule'de açın; böylece diğerlerinden gizlenir.
+
 ## Kule'nin kapsamadığı şeyler {#what-kule-does-not-cover}
 
 Kule yalnızca siz karar verene kadar dünyaya ulaşmadan bekletebildiği
