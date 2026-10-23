@@ -23,9 +23,9 @@ It works on any folder: code, but also notes, documents, photos and data.
 · [CLI reference](https://kulehq.github.io/kule/docs/cli)
 
 > [!NOTE]
-> **Status: preview (`0.2.0-preview.6`).** macOS 13+ and Linux. Windows is
+> **Status: preview (`0.2.0-preview.7`).** macOS 13+ and Linux. Windows is
 > not supported yet. The latest preview release is
-> [0.2.0-preview.6](https://github.com/kulehq/kule/releases/tag/v0.2.0-preview.6); or build it from source (below). Expect changes between previews; see [CHANGELOG.md](CHANGELOG.md).
+> [0.2.0-preview.7](https://github.com/kulehq/kule/releases/tag/v0.2.0-preview.7); or build it from source (below). Expect changes between previews; see [CHANGELOG.md](CHANGELOG.md).
 
 ## Why Kule
 
