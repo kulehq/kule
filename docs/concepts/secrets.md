@@ -112,8 +112,18 @@ secret or a secret Kule keeps or masked is in the path.
   way goes back only where it is unchanged, and no more times than the
   file held it.
 
+A settings file Kule cannot mask, because it is not UTF-8 (a Latin-1
+byte, a UTF-16 file from a Windows editor) or is larger than 1 MB, would
+show its values as they are. So no agent run, `kule exec`, `kule shell`
+or terminal starts in the task while the copy holds one; Kule names the
+file and why. Save it as UTF-8 under 1 MB, or move it out of the folder,
+and try again.
+
 The same masking applies to the [home layer](home-layer.md)'s clones of
-`.zshrc`, `.profile`, `~/.env` and the like.
+`.zshrc`, `.profile`, `~/.env` and the like. One there Kule cannot mask is
+withheld instead: the commands see it neither in the layer nor at its real
+path, and Kule says so where they run (the run's notes in the app, the
+output of `kule run`, `exec` and `shell`, and the terminal).
 
 ## Where secrets are stored
 

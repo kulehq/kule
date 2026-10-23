@@ -265,6 +265,24 @@ have not saved is lost.
 
 **Fix:** close the terminal's tab, or type `exit` in it, then try again.
 
+### Nothing starts: Kule cannot mask a settings file
+
+**Symptom:** "Kule cannot mask the secrets in .env.local (not UTF-8), so no
+command may read it" (or *larger than 1 MB*, *cannot be read*) when you
+start a run, `kule exec`, `kule shell` or a terminal.
+
+**Cause:** a `.env`-style file in the task's copy is not UTF-8 (one Latin-1
+byte is enough, or a UTF-16 file a Windows editor saved), or is larger
+than 1 MB. Kule cannot mask its values, so nothing that would read them
+starts.
+
+**Fix:** save the file as UTF-8 under 1 MB in your folder (or move it out
+of the folder), bring it in with Sync, then try again.
+
+A file like that in your home is not refused but withheld: the run's notes
+say *Kule hid ~/.bashrc from the commands here*. Save it as UTF-8 to give
+it back.
+
 ### A run is refused after opening the copy in an app
 
 **Symptom:** the app asks *Close … first* before a run, or `kule run` and

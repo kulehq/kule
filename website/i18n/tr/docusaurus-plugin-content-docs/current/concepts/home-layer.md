@@ -38,7 +38,10 @@ Kabukların ve araçların başlarken okuduğu dosyaların (`.zshrc`, `.profile`
 `.gitconfig`, …) ve env dosyalarının (`~/.env`) klonlarında, gizli bir değer
 gibi görünen bir ayar (`export GITHUB_TOKEN=…`) **maskelenir**: komutlar bir
 yer tutucu görür (bkz. [Gizli değerler](secrets.md)), uygulama (apply) ise
-sizin değerinizi geri koyar.
+sizin değerinizi geri koyar. Kule'nin maskeleyemediği bir dosya (UTF-8
+değilse ya da 1 MB'tan büyükse) komutlardan, katmanda ve gerçek yolunda,
+saklanır ve Kule bunu komutların çalıştığı yerde söyler; hiçbir zaman bir
+değişiklik olarak sunulmaz.
 
 ## Neyin beklediğini görmek
 

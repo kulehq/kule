@@ -86,7 +86,9 @@ hello that hides its name (Encrypted Client Hello) is cut too; in
 Chromium-based tools, turn it off with
 `--disable-features=EncryptedClientHello`. Port 443 carries nothing but
 TLS. Plain `http://` requests are read one by one, and each must be for the
-host it was let through to. A cut connection is logged as `cut`, with why.
+host it was let through to. A connection whose name led to an address on
+this computer or its network is cut too. A cut connection is logged as
+`cut`, with why.
 
 For hosts that a [secret](secrets.md) belongs to, it looks inside
 TLS to put the secret's value into the request. For that it makes a

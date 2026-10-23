@@ -733,6 +733,9 @@ fn run() -> Result<ExitCode> {
                     // review (`kule home`), not refused.
                     task.prepare_home(person, &[], sandbox.hidden(), sandbox.shown(), &[])?;
                     sandbox.use_home(&task, person)?;
+                    for note in task.home_withheld_notes()? {
+                        eprintln!("kule: {note}");
+                    }
                 }
                 for path in &allow_write {
                     sandbox.allow_write(path)?;
@@ -850,6 +853,9 @@ fn run() -> Result<ExitCode> {
                 kept,
                 mode,
             } = profile.launch(&task, &proxy)?;
+            for note in task.home_withheld_notes()? {
+                eprintln!("kule: {note}");
+            }
             let (tx, rx) = futures::channel::mpsc::unbounded();
             let runtime = tokio::runtime::Runtime::new()?;
             let printer = runtime.spawn(print_events(rx, usage, profile.name.clone()));

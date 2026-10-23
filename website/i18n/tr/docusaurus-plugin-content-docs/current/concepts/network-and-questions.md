@@ -86,8 +86,9 @@ sunar. Adını gizleyen bir hello (Encrypted Client Hello) da kesilir;
 Chromium tabanlı araçlarda bunu
 `--disable-features=EncryptedClientHello` ile kapatın. Port 443 TLS'ten
 başka bir şey taşımaz. Düz `http://` istekleri tek tek okunur ve her biri,
-geçirildiği host için olmalıdır. Kesilen bir bağlantı, nedeniyle birlikte
-`cut` olarak günlüğe yazılır.
+geçirildiği host için olmalıdır. Adı bu bilgisayardaki ya da ağındaki bir
+adrese çıkan bir bağlantı da kesilir. Kesilen bir bağlantı, nedeniyle
+birlikte `cut` olarak günlüğe yazılır.
 
 Bir [gizli değerin (secret)](secrets.md) ait olduğu host'lar
 için ise, gizli değeri isteğe yerleştirmek üzere TLS'in içine bakar. Bunun

@@ -1798,6 +1798,7 @@ impl Service {
             );
         }
         let launch = profile.launch(task, &proxy).map_err(text)?;
+        self.tell_withheld(task)?;
         let (tx, mut rx) = futures::channel::mpsc::unbounded::<kule_acp::Event>();
         let runtime = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
         let (service, id) = (Arc::clone(self), task.id().to_owned());
@@ -1992,6 +1993,16 @@ impl Service {
 
     /// The task, refused while an agent works in it: committing or rolling
     /// back under a running agent would split its work in two.
+    /// Tells the run's notes what Kule withheld from its commands in the
+    /// home (see `Task::home_withheld_notes`): said where the run is
+    /// watched, not left for a log.
+    fn tell_withheld(&self, task: &Task) -> Result<()> {
+        for note in task.home_withheld_notes().map_err(text)? {
+            self.emit(task.id(), RunEvent::Preparing { text: note });
+        }
+        Ok(())
+    }
+
     fn idle(&self, id: &str) -> Result<Task> {
         if self
             .running
@@ -3175,6 +3186,29 @@ mod tests {
         assert_eq!(
             control.reason().as_deref(),
             Some("stopped: you stopped the run")
+        );
+    }
+
+    /// A settings file in the home Kule could not mask is told in the run's
+    /// notes, word for word as the app shows it.
+    #[test]
+    fn a_withheld_home_file_is_told_in_the_run() {
+        let s = Setup::new();
+        let (id, _) = s.task();
+        let person = TempDir::new().unwrap();
+        fs::write(person.path().join(".bashrc"), b"# caf\xe9\nexport A=1\n").unwrap();
+        let task = s.app.open(&id).unwrap();
+        task.prepare_home(person.path(), &[], &[], &[], &[])
+            .unwrap();
+        s.app.tell_withheld(&task).unwrap();
+        let notes: Vec<RunEvent> = s.app.stream(&id).into_iter().map(|e| e.event).collect();
+        assert_eq!(
+            notes,
+            [RunEvent::Preparing {
+                text: "Kule hid ~/.bashrc from the commands here: it is not UTF-8, so its \
+                       secrets could not be masked"
+                    .into()
+            }]
         );
     }
 

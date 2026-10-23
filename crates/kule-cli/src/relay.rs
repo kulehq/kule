@@ -70,6 +70,9 @@ impl Drop for Raw {
 /// the sandbox refused it. Refused while an agent is at work in the task.
 pub fn run(home: &Path, task: &str, shell: &str) -> Result<(Option<i32>, Vec<Denial>)> {
     let sandboxed = Sandboxed::new(home, task).map_err(|e| anyhow!(e))?;
+    for note in sandboxed.notes() {
+        eprintln!("kule: {note}");
+    }
     let mut ws = their_size();
     let (mut leader, mut follower) = (0, 0);
     // SAFETY: openpty fills the two descriptors; no name is asked for, the

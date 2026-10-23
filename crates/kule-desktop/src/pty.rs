@@ -185,6 +185,14 @@ impl Terminals {
                 },
             );
         let tell = std::sync::Arc::new(tell);
+        // Said in the terminal before anything the shell writes.
+        for note in sandboxed.notes() {
+            let b64 = base64::engine::general_purpose::STANDARD;
+            tell(Event::Output {
+                id,
+                data: b64.encode(format!("kule: {note}\r\n")),
+            });
+        }
         let (read_out, all_read) = std::sync::mpsc::channel::<()>();
         let output = std::sync::Arc::clone(&tell);
         std::thread::spawn(move || {
