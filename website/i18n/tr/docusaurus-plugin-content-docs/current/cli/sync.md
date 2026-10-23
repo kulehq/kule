@@ -113,7 +113,7 @@ hint: commit or roll back the task's changes there first, or leave the copy as i
 | --- | --- |
 | `kule: the folder and the task both changed: <paths>; nothing was brought in` | İki taraf da aynı fonksiyonu, bölümü ya da anahtarı değiştirdi. Önce görevin oradaki değişikliğini commit edin ya da atın; ya da kopyayı olduğu gibi bırakıp çakışmayı commit sırasında çözün. |
 | `kule: an agent is at work in task <id> …` | Çalıştırmanın bitmesini bekleyin. |
-| `kule: a terminal is open on task <id>'s copy …; close it first, then sync` | Görevin terminalini kapatın (uygulamadaki sekmeyi ya da `kule shell`'den `exit` ile çıkın), sonra sync yapın. |
+| `kule: a terminal is open on this task's copy (in Kule's app, or kule shell); close it first, then sync` | Görevin terminalini kapatın (uygulamadaki sekmeyi ya da `kule shell`'den `exit` ile çıkın), sonra sync yapın. |
 
 ## Uygulamada
 

@@ -732,6 +732,27 @@ fn home_changes_wait_while_a_terminal_is_open() {
     assert!(e.to_string().contains("terminal is open"), "{e}");
     assert_eq!(s.real(".newrc"), "");
     drop(open);
+    let at_work = s.task.agent_at_work().unwrap();
+    let e = s.task.apply_home(&[".newrc".into()]).unwrap_err();
+    assert!(e.to_string().contains("agent is at work"), "{e}");
+    assert_eq!(s.real(".newrc"), "");
+    drop(at_work);
     s.task.apply_home(&[".newrc".into()]).unwrap();
     assert_eq!(s.real(".newrc"), "hi\n");
+
+    // Nor is it undone while an agent is at work, whose commands write in
+    // the layer.
+    let at_work = s.task.agent_at_work().unwrap();
+    let e = s.task.undo_home().unwrap_err();
+    assert!(e.to_string().contains("agent is at work"), "{e}");
+    drop(at_work);
+
+    // Undoing it waits the same way.
+    let open = s.task.terminal_opened().unwrap();
+    let e = s.task.undo_home().unwrap_err();
+    assert!(e.to_string().contains("terminal is open"), "{e}");
+    assert_eq!(s.real(".newrc"), "hi\n");
+    drop(open);
+    s.task.undo_home().unwrap();
+    assert!(!s.person.path().join(".newrc").exists());
 }

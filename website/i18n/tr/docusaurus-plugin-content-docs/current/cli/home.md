@@ -188,7 +188,8 @@ the changes wait for review again
 | `kule: ~/.bashrc has no change waiting` | Görevin orada bekleyen bir yazması yok; bekleyenleri `kule home TASK` listeler. |
 | `nothing to apply at those paths` | Bu yollarda bekleyen bir değişiklik yok; `kule home TASK` ile bakın. |
 | `kule: nothing applied from this task's home to undo` | Geri alınacak bir uygulama yok. |
-| `kule: a terminal is open on task <id>'s copy …; close it first, then apply its home changes` | Görevin terminalini kapatın (uygulamadaki sekmeyi ya da `kule shell`'den `exit` ile çıkın), sonra uygulayın. |
+| `kule: a terminal is open on this task's copy (in Kule's app, or kule shell); close it first, then apply its home changes` | Görevin terminalini kapatın (uygulamadaki sekmeyi ya da `kule shell`'den `exit` ile çıkın), sonra uygulayın. |
+| `kule: a terminal is open on this task's copy (in Kule's app, or kule shell); close it first, then undo its home changes` | `undo` için de aynısı. |
 
 ## Uygulamada {#in-the-app}
 

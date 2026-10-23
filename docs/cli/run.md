@@ -173,7 +173,7 @@ which is easier to log.
 | `kule: task <id> has spent its budget; raise it or turn it off to run again` | Raise it with `kule budget TASK <amount>`, or `kule budget TASK off`. The message names a group's or the daily budget when that is the one spent. |
 | `kule: the task has used its time: its runs took N minutes together; …` | Raise or remove the task's time limit with [kule limits](limits.md). |
 | `kule: an agent is at work in task <id> …` | One agent per task. Wait, or make another task. |
-| `kule: a terminal is open on task <id>'s copy …; close it first, then start work` | A terminal on the task (the app's, or `kule shell`) is open. Close it first. |
+| `kule: a terminal is open on this task's copy (in Kule's app, or kule shell); close it first, then start work` | A terminal on the task (the app's, or `kule shell`) is open. Close it first. |
 | `kule: Kule opened task <id>'s copy in <app> outside the sandbox; …` | Close that terminal app or editor, then run [kule closed](closed.md) `TASK`. |
 | `kule: <error> (see <home>/tasks/<id>/agent.log)` | The agent failed. Its own messages are in `agent.log`: its last 8 MB, and the 8 MB before them in `agent.log.1`. |
 | `kule: stopped: the agent sent a message larger than 16 MiB (see …)` | The agent said more in one message than Kule takes. Run it again with a narrower prompt. |

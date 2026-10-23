@@ -382,30 +382,18 @@ fn is_vanished(e: &Error) -> bool {
 /// come before their children, and their parents must exist under `dst`.
 /// With `atomic`, files and symlinks arrive through a rename, so nobody
 /// reading `dst` sees half a file.
+///
+/// Under `dst`, every directory on the way to a path is opened without
+/// following a link, and each write, removal, mode and time goes through
+/// the descriptor of the directory it is in: a link there (put in place
+/// meanwhile, even while this runs, or a name that a case-insensitive disk
+/// reads as another) takes nothing anywhere else, and is refused.
 pub fn mirror(src: &Path, dst: &Path, paths: &[String], atomic: bool) -> Result<()> {
-    // Under `dst`, every directory on the way to a path is one: a link there
-    // (put in place meanwhile, or a name that a case-insensitive disk reads
-    // as another) would take the write, or the removal, somewhere else.
-    let on_the_way = |p: &str| -> Result<()> {
-        let mut at = dst.to_path_buf();
-        for part in Path::new(p).parent().into_iter().flat_map(Path::components) {
-            at.push(part);
-            match fs::symlink_metadata(&at) {
-                Ok(m) if m.file_type().is_symlink() => {
-                    return Err(Error::Invalid(format!(
-                        "{} is a link, which a commit does not write through",
-                        at.display()
-                    )));
-                }
-                _ => {}
-            }
-        }
-        Ok(())
-    };
     let stamps = paths
         .iter()
         .map(|p| Ok((Stamp::of(&src.join(p))?, Stamp::of(&dst.join(p))?)))
         .collect::<Result<Vec<_>>>()?;
+    let root = File::open(dst).at(dst)?;
 
     // 1. Clear what has to go, children before parents.
     for (p, (s, d)) in paths.iter().zip(&stamps).rev() {
@@ -416,32 +404,32 @@ pub fn mirror(src: &Path, dst: &Path, paths: &[String], atomic: bool) -> Result<
             Some(_) => atomic,
         };
         if !keep {
-            on_the_way(p)?;
+            let (dir, name) = parent_beneath(&root, dst, p)?;
             let gone = dst.join(p);
-            in_parent(&gone, || remove(&gone))?;
+            in_dir(&dir, &gone, || remove_tree_at(&dir, name).at(&gone))?;
         }
     }
 
     // 2. Bring in what `src` has, parents before children.
     for (p, (s, _)) in paths.iter().zip(&stamps) {
         let Some(s) = s else { continue };
-        on_the_way(p)?;
+        let (dir, name) = parent_beneath(&root, dst, p)?;
         let to = dst.join(p);
-        in_parent(&to, || {
+        in_dir(&dir, &to, || {
             if s.kind == Kind::Dir {
-                if Stamp::of(&to)?.is_none() {
-                    fs::create_dir(&to).at(&to)?;
+                if entry_at(&dir, name).at(&to)?.is_none() {
+                    mkdir_at(&dir, name).at(&to)?;
                 }
             } else if atomic {
-                let tmp = temp_beside(&to);
-                let placed =
-                    place_beneath(src, p, &tmp, s).and_then(|()| fs::rename(&tmp, &to).at(&to));
+                let tmp = temp_name();
+                let placed = place_at(src, p, &dir, &tmp, s, &to)
+                    .and_then(|()| rename_at(&dir, &tmp, name).at(&to));
                 if placed.is_err() {
-                    let _ = fs::remove_file(&tmp);
+                    let _ = remove_at(&dir, &tmp);
                 }
                 placed?;
             } else {
-                place_beneath(src, p, &to, s)?;
+                place_at(src, p, &dir, name, s, &to)?;
             }
             Ok(())
         })?;
@@ -450,11 +438,12 @@ pub fn mirror(src: &Path, dst: &Path, paths: &[String], atomic: bool) -> Result<
     // 3. Directory modes and times last: adding a child moves a directory's mtime.
     for (p, (s, _)) in paths.iter().zip(&stamps).rev() {
         if let Some(s) = s.as_ref().filter(|s| s.kind == Kind::Dir) {
-            on_the_way(p)?;
-            if fs::symlink_metadata(dst.join(p)).is_ok_and(|m| m.file_type().is_symlink()) {
+            let (dir, name) = parent_beneath(&root, dst, p)?;
+            let to = dst.join(p);
+            if entry_at(&dir, name).at(&to)? != Some(Kind::Dir) {
                 continue;
             }
-            finish(&dst.join(p), s)?;
+            finish_at(&dir, name, s).at(&to)?;
         }
     }
 
@@ -463,7 +452,8 @@ pub fn mirror(src: &Path, dst: &Path, paths: &[String], atomic: bool) -> Result<
 }
 
 /// Gives the parent directories of `paths` (the root included) under `dst`
-/// the modification times they have under `src`, where both are directories.
+/// the modification times they have under `src`, where both are
+/// directories; under `dst`, through descriptors as [`mirror`] goes.
 pub fn copy_parent_times(src: &Path, dst: &Path, paths: &[String]) -> Result<()> {
     let listed: BTreeSet<&str> = paths.iter().map(String::as_str).collect();
     let parents: BTreeSet<&str> = paths
@@ -471,37 +461,186 @@ pub fn copy_parent_times(src: &Path, dst: &Path, paths: &[String]) -> Result<()>
         .filter_map(|p| Path::new(p).parent()?.to_str())
         .filter(|p| !listed.contains(p))
         .collect();
+    let root = File::open(dst).at(dst)?;
     for parent in parents {
-        let (from, to) = (src.join(parent), dst.join(parent));
-        if let (Some(s), Some(d)) = (Stamp::of(&from)?, Stamp::of(&to)?)
-            && s.kind == Kind::Dir
-            && d.kind == Kind::Dir
-        {
-            let mtime = FileTime::from_unix_time(s.mtime.0, s.mtime.1 as u32);
-            filetime::set_file_mtime(&to, mtime).at(&to)?;
+        let Some(s) = Stamp::of(&src.join(parent))?.filter(|s| s.kind == Kind::Dir) else {
+            continue;
+        };
+        let to = dst.join(parent);
+        if parent.is_empty() {
+            set_mtime(&root, None, s.mtime).at(&to)?;
+            continue;
+        }
+        let (dir, name) = parent_beneath(&root, dst, parent)?;
+        if entry_at(&dir, name).at(&to)? == Some(Kind::Dir) {
+            set_mtime(&dir, Some(name), s.mtime).at(&to)?;
         }
     }
     Ok(())
 }
 
-/// Runs `f`, which adds or removes an entry in `path`'s directory, with that
-/// directory writable for the moment if it is not (a read-only module cache,
-/// a `chmod 555` build directory), and its mode put back afterwards.
-fn in_parent<T>(path: &Path, f: impl FnOnce() -> Result<T>) -> Result<T> {
-    let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) else {
-        return f();
-    };
-    let mode = match fs::symlink_metadata(parent) {
-        Ok(meta) if meta.is_dir() => meta.permissions().mode() & 0o7777,
-        _ => return f(),
-    };
+/// The directory `rel` is in under `dst` (open as `root`), opened one
+/// component at a time without following a link, and `rel`'s own name in
+/// it. A link on the way is refused.
+fn parent_beneath<'a>(root: &File, dst: &Path, rel: &'a str) -> Result<(File, &'a str)> {
+    use std::os::fd::{AsRawFd, FromRawFd};
+    let (parent, name) = rel.rsplit_once('/').unwrap_or(("", rel));
+    let mut dir = root.try_clone().at(dst)?;
+    let mut at = dst.to_path_buf();
+    for part in parent.split('/').filter(|p| !p.is_empty()) {
+        at.push(part);
+        let cname = plain_name(part).at(&at)?;
+        let flags = libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC;
+        // SAFETY: openat reads the name and returns a new descriptor or -1.
+        let fd = unsafe { libc::openat(dir.as_raw_fd(), cname.as_ptr(), flags) };
+        if fd == -1 {
+            let e = io::Error::last_os_error();
+            if e.raw_os_error() == Some(libc::ELOOP) {
+                return Err(Error::Invalid(format!(
+                    "{} is a link, which a commit does not write through",
+                    at.display()
+                )));
+            }
+            return Err(e).at(&at);
+        }
+        // SAFETY: fd was just opened and is owned by nothing else.
+        dir = unsafe { File::from_raw_fd(fd) };
+    }
+    plain_name(name).at(&dst.join(rel))?;
+    Ok((dir, name))
+}
+
+/// Runs `f`, which adds or removes an entry in `dir`, with `dir` writable
+/// for the moment if it is not (a read-only module cache, a `chmod 555`
+/// build directory), and its mode put back afterwards; `shown` names the
+/// entry in errors.
+fn in_dir<T>(dir: &File, shown: &Path, f: impl FnOnce() -> Result<T>) -> Result<T> {
+    let mode = dir.metadata().at(shown)?.permissions().mode() & 0o7777;
     if mode & 0o200 != 0 {
         return f();
     }
-    fs::set_permissions(parent, fs::Permissions::from_mode(mode | 0o700)).at(parent)?;
+    dir.set_permissions(fs::Permissions::from_mode(mode | 0o700))
+        .at(shown)?;
     let done = f();
-    fs::set_permissions(parent, fs::Permissions::from_mode(mode)).at(parent)?;
+    dir.set_permissions(fs::Permissions::from_mode(mode))
+        .at(shown)?;
     done
+}
+
+/// A name for a file on its way into a directory, renamed into place.
+fn temp_name() -> String {
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let n = NEXT.fetch_add(1, Ordering::Relaxed);
+    format!(".kule-tmp-{}-{n}", std::process::id())
+}
+
+/// Makes the directory `name` in `dir`.
+fn mkdir_at(dir: &File, name: &str) -> io::Result<()> {
+    use std::os::fd::AsRawFd;
+    let cname = plain_name(name)?;
+    // SAFETY: a directory descriptor we own and a NUL-terminated name.
+    if unsafe { libc::mkdirat(dir.as_raw_fd(), cname.as_ptr(), 0o777) } == -1 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+/// Makes `name` in `dir` what `stamp` describes, read from `rel` under
+/// `root` without following a link at any step of its way: a file or link
+/// put in place of what `stamp` describes, or a directory on the way
+/// swapped for a link, is refused, so nothing from outside `root` can come
+/// along. `to` names it in errors.
+fn place_at(
+    root: &Path,
+    rel: &str,
+    dir: &File,
+    name: &str,
+    stamp: &Stamp,
+    to: &Path,
+) -> Result<()> {
+    use std::os::fd::AsRawFd;
+    use std::os::unix::ffi::OsStrExt;
+    let from = root.join(rel);
+    let changed = || Error::Invalid(format!("{rel} changed while it was being copied"));
+    let cname = plain_name(name).at(to)?;
+    match (stamp.kind, beneath(root, rel).at(&from)?) {
+        (Kind::File, Beneath::File(file)) => {
+            copy_into(&file, dir.as_raw_fd(), &cname).at(to)?;
+            finish_at(dir, name, stamp).at(to)
+        }
+        (Kind::Symlink, Beneath::Link(target)) => {
+            let target = std::ffi::CString::new(target.as_os_str().as_bytes())
+                .map_err(io::Error::other)
+                .at(to)?;
+            // SAFETY: two NUL-terminated strings and a directory descriptor we own.
+            if unsafe { libc::symlinkat(target.as_ptr(), dir.as_raw_fd(), cname.as_ptr()) } == -1 {
+                return Err(io::Error::last_os_error()).at(to);
+            }
+            Ok(())
+        }
+        (Kind::Dir, Beneath::Dir(_)) => mkdir_at(dir, name).at(to),
+        _ => Err(changed()),
+    }
+}
+
+/// [`finish`] for the entry `name` in `dir`, not following a link.
+fn finish_at(dir: &File, name: &str, stamp: &Stamp) -> io::Result<()> {
+    use std::os::fd::AsRawFd;
+    set_mtime(dir, Some(name), stamp.mtime)?;
+    let cname = plain_name(name)?;
+    // mode_t is u16 on macOS, u32 on Linux.
+    #[allow(clippy::useless_conversion)]
+    let mode = libc::mode_t::try_from(stamp.mode & 0o7777).map_err(io::Error::other)?;
+    // SAFETY: a directory descriptor we own and a NUL-terminated name.
+    let done = unsafe {
+        libc::fchmodat(
+            dir.as_raw_fd(),
+            cname.as_ptr(),
+            mode,
+            libc::AT_SYMLINK_NOFOLLOW,
+        )
+    };
+    if done == -1 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+/// Sets the modification time of the entry `name` in `dir` (of `dir`
+/// itself without one), leaving its access time, not following a link.
+fn set_mtime(dir: &File, name: Option<&str>, mtime: (i64, i64)) -> io::Result<()> {
+    use std::os::fd::AsRawFd;
+    let times = [
+        libc::timespec {
+            tv_sec: 0,
+            tv_nsec: libc::UTIME_OMIT,
+        },
+        libc::timespec {
+            tv_sec: mtime.0 as libc::time_t,
+            tv_nsec: mtime.1 as libc::c_long,
+        },
+    ];
+    let done = match name {
+        // SAFETY: a descriptor we own and two timespecs.
+        None => unsafe { libc::futimens(dir.as_raw_fd(), times.as_ptr()) },
+        Some(name) => {
+            let cname = plain_name(name)?;
+            // SAFETY: a directory descriptor we own, a NUL-terminated name
+            // and two timespecs.
+            unsafe {
+                libc::utimensat(
+                    dir.as_raw_fd(),
+                    cname.as_ptr(),
+                    times.as_ptr(),
+                    libc::AT_SYMLINK_NOFOLLOW,
+                )
+            }
+        }
+    };
+    if done == -1 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
 }
 
 /// Puts the file or symlink described by `stamp` (read from `from`) at `to`,
@@ -517,41 +656,26 @@ fn place(from: &Path, to: &Path, stamp: &Stamp) -> Result<()> {
     }
 }
 
-/// [`place`] for the entry `rel` under `root`, read without following a link
-/// at any step of its way: a file or link put in place of what `stamp`
-/// describes, or a directory on the way swapped for a link, is refused, so
-/// nothing from outside `root` can come along.
-fn place_beneath(root: &Path, rel: &str, to: &Path, stamp: &Stamp) -> Result<()> {
-    let from = root.join(rel);
-    let changed = || Error::Invalid(format!("{rel} changed while it was being copied"));
-    match (stamp.kind, beneath(root, rel).at(&from)?) {
-        (Kind::File, Beneath::File(file)) => {
-            copy_from(&file, to).at(to)?;
-            finish(to, stamp)
-        }
-        (Kind::Symlink, Beneath::Link(target)) => symlink(target, to).at(to),
-        (Kind::Dir, Beneath::Dir(_)) => fs::create_dir(to).at(to),
-        _ => Err(changed()),
-    }
-}
-
-/// A new file at `to` with what `file` holds: cloned where the filesystem
-/// allows it, copied otherwise.
-fn copy_from(file: &File, to: &Path) -> io::Result<()> {
-    use std::os::fd::AsRawFd;
+/// A new file, `name` in the directory `dir`, with what `file` holds:
+/// cloned where the filesystem allows it, copied otherwise; never one
+/// already there, nor a link followed.
+fn copy_into(file: &File, dir: std::os::fd::RawFd, name: &std::ffi::CStr) -> io::Result<()> {
+    use std::os::fd::{AsRawFd, FromRawFd};
     #[cfg(target_os = "macos")]
     {
-        use std::os::unix::ffi::OsStrExt;
-        let name = std::ffi::CString::new(to.as_os_str().as_bytes())?;
-        // SAFETY: a descriptor we own and a NUL-terminated path.
-        if unsafe { libc::fclonefileat(file.as_raw_fd(), libc::AT_FDCWD, name.as_ptr(), 0) } == 0 {
+        // SAFETY: descriptors we own and a NUL-terminated name.
+        if unsafe { libc::fclonefileat(file.as_raw_fd(), dir, name.as_ptr(), 0) } == 0 {
             return Ok(());
         }
     }
-    let mut out = fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(to)?;
+    let flags = libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW | libc::O_CLOEXEC;
+    // SAFETY: openat reads the name and returns a new descriptor or -1.
+    let fd = unsafe { libc::openat(dir, name.as_ptr(), flags, 0o666 as libc::c_uint) };
+    if fd == -1 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: fd was just opened and is owned by nothing else.
+    let mut out = unsafe { File::from_raw_fd(fd) };
     #[cfg(target_os = "linux")]
     {
         // SAFETY: two descriptors we own; FICLONE shares the source's extents.
@@ -1264,6 +1388,111 @@ mod tests {
             fs::read_to_string(outside.join("gone.txt")).unwrap(),
             "theirs\n"
         );
+    }
+
+    /// A folder on the way swapped for a link while `mirror` runs, over and
+    /// over, as a process left running could: nothing outside is written,
+    /// changed or removed, whichever moment the swap lands in.
+    #[test]
+    fn a_folder_swapped_for_a_link_meanwhile_takes_nothing_elsewhere() {
+        use std::sync::atomic::AtomicBool;
+        let dir = TempDir::new().unwrap();
+        let (src, dst, outside) = (
+            dir.path().join("src"),
+            dir.path().join("dst"),
+            dir.path().join("outside"),
+        );
+        fs::create_dir_all(src.join("d/sub")).unwrap();
+        fs::write(src.join("d/new.txt"), "ours\n").unwrap();
+        fs::create_dir_all(dst.join("d")).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        for name in ["gone.txt", "new.txt"] {
+            fs::write(outside.join(name), "theirs\n").unwrap();
+        }
+        fs::create_dir(outside.join("sub")).unwrap();
+        fs::set_permissions(outside.join("sub"), fs::Permissions::from_mode(0o700)).unwrap();
+        let theirs = || {
+            let mut names: Vec<_> = fs::read_dir(&outside)
+                .unwrap()
+                .map(|e| e.unwrap().file_name())
+                .collect();
+            names.sort();
+            let mode = fs::metadata(outside.join("sub"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777;
+            (
+                names,
+                fs::read_to_string(outside.join("gone.txt")).ok(),
+                fs::read_to_string(outside.join("new.txt")).ok(),
+                mode,
+            )
+        };
+        let before = theirs();
+
+        let stop = std::sync::Arc::new(AtomicBool::new(false));
+        // Held by the test while it puts `dst` right between runs, so only
+        // `mirror` ever meets the link.
+        let still = std::sync::Arc::new(std::sync::Mutex::new(()));
+        let swapper = {
+            let (dst, outside, stop, still) =
+                (dst.clone(), outside.clone(), stop.clone(), still.clone());
+            std::thread::spawn(move || {
+                let (d, real) = (dst.join("d"), dst.join("d.real"));
+                while !stop.load(Ordering::Relaxed) {
+                    let _still = still.lock().unwrap();
+                    if fs::rename(&d, &real).is_ok() {
+                        let _ = symlink(&outside, &d);
+                        std::thread::yield_now();
+                        let _ = fs::remove_file(&d);
+                        let _ = fs::rename(&real, &d);
+                    }
+                }
+            })
+        };
+        let paths = [
+            "d/gone.txt".to_owned(),
+            "d/new.txt".to_owned(),
+            "d/sub".to_owned(),
+        ];
+        let start = std::time::Instant::now();
+        while start.elapsed() < std::time::Duration::from_secs(3) {
+            for atomic in [true, false] {
+                {
+                    let _still = still.lock().unwrap();
+                    fs::write(dst.join("d/gone.txt"), "copy\n").unwrap();
+                    let _ = fs::remove_file(dst.join("d/new.txt"));
+                    let _ = fs::remove_dir(dst.join("d/sub"));
+                }
+                let _ = mirror(&src, &dst, &paths, atomic);
+            }
+        }
+        stop.store(true, Ordering::Relaxed);
+        swapper.join().unwrap();
+        assert_eq!(theirs(), before);
+    }
+
+    /// A mode or a time Kule gives an entry it put in place goes to that
+    /// entry: a link standing there takes neither to what it points at.
+    #[test]
+    fn modes_and_times_never_follow_a_link() {
+        let root = TempDir::new().unwrap();
+        let outside = TempDir::new().unwrap();
+        let victim = outside.path().join("victim");
+        fs::write(&victim, "mine\n").unwrap();
+        fs::set_permissions(&victim, fs::Permissions::from_mode(0o600)).unwrap();
+        let before = fs::metadata(&victim).unwrap().modified().unwrap();
+        symlink(&victim, root.path().join("entry")).unwrap();
+        let dir = File::open(root.path()).unwrap();
+        let mut stamp = Stamp::of(&victim).unwrap().unwrap();
+        stamp.mode = 0o777;
+        stamp.mtime = (1, 0);
+        let _ = finish_at(&dir, "entry", &stamp);
+        let _ = set_mtime(&dir, Some("entry"), (1, 0));
+        let after = fs::metadata(&victim).unwrap();
+        assert_eq!(after.permissions().mode() & 0o777, 0o600);
+        assert_eq!(after.modified().unwrap(), before);
     }
 
     #[test]

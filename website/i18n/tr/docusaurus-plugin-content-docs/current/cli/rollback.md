@@ -97,6 +97,7 @@ içindekiler dahil, geri konan her yolu sayar.
 | --- | --- |
 | `kule: an agent is at work in task <id> …` | Çalıştırmanın bitmesini bekleyin ya da onu durdurun. |
 | `kule: task <id> is busy: another kule command holds its lock` | Diğer komutun bitmesini bekleyin. |
+| `kule: a terminal is open on this task's copy (in Kule's app, or kule shell); close it first, then roll back` | Görevin terminalini kapatın (uygulamadaki sekmeyi ya da `kule shell`'den `exit` ile çıkın), sonra geri alın. Görevin sandbox'ında hâlâ çalışan ne varsa önce sonlandırılır; böylece kopya geri konurken hiçbir şey onu değiştirmez. |
 
 ## Uygulamada
 

@@ -255,7 +255,8 @@ opening a terminal".
 **Neden:** görev, kopyada sandbox'ın dışında kendiliğinden çalışacak bir
 şeyi değiştirdi: git config'ini ya da hook'larını (kabuk isteminizdeki
 `git status` onları çalıştırırdı), `rust-toolchain.toml` ya da `.nvmrc`
-gibi bir sürüm dosyasını, `.envrc`'yi ya da bir editörün ayarlarını. Ya da
+gibi bir sürüm dosyasını, bir `package.json`'ın adını verdiği paket
+yöneticisini, `.envrc`'yi ya da bir editörün ayarlarını. Ya da
 görevde bir ajan çalışıyor: işi bitene kadar bekleyin.
 
 **Çözüm:** değişikliği Review'da (ya da `kule status` ile) inceleyin,
@@ -266,9 +267,10 @@ copy in your editor*, `kule shell --outside`); görevin terminali ve
 
 ### Commit, sync ya da bir çalıştırma bir terminali bekliyor
 
-**Belirti:** "a terminal is open on task …'s copy (held by process …);
-close it first, then commit" (ya da *then sync*, *then apply its home
-changes*, *then start work*).
+**Belirti:** "a terminal is open on this task's copy (in Kule's app, or kule shell);
+close it first, then commit" (ya da *then sync*, *then roll back*, *then
+undo*, *then go back to a step*, *then apply its home changes*, *then undo
+its home changes*, *then start work*).
 
 **Neden:** görevde bir terminal açık: uygulamanın **Terminal** panelindeki
 bir sekme ya da `kule shell`. Kule orada çalışanı sonlandırmaz; böylece

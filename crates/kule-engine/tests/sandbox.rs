@@ -2705,3 +2705,75 @@ fn a_sandbox_ends_what_it_left_and_nothing_of_the_others() {
     assert!(alive(theirs), "another sandbox's process was ended");
     assert_eq!(other.end_own().unwrap(), 1);
 }
+
+/// Rolling back, undoing and going back to a step write in the copy, as a
+/// commit does: what still runs in the task's sandbox, having left its
+/// command's session and parent, is ended first, so nothing changes the
+/// copy while Kule writes there.
+#[test]
+fn what_still_runs_in_the_sandbox_is_ended_before_the_copy_is_put_back() {
+    type Put = fn(&Task) -> bool;
+    let ways: [(&str, Put); 3] = [
+        ("rollback", |t| t.rollback().is_ok()),
+        // Refused for the change the stray made, after it is ended.
+        ("undo", |t| t.undo().is_err()),
+        ("back to a step", |t| t.back_to_step(0).is_ok()),
+    ];
+    for (way, put) in ways {
+        let s = Setup::new();
+        let copy = s.task.copy();
+        let code = "import os, time\nif os.fork(): os._exit(0)\nos.setsid()\nif os.fork(): os._exit(0)\nopen('stray.tmp','w').write(str(os.getpid()))\nos.rename('stray.tmp','stray.txt')\nwhile True: time.sleep(0.05)";
+        let status = s
+            .sandbox()
+            .command(
+                "python3",
+                &["-I".to_owned(), "-c".to_owned(), code.to_owned()],
+            )
+            .unwrap()
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .unwrap();
+        assert!(status.success());
+        let mut pid = None;
+        for _ in 0..200 {
+            if let Ok(text) = fs::read_to_string(copy.join("stray.txt")) {
+                pid = Some(text.trim().parse::<i32>().unwrap());
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        // On Linux what a command leaves ends with its PID namespace, maybe
+        // before it says where it is; on macOS it stays, and must be found.
+        let Some(pid) = pid else {
+            if cfg!(target_os = "macos") {
+                panic!("the stray never started");
+            }
+            eprintln!("the stray ended with its command here; nothing left to end");
+            return;
+        };
+        // SAFETY: probing a pid; signal 0 sends nothing.
+        let alive = |pid: i32| unsafe { libc::kill(pid, 0) == 0 };
+        if !alive(pid) {
+            if cfg!(target_os = "macos") {
+                panic!("the stray ended on its own");
+            }
+            eprintln!("the stray ended with its command here; nothing left to end");
+            return;
+        }
+        assert!(put(&s.task), "{way}");
+        let mut gone = false;
+        for _ in 0..100 {
+            if !alive(pid) {
+                gone = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        if !gone {
+            Sandbox::end_all(&s.task).unwrap();
+        }
+        assert!(gone, "the stray still runs after {way}");
+    }
+}

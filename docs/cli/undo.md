@@ -96,6 +96,7 @@ hint: roll back, or rerun the task on the current workspace
 | `kule: the workspace changed since Kule last saw it, at: <paths>` | These files changed in the real folder after the commit. Kule will not overwrite them. Restore them by hand, or leave the commit in place. |
 | `kule: workspace <path> is gone …` | The real folder was moved or deleted. |
 | `kule: an agent is at work in task <id> …` | Wait for the run to end. |
+| `kule: a terminal is open on this task's copy (in Kule's app, or kule shell); close it first, then undo` | Close the task's terminal (the app's tab, or `exit` in `kule shell`), then undo. |
 
 ## In the app
 

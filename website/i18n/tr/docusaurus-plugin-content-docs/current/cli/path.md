@@ -28,7 +28,8 @@ reddeder; bu yüzden yazdırılan yol her zaman kopyanın içindedir.
 
 [`kule shell --outside`](shell.md#outside-the-sandbox) reddettiği yerde
 `kule path`, görev o klasörde kendiliğinden çalışacak bir şeyi (git
-config'i ya da hook'ları, bir sürüm dosyasını, bir editörün ayarlarını)
+config'i ya da hook'ları, bir sürüm dosyasını, bir `package.json`'ın adını
+verdiği paket yöneticisini, bir editörün ayarlarını)
 değiştirmişse ya da görevde bir ajan çalışıyorsa
 stderr'e bir uyarı yazar: prompt'unuz ya da editörünüz onları sandbox
 dışında çalıştırırdı. Yolu yine de yazdırır (tek başına bir

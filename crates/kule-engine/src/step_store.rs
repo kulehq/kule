@@ -210,6 +210,8 @@ impl Task {
     /// step), and records that as a step. Changes made since the last step
     /// are kept as a step first, so nothing is lost on the way.
     pub fn back_to_step(&self, id: u32) -> Result<Step> {
+        // Looked at again, with the lock held, before the copy is written.
+        self.no_terminal_open("go back to a step")?;
         let staging = self.dir().join(STORE).join("going-back");
         let staged = self
             .stage_step(id, &staging, "Changes before going back")

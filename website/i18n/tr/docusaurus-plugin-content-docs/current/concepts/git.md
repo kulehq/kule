@@ -77,7 +77,13 @@ sandbox'ında çalışır. Kopyayı sandbox'ın **dışında** açmak ise farkl�
   dosya: bir araç zinciri sürüm dosyası (`rust-toolchain.toml`, `.nvmrc`,
   `.python-version`, `.tool-versions`), `.envrc` ya da bir editörün ayarları
   ve görevleri (`.vscode/`); bir prompt ya da editör klasörü açarken
-  bunları okur.
+  bunları okur;
+- bir `package.json`'ın adını verdiği paket yöneticisi (`packageManager` ya
+  da `devEngines.packageManager`): Corepack açıksa oradaki bir sonraki
+  `pnpm` ya da `yarn`, bir editörünki de, o sürümü indirip çalıştırır.
+  `package.json`'daki öteki değişiklikler terminali açık bırakır; commit'te
+  bir manifest olarak beklerler. Kule'nin JSON olarak okuyamadığı bir
+  `package.json` da terminali kapatır.
 
 `kule path` stderr'e bir uyarı yazar. Önce inceleyip commit edin ya da
 değişiklikleri atın (roll back).

@@ -26,7 +26,8 @@ the copy.
 
 Where [`kule shell --outside`](shell.md#outside-the-sandbox) refuses,
 `kule path` warns on stderr when the task has changed what would run in
-that folder by itself (git config or hooks, a toolchain pin, an editor's
+that folder by itself (git config or hooks, a toolchain pin, the package
+manager a `package.json` names, an editor's
 settings), or while an agent is at work: your
 prompt or editor would run them outside the sandbox. It still prints the path (a path alone runs nothing),
 but take the warning seriously before you run git or open an editor there.
