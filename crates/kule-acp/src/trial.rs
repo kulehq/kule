@@ -345,6 +345,7 @@ mod tests {
             answer: None,
             secrets: Vec::new(),
             cut: None,
+            failed: None,
         }
     }
 

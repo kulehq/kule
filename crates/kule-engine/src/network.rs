@@ -35,7 +35,8 @@ pub struct Connection {
     pub port: u16,
     pub verdict: Verdict,
     pub rules: Vec<String>,
-    /// `refused`, `unresolved`, `private`, `unreachable` or `tunneled`.
+    /// `refused`, `unresolved`, `private`, `unreachable`, `tunneled`,
+    /// `cut` (see `cut`) or `failed` (see `failed`).
     pub outcome: String,
     /// For a connection put to a person, how it was decided.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -44,9 +45,15 @@ pub struct Connection {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub secrets: Vec<String>,
     /// Why Kule cut a connection it had let through, once it saw what went
-    /// over it: a TLS hello for another host, a request for another host.
+    /// over it: a TLS hello for another host, a request for another host,
+    /// a request Kule refused inside it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cut: Option<String>,
+    /// Why a connection Kule let through ended early on its own (the host
+    /// or the client went away, an error): not Kule's doing, and not one
+    /// that went through as asked either.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failed: Option<String>,
 }
 
 /// The proxy of one task, serving until it is dropped. Dropping it closes
@@ -271,9 +278,18 @@ struct Gate {
     interceptor: Option<Interceptor>,
 }
 
-/// A judged connection waiting for its outcome: the person's answer if one
-/// was asked, the secrets put into it, and why Kule cut it, if it did.
-type Pending = (Judgement, Option<Answer>, Vec<String>, Option<String>);
+/// A judged connection waiting for its outcome.
+struct Pending {
+    judgement: Judgement,
+    /// The person's answer, if one was asked.
+    answer: Option<Answer>,
+    /// The secrets put into it.
+    secrets: Vec<String>,
+    /// Why Kule cut it, if it did.
+    cut: Option<String>,
+    /// Why it failed on its own, if it did.
+    failed: Option<String>,
+}
 
 impl lonca_net::Gate for Gate {
     fn decide(&self, request: &lonca_net::Request<'_>) -> lonca_net::Verdict {
@@ -314,7 +330,16 @@ impl lonca_net::Gate for Gate {
             allow = false;
             reason = "addresses on this computer or its network are not reachable".to_owned();
         }
-        lock(&self.pending).insert(request.peer, (judgement, answer, Vec::new(), None));
+        lock(&self.pending).insert(
+            request.peer,
+            Pending {
+                judgement,
+                answer,
+                secrets: Vec::new(),
+                cut: None,
+                failed: None,
+            },
+        );
         lonca_net::Verdict {
             allow,
             allow_private,
@@ -352,10 +377,8 @@ impl lonca_net::Gate for Gate {
         // passed on half filled.
         // What went in before an error went out all the same.
         let mut used = std::collections::BTreeSet::new();
-        let _ = interceptor.serve_noting(&host, tunnel, &mut used);
-        if let Some(pending) = lock(&self.pending).get_mut(&request.peer) {
-            pending.2 = used.into_iter().collect();
-        }
+        let served = interceptor.serve_noting(&host, tunnel, &mut used);
+        self.record_served(request, served, used);
         None
     }
 
@@ -375,14 +398,22 @@ impl lonca_net::Gate for Gate {
         }
         // Every request on the connection is read, and each must be for
         // the host it was let through to.
-        if let Err(why) = crate::tls::serve_plain(&host, request.port, head, tunnel) {
-            self.note_cut(request, why);
+        match crate::tls::serve_plain(&host, request.port, head, tunnel) {
+            Ok(()) => {}
+            Err(crate::tls::Ended::Refused(why)) => self.note_cut(request, why),
+            Err(crate::tls::Ended::Failed(why)) => self.note_failed(request, why),
         }
         None
     }
 
     fn finished(&self, request: &lonca_net::Request<'_>, outcome: lonca_net::Outcome) {
-        let Some((judgement, answer, secrets, cut)) = lock(&self.pending).remove(&request.peer)
+        let Some(Pending {
+            judgement,
+            answer,
+            secrets,
+            cut,
+            failed,
+        }) = lock(&self.pending).remove(&request.peer)
         else {
             return;
         };
@@ -396,12 +427,15 @@ impl lonca_net::Gate for Gate {
             rules: judgement.rules,
             outcome: if cut.is_some() {
                 "cut".to_owned()
+            } else if failed.is_some() {
+                "failed".to_owned()
             } else {
                 format!("{outcome:?}").to_lowercase()
             },
             answer,
             secrets,
             cut,
+            failed,
         };
         if let Ok(mut line) = serde_json::to_vec(&record) {
             line.push(b'\n');
@@ -413,7 +447,34 @@ impl lonca_net::Gate for Gate {
 impl Gate {
     fn note_cut(&self, request: &lonca_net::Request<'_>, why: String) {
         if let Some(pending) = lock(&self.pending).get_mut(&request.peer) {
-            pending.3 = Some(why);
+            pending.cut = Some(why);
+        }
+    }
+
+    fn note_failed(&self, request: &lonca_net::Request<'_>, why: String) {
+        if let Some(pending) = lock(&self.pending).get_mut(&request.peer) {
+            pending.failed = Some(why);
+        }
+    }
+
+    /// Notes how a tunnel the interceptor served ended: the secrets that
+    /// went into it, and a request Kule refused (a cut, with why) or an
+    /// error (failed) apart from one that went through.
+    fn record_served(
+        &self,
+        request: &lonca_net::Request<'_>,
+        served: crate::error::Result<crate::tls::Served>,
+        used: std::collections::BTreeSet<String>,
+    ) {
+        if let Some(pending) = lock(&self.pending).get_mut(&request.peer) {
+            pending.secrets = used.into_iter().collect();
+        }
+        match served {
+            Ok(crate::tls::Served { refused: None }) => {}
+            Ok(crate::tls::Served { refused: Some(why) }) => {
+                self.note_cut(request, format!("Kule refused a request in it: {why}"));
+            }
+            Err(e) => self.note_failed(request, e.to_string()),
         }
     }
 }
@@ -606,6 +667,164 @@ fn loopback_by_name(host: &str) -> bool {
 mod tests {
     use super::*;
 
+    /// A tunnel Kule looked into is logged as what became of it: cut, with
+    /// why, when Kule refused a request in it; failed, with why, when it
+    /// ended in an error; tunneled only when every request went through.
+    /// The secrets that went in are kept either way.
+    #[test]
+    fn a_tunnel_kule_looked_into_is_logged_as_what_became_of_it() {
+        use lonca_net::Gate as _;
+        let dir = tempfile::TempDir::new().unwrap();
+        let log_path = dir.path().join("network.jsonl");
+        let gate = Gate {
+            policy: Policy::from_texts(crate::DEFAULT_POLICY, None).unwrap(),
+            log: Mutex::new(File::create(&log_path).unwrap()),
+            pending: Mutex::new(HashMap::new()),
+            asker: None,
+            interceptor: None,
+        };
+        let ends: [crate::error::Result<crate::tls::Served>; 3] = [
+            Ok(crate::tls::Served {
+                refused: Some(crate::tls::REFUSED_WRITE),
+            }),
+            Err(Error::Invalid(
+                "api.example: closed without a response".into(),
+            )),
+            Ok(crate::tls::Served { refused: None }),
+        ];
+        for (n, served) in ends.into_iter().enumerate() {
+            let peer: SocketAddr = format!("127.0.0.1:{}", 40000 + n).parse().unwrap();
+            let request = lonca_net::Request {
+                host: "api.example",
+                port: 443,
+                peer,
+                local: "127.0.0.1:1".parse().unwrap(),
+            };
+            lock(&gate.pending).insert(
+                peer,
+                Pending {
+                    judgement: gate.policy.judge_connection("api.example", 443),
+                    answer: None,
+                    secrets: Vec::new(),
+                    cut: None,
+                    failed: None,
+                },
+            );
+            gate.record_served(&request, served, ["API_KEY".to_owned()].into());
+            gate.finished(&request, lonca_net::Outcome::Tunneled);
+        }
+        let logged: Vec<Connection> = std::fs::read_to_string(&log_path)
+            .unwrap()
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        // What became of each: outcome, cut, failed, secrets.
+        type Seen<'a> = (&'a str, Option<&'a str>, Option<&'a str>, &'a [String]);
+        let seen: Vec<Seen> = logged
+            .iter()
+            .map(|c| {
+                (
+                    c.outcome.as_str(),
+                    c.cut.as_deref(),
+                    c.failed.as_deref(),
+                    c.secrets.as_slice(),
+                )
+            })
+            .collect();
+        let key = ["API_KEY".to_owned()];
+        assert_eq!(
+            seen,
+            [
+                (
+                    "cut",
+                    Some(
+                        "Kule refused a request in it: a write to a host commands may only read from"
+                    ),
+                    None,
+                    &key[..]
+                ),
+                (
+                    "failed",
+                    None,
+                    Some("api.example: closed without a response"),
+                    &key[..]
+                ),
+                ("tunneled", None, None, &key[..]),
+            ]
+        );
+    }
+
+    /// A plain HTTP connection is logged as cut, with why, when Kule
+    /// refused a request on it (one for another host), and as failed when
+    /// the host went away without an answer: Kule did not cut that one.
+    #[test]
+    fn a_plain_connection_is_logged_as_cut_by_kule_or_failed_on_its_own() {
+        use lonca_net::Gate as _;
+        use std::net::{TcpListener, TcpStream};
+        let dir = tempfile::TempDir::new().unwrap();
+        let log_path = dir.path().join("network.jsonl");
+        let gate = Gate {
+            policy: Policy::from_texts(crate::DEFAULT_POLICY, None).unwrap(),
+            log: Mutex::new(File::create(&log_path).unwrap()),
+            pending: Mutex::new(HashMap::new()),
+            asker: None,
+            interceptor: None,
+        };
+        for head in [
+            "GET / HTTP/1.1\r\nHost: other.example\r\n\r\n",
+            "GET / HTTP/1.1\r\nHost: localhost\r\n\r\n",
+        ] {
+            // A host that takes the connection and closes it unanswered.
+            let host = TcpListener::bind("127.0.0.1:0").unwrap();
+            let upstream = TcpStream::connect(host.local_addr().unwrap()).unwrap();
+            drop(host.accept().unwrap());
+            let proxy = TcpListener::bind("127.0.0.1:0").unwrap();
+            let _client = TcpStream::connect(proxy.local_addr().unwrap()).unwrap();
+            let (client, peer) = proxy.accept().unwrap();
+            let request = lonca_net::Request {
+                host: "localhost",
+                port: 80,
+                peer,
+                local: proxy.local_addr().unwrap(),
+            };
+            lock(&gate.pending).insert(
+                peer,
+                Pending {
+                    judgement: gate.policy.judge_connection("localhost", 80),
+                    answer: None,
+                    secrets: Vec::new(),
+                    cut: None,
+                    failed: None,
+                },
+            );
+            let tunnel = lonca_net::Tunnel {
+                client,
+                upstream,
+                early: Vec::new(),
+            };
+            assert!(
+                gate.relay_plain(&request, head.to_owned(), tunnel)
+                    .is_none()
+            );
+            gate.finished(&request, lonca_net::Outcome::Tunneled);
+        }
+        let logged: Vec<Connection> = std::fs::read_to_string(&log_path)
+            .unwrap()
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        assert_eq!(logged.len(), 2);
+        assert_eq!(logged[0].outcome, "cut", "{:?}", logged[0]);
+        assert!(logged[0].cut.is_some() && logged[0].failed.is_none());
+        assert_eq!(logged[1].outcome, "failed", "{:?}", logged[1]);
+        // Unanswered or reset: either way the host's doing, not Kule's.
+        assert!(
+            logged[1].failed.is_some() && logged[1].cut.is_none(),
+            "{:?}",
+            logged[1]
+        );
+    }
+
     /// A connection let through by name that reached an address on this
     /// computer or its network is shut, and recorded as cut, with why:
     /// never as a tunnel that went through.
@@ -639,7 +858,16 @@ mod tests {
             };
             let judgement = gate.policy.judge_connection("rebind.example", 443);
             assert_eq!(judgement.verdict, Verdict::Allow);
-            lock(&gate.pending).insert(peer, (judgement, None, Vec::new(), None));
+            lock(&gate.pending).insert(
+                peer,
+                Pending {
+                    judgement,
+                    answer: None,
+                    secrets: Vec::new(),
+                    cut: None,
+                    failed: None,
+                },
+            );
             let tunnel = lonca_net::Tunnel {
                 client,
                 upstream,
