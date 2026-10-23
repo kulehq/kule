@@ -1,6 +1,11 @@
 # Changes
 
-## Unreleased
+## 0.2.0-preview.7
+
+A security preview. A task's commands read neither the other projects on
+your computer that Kule opened or that lie at the top of your home, nor
+where apps and tools keep their settings, sign-ins and data, but for what
+toolchains, shells and prompts need there.
 
 ### Security
 
