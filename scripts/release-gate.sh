@@ -383,8 +383,10 @@ probe() {
       printf 'decoy\n' >"$home/$rel/decoy"
     fi
   done <"$work/hidden.txt"
-  # A tool's settings with a token: Kule masks it in the task's home and
-  # hides the real file.
+  # A token in the home's own .env: Kule masks it in the task's home and
+  # hides the real file. A tool's settings Kule does not list are hidden
+  # whole.
+  printf 'API_TOKEN=KULECANARY%s\n' "$(random_hex)" >"$home/.env"
   printf 'API_TOKEN=KULECANARY%s\n' "$(random_hex)" >"$home/.config/tool/.env"
   printf 'decoy\n' >"$home/code/beside/decoy"
   printf 'probe workspace\n' >"$ws/README.md"
@@ -424,7 +426,8 @@ probe() {
   while IFS= read -r rel; do
     if is_file "$rel"; then block "$home/$rel" "$rel"; else block "$home/$rel" "$rel" decoy; fi
   done <"$work/hidden.txt"
-  block "$home/.config/tool/.env" "masked .config/tool/.env"
+  block "$home/.env" "masked ~/.env"
+  block "$home/.config/tool/.env" "an unlisted tool's settings"
   block "$home/code/beside" "a project beside the workspace" decoy
   block "$KULE_HOME/tasks/$task/base" "the task's base" README.md
   block "$KULE_HOME/tasks/$task/secrets.json" "the task's sealed values"
@@ -557,10 +560,10 @@ project() {
   scratch
   home=$work/home
   mkdir -p "$home/.config/tool" "$home/code"
-  # A home as people have it: a tool's settings with a token, switches
-  # and a number whose keys look like secrets, and a startup file.
+  # A home as people have it: a .env with a token, switches and a number
+  # whose keys look like secrets, and a startup file.
   token=KULECANARY$(random_hex)
-  cat >"$home/.config/tool/.env" <<EOF
+  cat >"$home/.env" <<EOF
 API_TOKEN=$token
 TOOL_ALLOW_PRIVATE_NETWORKS=false
 TOOL_AUTH_ENABLED=true
@@ -601,7 +604,7 @@ EOF
   # The token is masked in the tasks' homes and the settings beside it are
   # as they were; its value is nowhere in Kule's home, sealed but there.
   for layer in "$KULE_HOME"/tasks/*/home; do
-    env=$layer/.config/tool/.env
+    env=$layer/.env
     grep -q '^API_TOKEN=kule_secret_' "$env" || fail "the token is not masked in $env"
     for line in TOOL_ALLOW_PRIVATE_NETWORKS=false TOOL_AUTH_ENABLED=true MAX_TOKENS=4096; do
       grep -qx "$line" "$env" || fail "$line was changed in $env"
