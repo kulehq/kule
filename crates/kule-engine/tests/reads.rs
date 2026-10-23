@@ -256,6 +256,7 @@ fn a_tool_linked_from_path_into_app_data_runs() {
 fn a_writable_folder_inside_app_data_stays_writable() {
     let (_home, home) = home_with(&[
         ".local/share/kule/agents/mine/settings.json",
+        ".local/share/kule/agents/mine/sessions/one.json",
         ".local/share/kule/agents/mine/login.json",
         ".local/share/kule/agents/other/settings.json",
     ]);
@@ -268,7 +269,10 @@ fn a_writable_folder_inside_app_data_stays_writable() {
     let out = sh(
         &sandbox,
         &format!(
-            "cd '{}' && cat settings.json && echo new > new.txt && cat new.txt",
+            // In a folder of its own: on Linux nothing new is made right
+            // in a writable folder that holds a hidden path (see the
+            // sandbox's carving).
+            "cd '{}' && cat settings.json && echo new > sessions/new.json && cat sessions/new.json",
             own.display()
         ),
     );
