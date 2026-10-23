@@ -155,13 +155,15 @@ impl Interceptor {
     /// Serves one tunnel to `host`: TLS with the client under the task's
     /// authority, TLS with the host, each request filled with the secrets
     /// bound there. Notes in `used` the name of each secret as it goes in:
-    /// a connection that ends in an error has still used them.
+    /// a connection that ends in an error has still used them. Says
+    /// whether it ended on a request Kule refused, and why, in Kule's own
+    /// words (never the request's).
     pub fn serve_noting(
         &self,
         host: &str,
         tunnel: lonca_net::Tunnel,
         used: &mut BTreeSet<String>,
-    ) -> Result<()> {
+    ) -> Result<Served> {
         let io = |e: io::Error| Error::Invalid(format!("{host}: {e}"));
         tunnel
             .client
@@ -196,6 +198,7 @@ impl Interceptor {
         let mut upstream = Conn::new(StreamOwned::new(conn, tunnel.upstream));
 
         let mut served = 0;
+        let mut ended = None;
         loop {
             let head = match client.head() {
                 Ok(Some(head)) => head,
@@ -220,21 +223,32 @@ impl Interceptor {
                 )
                 .map_err(io)?;
                 client.stream.flush().map_err(io)?;
+                ended = Some(REFUSED_HEAD);
                 break;
             }
-            let request = Request::of(&head).map_err(io)?;
+            // Framed two ways, or not at all: never passed on.
+            let Ok(request) = Request::of(&head) else {
+                ended = Some(REFUSED_HEAD);
+                break;
+            };
             // Someone else's credentials to the person's host, or anything
             // but a read from a registry: ways the work could be carried
             // off. Answered here, never passed on.
             let mut refused = if self.read_only.contains(host) && !reads(&request) {
-                Some(format!(
-                    "Kule refused this request: commands read from {host}, never send to it ({} {}).\n",
-                    request.method,
-                    request.target.split('?').next().unwrap_or_default()
+                Some((
+                    format!(
+                        "Kule refused this request: commands read from {host}, never send to it ({} {}).\n",
+                        request.method,
+                        request.target.split('?').next().unwrap_or_default()
+                    ),
+                    REFUSED_WRITE,
                 ))
             } else {
                 self.vault.foreign_credential(host, &head).map(|header| {
-                    format!("Kule refused this request: its {header} is not a credential Kule holds for {host}.\n")
+                    (
+                        format!("Kule refused this request: its {header} is not a credential Kule holds for {host}.\n"),
+                        REFUSED_CREDENTIAL,
+                    )
                 })
             };
             // A body with fields to a host Kule keeps credentials for (a
@@ -248,18 +262,24 @@ impl Interceptor {
                 match read_form(&mut client, request.framing).map_err(io)? {
                     Some(body) => {
                         refused = self.vault.foreign_in_body(host, &kind, &body).map(|field| {
-                            format!("Kule refused this request: its {field} is not a credential Kule holds for {host}.\n")
+                            (
+                                format!("Kule refused this request: its {field} is not a credential Kule holds for {host}.\n"),
+                                REFUSED_CREDENTIAL,
+                            )
                         });
                         form = Some(body);
                     }
                     None => {
-                        refused = Some(format!(
-                            "Kule refused this request: a body to {host} is checked whole, and this one is chunked or over {MAX_FORM} bytes.\n"
+                        refused = Some((
+                            format!(
+                                "Kule refused this request: a body to {host} is checked whole, and this one is chunked or over {MAX_FORM} bytes.\n"
+                            ),
+                            REFUSED_BODY,
                         ));
                     }
                 }
             }
-            if let Some(said) = refused {
+            if let Some((said, why)) = refused {
                 write!(
                     client.stream,
                     "HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{said}",
@@ -267,6 +287,7 @@ impl Interceptor {
                 )
                 .map_err(io)?;
                 client.stream.flush().map_err(io)?;
+                ended = Some(why);
                 break;
             }
             // A part of a response is a part of a secret it repeats, which
@@ -316,9 +337,25 @@ impl Interceptor {
         }
         client.stream.conn.send_close_notify();
         let _ = client.stream.flush();
-        Ok(())
+        Ok(Served { refused: ended })
     }
 }
+
+/// How a tunnel [`Interceptor::serve_noting`] served ended, when it did
+/// not end in an error.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Served {
+    /// Why Kule refused its last request and ended it there, in Kule's
+    /// own words; `None` when every request went through.
+    pub refused: Option<&'static str>,
+}
+
+/// Why [`Interceptor::serve_noting`] refused a request, as the log says
+/// it: what kind of request, never what it held.
+pub const REFUSED_HEAD: &str = "a request Kule could not read one way only, or for another host";
+pub const REFUSED_WRITE: &str = "a write to a host commands may only read from";
+pub const REFUSED_CREDENTIAL: &str = "a credential Kule does not hold for this host";
+pub const REFUSED_BODY: &str = "a body Kule checks whole that was chunked or over 1 MiB";
 
 /// An error that only means the other side went quiet or away.
 fn quiet(e: &io::Error) -> bool {
@@ -791,14 +828,15 @@ fn authority_is(authority: &str, host: &str, port: u16) -> bool {
 /// each request on it, read as [`plain_head`] reads one, must be for
 /// `host`, and later ones, which name their host in the request line
 /// (`GET http://host/path`), too. A request for another host behind the
-/// same address is answered here, never passed on; why, returned.
+/// same address is answered here, never passed on; why, returned, apart
+/// from a connection that failed on its own.
 pub(crate) fn serve_plain(
     host: &str,
     port: u16,
     head: String,
     tunnel: lonca_net::Tunnel,
-) -> std::result::Result<(), String> {
-    let io = |e: io::Error| format!("{host}: {e}");
+) -> std::result::Result<(), Ended> {
+    let io = |e: io::Error| Ended::Failed(format!("{host}: {e}"));
     let _ = tunnel
         .client
         .set_read_timeout(Some(Duration::from_secs(600)));
@@ -835,10 +873,11 @@ pub(crate) fn serve_plain(
                     said.len()
                 );
                 let _ = client.stream.flush();
-                return Err(why);
+                return Err(Ended::Refused(why));
             }
         };
-        let request = Request::of(&head).map_err(io)?;
+        // Framed two ways, or not at all: never passed on.
+        let request = Request::of(&head).map_err(|_| Ended::Refused(REFUSED_HEAD.to_owned()))?;
         upstream
             .stream
             .write_all(forward(&head, request.close).as_bytes())
@@ -847,7 +886,7 @@ pub(crate) fn serve_plain(
         upstream.stream.flush().map_err(io)?;
         let last = loop {
             let Some(head) = upstream.head().map_err(io)? else {
-                return Err(format!("{host}: closed without a response"));
+                return Err(Ended::Failed(format!("{host}: closed without a response")));
             };
             let response = Response::of(&String::from_utf8_lossy(&head), &request.method);
             client.stream.write_all(&head).map_err(io)?;
@@ -861,6 +900,16 @@ pub(crate) fn serve_plain(
             return Ok(());
         }
     }
+}
+
+/// Why [`serve_plain`] ended a connection before its end.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Ended {
+    /// Kule refused a request on it, and why.
+    Refused(String),
+    /// It failed on its own (the host or the client went away, an I/O
+    /// error): not Kule's doing.
+    Failed(String),
 }
 
 /// A plain request's head with its target cut to the path, where it names
@@ -1263,7 +1312,7 @@ mod tests {
         requests: &str,
         until: Option<&str>,
         hold: bool,
-    ) -> (io::Result<String>, Result<()>, Vec<String>) {
+    ) -> (io::Result<String>, Result<Served>, Vec<String>) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
         let (proxy_end, _) = listener.accept().unwrap();
@@ -1696,8 +1745,88 @@ mod tests {
              POST /v1 HTTP/1.1\r\nHost: {HOST}\r\nContent-Length: x\r\n\r\n"
         );
         let (_, served, used) = ask_until(&interceptor, host.port, HOST, &requests, None, false);
-        assert!(served.is_err());
+        assert_eq!(served.unwrap().refused, Some(REFUSED_HEAD));
         assert_eq!(used, ["API_KEY"]);
+    }
+
+    /// Why a tunnel ended on a request Kule refused, in Kule's words, for
+    /// the log to say what Kule did: each kind of refusal says its own;
+    /// one where every request went through says none.
+    #[test]
+    fn a_refused_request_ends_its_tunnel_saying_why() {
+        let host = echo_host();
+        let refused = |interceptor: &Arc<Interceptor>, sent: String| {
+            let (_, served, _) = ask_until(interceptor, host.port, HOST, &sent, None, false);
+            served.unwrap().refused
+        };
+        let (ws, dir, home) = (
+            TempDir::new().unwrap(),
+            TempDir::new().unwrap(),
+            TempDir::new().unwrap(),
+        );
+        let vault = Vault::load(home.path(), ws.path(), dir.path()).unwrap();
+        let registry = Arc::new(
+            Interceptor::new(vault, host.roots.clone(), [HOST.to_owned()].into()).unwrap(),
+        );
+        let close = "Connection: close\r\n\r\n";
+        assert_eq!(
+            refused(
+                &registry,
+                format!("PUT /left-pad HTTP/1.1\r\nHost: {HOST}\r\nContent-Length: 0\r\n{close}")
+            ),
+            Some(REFUSED_WRITE)
+        );
+        assert_eq!(
+            refused(
+                &registry,
+                format!("GET /left-pad HTTP/1.1\r\nHost: {HOST}\r\n{close}")
+            ),
+            None
+        );
+
+        let home = TempDir::new().unwrap();
+        let (holding, _) = interceptor(&home, host.roots);
+        assert_eq!(
+            refused(
+                &holding,
+                format!("GET /v1 HTTP/1.1\r\nHost: {HOST}\r\nx-api-key: someone-elses\r\n{close}")
+            ),
+            Some(REFUSED_CREDENTIAL)
+        );
+        let body = "client_secret=someone-elses";
+        assert_eq!(
+            refused(
+                &holding,
+                format!(
+                    "POST /t HTTP/1.1\r\nHost: {HOST}\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: {}\r\n{close}{body}",
+                    body.len()
+                )
+            ),
+            Some(REFUSED_CREDENTIAL)
+        );
+        assert_eq!(
+            refused(
+                &holding,
+                format!(
+                    "POST /t HTTP/1.1\r\nHost: {HOST}\r\nContent-Type: application/x-www-form-urlencoded\r\nTransfer-Encoding: chunked\r\n{close}6\r\ntoken=\r\n0\r\n\r\n"
+                )
+            ),
+            Some(REFUSED_BODY)
+        );
+        assert_eq!(
+            refused(
+                &holding,
+                format!("GET / HTTP/1.1\r\nHost: other.example\r\n{close}")
+            ),
+            Some(REFUSED_HEAD)
+        );
+        assert_eq!(
+            refused(
+                &holding,
+                format!("GET /v1 HTTP/1.1\r\nHost: {HOST}\r\n{close}")
+            ),
+            None
+        );
     }
 
     #[test]

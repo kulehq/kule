@@ -71,6 +71,12 @@ reddedilir (403); böylece sizin olmayan bir hesap adına hiçbir şey dışarı
   okunamayacak kadar büyük ya da parçalı (chunked) olan bir gövde
   reddedilir.
 
+Reddedilen bir isteği Kule kendisi yanıtlar, asla iletmez; bağlantı da
+Kule'nin sözleriyle nedeniyle birlikte `cut` olarak günlüğe yazılır:
+`Kule refused a request in it: a credential Kule does not hold for this host`
+ya da `… a body Kule checks whole that was chunked or over 1 MiB`. `net:`
+satırı `cut` der (bkz. [Ağ ve sorular](network-and-questions.md)).
+
 Proxy o host'tan yalnızca bütün yanıtlar ister (`Range` yok). Değeri geri
 yansıtan bir yanıtta değer, proxy'nin okuyabildiği ölçüde `*` ile
 karartılır: olduğu gibi, JSON'un ya da bir URL'nin yazdığı gibi kaçışlı

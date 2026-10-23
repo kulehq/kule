@@ -207,6 +207,22 @@ bütçede de sayılır ve ret
 `Kule cannot tell what group "clients"'s budget has left: …` (ya da
 `… daily budget …`) der.
 
+Bir çalıştırmanın başlarken ayırdığı, kullanımı kaydedilene kadar görevin o
+sırada bulunduğu grup için sayılır: tüm çalıştırmalar üzerindeki bütçede ve
+24 saat boyunca herhangi bir 24 saat üzerindeki bütçede. Satırlar bunu
+söyler:
+
+```console
+$ kule group budget 1
+budgets for GROUP 1 "clients": its 1 task together, beside each task's own and the daily one for every task:
+  all their runs   20.00 USD, 2.00 USD spent, 8.00 USD left (10.00 USD set aside for runs at work or that did not end)
+  any 24 hours     no budget (nothing reported spent)
+```
+
+Ayrılandan başka bir şey kalmadığında grubun görevleri de hiçbir çalıştırma
+başlatmaz:
+``what is left of group "clients"'s budget (10.00 USD) is set aside for runs at work, or that did not end, in task <id>: once a run ends, what it spent counts instead; `kule budget TASK --release` lets go of one that did not end``.
+
 ## kule group put {#kule-group-put}
 
 ```sh

@@ -131,6 +131,12 @@ onaylanır.
 kaldırılana veya bütçe kapatılana kadar sayılabileceği her bütçeyi tutar;
 görev başlığındaki etiket kırmızıyla *N usage records unreadable · budget held* der.
 
+Çalıştırmaların başlarken ayırdığı, her çalıştırmanın kullanımı gelene kadar
+harcanmış sayılır. *Spent* ve *Last 24 h* satırları bunu söyler
+(*· X set aside for runs at work or that did not end*) ve kalandan düşer.
+Bitmeyen bir çalıştırmanın payını bırakmak için komut satırında
+[`kule budget TASK --release`](../cli/budget.md) kullanın.
+
 Sınır olmaması için bir alanı boş bırakın. *Where budgets are set*, bütçesi
 olan her kapsamı listeler; açmak için bir kapsama tıklayın. Bir görevin ya
 da grubun ⋮ menüsü (*Budget…*) kendi kapsamını doğrudan açar.

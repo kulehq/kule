@@ -1353,6 +1353,38 @@ pub fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<()> {
     fs::rename(&tmp, path).at(path)
 }
 
+/// A lock across Kule's processes (the daemon, the CLI) on the file at
+/// `path`, made if missing and never followed if a link; held until
+/// dropped, waited for while another holds it.
+pub(crate) struct Flock {
+    _held: File,
+}
+
+impl Flock {
+    pub(crate) fn take(path: &Path) -> Result<Flock> {
+        use std::os::fd::AsRawFd;
+        use std::os::unix::fs::OpenOptionsExt;
+        let file = fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(path)
+            .at(path)?;
+        loop {
+            // SAFETY: flock on a descriptor this function owns.
+            if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } == 0 {
+                return Ok(Flock { _held: file });
+            }
+            let e = io::Error::last_os_error();
+            if e.kind() != io::ErrorKind::Interrupted {
+                return Err(e).at(path);
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use tempfile::TempDir;

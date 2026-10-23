@@ -80,6 +80,43 @@ pub struct RunUsage {
         skip_serializing_if = "Option::is_none"
     )]
     pub group: Option<Option<u64>>,
+    /// The share set aside for this run before it started (see
+    /// [`Task::reserve_run`]), which this record closes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reservation: Option<String>,
+    /// Not a run: the person let go of the share a run that did not end
+    /// still held (see [`Task::release_unfinished`]).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub released: bool,
+}
+
+/// What a run may spend, set aside before it starts, until the run's
+/// usage is recorded (see [`Task::reserve_run`]).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+struct Reservation {
+    id: String,
+    started_unix: u64,
+    /// The group the task was in then; none for none.
+    #[serde(default)]
+    group: Option<u64>,
+    amount: Money,
+}
+
+/// A run's share, set aside: the most it may spend, and what its usage
+/// record names to close it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Reserved {
+    pub id: String,
+    pub limit: Money,
+}
+
+/// What a task's records say: its runs (what the person let go of is
+/// none), how many records cannot be read, and the shares still set aside
+/// for runs whose usage has not come.
+struct Ledger {
+    runs: Vec<RunUsage>,
+    unreadable: usize,
+    open: Vec<Reservation>,
 }
 
 /// What a task's runs used together.
@@ -99,6 +136,13 @@ pub struct Spent {
     /// so no budget they count for holds a run (see [`Task::run_budget`]).
     #[serde(default, skip_serializing_if = "is_zero")]
     pub unreadable: usize,
+    /// Set aside for runs at work, or that did not end, one sum per
+    /// currency: counted as spent until each run's usage comes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub held: Vec<Money>,
+    /// The tasks those runs are in.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub held_by: Vec<String>,
 }
 
 fn is_zero(n: &usize) -> bool {
@@ -122,9 +166,38 @@ impl Spent {
         }
     }
 
+    fn hold(&mut self, share: &Reservation, task: &str) {
+        match self
+            .held
+            .iter_mut()
+            .find(|m| m.currency == share.amount.currency)
+        {
+            Some(sum) => sum.amount += share.amount.amount,
+            None => self.held.push(share.amount.clone()),
+        }
+        if !self.held_by.iter().any(|t| t == task) {
+            self.held_by.push(task.to_owned());
+        }
+    }
+
     /// What was spent in `currency`.
     pub fn in_currency(&self, currency: &str) -> f64 {
         self.cost
+            .iter()
+            .filter(|m| m.currency == currency)
+            .map(|m| m.amount)
+            .sum()
+    }
+
+    /// What counts against a budget in `currency`: what was spent, and
+    /// what is set aside for runs whose usage has not come.
+    pub fn counted_in(&self, currency: &str) -> f64 {
+        self.in_currency(currency) + self.held_in(currency)
+    }
+
+    /// What is set aside in `currency`.
+    pub fn held_in(&self, currency: &str) -> f64 {
+        self.held
             .iter()
             .filter(|m| m.currency == currency)
             .map(|m| m.amount)
@@ -137,67 +210,120 @@ impl Task {
         self.dir().join("usage.jsonl")
     }
 
+    fn reserved_path(&self) -> std::path::PathBuf {
+        self.dir().join("reserved.jsonl")
+    }
+
     /// Adds one run's usage to the task's, with the group the task is in
-    /// now unless the usage names one.
+    /// now unless the usage names one; it closes the share set aside for
+    /// the run, if it names one.
     pub fn record_usage(&self, usage: &RunUsage) -> Result<()> {
-        let path = self.usage_path();
         let mut usage = usage.clone();
         if usage.group.is_none() {
             usage.group = Some(self.group()?);
         }
-        let mut line = serde_json::to_vec(&usage).map_err(|source| Error::State {
-            path: path.clone(),
-            source,
+        let _lock = budget_lock(&self.home())?;
+        append_record(&self.usage_path(), &usage)
+    }
+
+    /// Before a run starts: sets aside what it may spend, the tightest of
+    /// [`Task::budgets`] with what other runs set aside counted as spent,
+    /// so runs started at once under one budget share what is left, and a
+    /// run whose usage never comes counts at its whole share. `None`
+    /// without a budget; refused, naming the budget, when nothing is
+    /// left, and when the share cannot be set aside (the run does not
+    /// start). Across Kule's processes, one run at a time is set aside.
+    pub fn reserve_run(&self) -> Result<Option<Reserved>> {
+        let _lock = budget_lock(&self.home())?;
+        let Some(limit) = self.run_budget()? else {
+            return Ok(None);
+        };
+        let share = Reservation {
+            id: random_id()?,
+            started_unix: now_unix(),
+            group: self.group()?,
+            amount: limit.clone(),
+        };
+        append_record(&self.reserved_path(), &share).map_err(|e| {
+            Error::Invalid(format!(
+                "Kule could not set aside what the run may spend ({e}), so it does not start"
+            ))
         })?;
-        line.push(b'\n');
-        let mut file = std::fs::OpenOptions::new()
-            .create(true)
-            .read(true)
-            .append(true)
-            .open(&path)
-            .at(&path)?;
-        // A record cut short (a crash as it was written) stays one that
-        // cannot be read, and does not take this one with it.
-        if ends_unfinished(&mut file).at(&path)? {
-            line.insert(0, b'\n');
+        Ok(Some(Reserved {
+            id: share.id,
+            limit,
+        }))
+    }
+
+    /// Lets go of the shares runs that did not end still hold in this task,
+    /// as the person asked, knowingly: each is closed by a record that says
+    /// it was let go, not spent. Refused while an agent is at work in the
+    /// task. Returns what was let go.
+    pub fn release_unfinished(&self) -> Result<Vec<Money>> {
+        let _lock = budget_lock(&self.home())?;
+        if let Some(pid) = self.agent_pid() {
+            return Err(Error::Invalid(format!(
+                "an agent is at work in task {} (process {pid}); its run holds its share until it ends",
+                self.id()
+            )));
         }
-        file.write_all(&line).at(&path)
+        let mut released = Vec::new();
+        for share in self.ledger()?.open {
+            append_record(
+                &self.usage_path(),
+                &RunUsage {
+                    started_unix: share.started_unix,
+                    group: Some(share.group),
+                    reservation: Some(share.id),
+                    released: true,
+                    ..RunUsage::default()
+                },
+            )?;
+            released.push(share.amount);
+        }
+        Ok(released)
     }
 
     /// Every run's usage, oldest first; a line that cannot be read is left
     /// out (and counted by [`Task::spent`]).
     pub fn usage(&self) -> Result<Vec<RunUsage>> {
-        Ok(self.usage_read()?.0)
+        Ok(self.ledger()?.runs)
     }
 
-    /// Every run's usage that can be read, and how many records cannot.
-    fn usage_read(&self) -> Result<(Vec<RunUsage>, usize)> {
-        let path = self.usage_path();
-        let text = match std::fs::read_to_string(&path) {
-            Ok(text) => text,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok((Vec::new(), 0)),
-            Err(e) => return Err(e).at(&path),
-        };
-        let mut runs = Vec::new();
-        let mut unreadable = 0;
-        for line in text.lines().filter(|l| !l.trim().is_empty()) {
-            match serde_json::from_str(line) {
-                Ok(run) => runs.push(run),
-                Err(_) => unreadable += 1,
-            }
-        }
-        Ok((runs, unreadable))
-    }
-
-    /// What the task's runs used together.
-    pub fn spent(&self) -> Result<Spent> {
-        let (runs, unreadable) = self.usage_read()?;
-        let mut spent = Spent {
+    /// What the task's records say (see [`Ledger`]).
+    fn ledger(&self) -> Result<Ledger> {
+        let (records, mut unreadable) = read_records::<RunUsage>(&self.usage_path())?;
+        let closed: std::collections::BTreeSet<String> = records
+            .iter()
+            .filter_map(|r| r.reservation.clone())
+            .collect();
+        let runs = records.into_iter().filter(|r| !r.released).collect();
+        let (shares, unreadable_shares) = read_records::<Reservation>(&self.reserved_path())?;
+        unreadable += unreadable_shares;
+        let open = shares
+            .into_iter()
+            .filter(|s| !closed.contains(&s.id))
+            .collect();
+        Ok(Ledger {
+            runs,
             unreadable,
+            open,
+        })
+    }
+
+    /// What the task's runs used together, with what is set aside for
+    /// those whose usage has not come.
+    pub fn spent(&self) -> Result<Spent> {
+        let ledger = self.ledger()?;
+        let mut spent = Spent {
+            unreadable: ledger.unreadable,
             ..Spent::default()
         };
-        for run in runs {
+        for run in ledger.runs {
             spent.add(run);
+        }
+        for share in &ledger.open {
+            spent.hold(share, self.id());
         }
         Ok(spent)
     }
@@ -208,7 +334,7 @@ impl Task {
         let Some(budget) = self.budget()? else {
             return Ok(None);
         };
-        let spent = self.spent()?.in_currency(&budget.currency);
+        let spent = self.spent()?.counted_in(&budget.currency);
         Ok(Some(Money {
             amount: budget.amount - spent,
             currency: budget.currency,
@@ -269,6 +395,9 @@ impl Task {
             if budget.unreadable > 0 {
                 return Err(Error::Invalid(budget.unreadable_reason(self.id())));
             }
+            if budget.left.amount <= 0.0 && budget.held > 0.0 {
+                return Err(Error::Invalid(budget.held_reason(self.id())));
+            }
             if budget.left.amount <= 0.0 {
                 return Err(Error::Invalid(budget.spent_reason(self.id())));
             }
@@ -304,31 +433,70 @@ pub struct BudgetLeft {
     /// are any.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub unreadable: usize,
+    /// Of what it counts, what is set aside for runs at work, or that did
+    /// not end, in its currency (see [`Task::reserve_run`]).
+    #[serde(default, skip_serializing_if = "is_none_held")]
+    pub held: f64,
+    /// The tasks those runs are in.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub held_by: Vec<String>,
+}
+
+fn is_none_held(held: &f64) -> bool {
+    *held == 0.0
 }
 
 impl BudgetLeft {
     fn new(scope: BudgetScope, budget: Money, spent: &Spent) -> BudgetLeft {
         let left = Money {
-            amount: budget.amount - spent.in_currency(&budget.currency),
+            amount: budget.amount - spent.counted_in(&budget.currency),
             currency: budget.currency.clone(),
         };
+        let held = spent.held_in(&budget.currency);
         BudgetLeft {
             scope,
+            held_by: if held > 0.0 {
+                spent.held_by.clone()
+            } else {
+                Vec::new()
+            },
+            held,
             budget,
             left,
             unreadable: spent.unreadable,
         }
     }
 
-    /// Why task `task` cannot run while records this budget counts cannot
-    /// be read.
-    fn unreadable_reason(&self, task: &str) -> String {
-        let whose = match &self.scope {
+    /// The budget's name in a sentence about task `task`.
+    fn whose(&self, task: &str) -> String {
+        match &self.scope {
             BudgetScope::Task => format!("task {task}'s budget"),
             BudgetScope::Group { name, .. } => format!("group {name:?}'s budget"),
             BudgetScope::GroupDaily { name, .. } => format!("group {name:?}'s daily budget"),
             BudgetScope::Daily => "the daily budget".to_owned(),
+        }
+    }
+
+    /// Why task `task` cannot run while what is left of this budget is set
+    /// aside for runs whose usage has not come.
+    fn held_reason(&self, task: &str) -> String {
+        let tasks = match self.held_by.as_slice() {
+            [one] => format!("task {one}"),
+            many => format!("tasks {}", many.join(", ")),
         };
+        format!(
+            "what is left of {} ({:.2} {}) is set aside for runs at work, or that did not end, in {tasks}: \
+             once a run ends, what it spent counts instead; `kule budget TASK --release` lets go of one that did not end",
+            self.whose(task),
+            self.held,
+            self.budget.currency
+        )
+    }
+
+    /// Why task `task` cannot run while records this budget counts cannot
+    /// be read.
+    fn unreadable_reason(&self, task: &str) -> String {
+        let whose = self.whose(task);
         let records = match self.unreadable {
             1 => "1 record of what runs spent (a task's usage.jsonl) cannot be read".to_owned(),
             n => format!("{n} records of what runs spent (in tasks' usage.jsonl) cannot be read"),
@@ -372,7 +540,11 @@ pub fn groups_spent(home: &Path) -> Result<std::collections::BTreeMap<u64, Group
     for info in Task::list(home)? {
         let task = Task::open(home, &info.id)?;
         let now_in = task.group()?;
-        let (runs, unreadable) = task.usage_read()?;
+        let Ledger {
+            runs,
+            unreadable,
+            open,
+        } = task.ledger()?;
         // Not known when, nor for which group: it counts for the group the
         // task is in now, today too.
         if let Some(group) = now_in
@@ -381,6 +553,18 @@ pub fn groups_spent(home: &Path) -> Result<std::collections::BTreeMap<u64, Group
             let entry = spent.entry(group).or_default();
             entry.total.unreadable += unreadable;
             entry.today.unreadable += unreadable;
+        }
+        // A share counts for the group the task was in when it was set
+        // aside.
+        for share in &open {
+            let Some(group) = share.group else {
+                continue;
+            };
+            let entry = spent.entry(group).or_default();
+            if share.started_unix >= since {
+                entry.today.hold(share, task.id());
+            }
+            entry.total.hold(share, task.id());
         }
         for run in runs {
             let Some(group) = run.group.unwrap_or(now_in) else {
@@ -548,6 +732,64 @@ mod tests {
     }
 }
 
+/// The lock under which shares are set aside and usage recorded, across
+/// Kule's processes: `<home>/budget.lock`.
+fn budget_lock(home: &Path) -> Result<crate::fsops::Flock> {
+    std::fs::create_dir_all(home).at(home)?;
+    crate::fsops::Flock::take(&home.join("budget.lock"))
+}
+
+/// Adds `record` as a line at the end of `path`, on disk before it
+/// returns; a line cut short before it (a crash as it was written) stays
+/// one that cannot be read, and does not take this one with it.
+fn append_record(path: &Path, record: &impl Serialize) -> Result<()> {
+    let mut line = serde_json::to_vec(record).map_err(|source| Error::State {
+        path: path.to_owned(),
+        source,
+    })?;
+    line.push(b'\n');
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .read(true)
+        .append(true)
+        .open(path)
+        .at(path)?;
+    if ends_unfinished(&mut file).at(path)? {
+        line.insert(0, b'\n');
+    }
+    file.write_all(&line).at(path)?;
+    file.sync_data().at(path)
+}
+
+/// The records at `path` that can be read, and how many cannot; none when
+/// it is missing.
+fn read_records<T: serde::de::DeserializeOwned>(path: &Path) -> Result<(Vec<T>, usize)> {
+    let text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok((Vec::new(), 0)),
+        Err(e) => return Err(e).at(path),
+    };
+    let mut records = Vec::new();
+    let mut unreadable = 0;
+    for line in text.lines().filter(|l| !l.trim().is_empty()) {
+        match serde_json::from_str(line) {
+            Ok(record) => records.push(record),
+            Err(_) => unreadable += 1,
+        }
+    }
+    Ok((records, unreadable))
+}
+
+/// A share's id: at random, as a task's is.
+fn random_id() -> Result<String> {
+    let random = Path::new("/dev/urandom");
+    let mut bytes = [0u8; 8];
+    std::fs::File::open(random)
+        .and_then(|mut f| std::io::Read::read_exact(&mut f, &mut bytes))
+        .at(random)?;
+    Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
+}
+
 /// Whether `file` has something in it and its last byte ends no line.
 fn ends_unfinished(file: &mut std::fs::File) -> std::io::Result<bool> {
     use std::io::{Read, Seek, SeekFrom};
@@ -597,15 +839,23 @@ pub fn set_daily_budget(home: &Path, budget: Option<Money>) -> Result<()> {
 }
 
 /// What every task in `home` used in the last 24 hours: the runs that
-/// started then.
+/// started then, and the shares set aside then for runs whose usage has
+/// not come.
 pub fn spent_today(home: &Path) -> Result<Spent> {
     let since = now_unix().saturating_sub(DAY_SECS);
     let mut spent = Spent::default();
     for info in Task::list(home)? {
         let task = Task::open(home, &info.id)?;
-        let (runs, unreadable) = task.usage_read()?;
+        let Ledger {
+            runs,
+            unreadable,
+            open,
+        } = task.ledger()?;
         // Not known when: it may be today's.
         spent.unreadable += unreadable;
+        for share in open.iter().filter(|s| s.started_unix >= since) {
+            spent.hold(share, task.id());
+        }
         for run in runs {
             if run.started_unix >= since {
                 spent.add(run);
@@ -621,7 +871,7 @@ pub fn daily_left(home: &Path) -> Result<Option<Money>> {
     let Some(budget) = daily_budget(home)? else {
         return Ok(None);
     };
-    let spent = spent_today(home)?.in_currency(&budget.currency);
+    let spent = spent_today(home)?.counted_in(&budget.currency);
     Ok(Some(Money {
         amount: budget.amount - spent,
         currency: budget.currency,

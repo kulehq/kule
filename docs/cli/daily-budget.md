@@ -27,6 +27,9 @@ afternoon stops counting tomorrow afternoon.
   held.
 - A record of what a run spent that cannot be read, in any task, holds
   every run: Kule cannot tell when it was made, so it may be today's.
+- What runs set aside as they start counts as spent, in every task, until
+  their usage is recorded. A share whose usage never comes leaves with the
+  24 hours, or sooner with `kule budget TASK --release`.
 
 With an amount, the command sets the daily budget; with `off`, it removes
 it; without either, it only shows it. Every form prints what all tasks spent
@@ -81,7 +84,13 @@ last 24 hours, every task: no cost reported in 0 runs; no daily budget
 `last 24 hours, every task: <cost> in <N> runs` is what every task's runs
 started in the last 24 hours reported. When costs came in more than one
 currency, they are joined with `+`. After the `;` comes the daily budget and
-what is left of it, or `no daily budget`.
+what is left of it, or `no daily budget`. What runs at work, or that did not
+end, set aside is counted in what is left and added after it:
+
+```console
+$ kule daily-budget
+last 24 hours, every task: 3.40 USD in 6 runs; daily budget 20.00 USD, 6.60 USD left (10.00 USD set aside for runs at work or that did not end)
+```
 
 ## Errors and fixes
 
@@ -90,6 +99,7 @@ what is left of it, or `no daily budget`.
 | `kule: abc: an amount like 20 or 7.50, or off` | Write a number or `off`. |
 | `kule: a budget is a positive amount in a currency like USD, not 0 USD` | Use an amount above 0 and a capitalised currency code. |
 | `the daily budget is spent: every task together, in the last 24 hours; raise it or turn it off to run again` (when a run is refused) | Wait until older runs fall out of the 24 hours, raise the budget, or turn it off. |
+| ``what is left of the daily budget (<amount>) is set aside for runs at work, or that did not end, in task <id>: once a run ends, what it spent counts instead; `kule budget TASK --release` lets go of one that did not end`` (when a run is refused) | Wait for the runs at work to end. A run that did not end (Kule was stopped) keeps its share for the 24 hours; `kule budget TASK --release`, in the task named, lets go of it sooner. |
 | `Kule cannot tell what the daily budget has left: <N> records of what runs spent (in tasks' usage.jsonl) cannot be read; mend or remove them, or turn the budget off, to run again` (when a run is refused) | Mend or remove the lines that cannot be read in the tasks' `usage.jsonl` files, or turn the daily budget off. |
 
 ## In the app

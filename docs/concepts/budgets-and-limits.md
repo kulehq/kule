@@ -52,6 +52,27 @@ How a budget holds:
 - A run is held to the tightest of what is left. A run whose agent reports
   its cost as it works is **cancelled** when it gets there.
 - A refusal names the budget that is spent.
+- **A run sets aside its share before its agent starts**: the most it may
+  spend, the tightest of what is left of the task's, its group's, the
+  group's daily and the daily budget. What other runs set aside counts as
+  spent, so runs started at once under one budget share what is left. Kule
+  sets shares aside one at a time across its processes (under
+  `budget.lock` in Kule's home) and keeps each in the task's
+  `reserved.jsonl`.
+- When nothing is left but what runs set aside, no run starts, and the
+  refusal names the budget and the tasks:
+  ``what is left of <budget> (<amount>) is set aside for runs at work, or that did not end, in task <id>: once a run ends, what it spent counts instead; `kule budget TASK --release` lets go of one that did not end``.
+- When a run's usage is recorded, its share closes: from then on only what
+  it spent counts.
+- **A share whose usage never comes counts in full**: Kule was stopped, or
+  what the run spent could not be recorded or read. For a daily budget it
+  leaves with the 24 hours. For the task's budget and the group's over all
+  runs it stays until you let go of it with `kule budget TASK --release`,
+  which is refused while an agent is at work in the task. What you let go
+  of stays on record in `usage.jsonl`.
+- A share counts for the group the task was in when it was set aside.
+- A share that cannot be written starts no run:
+  `Kule could not set aside what the run may spend (…), so it does not start`.
 - A run counts for the group its task was in **when it ran**, so moving a
   task out keeps what it spent in the group's account.
 - **A record that cannot be read is counted**, not taken for nothing spent.
@@ -78,7 +99,11 @@ What each run used (tokens, the context window, and the cost when the
 agent says) is kept in the task's `usage.jsonl`. `kule status` and the
 app's task header add it up. Records that cannot be read are counted there
 too: `spent:` lines add ` (N records cannot be read)`, and the header's chip
-says *N usage records unreadable · budget held* in red.
+says *N usage records unreadable · budget held* in red. What is set aside
+shows as well: `spent:` lines and the budget listings add
+` (<amount> set aside for runs at work or that did not end)`, `kule status --json`
+gives it as `held` and `held_by` under `spent`, and the header's chip says
+*<amount> set aside* and counts it in what is left.
 
 While the window is elsewhere, the app tells you when 80% of a budget is
 spent, and when all of it is.

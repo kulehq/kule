@@ -408,6 +408,20 @@ pub fn limits_cmd(
     Ok(())
 }
 
+/// What is set aside for runs at work, or that did not end, said after
+/// what was spent: ` (0.80 USD set aside for runs at work or that did not
+/// end)`, or nothing.
+pub fn held_words(held: &[Money]) -> String {
+    if held.is_empty() {
+        return String::new();
+    }
+    let held: Vec<String> = held.iter().map(money).collect();
+    format!(
+        " ({} set aside for runs at work or that did not end)",
+        held.join(" + ")
+    )
+}
+
 pub fn money(m: &Money) -> String {
     // An empty sum is -0.0, which reads as an odd minus.
     format!("{:.2} {}", m.amount + 0.0, m.currency)
@@ -462,14 +476,15 @@ pub fn group_budget_cmd(
             Some(b) => {
                 let used = used(&b.currency);
                 let left = Money {
-                    amount: (b.amount - used.amount).max(0.0),
+                    amount: (b.amount - spent.counted_in(&b.currency)).max(0.0),
                     currency: b.currency.clone(),
                 };
                 println!(
-                    "  {what:<16} {}, {} spent, {} left",
+                    "  {what:<16} {}, {} spent, {} left{}",
                     money(b),
                     money(&used),
-                    money(&left)
+                    money(&left),
+                    held_words(&spent.held)
                 );
             }
             None => {
@@ -506,7 +521,16 @@ pub fn print_task_budgets(task: &Task) -> Result<()> {
             amount: b.left.amount.max(0.0),
             currency: b.left.currency.clone(),
         };
-        println!("  {what:<32} {}, {} left", money(&b.budget), money(&left));
+        let held = (b.held > 0.0).then(|| Money {
+            amount: b.held,
+            currency: b.budget.currency.clone(),
+        });
+        println!(
+            "  {what:<32} {}, {} left{}",
+            money(&b.budget),
+            money(&left),
+            held_words(held.as_slice())
+        );
     }
     match task.run_budget() {
         Ok(Some(limit)) => println!("the next run may cost at most {}", money(&limit)),

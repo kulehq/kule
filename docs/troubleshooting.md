@@ -94,6 +94,19 @@ Raise or remove the one that holds (`kule budget TASK off`, `kule group
 budget ID off`, `kule daily-budget off`). See
 [Budgets and limits](concepts/budgets-and-limits.md).
 
+### A run is refused before it starts: what is left is set aside
+
+**Cause:** runs that started before it hold what is left of a budget over
+it, until their usage is recorded. The refusal names the budget and the
+tasks:
+`what is left of <budget> (<amount>) is set aside for runs at work, or that did not end, in task <id>: …`.
+A run Kule was stopped during, or whose
+usage could not be recorded, keeps its share counted.
+
+**Fix:** wait for the runs at work to end. For a run that did not end, let
+go of its share in the task named: `kule budget TASK --release`. See
+[`kule budget`](cli/budget.md).
+
 ### A run stopped by itself
 
 **Cause:** a [limit](concepts/budgets-and-limits.md) stopped it. Live says

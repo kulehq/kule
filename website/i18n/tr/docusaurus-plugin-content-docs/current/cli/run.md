@@ -172,12 +172,12 @@ took: 41s
 | `· <note>` | Kule'den ya da ajandan bir not; örneğin ona verilen bir izin. |
 | `N file changes: +a ~m -d` | Kopyada olup çalışma klasöründe olmayanlar: oluşturulan, değiştirilen, silinen. Her dosyanın içinde değişen fonksiyonlar, bölümler ya da anahtarlar. Bkz. [kule status](status.md). |
 | `git:` | Depoya ne olduğu: dal hareketleri, yeni nesneler, config ya da hook değişiklikleri. Bkz. [Git](../concepts/git.md). |
-| `net:` | Çalıştırmanın yaptığı her bağlantı ve geçip geçmediği. |
+| `net:` | Çalıştırmanın yaptığı her bağlantı ve ona ne olduğu: geçtiyse `tunneled`; Kule onu kestiyse ya da içindeki bir isteği reddettiyse `cut`; kendi hatasıyla bittiyse (host gitti, bağlantı sıfırlandı) `failed`; politika geçirmediyse `refused, …`. `cut` ve `failed` için nedeni `network.jsonl` söyler. |
 | `in your home, caught for review` | Ev klasörünüze yapılan ve ev katmanında bekleyen yazmalar. Bkz. [kule home](home.md). |
 | `sandbox: refused …` | Sandbox'ın reddettikleri (macOS bunları listeler; Linux'ta komut yalnızca bir hata alır). |
 | `sandbox: <path> changed during the run; Kule put it back …` | Çalıştırmanın değiştiremeyeceği, Kule'nin eski hâline geri koyduğu bir yol. |
 | `policy:` | Değişiklikler hakkındaki karar: *passes on its own* (kendiliğinden geçer), *waits for approval* (onay bekler) ya da *denied* (reddedildi), her birinin arkasındaki kuralla birlikte. |
-| `spent:` | Görevin çalıştırmalarının, ajanların bildirdiğine göre, şimdiye kadar ne kadar tuttuğu ve bütçesinden ne kaldığı. Görevin kullanım kayıtlarından bazıları okunamıyorsa ` (N records cannot be read)`. |
+| `spent:` | Görevin çalıştırmalarının, ajanların bildirdiğine göre, şimdiye kadar ne kadar tuttuğu ve bütçesinden ne kaldığı. Görevin kullanım kayıtlarından bazıları okunamıyorsa ` (N records cannot be read)`. Çalıştırmalar, kullanımlarının henüz kapatmadığı bir pay tutuyorsa ` (<amount> set aside for runs at work or that did not end)`; bu kalandan düşülür. |
 | `took:` | Çalıştırmanın ne kadar sürdüğü. |
 
 Çıktı bir terminal değilse her olay kendi düz satırında yazılır; bu,
@@ -191,6 +191,8 @@ günlüğe kaydetmeyi kolaylaştırır.
 | `kule: agent <name> cannot run: <why>` | Ajan eksik, oturum açılmamış ya da (kendi profilleriniz için) henüz onaylanmamış. Nedenini görmek için `kule agents` çalıştırın. |
 | `kule: task <id> has spent its budget; raise it or turn it off to run again` | `kule budget TASK <amount>` ile artırın ya da `kule budget TASK off` ile kapatın. Tükenen bir grubun ya da günlük bütçeyse mesaj onun adını verir. |
 | `kule: Kule cannot tell what <budget> has left: <N> record(s) of what runs spent … cannot be read; mend or remove them, or turn the budget off, to run again` | Okunamayan bir kullanım kaydı da sayılır; bu yüzden bütçe, kayıt düzeltilene ya da kaldırılana (bir görevin `usage.jsonl` dosyası) veya bütçe kapatılana kadar her çalıştırmayı tutar. Bkz. [Bütçeler ve sınırlar](../concepts/budgets-and-limits.md). |
+| ``kule: what is left of <budget> (<amount>) is set aside for runs at work, or that did not end, in task <id>: once a run ends, what it spent counts instead; `kule budget TASK --release` lets go of one that did not end`` | Ondan önce başlayan çalıştırmalar (adı verilen görevlerde) kalanı tutuyor. Bitmelerini bekleyin. Bitmeyen bir çalıştırmanın (Kule durdurulmuştu) payı, siz onu [kule budget](budget.md) `TASK --release` ile bırakana kadar sayılmaya devam eder. |
+| `kule: Kule could not set aside what the run may spend (…), so it does not start` | Kule görevin `reserved.jsonl` dosyasına yazamadı. Hiçbir şey başlamadı. Kule'nin ev klasörüne yazılabildiğini kontrol edin. |
 | `kule: the task has used its time: its runs took N minutes together; …` | Görevin süre sınırını [kule limits](limits.md) ile artırın ya da kaldırın. |
 | `kule: an agent is at work in task <id> …` | Görev başına tek ajan. Bekleyin ya da başka bir görev açın. |
 | `kule: a terminal is open on this task's copy (in Kule's app, or kule shell); close it first, then start work` | Görevde bir terminal (uygulamanınki ya da `kule shell`) açık. Önce onu kapatın. |
@@ -200,7 +202,8 @@ günlüğe kaydetmeyi kolaylaştırır.
 | `kule: stopped: the agent sent a message larger than 16 MiB` | Ajan tek mesajda Kule'nin aldığından fazlasını söyledi. Daha dar bir istemle yeniden çalıştırın. |
 | `kule: stopped: the agent left more than 1024 tool calls open` | Ajan araç çağrılarını bitirmeden yenilerini başlattı. |
 | `kule: Linux does not tell Kule what the sandbox refused; each refusal reached the command as an error` | Linux'ta, başarısız olan bir çalıştırmadan sonra: hiç `sandbox: refused` satırı olmaması hiçbir şeyin reddedilmediği anlamına gelmez: reddedilen bir işlem ajanın komutuna bir izin hatası olarak ulaştı. |
-| `kule: what the run spent could not be recorded: …` | Kule görevin `usage.jsonl` dosyasına yazamadı; bu çalıştırmanın maliyeti sayılmaz. Kule'nin ev klasörüne yazılabildiğini kontrol edin. |
+| `kule: what the run spent could not be recorded (…), so the <amount> set aside for it stays counted` | Kule görevin `usage.jsonl` dosyasına yazamadı. Harcadığının yerine, siz [kule budget](budget.md) `TASK --release` ile bırakana kadar çalıştırmanın payının tamamı sayılır. Kule'nin ev klasörüne yazılabildiğini kontrol edin. Bütçe yoksa satır `(…)` ile biter. |
+| `kule: what the run spent could not be read (…), so the <amount> set aside for it stays counted` | Kule çalıştırmanın ajanının bildirdiğini okuyamadı. Yukarıdaki gibi, çalıştırmanın payının tamamı sayılır. |
 | `kule: Kule could not put back the protected paths the run changed: …` | Commit etmeden önce değişikliklere [kule status](status.md) ile bakın ya da onları [geri alın](rollback.md). |
 | `kule: what the sandbox refused cannot be read: …` / `… could not be recorded: …` | Reddedilenler listelenmedi ya da ajanın bir sonraki çalıştırması ve uygulamanın Timeline'ı için saklanmadı. |
 | `kule: the run ended, but Kule could not do all of the above` | Çalıştırmanın kendisi iyi gitti; yukarıdaki satırlardan biri Kule'nin neyi yapamadığını söyler. |

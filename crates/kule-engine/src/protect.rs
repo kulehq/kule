@@ -23,7 +23,6 @@ use std::collections::HashMap;
 use std::ffi::OsString;
 use std::fs::{self, File};
 use std::io::Write;
-use std::os::fd::AsRawFd;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
@@ -233,7 +232,7 @@ fn started(pid: i32) -> Option<u64> {
 
 /// Kule's lock on the notes, across its processes; released when dropped.
 struct Lock {
-    _held: File,
+    _held: crate::fsops::Flock,
 }
 
 impl Lock {
@@ -243,25 +242,9 @@ impl Lock {
             .mode(0o700)
             .create(dir)
             .at(dir)?;
-        let path = dir.join("lock");
-        let file = fs::OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .write(true)
-            .mode(0o600)
-            .custom_flags(libc::O_NOFOLLOW)
-            .open(&path)
-            .at(&path)?;
-        loop {
-            // SAFETY: flock on a descriptor this function owns.
-            if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } == 0 {
-                return Ok(Lock { _held: file });
-            }
-            let e = std::io::Error::last_os_error();
-            if e.kind() != std::io::ErrorKind::Interrupted {
-                return Err(e).at(&path);
-            }
-        }
+        Ok(Lock {
+            _held: crate::fsops::Flock::take(&dir.join("lock"))?,
+        })
     }
 }
 

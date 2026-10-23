@@ -172,6 +172,8 @@ kule exec "$TASK" --reveal ~/Library/Keychains \
 | `N ignored by the workspace, staying in the copy …` | Çalışma klasörünün `.gitignore`'unun dışarıda bıraktığı yollar (derleme çıktısı, `.env`). `--include-ignored` vermezseniz bir commit bunları geride bırakır. |
 | `git:` | Depo değişiklikleri. Bkz. [Git](../concepts/git.md). |
 | `net: <host>:<port> · tunneled (<rule>)` | Politikanın geçirdiği bir bağlantı ve onu geçiren kural. |
+| `net: <host>:<port> · cut (<rule>)` | Politikanın geçirdiği, Kule'nin ise kestiği bir bağlantı: üzerinden geçen, geçirildiği host için değildi, adı bu bilgisayardaki ya da ağındaki bir adrese çıktı, ya da Kule içindeki bir isteği reddetti. Nedenini görevin `network.jsonl` dosyası söyler. |
+| `net: <host>:<port> · failed (<rule>)` | Politikanın geçirdiği, kendi hatasıyla biten bir bağlantı: host gitti ya da bağlantı sıfırlandı. Nedenini görevin `network.jsonl` dosyası söyler. |
 | `net: <host>:<port> · refused, …` | Politikanın geçirmediği bir bağlantı. |
 | `sandbox: refused <operation> <path> (<program>)` | macOS'ta sandbox'ın reddettikleri. Bunlar görevin `sandbox.jsonl` dosyasında da saklanır. |
 | `kule: ended <names>, still running in the task's sandbox as the command ended` | stderr'de: komutun çalışır bıraktığı ve Kule'nin onunla birlikte sonlandırdığı şey. Her ad, kaç tane olduğuyla bir kez (`sleep ×2`). |

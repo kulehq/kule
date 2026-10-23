@@ -37,6 +37,7 @@ can make Kule refuse to work until it is fixed or removed.
 | `order.json` | The order of tasks in the app and in `kule list`. | no |
 | `limits.json` | The limits for every task (`kule limits`). | no |
 | `budget.json` | The daily budget for every task (`kule daily-budget`). | no |
+| `budget.lock` | Held while Kule sets aside a run's share or records what a run spent, so its processes do it one at a time. | no |
 | `remembered.json` | What you told Kule not to ask about again (`kule rules`). | no |
 | `beside.json` | Projects beside a folder that its tasks may read (`kule reveal`). | no |
 | `isolation.json` | Whether you accepted weaker isolation (`kule isolation`). | no |
@@ -89,9 +90,10 @@ Each task lives in `tasks/<id>/`, where `<id>` is the 8-character id
 | `home-kept/` | What `kule home TASK apply` replaced in your real home, one folder per apply, for `kule home TASK undo`. |
 | `steps.jsonl`, `steps-mark.json`, `steps-store/` | The uncommitted **steps** (each tool call's changes) and what going back to a step needs. |
 | `checkpoints/` | One numbered folder per commit (`000001/checkpoint.json`, …), and `store.git`: the Lonca store with what each commit replaced, and the signed history (`refs/kule/log`). |
-| `network.jsonl` | Every connection the task's commands made through the proxy, refused ones included. |
+| `network.jsonl` | Every connection the task's commands made through the proxy, refused ones included: when, host, port, verdict, rules, `outcome` (`tunneled`, `refused`, `cut`, `failed`, `unresolved`, `private`, `unreachable`), your answer when one was asked, the secrets that went in, and why in `cut` or `failed`. |
 | `sandbox.jsonl` | What the sandbox refused (macOS reports it; Linux does not). |
-| `usage.jsonl` | What each agent run used, as the agent reported it: tokens, context, cost. |
+| `usage.jsonl` | What each agent run used, as the agent reported it: tokens, context, cost; and the share it closes (`reservation`). A line with `released: true` is a share you let go of with `kule budget TASK --release`, not a run. |
+| `reserved.jsonl` | What each run set aside of the budgets before its agent started. A share counts as spent until a line in `usage.jsonl` closes it. |
 | `secrets.json` | The values Kule masked in the copy's `.env` files, sealed like kept secrets. |
 | `synced.json` | What the last `kule sync` brought in, for the agent to hear at its next turn. |
 | `refused-hints.json` | Which "why a tool failed" notes the agent was already told. |

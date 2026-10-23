@@ -200,6 +200,21 @@ read: it counts for the group the task is in now, in both budgets, and the
 refusal says `Kule cannot tell what group "clients"'s budget has left: …`
 (or `… daily budget …`).
 
+What a run sets aside as it starts counts for the group the task was in
+then, until the run's usage is recorded: in the budget over all runs, and in
+the one over any 24 hours for 24 hours. The lines say so:
+
+```console
+$ kule group budget 1
+budgets for GROUP 1 "clients": its 1 task together, beside each task's own and the daily one for every task:
+  all their runs   20.00 USD, 2.00 USD spent, 8.00 USD left (10.00 USD set aside for runs at work or that did not end)
+  any 24 hours     no budget (nothing reported spent)
+```
+
+While nothing is left but what is set aside, the group's tasks start no
+run either:
+``what is left of group "clients"'s budget (10.00 USD) is set aside for runs at work, or that did not end, in task <id>: once a run ends, what it spent counts instead; `kule budget TASK --release` lets go of one that did not end``.
+
 ## kule group put
 
 ```sh

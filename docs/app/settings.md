@@ -116,6 +116,12 @@ A record of what runs spent that cannot be read holds every budget it
 could count for, until it is mended or removed or the budget is turned off;
 the task header's chip says *N usage records unreadable · budget held* in red.
 
+What runs set aside as they start counts as spent until each run's usage
+comes. The *Spent* and *Last 24 h* lines say so
+(*· X set aside for runs at work or that did not end*) and count it in what
+is left. To let go of the share of a run that did not end, use
+[`kule budget TASK --release`](../cli/budget.md) on the command line.
+
 Leave a field empty for no limit. *Where budgets are set* lists every scope
 that has one; click a scope to open it. A task's or a group's ⋮ menu
 (*Budget…*) opens its scope directly.

@@ -41,6 +41,7 @@ açabilir.
 | `order.json` | Görevlerin uygulamadaki ve `kule list`'teki sırası. | hayır |
 | `limits.json` | Her görev için sınırlar (`kule limits`). | hayır |
 | `budget.json` | Her görev için günlük bütçe (`kule daily-budget`). | hayır |
+| `budget.lock` | Kule bir çalıştırmanın payını ayırırken ya da bir çalıştırmanın harcadığını kaydederken tutulur; böylece süreçleri bunu birer birer yapar. | hayır |
 | `remembered.json` | Kule'ye bir daha sormamasını söyledikleriniz (`kule rules`). | hayır |
 | `beside.json` | Bir klasörün yanındaki, görevlerinin okuyabildiği projeler (`kule reveal`). | hayır |
 | `isolation.json` | Daha zayıf yalıtımı kabul edip etmediğiniz (`kule isolation`). | hayır |
@@ -93,9 +94,10 @@ karakterlik kimliktir.
 | `home-kept/` | `kule home TASK apply`'ın gerçek ev dizininizde yerine geçtikleri; her uygulama için bir klasör, `kule home TASK undo` için. |
 | `steps.jsonl`, `steps-mark.json`, `steps-store/` | Commit edilmemiş **adımlar** (her araç çağrısının değişiklikleri) ve bir adıma geri dönmek için gerekenler. |
 | `checkpoints/` | Her commit için numaralı bir klasör (`000001/checkpoint.json`, …) ve `store.git`: her commit'in yerine geçtiklerini tutan Lonca deposu ve imzalı geçmiş (`refs/kule/log`). |
-| `network.jsonl` | Görevin komutlarının proxy üzerinden kurduğu her bağlantı, reddedilenler dahil. |
+| `network.jsonl` | Görevin komutlarının proxy üzerinden kurduğu her bağlantı, reddedilenler dahil: ne zaman, host, port, karar, kurallar, `outcome` (`tunneled`, `refused`, `cut`, `failed`, `unresolved`, `private`, `unreachable`), sorulduysa yanıtınız, içine giden gizli değerler, ve `cut` ya da `failed` içinde nedeni. |
 | `sandbox.jsonl` | Sandbox'ın reddettikleri (macOS bildirir; Linux bildirmez). |
-| `usage.jsonl` | Her ajan çalıştırmasının, ajanın bildirdiği şekliyle kullandıkları: token'lar, bağlam, maliyet. |
+| `usage.jsonl` | Her ajan çalıştırmasının, ajanın bildirdiği şekliyle kullandıkları: token'lar, bağlam, maliyet; ve kapattığı pay (`reservation`). `released: true` olan bir satır bir çalıştırma değil, `kule budget TASK --release` ile bıraktığınız bir paydır. |
+| `reserved.jsonl` | Her çalıştırmanın, ajanı başlamadan önce bütçelerden ayırdığı. Bir pay, `usage.jsonl` dosyasındaki bir satır onu kapatana kadar harcanmış sayılır. |
 | `secrets.json` | Kule'nin kopyadaki `.env` dosyalarında maskelediği değerler; saklanan gizli değerler gibi mühürlenmiş. |
 | `synced.json` | Son `kule sync`'in getirdikleri; ajanın bir sonraki turunda duyması için. |
 | `refused-hints.json` | "Bir araç neden başarısız oldu" notlarından hangilerinin ajana zaten söylendiği. |

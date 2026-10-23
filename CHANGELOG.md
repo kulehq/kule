@@ -1,9 +1,13 @@
 # Changes
 
-## Unreleased
+## 0.2.0-preview.10
 
-Kule tells you what it cuts, ends or refuses, where you work: in the
-command's output, the app's terminal, Live, the Timeline and the task list.
+A security preview. A run sets aside what it may spend before it starts,
+so runs started at once under one budget share what is left and a run
+whose usage never comes still counts. A request Kule refuses inside a
+connection is logged as cut, with why. And Kule tells you what it cuts,
+ends or refuses, where you work: in the command's output, the app's
+terminal, Live, the Timeline and the task list.
 
 ### Changed
 
@@ -48,6 +52,28 @@ command's output, the app's terminal, Live, the Timeline and the task list.
 - An extension that is on but cannot run in the window now says *Does not
   run now*, with why (safe mode, extensions cannot be served, or waiting
   until the window's WebRTC is off), instead of *Runs*.
+
+### Security
+
+- Before an agent starts, Kule sets aside the run's share of its budgets
+  (the tightest of the task's, its group's and the daily ones), with what
+  other runs set aside counted as spent, one run at a time across Kule's
+  processes. Runs started at once under one budget share what is left, and
+  a run is refused, naming the budget and the tasks, while what is left is
+  set aside. A share that cannot be written starts no run.
+- A run whose usage never comes (Kule was stopped, or what it spent could
+  not be recorded or read) counts at its whole share: for a daily budget
+  until the 24 hours pass, for the task's and the group's over all runs
+  until `kule budget TASK --release` lets go of it. That is refused while an
+  agent is at work in the task, and what is let go of stays on record.
+  `spent:` lines, `kule budget`, `kule daily-budget`, `kule group budget`,
+  `kule status --json` and the app say what is set aside.
+- Where Kule looks inside a connection and answers a request itself (a
+  write to a read-only registry, a credential Kule does not hold, a body it
+  cannot check whole, a request it cannot read one way only), the
+  connection is logged as `cut`, with why in Kule's words. A connection
+  that ends in an error of its own (the host went away, a reset) is logged
+  as `failed`, with why, for plain HTTP too.
 
 ## 0.2.0-preview.9
 
