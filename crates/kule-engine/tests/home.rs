@@ -274,9 +274,10 @@ fn the_agents_own_state_is_its_own() {
     assert!(s.task.home_changes().unwrap().is_empty());
     assert!(!layer.join(".ssh").exists());
     assert!(!layer.join(".config/gh").exists());
-    // The person's own files are hidden, and not in the layer either.
+    // The person's own files are hidden, and not in the layer either: what
+    // lies at the top of the home but its settings too.
     assert!(!layer.join("Documents").exists());
-    assert!(Path::new(&layer.join("work")).is_symlink());
+    assert!(fs::symlink_metadata(layer.join("work")).is_err());
 }
 
 #[test]
