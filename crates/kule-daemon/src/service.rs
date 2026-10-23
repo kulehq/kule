@@ -1636,8 +1636,9 @@ impl Service {
             })
             .collect();
         // The tightest of the task's, its group's and the daily budget;
-        // refused, naming it, when one is spent.
-        let limit = task.run_budget().map_err(text)?;
+        // refused, naming it, when one is spent. Checked again, and set
+        // aside, as the agent starts (see `run_governed`).
+        task.run_budget().map_err(text)?;
         let plan = plan(&task)?;
         if !self
             .running
@@ -1685,7 +1686,7 @@ impl Service {
         };
         let service = Arc::clone(self);
         std::thread::spawn(move || {
-            let run = service.run(&task, &profile, &prompt, &pictures, limit, plan, &control);
+            let run = service.run(&task, &profile, &prompt, &pictures, plan, &control);
             let (error, denials, unreported) = match run {
                 Ok(end) => (end.error, end.denials, end.unreported),
                 Err(e) => (Some(e), Vec::new(), false),
@@ -1819,13 +1820,12 @@ impl Service {
         profile: &kule_acp::Profile,
         prompt: &str,
         pictures: &[kule_acp::Picture],
-        limit: Option<kule_engine::Money>,
         plan: kule_acp::governor::Plan,
         control: &kule_acp::RunControl,
     ) -> Result<RunEnd> {
         let started = Instant::now();
         let governor = self.govern(task, plan, control);
-        let outcome = self.run_governed(task, profile, prompt, pictures, limit, control, started);
+        let outcome = self.run_governed(task, profile, prompt, pictures, control, started);
         // The run is over by now, however it ended; one that failed before
         // its agent started (the policy, the proxy, installing or launching
         // the agent) never marked it, and the governor would wait for it
@@ -1865,7 +1865,6 @@ impl Service {
         profile: &kule_acp::Profile,
         prompt: &str,
         pictures: &[kule_acp::Picture],
-        limit: Option<kule_engine::Money>,
         control: &kule_acp::RunControl,
         started: Instant,
     ) -> Result<RunEnd> {
@@ -1920,6 +1919,17 @@ impl Service {
             );
             Vec::new()
         });
+        // What the run may spend, set aside as it starts: runs at once
+        // under one budget share what is left, and a run whose usage never
+        // comes counts at its whole share. Refused, nothing has started.
+        let reserved = match task.reserve_run() {
+            Ok(reserved) => reserved,
+            Err(e) => {
+                let _ = launch.kept.restore();
+                return Err(text(e));
+            }
+        };
+        let limit = reserved.as_ref().map(|r| r.limit.clone());
         let outcome = runtime.block_on(kule_acp::run_pictured(
             task,
             launch.command,
@@ -1936,12 +1946,27 @@ impl Service {
             tx,
         ));
         let mut failed = Vec::new();
-        if let Ok(mut usage) = runtime.block_on(forward) {
-            usage.duration_secs = started.elapsed().as_secs();
-            // Kept whether the run went well or not: it was spent either way.
-            if let Err(e) = task.record_usage(&usage) {
-                failed.push(format!("what the run spent could not be recorded: {e}"));
+        let kept_whole = |why: String| match &reserved {
+            Some(r) => format!(
+                "{why}, so the {:.2} {} set aside for it stays counted",
+                r.limit.amount, r.limit.currency
+            ),
+            None => why,
+        };
+        match runtime.block_on(forward) {
+            Ok(mut usage) => {
+                usage.duration_secs = started.elapsed().as_secs();
+                usage.reservation = reserved.as_ref().map(|r| r.id.clone());
+                // Kept whether the run went well or not: it was spent either way.
+                if let Err(e) = task.record_usage(&usage) {
+                    failed.push(kept_whole(format!(
+                        "what the run spent could not be recorded ({e})"
+                    )));
+                }
             }
+            Err(e) => failed.push(kept_whole(format!(
+                "what the run spent could not be read ({e})"
+            ))),
         }
         // The agent's process group is gone by now. Told however the run
         // ended: a failed or stopped run did things too.
@@ -3750,6 +3775,43 @@ mod tests {
         } else {
             assert!(unreported);
         }
+    }
+
+    /// A run sets aside what it may spend before its agent starts: while it
+    /// is at work, another task's run under the same daily budget is
+    /// refused, saying why; once it ends, only what it spent counts.
+    #[test]
+    fn a_run_reserves_before_its_agent_starts() {
+        let s = Setup::new();
+        let (first, _) = s.task();
+        let (second, _) = s.task();
+        s.app
+            .set_daily_budget(Some(kule_engine::Money {
+                amount: 10.0,
+                currency: "USD".into(),
+            }))
+            .unwrap();
+        own_agent(&s, "slow", "sleep 60");
+        s.app.start_run(&first, "slow", "hi", Vec::new()).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while kule_engine::spent_today(&s.app.home)
+            .unwrap()
+            .held
+            .is_empty()
+        {
+            assert!(Instant::now() < deadline, "nothing was set aside");
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        let e = s
+            .app
+            .start_run(&second, "slow", "hi", Vec::new())
+            .unwrap_err();
+        assert!(e.contains("set aside") && e.contains(&first), "{e}");
+        s.app.stop_run(&first).unwrap();
+        finished(&s, &first);
+        let today = kule_engine::spent_today(&s.app.home).unwrap();
+        assert!(today.held.is_empty(), "{today:?}");
+        assert_eq!(today.runs, 1);
     }
 
     /// A run the person stopped says so, as it is: no log to see, no

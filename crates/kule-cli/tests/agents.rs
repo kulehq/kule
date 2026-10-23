@@ -135,3 +135,83 @@ fn a_failed_run_still_tells_what_its_sandbox_did() {
         assert!(err.contains(kule_engine::UNREPORTED), "{err}");
     }
 }
+
+/// A run sets aside what it may spend: while it is at work, another task's
+/// run under the same daily budget is refused, saying why. A run that did
+/// not end (its `kule run` was killed) keeps its share counted until the
+/// person lets go of it, which is refused while it is at work.
+#[test]
+fn releasing_an_unfinished_reservation_is_said_and_kept() {
+    let (home, ws) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+    fs::write(
+        home.path().join("agents.toml"),
+        "[[agent]]\nname = \"slow\"\ncommand = [\"sh\", \"-c\", \"sleep 30\"]\n\n\
+         [[agent]]\nname = \"quick\"\ncommand = [\"sh\", \"-c\", \"exit 3\"]\n",
+    )
+    .unwrap();
+    stdout(&kule(home.path(), &["agents", "approve", "slow"]));
+    stdout(&kule(home.path(), &["agents", "approve", "quick"]));
+    let new = || {
+        let created = stdout(&kule(home.path(), &["new", ws.path().to_str().unwrap()]));
+        created.split_whitespace().nth(1).unwrap().to_owned()
+    };
+    let (first, second) = (new(), new());
+    stdout(&kule(home.path(), &["daily-budget", "10", "USD"]));
+
+    // A run that ends closes its share: what it spent counts instead.
+    let ended = kule(home.path(), &["run", &second, "--agent", "quick", "hi"]);
+    assert!(!ended.status.success(), "the agent speaks no ACP");
+    let daily = stdout(&kule(home.path(), &["daily-budget"]));
+    assert!(
+        daily.contains("10.00 USD left") && !daily.contains("set aside"),
+        "{daily}"
+    );
+
+    let mut running = Command::new(env!("CARGO_BIN_EXE_kule"))
+        .args(["run", &first, "--agent", "slow", "hi"])
+        .env("KULE_HOME", home.path())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    let share = home
+        .path()
+        .join("tasks")
+        .join(&first)
+        .join("reserved.jsonl");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    while fs::read_to_string(&share).unwrap_or_default().is_empty() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "nothing was set aside"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+
+    let refused = kule(home.path(), &["run", &second, "--agent", "slow", "hi"]);
+    let said = String::from_utf8_lossy(&refused.stderr);
+    assert!(!refused.status.success());
+    assert!(
+        said.contains("set aside") && said.contains(&first),
+        "{said}"
+    );
+    let at_work = kule(home.path(), &["budget", &first, "--release"]);
+    assert!(!at_work.status.success());
+    assert!(String::from_utf8_lossy(&at_work.stderr).contains("at work"));
+
+    // Killed: its usage never comes, and its share stays counted.
+    running.kill().unwrap();
+    running.wait().unwrap();
+    let task = kule_engine::Task::open(home.path(), &first).unwrap();
+    let _ = kule_engine::Sandbox::end_all(&task);
+    let held = kule(home.path(), &["run", &second, "--agent", "slow", "hi"]);
+    assert!(String::from_utf8_lossy(&held.stderr).contains("set aside"));
+
+    let released = stdout(&kule(home.path(), &["budget", &first, "--release"]));
+    assert!(released.contains("let go of 10.00 USD"), "{released}");
+    let usage =
+        fs::read_to_string(home.path().join("tasks").join(&first).join("usage.jsonl")).unwrap();
+    assert!(usage.contains("\"released\":true"), "{usage}");
+    let daily = stdout(&kule(home.path(), &["daily-budget"]));
+    assert!(daily.contains("10.00 USD left"), "{daily}");
+}

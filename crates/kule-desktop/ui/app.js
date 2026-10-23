@@ -1573,10 +1573,17 @@ function renderSpent(task) {
   }
   if (cost.length > 0) parts.push(`${cost.map(money).join(" + ")} spent`);
   else if (spent.tokens > 0) parts.push(`${spent.tokens.toLocaleString()} tokens`);
+  // Set aside for runs at work, or that did not end: counted as spent
+  // until each run's usage comes.
+  const held = spent.held || [];
+  if (held.length) parts.push(`${held.map(money).join(" + ")} set aside`);
   // What is left cannot be told: the budget holds every run.
   if (task.budget && spent.unreadable) parts.push("budget held");
   else if (task.budget) {
-    const used = cost.filter((m) => m.currency === task.budget.currency).reduce((a, m) => a + m.amount, 0);
+    // A run at work is counted at its share while it has one, not at what
+    // it reported so far as well.
+    const counted = held.length ? [...spent.cost, ...held] : cost;
+    const used = counted.filter((m) => m.currency === task.budget.currency).reduce((a, m) => a + m.amount, 0);
     const rest = Math.max(0, task.budget.amount - used);
     parts.push(`${money({ amount: rest, currency: task.budget.currency })} left`);
     if (rest <= 0) chip.classList.add("deny");
@@ -2189,9 +2196,11 @@ function budgetField(label, input, currency, after) {
 /** What was spent, against `budget` when there is one. */
 function spentLine(spent, budget, what) {
   const cost = spent && spent.cost.length ? spent.cost.map(money).join(" + ") : "nothing reported";
-  const el = h("span", { class: "daily-spent" }, `${what}: ${cost}`);
+  const held = spent?.held || [];
+  const el = h("span", { class: "daily-spent" }, `${what}: ${cost}${held.length ? ` · ${held.map(money).join(" + ")} set aside for runs at work or that did not end` : ""}`);
   if (!budget) return el;
-  const used = (spent?.cost || []).filter((m) => m.currency === budget.currency).reduce((a, m) => a + m.amount, 0);
+  // What is set aside counts as spent until each run's usage comes.
+  const used = [...(spent?.cost || []), ...held].filter((m) => m.currency === budget.currency).reduce((a, m) => a + m.amount, 0);
   const rest = Math.max(0, budget.amount - used);
   el.textContent += ` · ${money({ amount: rest, currency: budget.currency })} left`;
   if (rest <= 0) el.classList.add("deny");

@@ -181,3 +181,147 @@ fn a_group_s_budgets_hold_its_tasks_together() {
         "{e}"
     );
 }
+
+/// What a run may spend is set aside before it starts: until its usage is
+/// recorded, the whole of it counts, so a run whose usage never comes
+/// (Kule could not write it, a crash) is not taken for nothing spent.
+/// Once recorded, only what the run spent counts.
+#[test]
+fn a_run_whose_cost_is_not_recorded_stays_counted_at_its_reservation() {
+    let (home, ws) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+    let task = Task::create(home.path(), ws.path()).unwrap();
+    assert!(
+        task.reserve_run().unwrap().is_none(),
+        "no budget, nothing to set aside"
+    );
+    task.set_budget(Some(usd(2.0))).unwrap();
+    let reserved = task.reserve_run().unwrap().unwrap();
+    assert_eq!(reserved.limit, usd(2.0));
+    // Nothing recorded yet: all of it is held.
+    let e = task.run_budget().unwrap_err().to_string();
+    assert!(e.contains("set aside"), "{e}");
+    assert_eq!(task.spent().unwrap().held, [usd(2.0)]);
+    let mut spent = run(now(), Some(usd(0.5)));
+    spent.reservation = Some(reserved.id.clone());
+    task.record_usage(&spent).unwrap();
+    assert_eq!(task.run_budget().unwrap(), Some(usd(1.5)));
+    assert!(task.spent().unwrap().held.is_empty());
+}
+
+/// Runs started at once under a budget they share see each other: what
+/// one set aside, the next cannot have.
+#[test]
+fn runs_started_together_share_what_is_left() {
+    let (home, ws) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+    let tasks: Vec<Task> = (0..8)
+        .map(|_| Task::create(home.path(), ws.path()).unwrap())
+        .collect();
+    set_daily_budget(home.path(), Some(usd(10.0))).unwrap();
+    let got: Vec<bool> = std::thread::scope(|scope| {
+        let runs: Vec<_> = tasks
+            .iter()
+            .map(|t| scope.spawn(|| t.reserve_run()))
+            .collect();
+        runs.into_iter()
+            .map(|r| match r.join().unwrap() {
+                Ok(Some(r)) => {
+                    assert_eq!(r.limit, usd(10.0));
+                    true
+                }
+                Ok(None) => panic!("a budget holds"),
+                Err(e) => {
+                    assert!(e.to_string().contains("set aside"), "{e}");
+                    false
+                }
+            })
+            .collect()
+    });
+    assert_eq!(got.iter().filter(|g| **g).count(), 1, "{got:?}");
+    assert_eq!(spent_today(home.path()).unwrap().held, [usd(10.0)]);
+}
+
+/// A run whose share cannot be set aside does not start.
+#[test]
+fn a_reservation_that_cannot_be_written_starts_no_run() {
+    let (home, ws) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+    let task = Task::create(home.path(), ws.path()).unwrap();
+    task.set_budget(Some(usd(2.0))).unwrap();
+    // Read, but not written to.
+    use std::os::unix::fs::PermissionsExt;
+    let path = home
+        .path()
+        .join("tasks")
+        .join(task.id())
+        .join("reserved.jsonl");
+    std::fs::write(&path, "").unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o400)).unwrap();
+    let e = task.reserve_run().unwrap_err().to_string();
+    assert!(e.contains("does not start"), "{e}");
+}
+
+/// A share set aside for a day's budget leaves it with the day; the
+/// task's own budget, over all of its runs, keeps counting it.
+#[test]
+fn a_daily_reservation_ages_out() {
+    let (home, ws) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+    let task = Task::create(home.path(), ws.path()).unwrap();
+    std::fs::write(
+        home.path().join("tasks").join(task.id()).join("reserved.jsonl"),
+        format!(
+            "{{\"id\":\"old\",\"started_unix\":{},\"amount\":{{\"amount\":3.0,\"currency\":\"USD\"}}}}\n",
+            now() - 2 * 24 * 3600
+        ),
+    )
+    .unwrap();
+    assert!(spent_today(home.path()).unwrap().held.is_empty());
+    assert_eq!(task.spent().unwrap().held, [usd(3.0)]);
+}
+
+/// A share a run that did not end still holds can be let go of by the
+/// person, knowingly: never while an agent is at work in the task, and
+/// what was let go stays on record.
+#[test]
+fn a_reservation_of_a_run_at_work_is_not_released() {
+    let (home, ws) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+    let task = Task::create(home.path(), ws.path()).unwrap();
+    task.set_budget(Some(usd(2.0))).unwrap();
+    task.reserve_run().unwrap().unwrap();
+    {
+        let _at_work = task.agent_at_work().unwrap();
+        let e = task.release_unfinished().unwrap_err().to_string();
+        assert!(e.contains("at work"), "{e}");
+    }
+    assert_eq!(task.release_unfinished().unwrap(), [usd(2.0)]);
+    assert_eq!(task.run_budget().unwrap(), Some(usd(2.0)));
+    assert_eq!(task.spent().unwrap().runs, 0, "a release is no run");
+    assert!(task.release_unfinished().unwrap().is_empty());
+    let kept = std::fs::read_to_string(
+        home.path()
+            .join("tasks")
+            .join(task.id())
+            .join("usage.jsonl"),
+    )
+    .unwrap();
+    assert!(kept.contains("\"released\":true"), "{kept}");
+}
+
+/// A share counts for the group the task was in when it was set aside:
+/// another of the group's tasks sees it.
+#[test]
+fn a_share_counts_for_the_group() {
+    let (home, ws) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+    let (one, other) = (
+        Task::create(home.path(), ws.path()).unwrap(),
+        Task::create(home.path(), ws.path()).unwrap(),
+    );
+    let group = create_group(home.path(), "clients", None).unwrap();
+    set_group_budget(home.path(), group.id, Some(usd(4.0)), None).unwrap();
+    one.set_group(Some(group.id)).unwrap();
+    other.set_group(Some(group.id)).unwrap();
+    assert_eq!(one.reserve_run().unwrap().unwrap().limit, usd(4.0));
+    let e = other.run_budget().unwrap_err().to_string();
+    assert!(
+        e.contains("group \"clients\"'s budget") && e.contains("set aside"),
+        "{e}"
+    );
+}

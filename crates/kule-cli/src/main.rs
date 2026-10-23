@@ -383,6 +383,12 @@ enum Cmd {
         amount: Option<String>,
         /// ISO 4217 [default: USD]
         currency: Option<String>,
+        /// Let go of what runs that did not end (Kule was stopped, their
+        /// usage could not be recorded) still hold of the budgets, as
+        /// spent. Refused while an agent is at work in the task; what is let
+        /// go stays on record.
+        #[arg(long, conflicts_with_all = ["amount", "currency"])]
+        release: bool,
     },
     /// Show or set what every task may cost together in any 24 hours: no
     /// run starts anywhere once the runs started in the last 24 hours
@@ -826,8 +832,8 @@ fn run() -> Result<ExitCode> {
                 .ok_or_else(|| anyhow!("{}", agents.refusal(&agent)))?;
             // The tightest of the task's, its group's and the daily budget;
             // refused, naming it, when one is spent (`kule budget ID` shows
-            // them all).
-            let limit = task.run_budget()?;
+            // them all). Checked again, and set aside, as the agent starts.
+            task.run_budget()?;
             let time_left = task.time_left()?;
             if time_left.is_some_and(|l| l.is_zero()) {
                 bail!(
@@ -867,6 +873,18 @@ fn run() -> Result<ExitCode> {
             for note in task.home_withheld_notes()? {
                 eprintln!("kule: {note}");
             }
+            // What the run may spend, set aside as it starts: runs at once
+            // under one budget share what is left, and a run whose usage
+            // never comes counts at its whole share. Refused, nothing has
+            // started.
+            let reserved = match task.reserve_run() {
+                Ok(reserved) => reserved,
+                Err(e) => {
+                    let _ = kept.restore();
+                    return Err(e.into());
+                }
+            };
+            let limit = reserved.as_ref().map(|r| r.limit.clone());
             let (tx, rx) = futures::channel::mpsc::unbounded();
             let runtime = tokio::runtime::Runtime::new()?;
             let printer = runtime.spawn(print_events(rx, usage, profile.name.clone()));
@@ -898,11 +916,27 @@ fn run() -> Result<ExitCode> {
             ));
             let _ = governor.join();
             let mut failed = Vec::new();
-            if let Ok(mut usage) = runtime.block_on(printer) {
+            let kept_whole = |why: String| match &reserved {
+                Some(r) => format!(
+                    "{why}, so the {:.2} {} set aside for it stays counted",
+                    r.limit.amount, r.limit.currency
+                ),
+                None => why,
+            };
+            let printed = runtime.block_on(printer);
+            if let Err(e) = &printed {
+                failed.push(kept_whole(format!(
+                    "what the run spent could not be read ({e})"
+                )));
+            }
+            if let Ok(mut usage) = printed {
                 usage.duration_secs = started.elapsed().as_secs();
+                usage.reservation = reserved.as_ref().map(|r| r.id.clone());
                 // Kept whether the run went well or not: it was spent either way.
                 if let Err(e) = task.record_usage(&usage) {
-                    failed.push(format!("what the run spent could not be recorded: {e}"));
+                    failed.push(kept_whole(format!(
+                        "what the run spent could not be recorded ({e})"
+                    )));
                 } else if usage.cost.is_none() && task.budget()?.is_some() {
                     eprintln!(
                         "kule: {} reported no cost, so the task's budget does not count this run",
@@ -956,8 +990,26 @@ fn run() -> Result<ExitCode> {
             task,
             amount,
             currency,
+            release,
         } => {
             let task = Task::open(&home, &task)?;
+            if release {
+                let released = task.release_unfinished()?;
+                if released.is_empty() {
+                    println!(
+                        "nothing is set aside for runs that did not end in task {}",
+                        task.id()
+                    );
+                }
+                for share in &released {
+                    println!(
+                        "let go of {} set aside for a run that did not end; it no longer counts as spent",
+                        money(share)
+                    );
+                }
+                print_spent(&task)?;
+                return Ok(ExitCode::SUCCESS);
+            }
             match amount {
                 Some(amount) => {
                     task.set_budget(scopes::parse_budget(&amount, currency)?)?;
@@ -1021,14 +1073,15 @@ fn run() -> Result<ExitCode> {
             let mut line = format!("last 24 hours, every task: {cost} in {} runs", spent.runs);
             match kule_engine::daily_budget(&home)? {
                 Some(budget) => {
-                    let left = budget.amount - spent.in_currency(&budget.currency);
+                    let left = budget.amount - spent.counted_in(&budget.currency);
                     line += &format!(
-                        "; daily budget {}, {} left",
+                        "; daily budget {}, {} left{}",
                         money(&budget),
                         money(&Money {
                             amount: left.max(0.0),
                             currency: budget.currency.clone()
-                        })
+                        }),
+                        scopes::held_words(&spent.held)
                     );
                 }
                 None => line += "; no daily budget",
@@ -1454,8 +1507,9 @@ fn print_spent(task: &Task) -> Result<()> {
             }
         );
     }
+    line += &scopes::held_words(&spent.held);
     if let Some(budget) = budget {
-        let left = budget.amount - spent.in_currency(&budget.currency);
+        let left = budget.amount - spent.counted_in(&budget.currency);
         line += &format!(
             "; budget {}, {} left",
             money(&budget),

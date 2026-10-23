@@ -113,6 +113,6 @@ pub use sync::{Behind, Synced};
 pub use task::{AgentAtWork, OpenTerminal, OpenedOutside, Task, TaskInfo};
 pub use textdiff::{DiffSkip, Hunk, Line, LineKind, TextDiff};
 pub use usage::{
-    BudgetLeft, BudgetScope, GroupSpent, Money, RunUsage, Spent, daily_budget, daily_left,
-    groups_spent, set_daily_budget, spent_today,
+    BudgetLeft, BudgetScope, GroupSpent, Money, Reserved, RunUsage, Spent, daily_budget,
+    daily_left, groups_spent, set_daily_budget, spent_today,
 };
