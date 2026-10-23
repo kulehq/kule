@@ -168,6 +168,8 @@ kule exec "$TASK" --reveal ~/Library/Keychains \
 | `N ignored by the workspace, staying in the copy …` | Paths the workspace's `.gitignore` excludes (build output, `.env`). A commit leaves them behind unless you pass `--include-ignored`. |
 | `git:` | Repository changes. See [Git](../concepts/git.md). |
 | `net: <host>:<port> · tunneled (<rule>)` | A connection the policy let through, and the rule that did. |
+| `net: <host>:<port> · cut (<rule>)` | A connection the policy let through, which Kule ended: what went over it was not for the host it was let through to, its name led to an address on this computer or its network, or Kule refused a request in it. The task's `network.jsonl` says why. |
+| `net: <host>:<port> · failed (<rule>)` | A connection the policy let through, which ended in an error of its own: the host went away, or the connection was reset. The task's `network.jsonl` says why. |
 | `net: <host>:<port> · refused, …` | A connection the policy did not let through. |
 | `sandbox: refused <operation> <path> (<program>)` | What the sandbox refused, on macOS. They are also kept in the task's `sandbox.jsonl`. |
 | `kule: ended <names>, still running in the task's sandbox as the command ended` | On stderr: what the command left running, which Kule ended with it. Each name once, with how many (`sleep ×2`). |

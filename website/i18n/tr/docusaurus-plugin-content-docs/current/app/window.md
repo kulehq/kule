@@ -120,7 +120,9 @@ Ana alanın üstünde, açık görevin başlığı şunları gösterir:
 - ajanların bildirdiği kadarıyla, çalıştırmalarının şimdiye kadar
   **harcadığı** tutar; çalıştırmalarının harcadıklarına dair bazı kayıtlar
   okunamıyorsa kırmızıyla *N usage records unreadable · budget held* (bkz.
-  [Bütçeler ve sınırlar](../concepts/budgets-and-limits.md));
+  [Bütçeler ve sınırlar](../concepts/budgets-and-limits.md)). Çalışmakta
+  olan ya da bitmeyen çalıştırmalar bir pay tutarken *X set aside* ekler ve
+  bunu kalandan düşer;
 - klasör, yanındaki bir projeden derleniyor ama görevleri o projeyi henüz
   okuyamıyorsa bir **builds from** etiketi (bkz.
   [`kule reveal`](../cli/reveal.md)).

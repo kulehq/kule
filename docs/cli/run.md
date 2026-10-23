@@ -165,12 +165,12 @@ took: 41s
 | `· <note>` | A note from Kule or the agent, such as a permission it was given. |
 | `N file changes: +a ~m -d` | What the copy now holds that the workspace does not: created, modified, deleted. Inside each file, the functions, sections or keys that changed. See [kule status](status.md). |
 | `git:` | What happened to the repository: branch moves, new objects, config or hook changes. See [Git](../concepts/git.md). |
-| `net:` | Each connection the run made and whether it went through. |
+| `net:` | Each connection the run made and what became of it: `tunneled` when it went through; `cut` when Kule ended it or refused a request in it; `failed` when it ended in an error of its own (the host went away, a reset); `refused, …` when the policy did not let it through. `network.jsonl` says why for `cut` and `failed`. |
 | `in your home, caught for review` | Writes in your home folder, waiting in the home layer. See [kule home](home.md). |
 | `sandbox: refused …` | What the sandbox refused (macOS lists them; on Linux the command just gets an error). |
 | `sandbox: <path> changed during the run; Kule put it back …` | A path the run may not change, which Kule put back as it was. |
 | `policy:` | The ruling on the changes: *passes on its own*, *waits for approval* or *denied*, with the rule behind each. |
-| `spent:` | What the task's runs have cost so far, as the agents reported it, and what is left of its budget. ` (N records cannot be read)` when some of the task's usage records cannot be read. |
+| `spent:` | What the task's runs have cost so far, as the agents reported it, and what is left of its budget. ` (N records cannot be read)` when some of the task's usage records cannot be read. ` (<amount> set aside for runs at work or that did not end)` when runs hold a share that their usage has not closed yet; it counts in what is left. |
 | `took:` | How long the run took. |
 
 When the output is not a terminal, every event is a plain line of its own,
@@ -184,6 +184,8 @@ which is easier to log.
 | `kule: agent <name> cannot run: <why>` | The agent is missing, not signed in, or (for your own profiles) not approved yet. Run `kule agents` to see why. |
 | `kule: task <id> has spent its budget; raise it or turn it off to run again` | Raise it with `kule budget TASK <amount>`, or `kule budget TASK off`. The message names a group's or the daily budget when that is the one spent. |
 | `kule: Kule cannot tell what <budget> has left: <N> record(s) of what runs spent … cannot be read; mend or remove them, or turn the budget off, to run again` | A usage record that cannot be read counts, so the budget holds every run until it is mended or removed (a task's `usage.jsonl`), or the budget is turned off. See [Budgets and limits](../concepts/budgets-and-limits.md). |
+| ``kule: what is left of <budget> (<amount>) is set aside for runs at work, or that did not end, in task <id>: once a run ends, what it spent counts instead; `kule budget TASK --release` lets go of one that did not end`` | Runs that started before it (in the tasks named) hold what is left. Wait for them to end. A run that did not end (Kule was stopped) keeps its share counted until you let go of it with [kule budget](budget.md) `TASK --release`. |
+| `kule: Kule could not set aside what the run may spend (…), so it does not start` | Kule could not write the task's `reserved.jsonl`. Nothing started. Check that Kule's home can be written. |
 | `kule: the task has used its time: its runs took N minutes together; …` | Raise or remove the task's time limit with [kule limits](limits.md). |
 | `kule: an agent is at work in task <id> …` | One agent per task. Wait, or make another task. |
 | `kule: a terminal is open on this task's copy (in Kule's app, or kule shell); close it first, then start work` | A terminal on the task (the app's, or `kule shell`) is open. Close it first. |
@@ -193,7 +195,8 @@ which is easier to log.
 | `kule: stopped: the agent sent a message larger than 16 MiB` | The agent said more in one message than Kule takes. Run it again with a narrower prompt. |
 | `kule: stopped: the agent left more than 1024 tool calls open` | The agent started tool calls without ending them. |
 | `kule: Linux does not tell Kule what the sandbox refused; each refusal reached the command as an error` | On Linux, after a run that failed: no `sandbox: refused` line does not mean nothing was refused: a refused operation reached the agent's command as a permission error. |
-| `kule: what the run spent could not be recorded: …` | Kule could not write the task's `usage.jsonl`, so this run's cost is not counted. Check that Kule's home can be written. |
+| `kule: what the run spent could not be recorded (…), so the <amount> set aside for it stays counted` | Kule could not write the task's `usage.jsonl`. The run's whole share counts in place of what it spent, until you let go of it with [kule budget](budget.md) `TASK --release`. Check that Kule's home can be written. Without a budget the line ends at `(…)`. |
+| `kule: what the run spent could not be read (…), so the <amount> set aside for it stays counted` | Kule could not read what the run's agent reported. The run's whole share counts, as above. |
 | `kule: Kule could not put back the protected paths the run changed: …` | Look at the changes with [kule status](status.md) before you commit, or [roll them back](rollback.md). |
 | `kule: what the sandbox refused cannot be read: …` / `… could not be recorded: …` | The refusals are not listed, or not kept for the agent's next run and the app's Timeline. |
 | `kule: the run ended, but Kule could not do all of the above` | The run itself went well; one of the lines above says what Kule could not do. |

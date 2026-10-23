@@ -13,6 +13,7 @@ ya da ayarlar.
 
 ```sh
 kule budget [OPTIONS] <TASK> [AMOUNT] [CURRENCY]
+kule budget [OPTIONS] <TASK> --release
 ```
 
 ## Açıklama {#description}
@@ -30,6 +31,8 @@ kule budget [OPTIONS] <TASK> [AMOUNT] [CURRENCY]
   [`kule group budget`](group.md)) ve tüm görevler için günlük bütçe (bkz.
   [`kule daily-budget`](daily-budget.md)). Bir sonraki çalıştırmanın en fazla
   ne kadar tutabileceğini de söyler: bunların en sıkısı.
+- **`--release` ile** görevde bitmeyen çalıştırmaların bütçelerden hâlâ
+  tuttuğunu bırakır (aşağıya bakın).
 
 Bir bütçe nasıl işler:
 
@@ -40,6 +43,15 @@ Bir bütçe nasıl işler:
   bilemez. Böyle bir kaydı hiç harcanmamış saymak yerine sayar. Kaydı
   (görevin `usage.jsonl` dosyasında) düzeltin ya da kaldırın, veya bütçeyi
   kapatın.
+- Bir çalıştırma, ajanı başlamadan önce payını ayırır: kalanların en
+  sıkısı; diğer çalıştırmaların ayırdığı harcanmış sayılır. Aynı bütçe
+  altında aynı anda başlayan çalıştırmalar kalanı paylaşır. Çalıştırmanın
+  kullanımı kaydedildiğinde yalnızca harcadığı sayılır.
+- Kullanımı hiç gelmeyen bir çalıştırmanın (Kule durdurulmuştur, kayıt
+  yazılamamış ya da okunamamıştır) payının tamamı sayılmaya devam eder.
+  `--release` onu bırakır, böylece artık harcanmış sayılmaz, ve bunun
+  kaydını görevin `usage.jsonl` dosyasında tutar. Görevde bir ajan
+  çalışırken reddedilir.
 - Maliyetini çalışırken bildiren bir ajanın çalıştırması, kalan tutara
   ulaştığında durdurulur.
 - Claude Code maliyetini her turun sonunda bildirir; bu yüzden bir tur
@@ -67,6 +79,7 @@ sayfasına bakın.
 
 | Seçenek | Değer | Varsayılan | Anlamı |
 | --- | --- | --- | --- |
+| `--release` | | | Görevde bitmeyen çalıştırmaların bütçelerden hâlâ tuttuğunu bırakır; böylece artık harcanmış sayılmaz. Görevde bir ajan çalışırken reddedilir. `AMOUNT` ya da `CURRENCY` almaz. |
 | `--home` | yol | `~/.kule` (ya da `KULE_HOME`) | Kule'nin evi. Bkz. [genel seçenekler](index.md). |
 | `-h`, `--help` | | | Yardımı yazdırır. |
 
@@ -108,19 +121,47 @@ $ kule budget 1046fb30 off
 
 Görevin henüz hiç çalıştırması yoksa `off` hiçbir şey yazmaz.
 
+Başka bir görevde bir çalıştırma günlük bütçe altında çalışırken, ayırdığı
+bütçenin yanında görünür ve sayılır:
+
+```console
+$ kule budget 1046fb30
+budgets over task 1046fb30's next run:
+  every task, any 24 hours         10.00 USD, 0.00 USD left (10.00 USD set aside for runs at work or that did not end)
+no run starts: what is left of the daily budget (10.00 USD) is set aside for runs at work, or that did not end, in task 7c2e9a10: once a run ends, what it spent counts instead; `kule budget TASK --release` lets go of one that did not end
+```
+
+O görevde bitmeyen bir çalıştırmanın payını bırakın (`kule run`'ı
+öldürülmüştü):
+
+```console
+$ kule budget 7c2e9a10 --release
+let go of 10.00 USD set aside for a run that did not end; it no longer counts as spent
+```
+
+Görevin çalıştırmaları ya da kendi bütçesi varsa ardından bir `spent:`
+satırı gelir.
+
 ## Çıktı {#output}
 
 - `spent: … in N runs`, ajanların bu görev için bildirdiklerini toplar. Bazı
   çalıştırmalar token bildirip maliyet bildirmediyse satır bunların kaç tane
   olduğunu söyler (`(2 without a cost)`). Görevin bazı kayıtları
   okunamıyorsa kaç tane olduğunu söyler (`(1 record cannot be read)`).
+  Çalışmakta olan ya da bitmeyen çalıştırmaların ayırdığı
+  ` (10.00 USD set aside for runs at work or that did not end)` olarak
+  eklenir.
 - `budgets over task …'s next run` her bütçeyi kalan tutarıyla listeler.
-  Tükenmiş bir bütçe `0.00` kaldığını gösterir.
+  Tükenmiş bir bütçe `0.00` kaldığını gösterir. Ayrılan harcanmış sayılır ve
+  ardından gösterilir.
 - `the next run may cost at most …` kalanların en sıkısıdır.
 - `no budget holds task …` hiçbir kapsamda bütçe ayarlı olmadığı anlamına
   gelir.
-- `no run starts: …` bütçelerden birinin tükendiği anlamına gelir; metin
-  hangisi olduğunu söyler.
+- `no run starts: …` bütçelerden birinin tükendiği ya da kalanının ayrıldığı
+  anlamına gelir; metin hangisi olduğunu söyler.
+- `let go of … set aside for a run that did not end; it no longer counts as spent`,
+  `--release`'in bıraktığıdır, her pay için bir satır; hiç yoksa
+  `nothing is set aside for runs that did not end in task …`.
 
 ## Hatalar ve çözümler {#errors-and-fixes}
 
@@ -130,6 +171,8 @@ Görevin henüz hiç çalıştırması yoksa `off` hiçbir şey yazmaz.
 | `kule: a budget is a positive amount in a currency like USD, not 0 USD` | 0'dan büyük bir tutar ve büyük harfle üç harfli bir para birimi kullanın (`usd` değil, `USD`). Bir bütçeyi kaldırmak için `off` kullanın. |
 | `kule: no task 1046fb3` | `kule list`'teki görev kimliğinin tamamını kullanın. |
 | `task 1046fb30 has spent its budget; raise it or turn it off to run again` (`kule run`'dan ya da uygulamadan) | Bütçeyi artırın (`kule budget TASK 10`) ya da kaldırın (`kule budget TASK off`). |
+| ``what is left of task 1046fb30's budget (5.00 USD) is set aside for runs at work, or that did not end, in task 1046fb30: once a run ends, what it spent counts instead; `kule budget TASK --release` lets go of one that did not end`` (`kule run`'dan, uygulamadan ya da burada `no run starts:` ile) | Çalışmakta olan çalıştırmanın bitmesini bekleyin. Çalışan yoksa (Kule durdurulmuştu), mesajın adını verdiği görevde payını bırakın: `kule budget TASK --release`. |
+| `kule: an agent is at work in task 1046fb30 (process 4242); its run holds its share until it ends` (`--release`'ten) | Çalıştırmanın bitmesini bekleyin ya da onu durdurun; ardından harcadığı sayılır. |
 | `Kule cannot tell what task 1046fb30's budget has left: 1 record of what runs spent (a task's usage.jsonl) cannot be read; mend or remove them, or turn the budget off, to run again` (`kule run`'dan, uygulamadan ya da burada `no run starts:` ile) | Görevin `usage.jsonl` dosyasındaki okunamayan satırı düzeltin ya da kaldırın, veya bütçeyi kapatın. Tutan bir grubun ya da günlük bütçeyse mesaj onun adını verir. |
 
 Her hata 2 durum koduyla çıkar.
@@ -139,8 +182,10 @@ Her hata 2 durum koduyla çıkar.
 **Applies to: One task** seçiliyken *Settings → Budget*, ya da görevin ⋮
 menüsündeki *Budget…*. Görev başlığındaki çip, görevin ne harcadığını ve ne
 kaldığını, bazı kayıtlar okunamıyorsa da kırmızıyla *N usage records
-unreadable · budget held* gösterir. Pencere öndeyken değilse Kule bir bütçenin %80'i
-harcandığında ve tamamı bittiğinde size haber verir.
+unreadable · budget held* gösterir. Çalıştırmalar bir pay tutarken *X set
+aside* der ve bunu kalandan düşer. `--release` yalnızca komut satırındadır.
+Pencere öndeyken değilse Kule bir bütçenin %80'i harcandığında ve tamamı
+bittiğinde size haber verir.
 
 ## Ayrıca bakın {#see-also}
 

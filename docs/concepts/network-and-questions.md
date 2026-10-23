@@ -31,6 +31,16 @@ net: registry.npmjs.org:443 · tunneled (package-registries)
 net: example.com:443 · refused, would wait for approval; the command line asks no one (no-rule-lets-it-pass)
 ```
 
+Each connection's outcome says what became of it:
+
+| Outcome | What became of it |
+| --- | --- |
+| `tunneled` | It went through. Where Kule looks inside it, every request in it went through too. |
+| `refused` | The policy did not let it through, or nobody approved it. |
+| `cut` | Kule let it through, then ended it, and says why in the log's `cut` field: see [HTTPS and secrets](#https-and-secrets). |
+| `failed` | It ended in an error of its own, not Kule's doing: the host went away, the connection was reset. The log's `failed` field says why. This holds for plain HTTP and for connections Kule looks inside alike. |
+| `unresolved`, `private`, `unreachable` | Its name did not resolve, every address it led to is private or this computer's, or the host did not take the connection. |
+
 The proxy also checks the address it connects to, and keeps private
 addresses out of reach. For IPv6 only the global unicast range counts as
 public; an IPv4 address carried inside an IPv6 one (mapped, NAT64, 6to4)
@@ -99,6 +109,17 @@ the like at it. Kule never adds it to your keychain.
 Package registries are **read-only** to commands (a publish is refused) for
 npm, yarn, pnpm and bun, cargo, pip, uv and poetry, and gem, whose tools
 trust the task's authority.
+
+Where Kule looks inside a connection and answers a request itself, the
+connection is logged as `cut`, with `Kule refused a request in it: <why>`.
+The why is one of these, in Kule's words, never the request's:
+
+- `a write to a host commands may only read from`
+- `a credential Kule does not hold for this host`
+- `a body Kule checks whole that was chunked or over 1 MiB`
+- `a request Kule could not read one way only, or for another host`
+
+A plain `http://` request Kule refused is logged as `cut` too, with why.
 
 ## Known limits
 

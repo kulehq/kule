@@ -110,7 +110,9 @@ Above the main area, the open task's header shows:
 - its **state**, such as "agent at work" or "3 changes · needs approval";
 - what its runs have **spent** so far, as the agents reported it, and in red
   *N usage records unreadable · budget held* when some records of what its runs spent
-  cannot be read (see [Budgets and limits](../concepts/budgets-and-limits.md));
+  cannot be read (see [Budgets and limits](../concepts/budgets-and-limits.md)).
+  While runs at work, or that did not end, hold a share, it adds
+  *X set aside* and counts it in what is left;
 - a **builds from** chip when the folder builds from a project beside it
   that its tasks cannot read yet (see [`kule reveal`](../cli/reveal.md)).
 

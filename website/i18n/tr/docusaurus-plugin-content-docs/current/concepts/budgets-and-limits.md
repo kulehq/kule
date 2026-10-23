@@ -53,6 +53,27 @@ Bir bütçe nasıl uygulanır:
 - Bir çalıştırma, kalanların en sıkısıyla sınırlanır. Maliyetini çalışırken
   bildiren bir ajanın çalıştırması, oraya vardığında **iptal edilir**.
 - Bir ret, harcanan bütçenin adını verir.
+- **Bir çalıştırma, ajanı başlamadan önce payını ayırır**: harcayabileceği
+  en fazla tutar; görevin, grubunun, grubun günlük ve günlük bütçeden
+  kalanların en sıkısı. Diğer çalıştırmaların ayırdığı harcanmış sayılır;
+  böylece aynı bütçe altında aynı anda başlayan çalıştırmalar kalanı
+  paylaşır. Kule payları süreçleri arasında birer birer ayırır (Kule'nin
+  evindeki `budget.lock` altında) ve her birini görevin `reserved.jsonl`
+  dosyasında tutar.
+- Çalıştırmaların ayırdığından başka bir şey kalmadığında hiçbir çalıştırma
+  başlamaz; ret, bütçenin ve görevlerin adını verir:
+  ``what is left of <budget> (<amount>) is set aside for runs at work, or that did not end, in task <id>: once a run ends, what it spent counts instead; `kule budget TASK --release` lets go of one that did not end``.
+- Bir çalıştırmanın kullanımı kaydedildiğinde payı kapanır: bundan sonra
+  yalnızca harcadığı sayılır.
+- **Kullanımı hiç gelmeyen bir pay tamamen sayılır**: Kule durdurulmuştur ya
+  da çalıştırmanın harcadığı kaydedilememiş veya okunamamıştır. Günlük bir
+  bütçede pay 24 saatle birlikte düşer. Görevin bütçesinde ve grubun tüm
+  çalıştırmalar üzerindeki bütçesinde, siz onu `kule budget TASK --release`
+  ile bırakana kadar kalır; görevde bir ajan çalışırken bu reddedilir.
+  Bıraktığınız, `usage.jsonl` dosyasında kayıtlı kalır.
+- Bir pay, ayrıldığı sırada görevin bulunduğu grup için sayılır.
+- Yazılamayan bir pay hiçbir çalıştırma başlatmaz:
+  `Kule could not set aside what the run may spend (…), so it does not start`.
 - Bir çalıştırma, görevinin **çalıştığı sırada** bulunduğu grup için
   sayılır; böylece bir görevi gruptan çıkarmak, harcadığını grubun
   hesabında bırakır.
@@ -83,6 +104,10 @@ söylediğinde maliyet) görevin `usage.jsonl` dosyasında tutulur.
 `kule status` ve uygulamanın görev başlığı bunları toplar. Okunamayan
 kayıtlar orada da sayılır: `spent:` satırlarına ` (N records cannot be read)`
 eklenir, başlıktaki etiket de kırmızıyla *N usage records unreadable · budget held* der.
+Ayrılanlar da gösterilir: `spent:` satırları ve bütçe listeleri
+` (<amount> set aside for runs at work or that did not end)` ekler,
+`kule status --json` bunu `spent` altında `held` ve `held_by` olarak verir,
+başlıktaki etiket de *<amount> set aside* der ve bunu kalandan düşer.
 
 Pencere başka yerdeyken uygulama, bir bütçenin %80'i harcandığında ve
 tamamı harcandığında size haber verir.

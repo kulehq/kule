@@ -30,6 +30,9 @@ bütçedir. Son 24 saatte başlayan çalıştırmaları sayar, yani kayar: dün
 - Herhangi bir görevde, bir çalıştırmanın harcadığına dair okunamayan bir
   kayıt her çalıştırmayı tutar: Kule onun ne zaman yazıldığını bilemez;
   bugünkü olabilir.
+- Çalıştırmaların başlarken ayırdığı, her görevde, kullanımları kaydedilene
+  kadar harcanmış sayılır. Kullanımı hiç gelmeyen bir pay 24 saatle
+  birlikte düşer, ya da daha önce `kule budget TASK --release` ile.
 
 Bir tutarla komut günlük bütçeyi ayarlar; `off` ile kaldırır; ikisi de
 yoksa yalnızca gösterir. Her biçim, tüm görevlerin son 24 saatte ne
@@ -84,7 +87,13 @@ last 24 hours, every task: no cost reported in 0 runs; no daily budget
 `last 24 hours, every task: <cost> in <N> runs`, tüm görevlerin son 24 saatte
 başlayan çalıştırmalarının bildirdiğidir. Maliyetler birden fazla para
 biriminde geldiyse `+` ile birleştirilir. `;` işaretinden sonra günlük bütçe
-ve kalanı gelir, ya da `no daily budget`.
+ve kalanı gelir, ya da `no daily budget`. Çalışmakta olan ya da bitmeyen
+çalıştırmaların ayırdığı kalandan düşülür ve ardından eklenir:
+
+```console
+$ kule daily-budget
+last 24 hours, every task: 3.40 USD in 6 runs; daily budget 20.00 USD, 6.60 USD left (10.00 USD set aside for runs at work or that did not end)
+```
 
 ## Hatalar ve çözümler {#errors-and-fixes}
 
@@ -93,6 +102,7 @@ ve kalanı gelir, ya da `no daily budget`.
 | `kule: abc: an amount like 20 or 7.50, or off` | Bir sayı ya da `off` yazın. |
 | `kule: a budget is a positive amount in a currency like USD, not 0 USD` | 0'dan büyük bir tutar ve büyük harfle bir para birimi kodu kullanın. |
 | `the daily budget is spent: every task together, in the last 24 hours; raise it or turn it off to run again` (bir çalıştırma reddedildiğinde) | Eski çalıştırmaların 24 saatin dışına çıkmasını bekleyin, bütçeyi artırın ya da kaldırın. |
+| ``what is left of the daily budget (<amount>) is set aside for runs at work, or that did not end, in task <id>: once a run ends, what it spent counts instead; `kule budget TASK --release` lets go of one that did not end`` (bir çalıştırma reddedildiğinde) | Çalışmakta olan çalıştırmaların bitmesini bekleyin. Bitmeyen bir çalıştırma (Kule durdurulmuştu) payını 24 saat boyunca tutar; adı verilen görevde `kule budget TASK --release` onu daha önce bırakır. |
 | `Kule cannot tell what the daily budget has left: <N> records of what runs spent (in tasks' usage.jsonl) cannot be read; mend or remove them, or turn the budget off, to run again` (bir çalıştırma reddedildiğinde) | Görevlerin `usage.jsonl` dosyalarındaki okunamayan satırları düzeltin ya da kaldırın, veya günlük bütçeyi kapatın. |
 
 ## Uygulamada {#in-the-app}

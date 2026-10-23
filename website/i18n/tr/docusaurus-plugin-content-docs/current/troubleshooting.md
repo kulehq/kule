@@ -100,6 +100,19 @@ her bütçeyi listeler. Sınırı belirleyeni artırın ya da kaldırın (`kule
 budget TASK off`, `kule group budget ID off`, `kule daily-budget off`).
 Bkz. [Bütçeler ve sınırlar](concepts/budgets-and-limits.md).
 
+### Bir çalıştırma başlamadan reddediliyor: kalan ayrılmış
+
+**Neden:** ondan önce başlayan çalıştırmalar, kullanımları kaydedilene kadar
+onu kapsayan bir bütçeden kalanı tutuyor. Ret iletisi bütçenin ve görevlerin
+adını verir:
+`what is left of <budget> (<amount>) is set aside for runs at work, or that did not end, in task <id>: …`.
+Kule'nin sırasında durdurulduğu ya da kullanımı kaydedilemeyen bir
+çalıştırmanın payı sayılmaya devam eder.
+
+**Çözüm:** çalışmakta olan çalıştırmaların bitmesini bekleyin. Bitmeyen bir
+çalıştırmanın payını, adı verilen görevde bırakın: `kule budget TASK
+--release`. Bkz. [`kule budget`](cli/budget.md).
+
 ### Bir çalıştırma kendiliğinden durdu
 
 **Neden:** bir [sınır](concepts/budgets-and-limits.md) onu durdurdu. Live

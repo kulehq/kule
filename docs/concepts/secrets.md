@@ -65,6 +65,12 @@ refused (403), so nothing goes out under an account that is not yours:
   up to 1 MB, and the same holds for its fields, at the top of JSON and in
   objects within objects; one too large or chunked to read is refused.
 
+A refused request is answered by Kule, never sent on, and the connection
+is logged as `cut`, with why in Kule's words:
+`Kule refused a request in it: a credential Kule does not hold for this host`,
+or `… a body Kule checks whole that was chunked or over 1 MiB`. Its `net:`
+line says `cut` (see [Network and questions](network-and-questions.md)).
+
 The proxy asks that host for whole responses only (no `Range`). A response
 that repeats the value has it blanked out with `*`, as far as the proxy
 can read it: as it is, escaped as JSON or a URL writes it, or in base64,

@@ -32,6 +32,16 @@ net: registry.npmjs.org:443 · tunneled (package-registries)
 net: example.com:443 · refused, would wait for approval; the command line asks no one (no-rule-lets-it-pass)
 ```
 
+Her bağlantının sonucu (`outcome`) ona ne olduğunu söyler:
+
+| Sonuç | Ne oldu |
+| --- | --- |
+| `tunneled` | Geçti. Kule'nin içine baktığı yerde, içindeki her istek de geçti. |
+| `refused` | Politika onu geçirmedi ya da kimse onaylamadı. |
+| `cut` | Kule onu geçirdi, sonra kesti ve nedenini günlüğün `cut` alanında söyler: aşağıdaki *HTTPS ve gizli değerler* bölümüne bakın. |
+| `failed` | Kendi hatasıyla bitti, Kule'nin yaptığı değil: host gitti, bağlantı sıfırlandı. Nedenini günlüğün `failed` alanı söyler. Bu, düz HTTP için de Kule'nin içine baktığı bağlantılar için de geçerlidir. |
+| `unresolved`, `private`, `unreachable` | Adı çözümlenmedi, çıktığı her adres özel ya da bu bilgisayarın adresiydi, ya da host bağlantıyı kabul etmedi. |
+
 Proxy bağlandığı adresi de denetler ve özel (private) adresleri erişim
 dışında tutar. IPv6'da yalnızca global unicast aralığı genel (public)
 sayılır; bir IPv6 adresinin içinde taşınan bir IPv4 adresi (mapped, NAT64,
@@ -100,6 +110,18 @@ anahtar zincirinize (keychain) eklemez.
 Paket kayıt depoları, aracı görevin otoritesine güvenen npm, yarn, pnpm ve
 bun, cargo, pip, uv ve poetry ile gem için komutlara **salt okunurdur**
 (publish reddedilir).
+
+Kule'nin bir bağlantının içine bakıp bir isteği kendisi yanıtladığı yerde
+bağlantı, `Kule refused a request in it: <why>` ile `cut` olarak günlüğe
+yazılır. Neden bunlardan biridir; isteğin değil, Kule'nin sözleriyle:
+
+- `a write to a host commands may only read from`
+- `a credential Kule does not hold for this host`
+- `a body Kule checks whole that was chunked or over 1 MiB`
+- `a request Kule could not read one way only, or for another host`
+
+Kule'nin reddettiği düz bir `http://` isteği de nedeniyle birlikte `cut`
+olarak yazılır.
 
 ## Bilinen sınırlar
 
