@@ -1,6 +1,11 @@
 # Changes
 
-## Unreleased
+## 0.2.0-preview.9
+
+A security preview. A settings file Kule cannot mask no longer shows its
+values to a task's commands: in the copy nothing starts until it can be
+masked, and in your home it is withheld and Kule says so. A connection
+cut for reaching this computer's network is logged as such.
 
 ### Security
 
