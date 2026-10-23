@@ -56,6 +56,14 @@ Bir bütçe nasıl uygulanır:
 - Bir çalıştırma, görevinin **çalıştığı sırada** bulunduğu grup için
   sayılır; böylece bir görevi gruptan çıkarmak, harcadığını grubun
   hesabında bırakır.
+- **Okunamayan bir kayıt sayılır**; hiç harcanmamış sayılmaz. Kule onun ne
+  zaman ve hangi grup için yazıldığını bilemez; bu yüzden sayılabileceği her
+  bütçe çalıştırmaları tutar: görevin kendi bütçesi, şu an bulunduğu grubun
+  iki bütçesi ve günlük bütçe. Ret, bütçenin adını ve kaç kayıt olduğunu
+  verir:
+  `Kule cannot tell what <budget> has left: <N> record(s) of what runs spent … cannot be read; mend or remove them, or turn the budget off, to run again`.
+  Bir çökme yüzünden yarım kalan bir kayıt, bir sonraki çalıştırmanın
+  kaydını da beraberinde götürmez.
 
 :::warning Bir bütçe yalnızca ajanların bildirdiğini sınırlar
 
@@ -72,7 +80,9 @@ bildirilmeyeni sınırlayamaz.
 
 Her çalıştırmanın ne kullandığı (token'lar, bağlam penceresi ve ajan
 söylediğinde maliyet) görevin `usage.jsonl` dosyasında tutulur.
-`kule status` ve uygulamanın görev başlığı bunları toplar.
+`kule status` ve uygulamanın görev başlığı bunları toplar. Okunamayan
+kayıtlar orada da sayılır: `spent:` satırlarına ` (N records cannot be read)`
+eklenir, başlıktaki etiket de kırmızıyla *N usage records unreadable · budget held* der.
 
 Pencere başka yerdeyken uygulama, bir bütçenin %80'i harcandığında ve
 tamamı harcandığında size haber verir.

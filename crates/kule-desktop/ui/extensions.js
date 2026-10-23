@@ -15,6 +15,8 @@
 const EXT = {
   /** Where extension files are served: `<prefix><id>/<path>`. */
   prefix: null,
+  /** Why no extension runs now, when none may. */
+  off: null,
   /** The daemon's list, with why any cannot run. */
   listed: [],
   /** id → { id, digest, manifest, perms, frames } of those running. */
@@ -84,7 +86,9 @@ const MAX_PARAMS = 1024 * 1024;
 
 async function loadExtensions() {
   try {
-    EXT.prefix = (await call("extension_host")).prefix;
+    const host = await call("extension_host");
+    EXT.prefix = host.prefix;
+    EXT.off = host.off;
     EXT.listed = await call("extensions");
     EXT.mcp = (await call("mcp_servers")) || [];
     const brought = await call("extension_themes");
@@ -483,8 +487,7 @@ function renderExtensions() {
 function extensionCard(l) {
   const m = l.manifest;
   const isNew = (p) => l.new_permissions.includes(p);
-  const status = l.held ? `Held: ${l.held}` : l.enabled ? "Runs" : "Turned off";
-  const kind = l.held ? "ask" : l.enabled ? "allow" : "";
+  const { text: status, kind, why } = extensionStatus(l, EXT.prefix, EXT.off);
   const parts = [
     h(
       "div",
@@ -492,9 +495,10 @@ function extensionCard(l) {
       h("strong", {}, m ? m.name : l.id),
       h("span", { class: "muted" }, `${l.id} ${l.version}`),
       l.dev ? h("span", { class: "chip" }, "DEV") : null,
-      h("span", { class: `chip ${kind}` }, status)
+      h("span", { class: `chip ${kind}`, title: why || null }, status)
     ),
   ];
+  if (why) parts.push(h("div", { class: "muted" }, why));
   if (m) {
     parts.push(h("div", { class: "muted" }, `Publisher: ${m.publisher} (not verified by anyone)`));
     if (m.description) parts.push(h("p", {}, m.description));

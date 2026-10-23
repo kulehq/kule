@@ -88,6 +88,7 @@ hint: roll back, or rerun the task on the current workspace
 | --- | --- |
 | `undid checkpoint C (N changes)` | The commit with checkpoint `C` is taken back; `N` paths were put back. |
 | `nothing to undo` | The task has no commit left to take back. |
+| `kule: Kule ended <name>, still running in the task's sandbox, to undo` | On stderr: what still ran in the task's sandbox, which Kule ended before it wrote in the copy. For more than one: `kule: Kule ended <N> processes still running in the task's sandbox, to undo: <names>`. See [Processes and servers](../concepts/sandbox.md#processes-and-servers). |
 
 ## Errors and fixes
 

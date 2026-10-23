@@ -48,7 +48,9 @@ namespaces on Linux. By default:
 If the sandbox cannot be set up, the command does not run.
 
 When the command ends, what it left running in the sandbox ends with it,
-whatever became of its parent. Kule then prints the copy's changes (all of them, not only
+whatever became of its parent, and Kule names it:
+`kule: ended <names>, still running in the task's sandbox as the command ended`.
+Kule then prints the copy's changes (all of them, not only
 this command's), the connections it made, home writes, and on macOS what the
 sandbox refused. `kule exec` exits with the command's own exit code.
 
@@ -168,6 +170,7 @@ kule exec "$TASK" --reveal ~/Library/Keychains \
 | `net: <host>:<port> · tunneled (<rule>)` | A connection the policy let through, and the rule that did. |
 | `net: <host>:<port> · refused, …` | A connection the policy did not let through. |
 | `sandbox: refused <operation> <path> (<program>)` | What the sandbox refused, on macOS. They are also kept in the task's `sandbox.jsonl`. |
+| `kule: ended <names>, still running in the task's sandbox as the command ended` | On stderr: what the command left running, which Kule ended with it. Each name once, with how many (`sleep ×2`). |
 | `kule: running without the sandbox` | You passed `--no-sandbox`. |
 | `kule: network open, bypassing the proxy and the policy` | You passed `--open-network`. |
 

@@ -224,6 +224,11 @@ Olaylar yalnızca masaüstü uygulaması açıkken gelir.
 - **Kod ne zaman çalışır:** bir eklenti, masaüstü uygulaması açıkken ve
   eklenti açık ve şimdiki haliyle onaylanmışken çalışır. Uygulama kapalıyken
   hiçbir şey çalışmaz ve o sırada olan olaylar yeniden oynatılmaz.
+  Pencerede hiçbir eklenti çalışamıyorken, açık bir eklentinin kartı
+  nedeniyle birlikte *Does not run now* der: *Kule started without
+  extensions this time (safe mode: --no-extensions or KULE_NO_EXTENSIONS)*,
+  *extensions cannot be served: …* ya da *extensions wait until the
+  window's WebRTC is off*.
 - **Ana betik:** uygulamanın başlangıcından (ya da onaydan) eklenti
   kapatılana, kaldırılana ya da değiştirilene kadar gizli bir çerçevede
   çalışır. Bir değişiklik, eklenti yeniden onaylanana kadar onu durdurur.

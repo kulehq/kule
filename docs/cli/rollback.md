@@ -90,13 +90,19 @@ rolled back 0 changes
 `rolled back N changes`, where `N` counts every path put back, including
 those inside moved folders and `.git`.
 
+What still ran in the task's sandbox is ended before the copy is put back,
+and Kule names it on stderr:
+`kule: Kule ended <name>, still running in the task's sandbox, to roll back`,
+or `kule: Kule ended <N> processes still running in the task's sandbox, to roll back: <names>`.
+See [Processes and servers](../concepts/sandbox.md#processes-and-servers).
+
 ## Errors and fixes
 
 | Message | What to do |
 | --- | --- |
 | `kule: an agent is at work in task <id> …` | Wait for the run to end, or stop it. |
 | `kule: task <id> is busy: another kule command holds its lock` | Wait for the other command. |
-| `kule: a terminal is open on this task's copy (in Kule's app, or kule shell); close it first, then roll back` | Close the task's terminal (the app's tab, or `exit` in `kule shell`), then roll back. What still runs in the task's sandbox is ended first, so nothing changes the copy while it is put back. |
+| `kule: a terminal is open on this task's copy (in Kule's app, or kule shell); close it first, then roll back` | Close the task's terminal (the app's tab, or `exit` in `kule shell`), then roll back. What still runs in the task's sandbox is ended first, and named, so nothing changes the copy while it is put back. |
 
 ## In the app
 

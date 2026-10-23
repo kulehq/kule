@@ -68,7 +68,12 @@ Belgeleri, resimleri, sesleri ve videoları bilgisayarınızın onlar için
 kullandığı uygulamayla açar: PDF, Word, Excel, PowerPoint, OpenDocument,
 CSV, düz metin ve yaygın resim, ses ve video türleri. Açılan, dosyanın
 kontrolden önce yapılan Kule'ye ait kopyasıdır: uygulamada yaptığınız
-değişiklikler görevin değil, o kopyanın içinde kalır.
+değişiklikler görevin değil, o kopyanın içinde kalır. Dosya açılınca
+uygulama bunu söyler, örneğin *report.pdf opened as Kule's own copy: what
+you change there does not reach the task, and Kule removes the copy after
+24 hours. Save it elsewhere to keep it.* (Kule'nin kendi kopyası olarak açıldı:
+orada değiştirdikleriniz göreve ulaşmaz ve Kule kopyayı 24 saat sonra
+kaldırır. Saklamak için başka bir yere kaydedin.)
 
 :::warning Kule'nin açmayacakları
 

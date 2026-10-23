@@ -119,6 +119,21 @@ fn default_timeout() -> u64 {
 pub struct Task {
     info: TaskInfo,
     dir: PathBuf,
+    /// What Kule ended in the task's sandbox through this handle, to be
+    /// told (see [`Task::take_ended`]).
+    ended: Told,
+}
+
+/// What [`Task::quiet_sandbox`] ended, one sentence each, until
+/// [`Task::take_ended`] takes it. A clone of the handle starts with none:
+/// each tells only what it ended.
+#[derive(Debug, Default)]
+struct Told(std::sync::Mutex<Vec<String>>);
+
+impl Clone for Told {
+    fn clone(&self) -> Told {
+        Told::default()
+    }
 }
 
 impl Task {
@@ -153,6 +168,7 @@ impl Task {
                 created_unix,
             },
             dir,
+            ended: Told::default(),
         };
         match task.populate() {
             Ok(()) => Ok(task),
@@ -187,6 +203,7 @@ impl Task {
                     copy_name: copy_name(&self.info.workspace),
                 },
                 dir,
+                ended: Told::default(),
             };
             match fork.populate_from(self, staged.as_deref(), &staging) {
                 Ok(()) => Ok(fork),
@@ -473,7 +490,11 @@ impl Task {
         if info.id != id {
             return Err(Error::Invalid(format!("task {id} says it is another")));
         }
-        Ok(Task { info, dir })
+        Ok(Task {
+            info,
+            dir,
+            ended: Told::default(),
+        })
     }
 
     pub fn list(home: &Path) -> Result<Vec<TaskInfo>> {
@@ -514,6 +535,22 @@ impl Task {
     /// What the task's agent runs printed to their standard error.
     pub fn agent_log(&self) -> PathBuf {
         self.dir.join("agent.log")
+    }
+
+    /// Where a failed run's agent said why: its log, and the one before it
+    /// when the log was turned over during the run (see `agent.log.1`).
+    pub fn agent_log_hint(&self) -> String {
+        let log = self.agent_log();
+        let older = log.with_extension("log.1");
+        if older.exists() {
+            format!(
+                "see {}, and {} beside it for what came before",
+                log.display(),
+                older.file_name().unwrap_or_default().to_string_lossy()
+            )
+        } else {
+            format!("see {}", log.display())
+        }
     }
 
     /// Where commands run: the task's copy of the workspace.
@@ -1748,10 +1785,38 @@ impl Task {
     /// nothing swaps a folder on the way while Kule writes there. Called
     /// with the task's lock held: a terminal opened meanwhile sees the lock
     /// and refuses (see [`Task::terminal_opened`]).
+    ///
+    /// What it ends is kept for the person to be told, where they asked
+    /// for `doing` (see [`Task::take_ended`]).
     pub(crate) fn quiet_sandbox(&self, doing: &str) -> Result<()> {
         self.no_terminal_open(doing)?;
-        crate::Sandbox::end_all(self)?;
+        let ended = crate::Sandbox::end_all(self)?;
+        let told = match ended.len() {
+            0 => return Ok(()),
+            1 => format!(
+                "Kule ended {}, still running in the task's sandbox, to {doing}",
+                ended.listed()
+            ),
+            n => format!(
+                "Kule ended {n} processes still running in the task's sandbox, to {doing}: {}",
+                ended.listed()
+            ),
+        };
+        self.ended
+            .0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(told);
         Ok(())
+    }
+
+    /// What Kule ended in the task's sandbox through this handle before it
+    /// wrote where the sandbox writes (a commit, a rollback, an undo, a
+    /// sync, going back to a step, applying or undoing home changes), one
+    /// sentence each, for the person to be told; taken, so each is told
+    /// once.
+    pub fn take_ended(&self) -> Vec<String> {
+        std::mem::take(&mut *self.ended.0.lock().unwrap_or_else(|e| e.into_inner()))
     }
 
     /// Refuses `doing` while a terminal Kule opened is open on the copy.

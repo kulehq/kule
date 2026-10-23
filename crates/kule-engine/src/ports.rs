@@ -187,6 +187,25 @@ pub(crate) mod macos {
         (got == size).then(|| info.pbi_start_tvsec * 1_000_000 + info.pbi_start_tvusec)
     }
 
+    /// Whether `pid` is on its way out: a zombie, or past where its state
+    /// can be read.
+    pub(crate) fn exiting(pid: i32) -> bool {
+        // SAFETY: an all-zero proc_bsdinfo is valid; proc_pidinfo fills at
+        // most its size.
+        let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
+        let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
+        let got = unsafe {
+            libc::proc_pidinfo(
+                pid,
+                libc::PROC_PIDTBSDINFO,
+                0,
+                (&mut info as *mut libc::proc_bsdinfo).cast(),
+                size,
+            )
+        };
+        got != size || info.pbi_status == libc::SZOMB
+    }
+
     /// The parent of `pid`, if it can be read.
     pub(crate) fn parent_of(pid: i32) -> Option<i32> {
         // SAFETY: an all-zero proc_bsdinfo is valid; proc_pidinfo fills at

@@ -139,6 +139,11 @@ yours. Each apply gets its own folder there, named by when it happened.
 When your file changed since the layer was made, the apply is refused, so
 nothing of yours is overwritten unseen.
 
+What still runs in the task's sandbox is ended first, and Kule names it on
+stderr: `kule: Kule ended <name>, still running in the task's sandbox, to apply its home changes`
+(or `… <N> processes …: <names>`). `undo` does the same, `to undo its home
+changes`. See [Processes and servers](../concepts/sandbox.md#processes-and-servers).
+
 ## kule home TASK discard
 
 ```sh

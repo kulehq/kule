@@ -201,6 +201,11 @@ $ kule group budget 1 off --daily
 
 Bir grup bütçesi tükendiğinde grubun görevleri hiçbir çalıştırma başlatmaz:
 `group "clients" has spent its budget: its tasks together; raise it or turn it off to run again`.
+Görevlerinden birinin çalıştırmalarının harcadığına dair bir kayıt
+okunamıyorken de başlatmaz: kayıt, görevin şu an bulunduğu grup için, iki
+bütçede de sayılır ve ret
+`Kule cannot tell what group "clients"'s budget has left: …` (ya da
+`… daily budget …`) der.
 
 ## kule group put {#kule-group-put}
 

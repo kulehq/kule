@@ -35,6 +35,11 @@ Bir bütçe nasıl işler:
 
 - Üzerindeki bir bütçe tükendiğinde hiçbir çalıştırma başlamaz. Ret mesajı
   hangi bütçe olduğunu söyler.
+- Bütçenin saydığı, çalıştırmaların harcadıklarına dair bir kayıt
+  okunamıyorken de hiçbir çalıştırma başlamaz: Kule neyin kaldığını
+  bilemez. Böyle bir kaydı hiç harcanmamış saymak yerine sayar. Kaydı
+  (görevin `usage.jsonl` dosyasında) düzeltin ya da kaldırın, veya bütçeyi
+  kapatın.
 - Maliyetini çalışırken bildiren bir ajanın çalıştırması, kalan tutara
   ulaştığında durdurulur.
 - Claude Code maliyetini her turun sonunda bildirir; bu yüzden bir tur
@@ -107,7 +112,8 @@ Görevin henüz hiç çalıştırması yoksa `off` hiçbir şey yazmaz.
 
 - `spent: … in N runs`, ajanların bu görev için bildirdiklerini toplar. Bazı
   çalıştırmalar token bildirip maliyet bildirmediyse satır bunların kaç tane
-  olduğunu söyler (`(2 without a cost)`).
+  olduğunu söyler (`(2 without a cost)`). Görevin bazı kayıtları
+  okunamıyorsa kaç tane olduğunu söyler (`(1 record cannot be read)`).
 - `budgets over task …'s next run` her bütçeyi kalan tutarıyla listeler.
   Tükenmiş bir bütçe `0.00` kaldığını gösterir.
 - `the next run may cost at most …` kalanların en sıkısıdır.
@@ -124,6 +130,7 @@ Görevin henüz hiç çalıştırması yoksa `off` hiçbir şey yazmaz.
 | `kule: a budget is a positive amount in a currency like USD, not 0 USD` | 0'dan büyük bir tutar ve büyük harfle üç harfli bir para birimi kullanın (`usd` değil, `USD`). Bir bütçeyi kaldırmak için `off` kullanın. |
 | `kule: no task 1046fb3` | `kule list`'teki görev kimliğinin tamamını kullanın. |
 | `task 1046fb30 has spent its budget; raise it or turn it off to run again` (`kule run`'dan ya da uygulamadan) | Bütçeyi artırın (`kule budget TASK 10`) ya da kaldırın (`kule budget TASK off`). |
+| `Kule cannot tell what task 1046fb30's budget has left: 1 record of what runs spent (a task's usage.jsonl) cannot be read; mend or remove them, or turn the budget off, to run again` (`kule run`'dan, uygulamadan ya da burada `no run starts:` ile) | Görevin `usage.jsonl` dosyasındaki okunamayan satırı düzeltin ya da kaldırın, veya bütçeyi kapatın. Tutan bir grubun ya da günlük bütçeyse mesaj onun adını verir. |
 
 Her hata 2 durum koduyla çıkar.
 
@@ -131,7 +138,8 @@ Her hata 2 durum koduyla çıkar.
 
 **Applies to: One task** seçiliyken *Settings → Budget*, ya da görevin ⋮
 menüsündeki *Budget…*. Görev başlığındaki çip, görevin ne harcadığını ve ne
-kaldığını gösterir. Pencere öndeyken değilse Kule bir bütçenin %80'i
+kaldığını, bazı kayıtlar okunamıyorsa da kırmızıyla *N usage records
+unreadable · budget held* gösterir. Pencere öndeyken değilse Kule bir bütçenin %80'i
 harcandığında ve tamamı bittiğinde size haber verir.
 
 ## Ayrıca bakın {#see-also}

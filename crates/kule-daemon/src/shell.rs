@@ -14,6 +14,77 @@ pub use kule_engine::Task;
 
 use crate::Result;
 
+/// What a shell's end tells the person (see [`Sandboxed::end`]).
+#[derive(Debug, Default, Clone, PartialEq, serde::Serialize)]
+pub struct ShellEnd {
+    /// What the sandbox refused the shell's commands.
+    pub denials: Vec<Denial>,
+    /// The platform does not report refusals (see
+    /// `kule_engine::UNREPORTED`).
+    pub unreported: bool,
+    /// What it left running, which Kule ended with it, by name.
+    pub ended: Vec<String>,
+    /// What Kule could not do or read of it.
+    pub error: Option<String>,
+}
+
+impl ShellEnd {
+    /// What the person is told as the shell ends, a line each: what was
+    /// ended, what Kule could not do, and on Linux, when the shell failed
+    /// (`failed`), that refusals are not reported. The refusals
+    /// themselves are listed apart.
+    pub fn notes(&self, failed: bool) -> Vec<String> {
+        let mut notes = Vec::new();
+        if !self.ended.is_empty() {
+            let ended = kule_engine::Ended {
+                processes: self.ended.clone(),
+            };
+            notes.push(format!(
+                "Kule ended {}, which the shell left running in its sandbox",
+                ended.listed()
+            ));
+        }
+        notes.extend(self.error.clone());
+        if self.unreported && failed {
+            notes.push(kule_engine::UNREPORTED.to_owned());
+        }
+        notes
+    }
+
+    /// [`ShellEnd::notes`] after what the sandbox refused, a line each,
+    /// the same refusal once with how many times, then the hints: for a
+    /// terminal that shows them where the shell was.
+    pub fn lines(&self, failed: bool) -> Vec<String> {
+        let mut refused: Vec<(String, usize)> = Vec::new();
+        let mut hints: Vec<&str> = Vec::new();
+        for d in &self.denials {
+            let line = format!(
+                "sandbox: refused {} {} ({})",
+                d.operation, d.path, d.process
+            );
+            match refused.iter_mut().find(|(l, _)| *l == line) {
+                Some((_, count)) => *count += 1,
+                None => refused.push((line, 1)),
+            }
+            if let Some(hint) = &d.hint
+                && !hints.contains(&hint.as_str())
+            {
+                hints.push(hint);
+            }
+        }
+        let mut lines: Vec<String> = refused
+            .into_iter()
+            .map(|(line, count)| match count {
+                1 => line,
+                _ => format!("{line} ×{count}"),
+            })
+            .collect();
+        lines.extend(hints.into_iter().map(|h| format!("  {h}")));
+        lines.extend(self.notes(failed));
+        lines
+    }
+}
+
 fn text(e: kule_engine::Error) -> String {
     e.to_string()
 }
@@ -97,19 +168,73 @@ impl Sandboxed {
 
     /// Once the shell ended: ends what it left running, cuts what it left
     /// connected, notes what the sandbox refused it, and lets the task's
-    /// work go on. The refusals, where the platform reports them.
-    pub fn end(self) -> Result<Vec<Denial>> {
+    /// work go on. What of it the person is told; nothing is skipped
+    /// because another part failed.
+    pub fn end(self) -> ShellEnd {
+        let mut end = ShellEnd::default();
+        let mut failed = Vec::new();
         // What the shell left running goes with it, before its terminal
         // can be another's (see `Sandbox::end_own`).
-        let ended = self.sandbox.end_own().map_err(text);
+        match self.sandbox.end_own() {
+            Ok(ended) => end.ended = ended.processes,
+            Err(e) => failed.push(text(e)),
+        }
         self.proxy.stop();
-        let denials = self
-            .sandbox
-            .denials(self.started.elapsed())
-            .map_err(text)?
-            .unwrap_or_default();
-        record_denials(&self.task, &denials).map_err(text)?;
-        ended?;
-        Ok(denials)
+        match self.sandbox.denials(self.started.elapsed()) {
+            Ok(Some(denials)) => end.denials = denials,
+            Ok(None) => end.unreported = true,
+            Err(e) => failed.push(format!("what the sandbox refused cannot be read: {e}")),
+        }
+        if let Err(e) = record_denials(&self.task, &end.denials) {
+            failed.push(format!(
+                "what the sandbox refused could not be recorded: {e}"
+            ));
+        }
+        end.error = (!failed.is_empty()).then(|| failed.join("; "));
+        end
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn refused(process: &str, path: &str) -> Denial {
+        Denial {
+            process: process.into(),
+            operation: "file-read-data".into(),
+            path: path.into(),
+            saved: None,
+            hint: None,
+        }
+    }
+
+    /// A shell that probed the terminals around it is told in one line each,
+    /// counted, before what Kule ended with it.
+    #[test]
+    fn a_shell_s_end_is_told_a_line_each_the_same_once() {
+        let end = ShellEnd {
+            denials: vec![
+                refused("zsh", "/dev/ttys004"),
+                refused("zsh", "/dev/ttys004"),
+                refused("cat", "/etc/secret"),
+            ],
+            ended: vec!["sleep".into(), "sleep".into()],
+            ..ShellEnd::default()
+        };
+        assert_eq!(
+            end.lines(false),
+            [
+                "sandbox: refused file-read-data /dev/ttys004 (zsh) ×2",
+                "sandbox: refused file-read-data /etc/secret (cat)",
+                "Kule ended sleep ×2, which the shell left running in its sandbox",
+            ]
+        );
+        let linux = ShellEnd {
+            unreported: true,
+            ..ShellEnd::default()
+        };
+        assert!(linux.lines(false).is_empty());
+        assert_eq!(linux.lines(true), [kule_engine::UNREPORTED]);
     }
 }

@@ -64,7 +64,21 @@ en çok 32 komut çalıştırır.
 
 **Başlattığı hiçbir şey çalıştırmadan uzun yaşamaz.** Çalıştırma nasıl
 biterse bitsin, ajanın sandbox'ında çalışır bıraktığı her şey de biter;
-ebeveynine ne olmuş olursa olsun.
+ebeveynine ne olmuş olursa olsun. Kule neyi sonlandırdığını bir notta adıyla
+söyler:
+`· Kule ended <names>, which the agent left running in its sandbox, as the run ended`.
+
+**Başarısız olan ya da durdurulan bir çalıştırma da eksiksiz anlatılır.**
+Kule, iyi giden bir çalıştırmadan sonra olduğu gibi neyin değiştiğini,
+bağlantılarını, ev dizinine yazdıklarını, sandbox'ın reddettiklerini,
+Kule'nin geri koyduğu yolları, politikanın kararını, ne harcandığını ve ne
+kadar sürdüğünü yazdırır; hatayı ancak ondan sonra yazar. Linux'ta başarısız
+olan bir çalıştırma ayrıca
+`kule: Linux does not tell Kule what the sandbox refused; each refusal reached the command as an error`
+yazdırır. Kule çalıştırmanın harcadığını kaydedemediyse, değiştirdiğini geri
+koyamadıysa ya da sandbox'ın reddettiklerini okuyamadıysa veya
+kaydedemediyse, her biri için bir `kule:` satırıyla bunu söyler ve
+`kule run` başarısız olur.
 
 **Ajan neyin değiştiğini duyar.** Ajanın son çalıştırmasından bu yana
 [kule sync](sync.md) klasördeki değişiklikleri kopyaya aldıysa ya da
@@ -161,8 +175,9 @@ took: 41s
 | `net:` | Çalıştırmanın yaptığı her bağlantı ve geçip geçmediği. |
 | `in your home, caught for review` | Ev klasörünüze yapılan ve ev katmanında bekleyen yazmalar. Bkz. [kule home](home.md). |
 | `sandbox: refused …` | Sandbox'ın reddettikleri (macOS bunları listeler; Linux'ta komut yalnızca bir hata alır). |
+| `sandbox: <path> changed during the run; Kule put it back …` | Çalıştırmanın değiştiremeyeceği, Kule'nin eski hâline geri koyduğu bir yol. |
 | `policy:` | Değişiklikler hakkındaki karar: *passes on its own* (kendiliğinden geçer), *waits for approval* (onay bekler) ya da *denied* (reddedildi), her birinin arkasındaki kuralla birlikte. |
-| `spent:` | Görevin çalıştırmalarının, ajanların bildirdiğine göre, şimdiye kadar ne kadar tuttuğu ve bütçesinden ne kaldığı. |
+| `spent:` | Görevin çalıştırmalarının, ajanların bildirdiğine göre, şimdiye kadar ne kadar tuttuğu ve bütçesinden ne kaldığı. Görevin kullanım kayıtlarından bazıları okunamıyorsa ` (N records cannot be read)`. |
 | `took:` | Çalıştırmanın ne kadar sürdüğü. |
 
 Çıktı bir terminal değilse her olay kendi düz satırında yazılır; bu,
@@ -175,13 +190,21 @@ günlüğe kaydetmeyi kolaylaştırır.
 | `kule: no agent <name>; known: claude-code, gemini, codex` | Adı kontrol edin. Kendi ajanlarınızı [kule agents](kule-agents.md) ile ekleyin. |
 | `kule: agent <name> cannot run: <why>` | Ajan eksik, oturum açılmamış ya da (kendi profilleriniz için) henüz onaylanmamış. Nedenini görmek için `kule agents` çalıştırın. |
 | `kule: task <id> has spent its budget; raise it or turn it off to run again` | `kule budget TASK <amount>` ile artırın ya da `kule budget TASK off` ile kapatın. Tükenen bir grubun ya da günlük bütçeyse mesaj onun adını verir. |
+| `kule: Kule cannot tell what <budget> has left: <N> record(s) of what runs spent … cannot be read; mend or remove them, or turn the budget off, to run again` | Okunamayan bir kullanım kaydı da sayılır; bu yüzden bütçe, kayıt düzeltilene ya da kaldırılana (bir görevin `usage.jsonl` dosyası) veya bütçe kapatılana kadar her çalıştırmayı tutar. Bkz. [Bütçeler ve sınırlar](../concepts/budgets-and-limits.md). |
 | `kule: the task has used its time: its runs took N minutes together; …` | Görevin süre sınırını [kule limits](limits.md) ile artırın ya da kaldırın. |
 | `kule: an agent is at work in task <id> …` | Görev başına tek ajan. Bekleyin ya da başka bir görev açın. |
 | `kule: a terminal is open on this task's copy (in Kule's app, or kule shell); close it first, then start work` | Görevde bir terminal (uygulamanınki ya da `kule shell`) açık. Önce onu kapatın. |
 | `kule: Kule opened task <id>'s copy in <app> outside the sandbox; …` | O terminal uygulamasını ya da editörü kapatın, sonra [kule closed](closed.md) `TASK` çalıştırın. |
-| `kule: <error> (see <home>/tasks/<id>/agent.log)` | Ajan başarısız oldu. Kendi mesajları `agent.log` içinde: son 8 MB'ı, ondan önceki 8 MB'ı da `agent.log.1` içinde. |
-| `kule: stopped: the agent sent a message larger than 16 MiB (see …)` | Ajan tek mesajda Kule'nin aldığından fazlasını söyledi. Daha dar bir istemle yeniden çalıştırın. |
-| `kule: stopped: the agent left more than 1024 tool calls open (see …)` | Ajan araç çağrılarını bitirmeden yenilerini başlattı. |
+| `kule: <error> (see <home>/tasks/<id>/agent.log)` | Ajan başarısız oldu. Bu satır, çalıştırmanın yaptıklarından sonra gelir. Ajanın kendi mesajları `agent.log` içinde: son 8 MB'ı. Günlük çalıştırma sırasında yenilendiyse (eskisi `agent.log.1` olduysa) satır `, and agent.log.1 beside it for what came before` ile biter: ondan önceki 8 MB. |
+| `kule: stopped: <why>` | Bir sınır ya da ajanın kendi mesajları çalıştırmayı durdurdu; satırın gerisi nedenini söyler. Bir günlük adı vermez. |
+| `kule: stopped: the agent sent a message larger than 16 MiB` | Ajan tek mesajda Kule'nin aldığından fazlasını söyledi. Daha dar bir istemle yeniden çalıştırın. |
+| `kule: stopped: the agent left more than 1024 tool calls open` | Ajan araç çağrılarını bitirmeden yenilerini başlattı. |
+| `kule: Linux does not tell Kule what the sandbox refused; each refusal reached the command as an error` | Linux'ta, başarısız olan bir çalıştırmadan sonra: hiç `sandbox: refused` satırı olmaması hiçbir şeyin reddedilmediği anlamına gelmez: reddedilen bir işlem ajanın komutuna bir izin hatası olarak ulaştı. |
+| `kule: what the run spent could not be recorded: …` | Kule görevin `usage.jsonl` dosyasına yazamadı; bu çalıştırmanın maliyeti sayılmaz. Kule'nin ev klasörüne yazılabildiğini kontrol edin. |
+| `kule: Kule could not put back the protected paths the run changed: …` | Commit etmeden önce değişikliklere [kule status](status.md) ile bakın ya da onları [geri alın](rollback.md). |
+| `kule: what the sandbox refused cannot be read: …` / `… could not be recorded: …` | Reddedilenler listelenmedi ya da ajanın bir sonraki çalıştırması ve uygulamanın Timeline'ı için saklanmadı. |
+| `kule: the run ended, but Kule could not do all of the above` | Çalıştırmanın kendisi iyi gitti; yukarıdaki satırlardan biri Kule'nin neyi yapamadığını söyler. |
+| `· Kule could not write the agent's log (…); what the agent writes to it is not kept for the rest of this run` | Hata değil, bir not: ajan devam eder, ama o andan sonraki mesajları `agent.log` içinde olmaz. Kule'nin ev klasörüne yazılabildiğini kontrol edin. |
 | `kule: <agent> reported no cost, so the task's budget does not count this run` | Hata değil, bir uyarı: abonelikle oturum açmış ajanlar yalnızca token bildirebilir ve bütçe, bildirilmeyeni tutamaz. |
 
 Bazı Linux sistemlerinde, daha zayıf yalıtımı kabul edene kadar hiçbir ajan

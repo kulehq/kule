@@ -53,7 +53,8 @@ Sync'in yaptıkları:
 - ajan, bir sonraki turunun başında nelerin geldiğini öğrenir.
 
 Klasörünüz yalnızca okunur. Sync, bir ajan çalışırken reddedilir; önce
-görevin sandbox'ında hâlâ çalışan programları durdurur.
+görevin sandbox'ında hâlâ çalışan programları durdurur ve Kule durdurduğu
+programların adını verir.
 
 ## Birleştirme: iki görev, bir klasör
 

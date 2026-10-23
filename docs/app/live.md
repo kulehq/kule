@@ -54,11 +54,22 @@ As they come:
   - terminal colours and cursor moves are taken out, and the last 64 KB of
     each call's output are kept.
 - **Notes**: the agent's plan, permissions it was given, a server Kule
-  stopped, pictures an agent could not take.
+  stopped, pictures an agent could not take, what Kule ended in the task's
+  sandbox (see [Processes and servers](../concepts/sandbox.md#processes-and-servers)),
+  and what Kule could not do:
+  - *Kule could not read the extensions' MCP servers (…); this run goes
+    without them*;
+  - *Kule could not write the agent's log (…); what the agent writes to it
+    is not kept for the rest of this run*. The agent goes on.
 - **Question cards** when the agent's program wants to connect somewhere the
   policy does not let through on its own (see [below](#questions)).
-- **The end of the run**: *Done*, *Stopped: …* with the reason, or *The run
-  failed: …*, with the number of operations the sandbox refused. Where Kule
+- **The end of the run**: *Done* or *Stopped: …* with the reason, each with
+  the number of operations the sandbox refused, or *The run failed: …*. A stop you
+  asked for shows as a stop, not as a failure. Under the line, *What the
+  sandbox refused* opens the list of them: the same refusal once, with how
+  many times (`×3`), the newest 20, then *… and N more refusals in the
+  Timeline*. On Linux, the line says that Linux does not tell Kule what the
+  sandbox refused, and each refusal reached the command as an error. Where Kule
   knows why a refusal keeps a tool from working, it says so under that line.
   For example, a program that wants the screen (LibreOffice, even with
   `--headless`) cannot run in a task, and macOS may report that it quit
@@ -66,7 +77,9 @@ As they come:
   words, once.
 
 The daemon keeps a task's latest events, so a window opened later shows what
-happened meanwhile.
+happened meanwhile. When older ones were let go, that window starts with
+*N earlier events of this task's runs are no longer kept (Kule keeps the
+latest 2000, up to 32 MiB)*.
 
 :::tip Copy on select
 

@@ -135,6 +135,25 @@ started it. On every system, what an agent's run or `kule exec` left
 running in the sandbox ends when it does, whatever became of its parent,
 and a run's limits count it while it runs.
 
+Kule says what it ended, by the names the processes ran under, where you
+work:
+
+- An agent's run: a note in Live, or in the output of `kule run`:
+  `Kule ended <names>, which the agent left running in its sandbox, as the run ended`.
+- `kule exec`: `kule: ended <names>, still running in the task's sandbox as the command ended`.
+- `kule shell` and the app's terminal (macOS):
+  `Kule ended <names>, which the shell left running in its sandbox`.
+- A commit, a rollback, an undo, a sync, going back to a step, and applying
+  or undoing home changes end what still runs in the task's sandbox before
+  Kule writes in the copy. On the command line:
+  `kule: Kule ended <name>, still running in the task's sandbox, to <what you asked>`,
+  or `kule: Kule ended <N> processes still running in the task's sandbox, to <what you asked>: <names>`.
+  In the app, the same words show as a notice and as a note in Live.
+
+Each name is listed once, with how many ran under it (`sleep ×2, node`),
+eight names at most and then how many more. A name is cut at 32
+characters and shown as plain text.
+
 Servers a task starts listen on **this computer only**, never on your
 network. On macOS, where the sandbox cannot tell a server's address, a
 task's programs listen only once you allow servers for it, which is weaker
@@ -173,9 +192,13 @@ sandbox: refused file-read-data /Users/me/.config/gh/config.yml (gh)
 sandbox: refused file-read-data /Users/me/.ssh/id_ed25519 (ssh)
 ```
 
-The app shows refusals in [Timeline](../app/timeline.md). Linux reports
+The app shows refusals in [Timeline](../app/timeline.md), and a finished
+run's line in [Live](../app/live.md) lists them too. Linux reports
 Landlock refusals only to the audit log, so they are not listed; the
-command still gets a permission error.
+command still gets a permission error. Kule says so rather than show no
+refusals: after an agent's run or a shell that failed, and in Live after
+every run, it reads
+`Linux does not tell Kule what the sandbox refused; each refusal reached the command as an error`.
 
 ## Weaker isolation on Linux
 

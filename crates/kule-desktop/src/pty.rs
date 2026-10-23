@@ -42,8 +42,17 @@ pub struct Terminals {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 enum Event {
-    Output { id: u64, data: String },
-    Exit { id: u64, code: Option<u32> },
+    Output {
+        id: u64,
+        data: String,
+    },
+    /// `notes`: what the sandbox refused the shell and what Kule ended or
+    /// could not do as it ended, a line each (see `ShellEnd::lines`).
+    Exit {
+        id: u64,
+        code: Option<u32>,
+        notes: Vec<String>,
+    },
 }
 
 fn size(cols: u16, rows: u16) -> libc::winsize {
@@ -216,11 +225,9 @@ impl Terminals {
             let status = child.wait().ok();
             // What it wrote last, before its end is told.
             let _ = all_read.recv_timeout(Duration::from_millis(300));
-            let _ = sandboxed.end();
-            tell(Event::Exit {
-                id,
-                code: status.and_then(|s| s.code()).map(|c| c as u32),
-            });
+            let code = status.and_then(|s| s.code()).map(|c| c as u32);
+            let notes = sandboxed.end().lines(code != Some(0));
+            tell(Event::Exit { id, code, notes });
         });
         Ok(id)
     }
@@ -407,6 +414,57 @@ mod tests {
         let out = until(&rx, "done");
         assert!(out.contains("refused"), "{out:?}");
         assert!(!outside.join("escaped").exists());
+    }
+
+    /// The notes the shell's end came with, waiting a while for it.
+    fn end_notes(rx: &mpsc::Receiver<Event>) -> Vec<String> {
+        loop {
+            match rx.recv_timeout(Duration::from_secs(30)) {
+                Ok(Event::Exit { notes, .. }) => break notes,
+                Ok(_) => continue,
+                Err(_) => panic!("the shell never ended"),
+            }
+        }
+    }
+
+    /// As the shell ends, its terminal says what the sandbox refused it and
+    /// what Kule ended that it left running (macOS), or that the platform
+    /// does not report refusals when the shell failed (Linux).
+    #[test]
+    fn a_shell_s_end_tells_what_the_sandbox_did() {
+        let s = Setup::new();
+        let terms = Terminals::default();
+        let outside = std::fs::canonicalize(s.outside.path()).unwrap();
+        let target = outside.join("escaped");
+        let (_, rx) = s.start(
+            &terms,
+            &format!(
+                "echo x > '{}' 2>/dev/null; nohup sleep 30 </dev/null >/dev/null 2>&1 & sleep 1; exit 3",
+                target.display()
+            ),
+        );
+        let notes = end_notes(&rx);
+        assert!(!target.exists());
+        if cfg!(target_os = "macos") {
+            assert!(
+                notes
+                    .iter()
+                    .any(|n| n.starts_with("sandbox: refused")
+                        && n.contains(&*target.to_string_lossy())),
+                "{notes:?}"
+            );
+            assert!(
+                notes.iter().any(|n| n.starts_with("Kule ended sleep,")),
+                "{notes:?}"
+            );
+        } else {
+            assert!(
+                notes
+                    .iter()
+                    .any(|n| n.starts_with("Linux does not tell Kule")),
+                "{notes:?}"
+            );
+        }
     }
 
     /// While a terminal is open on the copy, no agent starts work in the

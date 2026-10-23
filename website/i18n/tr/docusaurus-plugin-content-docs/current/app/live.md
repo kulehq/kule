@@ -59,19 +59,37 @@ Geldikçe şunlar görünür:
   - terminal renkleri ve imleç hareketleri ayıklanır, her çağrının
     çıktısının son 64 KB'ı saklanır.
 - **Notlar**: ajanın planı, ona verilen izinler, Kule'nin durdurduğu bir
-  sunucu, bir ajanın alamadığı resimler.
+  sunucu, bir ajanın alamadığı resimler, Kule'nin görevin sandbox'ında
+  sonlandırdıkları (bkz. [Süreçler ve sunucular](../concepts/sandbox.md#processes-and-servers))
+  ve Kule'nin yapamadıkları:
+  - *Kule could not read the extensions' MCP servers (…); this run goes
+    without them* (Kule eklentilerin MCP sunucularını okuyamadı; bu
+    çalıştırma onlarsız sürer);
+  - *Kule could not write the agent's log (…); what the agent writes to it
+    is not kept for the rest of this run* (Kule ajanın günlüğüne yazamadı;
+    ajanın oraya yazdıkları çalıştırmanın geri kalanında saklanmaz). Ajan
+    devam eder.
 - Ajanın programı, politikanın kendiliğinden geçirmediği bir yere bağlanmak
   istediğinde **soru kartları** (bkz. [aşağısı](#questions)).
-- **Çalıştırmanın sonu**: *Done*, nedeniyle birlikte *Stopped: …* ya da
-  *The run failed: …*; sandbox'ın reddettiği işlemlerin sayısıyla. Kule bir
-  reddin bir aracın çalışmasını neden engellediğini biliyorsa, bunu o
+- **Çalıştırmanın sonu**: *Done* ya da nedeniyle birlikte *Stopped: …*, her
+  biri sandbox'ın reddettiği işlemlerin sayısıyla; ya da *The run failed: …*.
+  Sizin istediğiniz bir durdurma, başarısızlık olarak değil durdurma olarak
+  görünür. Satırın altındaki *What the sandbox refused* reddedilenlerin
+  listesini açar: aynı ret bir kez, kaç kez olduğuyla (`×3`), en yeni 20'si,
+  ardından *… and N more refusals in the Timeline*. Linux'ta satır, Linux'un
+  sandbox'ın reddettiklerini Kule'ye söylemediğini ve her reddin komuta bir
+  hata olarak ulaştığını belirtir. Kule bir reddin bir aracın çalışmasını neden engellediğini biliyorsa, bunu o
   satırın altında söyler. Örneğin ekran isteyen bir program (`--headless`
   ile bile LibreOffice) bir görevde çalışamaz ve macOS onun beklenmedik
   şekilde kapandığını bildirebilir. Ajana da aynı şey, bir sonraki
   prompt'unda, Kule'nin sözleriyle, bir kez söylenir.
 
 Daemon bir görevin son olaylarını saklar; böylece daha sonra açılan bir
-pencere bu arada olanları gösterir.
+pencere bu arada olanları gösterir. Daha eski olaylar bırakıldıysa o pencere
+*N earlier events of this task's runs are no longer kept (Kule keeps the
+latest 2000, up to 32 MiB)* ile başlar (görevin çalıştırmalarının N eski
+olayı artık saklanmıyor; Kule en son 2000 tanesini, en çok 32 MiB'a kadar
+saklar).
 
 :::tip Seçince kopyala
 

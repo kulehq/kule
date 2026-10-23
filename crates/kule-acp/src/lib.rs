@@ -392,16 +392,16 @@ pub async fn run_pictured(
         .spawn()
         .map_err(|e| Error(format!("could not start the agent: {e}")))?;
     if let Some(stderr) = child.stderr.take() {
-        let path = task.agent_log();
+        let (path, told) = (task.agent_log(), events.clone());
         std::thread::spawn(move || {
-            let mut log = futures::io::AllowStdIo::new(TurnedLog::new(path, log));
+            let mut log = futures::io::AllowStdIo::new(TurnedLog::new(path, log, told));
             let _ = futures::executor::block_on(futures::io::copy(stderr, &mut log));
         });
     }
     // The sandbox starts the agent in a session of its own; when the run
     // ends, however it ends, everything the agent left running in it goes
     // too, so nothing keeps changing the copy behind the person's review.
-    let _group = Group(child.id() as i32, sandbox.clone());
+    let _group = Group(child.id() as i32, sandbox.clone(), events.clone());
     control.started_agent(child.id() as i32);
     let stdin = child.stdin.take().ok_or_else(|| error("no stdin"))?;
     let stdout = Capped {
@@ -683,12 +683,69 @@ pub async fn run_pictured(
     Ok(stop)
 }
 
+/// What a run's sandbox did, told however the run ended (see
+/// [`after_run`]).
+#[derive(Debug, Default)]
+pub struct AfterRun {
+    /// What the sandbox refused the run's commands.
+    pub refused: Vec<kule_engine::Denial>,
+    /// Protected paths the run changed, which Kule put back.
+    pub put_back: Vec<kule_engine::Denial>,
+    /// The platform does not report refusals (see
+    /// [`kule_engine::UNREPORTED`]).
+    pub unreported: bool,
+    /// What Kule could not do or read of it, one sentence each.
+    pub failed: Vec<String>,
+}
+
+/// Once a run's agent is gone, however the run ended (well, failed or
+/// stopped): puts back the protected paths it changed, reads what its
+/// sandbox refused within `took`, and records both for the agent's next
+/// run. Nothing of it is skipped because another part failed: each failure
+/// is in [`AfterRun::failed`].
+pub fn after_run(
+    task: &Task,
+    sandbox: &kule_engine::Sandbox,
+    kept: kule_engine::Kept,
+    took: Duration,
+) -> AfterRun {
+    let mut after = AfterRun::default();
+    match kept.restore() {
+        Ok(put_back) => {
+            after.put_back = put_back.iter().map(kule_engine::Denial::put_back).collect();
+        }
+        Err(e) => after.failed.push(format!(
+            "Kule could not put back the protected paths the run changed: {e}"
+        )),
+    }
+    match sandbox.denials(took) {
+        Ok(Some(refused)) => after.refused = refused,
+        Ok(None) => after.unreported = true,
+        Err(e) => after
+            .failed
+            .push(format!("what the sandbox refused cannot be read: {e}")),
+    }
+    let all: Vec<kule_engine::Denial> = after
+        .refused
+        .iter()
+        .chain(&after.put_back)
+        .cloned()
+        .collect();
+    if let Err(e) = kule_engine::record_denials(task, &all) {
+        after.failed.push(format!(
+            "what the sandbox refused could not be recorded: {e}"
+        ));
+    }
+    after
+}
+
 /// How long a stopped agent has to end its turn.
 const STOP_GRACE: Duration = Duration::from_secs(10);
 
 /// The agent's process group, killed when dropped, and with it whatever
-/// left the group but still runs in the task's sandbox.
-struct Group(i32, kule_engine::Sandbox);
+/// left the group but still runs in the task's sandbox, which the run's
+/// notes then name.
+struct Group(i32, kule_engine::Sandbox, UnboundedSender<Event>);
 
 impl Drop for Group {
     fn drop(&mut self) {
@@ -700,7 +757,15 @@ impl Drop for Group {
             }
         }
         // What it cannot end now, a commit ends or refuses over.
-        let _ = self.1.end_strays();
+        let text = match self.1.end_strays() {
+            Ok(ended) if ended.is_empty() => return,
+            Ok(ended) => format!(
+                "Kule ended {}, which the agent left running in its sandbox, as the run ended",
+                ended.listed()
+            ),
+            Err(e) => format!("{e}; a commit ends them or refuses"),
+        };
+        let _ = self.2.unbounded_send(Event::Note { text });
     }
 }
 
@@ -742,26 +807,32 @@ impl<R: futures::io::AsyncRead + Unpin> futures::io::AsyncRead for Capped<R> {
 /// The agent's log, turned over at [`MAX_LOG`]: what it held becomes
 /// `agent.log.1`, in place of the one before, so the log keeps its end
 /// and never more than twice that. Kule writes it, outside the task's
-/// limits.
+/// limits. Once it cannot be written, the run's notes say so and what the
+/// agent writes goes nowhere, still read, so the agent is not cut off.
 struct TurnedLog {
     path: std::path::PathBuf,
     file: Option<std::fs::File>,
     len: u64,
+    events: UnboundedSender<Event>,
 }
 
 impl TurnedLog {
-    fn new(path: std::path::PathBuf, file: std::fs::File) -> TurnedLog {
+    fn new(
+        path: std::path::PathBuf,
+        file: std::fs::File,
+        events: UnboundedSender<Event>,
+    ) -> TurnedLog {
         let len = file.metadata().map_or(0, |m| m.len());
         TurnedLog {
             path,
             file: Some(file),
             len,
+            events,
         }
     }
 
     fn turn(&mut self) -> std::io::Result<()> {
         use std::os::unix::fs::OpenOptionsExt;
-        self.file = None;
         std::fs::rename(&self.path, self.path.with_file_name("agent.log.1"))?;
         self.file = Some(
             std::fs::OpenOptions::new()
@@ -773,18 +844,36 @@ impl TurnedLog {
         self.len = 0;
         Ok(())
     }
-}
 
-impl std::io::Write for TurnedLog {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+    fn put(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         if self.len >= MAX_LOG {
             self.turn()?;
         }
         let room = (MAX_LOG - self.len).min(buf.len() as u64) as usize;
         let file = self.file.as_mut().ok_or(std::io::ErrorKind::BrokenPipe)?;
-        let wrote = file.write(&buf[..room])?;
+        let wrote = std::io::Write::write(file, &buf[..room])?;
         self.len += wrote as u64;
         Ok(wrote)
+    }
+}
+
+impl std::io::Write for TurnedLog {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        if self.file.is_none() {
+            return Ok(buf.len());
+        }
+        match self.put(buf) {
+            Ok(wrote) => Ok(wrote),
+            Err(e) => {
+                self.file = None;
+                let _ = self.events.unbounded_send(Event::Note {
+                    text: format!(
+                        "Kule could not write the agent's log ({e}); what the agent writes to it is not kept for the rest of this run"
+                    ),
+                });
+                Ok(buf.len())
+            }
+        }
     }
 
     fn flush(&mut self) -> std::io::Result<()> {

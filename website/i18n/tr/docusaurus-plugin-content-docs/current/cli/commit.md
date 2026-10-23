@@ -142,6 +142,7 @@ hint: roll back, or rerun the task on the current workspace
 | `merged with what the folder changed meanwhile: <paths>` | Bu dosyalar çalışma klasöründe de değişmişti ve birleştirildi. |
 | `not asked again on this folder: …` | `--remember` ile: Kule'nin bundan sonra sormadan geçireceği şeyler. |
 | `nothing to commit` | Kopya, çalışma klasöründekinin aynısını tutuyor. |
+| `kule: Kule ended <name>, still running in the task's sandbox, to commit` | stderr'de: görevin sandbox'ında hâlâ çalışan ve Kule'nin kopyaya yazmadan önce sonlandırdığı şey. Birden fazlaysa: `kule: Kule ended <N> processes still running in the task's sandbox, to commit: <names>`. Bkz. [Süreçler ve sunucular](../concepts/sandbox.md#processes-and-servers). |
 | `policy: …` ve `kule: not committed; …` | Karar değişiklikleri geri tuttu; hiçbir şey yazılmadı (çıkış kodu `3`). |
 
 ## Hatalar ve çözümleri

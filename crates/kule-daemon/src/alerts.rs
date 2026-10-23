@@ -274,6 +274,7 @@ mod tests {
             own_limits: Default::default(),
             time_used_secs: 0,
             behind: Default::default(),
+            unreadable: None,
         }
     }
 

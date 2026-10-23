@@ -20,10 +20,10 @@ kule-view = { version = "0.2.0-preview.9", path = "../kule-view" }
 libc = "0.2.190"
 # Shared with Lonca. Builds use the pinned commit; a crates.io publish uses
 # the version, so that version has to be on crates.io first.
-lonca-net = { version = "0.1.2", git = "https://github.com/selcukgural/lonca", rev = "3a4e015461811d5a1241d7b1a813454d5edf049d" }
+lonca-net = { version = "0.1.2", git = "https://github.com/selcukgural/lonca", rev = "bf7a03962d16601e07727819d5c80dc085a093b0" }
 # Checkpoints and their signed history live in Lonca's object store. Not on
 # crates.io yet, so for now this keeps kule-engine from being published.
-lonca-core = { git = "https://github.com/selcukgural/lonca", rev = "3a4e015461811d5a1241d7b1a813454d5edf049d" }
+lonca-core = { git = "https://github.com/selcukgural/lonca", rev = "bf7a03962d16601e07727819d5c80dc085a093b0" }
 reflink-copy.workspace = true
 # Seals the secrets' values; the key lives in the system's keychain (macOS)
 # or Secret Service (Linux, through zbus).

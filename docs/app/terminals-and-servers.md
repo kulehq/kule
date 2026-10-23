@@ -45,7 +45,14 @@ agent's work.
 - The first terminal in a task can take a few seconds to open, while the
   task's package caches are made.
 - Kule **refuses to open a terminal** while an agent is at work in the
-  task.
+  task. A terminal Kule did not open shows why, then *[Kule did not open
+  this shell; press Enter to try again]*, and its cursor stops blinking.
+- **When the shell ends**, the terminal says, in yellow, what the sandbox
+  refused it (the same refusal once, with how many times: `×4`), Kule's
+  hints about those refusals, and what Kule ended that the shell left
+  running in its sandbox (macOS). On Linux, when the shell exited with an
+  error, it says that Linux does not tell Kule what the sandbox refused.
+  Then comes *[the shell ended; press Enter for a new one]*.
 - **While a terminal is open on a task**, no agent run starts in it, and
   **Commit**, **Sync**, **Roll back**, **Undo**, going back to a step, and
   applying or undoing home changes wait. Kule says *a terminal is open on

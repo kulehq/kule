@@ -118,7 +118,9 @@ Ana alanın üstünde, açık görevin başlığı şunları gösterir:
   etiketleri** (bkz. [Terminaller ve sunucular](terminals-and-servers.md));
 - "agent at work" ya da "3 changes · needs approval" gibi **durumu**;
 - ajanların bildirdiği kadarıyla, çalıştırmalarının şimdiye kadar
-  **harcadığı** tutar;
+  **harcadığı** tutar; çalıştırmalarının harcadıklarına dair bazı kayıtlar
+  okunamıyorsa kırmızıyla *N usage records unreadable · budget held* (bkz.
+  [Bütçeler ve sınırlar](../concepts/budgets-and-limits.md));
 - klasör, yanındaki bir projeden derleniyor ama görevleri o projeyi henüz
   okuyamıyorsa bir **builds from** etiketi (bkz.
   [`kule reveal`](../cli/reveal.md)).
@@ -130,7 +132,9 @@ Ana alanın üstünde, açık görevin başlığı şunları gösterir:
 - **Needs you**, sizi bekleyen görevleri listeler: bir bağlantı hakkında
   bir soru ya da onay gerektiren değişiklikler.
 - **Tasks**, tüm görevleri ve grupları listeler. Başlığın yanındaki **+**
-  bir [grup](../concepts/groups.md) oluşturur.
+  bir [grup](../concepts/groups.md) oluşturur. Kule'nin okuyamadığı bir görev
+  listeden çıkmaz; kırmızı bir *cannot be read* etiketi ve nedeniyle listede
+  kalır.
 - Her görevin bir **⋮ menüsü** vardır (Mod+. ya da sağ tık): *Rename…*,
   bir renk, *Group…*, *Budget…*, *Limits…*, *Open in terminal app*, *Open
   the copy in an editor*, *Bring in the folder's changes*, *Fork task*,

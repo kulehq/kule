@@ -11,8 +11,7 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 use anyhow::{Result, anyhow, bail};
-use kule_daemon::shell::Sandboxed;
-use kule_engine::Denial;
+use kule_daemon::shell::{Sandboxed, ShellEnd};
 
 /// The size of the person's terminal, or 80 × 24 where there is none.
 fn their_size() -> libc::winsize {
@@ -67,8 +66,8 @@ impl Drop for Raw {
 
 /// Runs `shell` in task `task`'s sandbox on a terminal of its own, passing
 /// the person's terminal through, until it ends: its exit status, and what
-/// the sandbox refused it. Refused while an agent is at work in the task.
-pub fn run(home: &Path, task: &str, shell: &str) -> Result<(Option<i32>, Vec<Denial>)> {
+/// its end tells (what the sandbox refused it, what Kule ended). Refused while an agent is at work in the task.
+pub fn run(home: &Path, task: &str, shell: &str) -> Result<(Option<i32>, ShellEnd)> {
     let sandboxed = Sandboxed::new(home, task).map_err(|e| anyhow!(e))?;
     for note in sandboxed.notes() {
         eprintln!("kule: {note}");
@@ -157,6 +156,5 @@ pub fn run(home: &Path, task: &str, shell: &str) -> Result<(Option<i32>, Vec<Den
     // terminal on, and a commit ends that.
     let _ = all_read.recv_timeout(Duration::from_millis(300));
     drop(raw);
-    let denials = sandboxed.end().map_err(|e| anyhow!(e))?;
-    Ok((status.code(), denials))
+    Ok((status.code(), sandboxed.end()))
 }

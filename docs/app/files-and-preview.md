@@ -64,7 +64,10 @@ Opens documents, pictures, sound and video with the app your computer uses
 for them: PDF, Word, Excel, PowerPoint, OpenDocument, CSV, plain text, and
 the common picture, sound and video kinds. What opens is Kule's own copy of
 the file, made before it is checked: changes you make in the app stay in
-that copy, not in the task's.
+that copy, not in the task's. Once it opens, the app says so, for example
+*report.pdf opened as Kule's own copy: what you change there does not reach
+the task, and Kule removes the copy after 24 hours. Save it elsewhere to
+keep it.*
 
 :::warning What Kule will not open
 

@@ -43,7 +43,12 @@ parçasıdır: `kule status` onları listeler, `kule commit` uygular.
 Kabuğun içinde `KULE_TASK` görevin kimliğini tutar. `exit` yaptığınızda Kule,
 `kule exec`'in yaptığı gibi kopyadaki değişiklikleri, kabuğun kurduğu
 bağlantıları, ev klasörüne yazılanları ve sandbox'ın reddettiklerini
-yazdırır; `kule shell` de kabuğun çıkış koduyla çıkar.
+yazdırır; `kule shell` de kabuğun çıkış koduyla çıkar. macOS'ta Kule ayrıca
+kabuğun sandbox'ında çalışır bıraktığı şeyi sonlandırır ve adını verir.
+Linux'ta, kabuk bir hatayla çıktıysa Kule, Linux'un sandbox'ın
+reddettiklerini kendisine söylemediğini belirtir. Kule sandbox'ın
+reddettiklerini okuyamadıysa ya da kaydedemediyse bunu söyler ve kabuk 0
+ile çıksa bile `kule shell` başarısız olur.
 
 **Kabuk açıkken** görevde hiçbir ajan işe başlamaz (`kule run` ve
 `kule exec` de reddedilir); commit, sync ve ev değişikliklerini uygulamak
@@ -153,6 +158,8 @@ kule: a terminal is open on this task's copy (in Kule's app, or kule shell); clo
 | `kule: in task <id>'s copy, outside the sandbox; exit to come back` | Aynısı, `--outside` ile. |
 | `exit`'ten sonraki değişiklik listesi | Görevin şimdiye kadarki değişiklikleri, [kule status](status.md)'un gösterdiği gibi. |
 | `exit`'ten sonraki `net:`, ev ve `sandbox:` satırları | Kabuğun kurduğu bağlantılar, ev klasörüne yazdıkları ve sandbox'ın reddettikleri, [kule exec](exec.md)'in yazdırdığı gibi. `--outside` ile yazılmaz. |
+| `kule: Kule ended <names>, which the shell left running in its sandbox` | macOS: kabuğun çalışır bıraktığı ve Kule'nin kabuk çıkarken sonlandırdığı şey. |
+| `kule: Linux does not tell Kule what the sandbox refused; each refusal reached the command as an error` | Linux, kabuk bir hatayla çıktığında: hiç `sandbox:` satırı olmaması hiçbir şeyin reddedilmediği anlamına gelmez. |
 
 ## Hatalar ve çözümleri
 

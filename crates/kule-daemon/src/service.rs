@@ -14,7 +14,7 @@ use kule_engine::entities;
 use kule_engine::{
     Approvals, Checkpoint, Connection, Denial, Effect, EffectSet, Error, FileOutline, Kind, Policy,
     Preview, Proxy, Question, Ruling, Step, Task, Touched, Verdict, changed_entities, connections,
-    denials, meet, record_denials,
+    denials, meet,
 };
 use serde::{Deserialize, Serialize};
 
@@ -129,7 +129,7 @@ fn person_home() -> Result<PathBuf> {
 }
 
 /// A task as the task list shows it.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct TaskView {
     pub id: String,
     pub workspace: PathBuf,
@@ -187,6 +187,11 @@ pub struct TaskView {
     /// sync would bring into the copy.
     #[serde(default)]
     pub behind: Behind,
+    /// Why the task cannot be read now (damaged, say): it stays in the
+    /// list with why, rather than leave it unseen; what it shows besides
+    /// may not be known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unreadable: Option<String>,
 }
 
 /// The most paths of each list a task view carries of what the workspace
@@ -270,8 +275,9 @@ struct Cached {
     /// When the last scan started.
     at: Instant,
     scanning: bool,
-    /// The last scan could not read the task (being removed, damaged).
-    failed: bool,
+    /// Why the last scan could not read the task (being removed,
+    /// damaged).
+    failed: Option<String>,
 }
 
 /// How long a scan answers the task list before it is made again. A large
@@ -332,6 +338,16 @@ pub struct Timeline {
     pub blockers: std::collections::BTreeMap<u32, Option<String>>,
 }
 
+/// How a run that started its agent ended.
+#[derive(Debug, Default)]
+struct RunEnd {
+    /// Why it failed or stopped.
+    error: Option<String>,
+    /// What its sandbox refused, then what Kule put back.
+    denials: Vec<Denial>,
+    unreported: bool,
+}
+
 /// What a run reports.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -356,10 +372,20 @@ pub enum RunEvent {
     Resources {
         measured: kule_acp::governor::Measured,
     },
+    /// Kule ended what still ran in the task's sandbox before it wrote
+    /// where the sandbox writes, for something the person asked (a commit,
+    /// a rollback, ...): said where they asked it, and kept with the runs.
+    Ended {
+        text: String,
+    },
     /// The run is over; `error` says why it failed.
     Finished {
         error: Option<String>,
         denials: Vec<Denial>,
+        /// The platform does not report what the sandbox refused (see
+        /// `kule_engine::UNREPORTED`): not that nothing was.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        unreported: bool,
     },
 }
 
@@ -416,7 +442,9 @@ fn weight(event: &RunEvent) -> usize {
     use kule_acp::Event;
     const EACH: usize = 128;
     EACH + match event {
-        RunEvent::Prompt { text, .. } | RunEvent::Preparing { text } => text.len(),
+        RunEvent::Prompt { text, .. } | RunEvent::Preparing { text } | RunEvent::Ended { text } => {
+            text.len()
+        }
         RunEvent::Agent { event } => match event {
             Event::Message { text, .. }
             | Event::Thought { text, .. }
@@ -427,7 +455,7 @@ fn weight(event: &RunEvent) -> usize {
             Event::Plan { entries } => entries.iter().map(String::len).sum(),
             _ => 0,
         },
-        RunEvent::Finished { error, denials } => {
+        RunEvent::Finished { error, denials, .. } => {
             error.as_ref().map_or(0, String::len) + denials.len() * EACH
         }
         RunEvent::Resources { .. } => 0,
@@ -435,6 +463,14 @@ fn weight(event: &RunEvent) -> usize {
 }
 
 type Subscribers = Arc<Mutex<Vec<Sender<Notice>>>>;
+
+/// A task's kept run events, and how many older ones were let go to keep
+/// within [`KEPT_EVENTS`] and [`KEPT_BYTES`].
+#[derive(Debug, Default)]
+struct Stream {
+    events: VecDeque<Sequenced>,
+    dropped: u64,
+}
 
 /// A kept run event and its place in the order of all events.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -453,7 +489,7 @@ pub struct Service {
     approvals: Approvals,
     subscribers: Subscribers,
     /// The latest events of each task's runs, oldest first.
-    streams: Mutex<HashMap<String, VecDeque<Sequenced>>>,
+    streams: Mutex<HashMap<String, Stream>>,
     next_seq: std::sync::atomic::AtomicU64,
     /// Each task's last scan, for the task list.
     scans: Mutex<HashMap<String, Cached>>,
@@ -600,14 +636,30 @@ impl Service {
         rx
     }
 
-    /// The task's latest run events, oldest first.
+    /// The task's latest run events, oldest first; led by a note saying
+    /// how many older ones are no longer kept, when any were let go.
     pub fn stream(&self, id: &str) -> Vec<Sequenced> {
-        self.streams
+        let streams = self
+            .streams
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .get(id)
-            .map(|events| events.iter().cloned().collect())
-            .unwrap_or_default()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let Some(stream) = streams.get(id) else {
+            return Vec::new();
+        };
+        let dropped = (stream.dropped > 0).then(|| Sequenced {
+            seq: 0,
+            event: RunEvent::Preparing {
+                text: format!(
+                    "{} earlier events of this task's runs are no longer kept (Kule keeps the latest {KEPT_EVENTS}, up to {} MiB)",
+                    stream.dropped,
+                    KEPT_BYTES >> 20
+                ),
+            },
+        });
+        dropped
+            .into_iter()
+            .chain(stream.events.iter().cloned())
+            .collect()
     }
 
     /// Whether anything is going on: an agent at work or a question waiting.
@@ -629,7 +681,8 @@ impl Service {
         let seq = self
             .next_seq
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let kept = streams.entry(task.to_owned()).or_default();
+        let stream = streams.entry(task.to_owned()).or_default();
+        let kept = &mut stream.events;
         // An answer arrives in many small chunks; kept as one, the prompt
         // stays in reach of a window that opens later. A piece of another
         // message starts one of its own.
@@ -682,6 +735,7 @@ impl Service {
         if !merged {
             if kept.len() == KEPT_EVENTS {
                 kept.pop_front();
+                stream.dropped += 1;
             }
             kept.push_back(Sequenced {
                 seq,
@@ -691,6 +745,7 @@ impl Service {
         let mut size: usize = kept.iter().map(|s| weight(&s.event)).sum();
         while size > KEPT_BYTES && kept.len() > 1 {
             size -= kept.pop_front().map_or(0, |s| weight(&s.event));
+            stream.dropped += 1;
         }
         notify(
             &self.subscribers,
@@ -1075,20 +1130,39 @@ impl Service {
     /// [`FRESH`] are made again in the background.
     pub fn tasks(self: &Arc<Self>) -> Result<Vec<TaskView>> {
         let infos = kule_engine::arranged(&self.home).map_err(text)?;
-        // One task that cannot be read (being removed, damaged) does not
-        // hide the others.
+        // One task that cannot be read (damaged) does not hide the others,
+        // and is listed with why; one being removed is left out.
         Ok(infos
             .iter()
             .filter_map(|info| {
-                let scan = self.last_scan(&info.id).ok()?;
-                self.assemble(&info.id, scan).ok()
+                let viewed = match self.last_scan(&info.id) {
+                    Ok(scan) => self.assemble(&info.id, scan),
+                    Err(why) => self
+                        .assemble(&info.id, Some(Scan::default()))
+                        .map(|view| TaskView {
+                            unreadable: Some(why.clone()),
+                            ..view
+                        })
+                        .map_err(|_| why),
+                };
+                match viewed {
+                    Ok(view) => Some(view),
+                    Err(_) if !self.home.join("tasks").join(&info.id).exists() => None,
+                    Err(why) => Some(TaskView {
+                        id: info.id.clone(),
+                        workspace: info.workspace.clone(),
+                        created_unix: info.created_unix,
+                        unreadable: Some(why),
+                        ..TaskView::default()
+                    }),
+                }
             })
             .collect())
     }
 
     /// The task's last scan, starting a new one in the background when it
-    /// is old or there is none; an error when the last one failed.
-    fn last_scan(self: &Arc<Self>, id: &str) -> std::result::Result<Option<Scan>, ()> {
+    /// is old or there is none; why, when the last one failed.
+    fn last_scan(self: &Arc<Self>, id: &str) -> Result<Option<Scan>> {
         let mut scans = self
             .scans
             .lock()
@@ -1097,9 +1171,9 @@ impl Service {
             scan: None,
             at: Instant::now(),
             scanning: false,
-            failed: false,
+            failed: None,
         });
-        let unscanned = cached.scan.is_none() && !cached.failed;
+        let unscanned = cached.scan.is_none() && cached.failed.is_none();
         if !cached.scanning && (unscanned || cached.at.elapsed() >= FRESH) {
             cached.scanning = true;
             let (service, id) = (Arc::clone(self), id.to_owned());
@@ -1109,21 +1183,21 @@ impl Service {
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .get(&id)
-                    .map(|c| (c.scan.clone(), c.failed));
+                    .map(|c| (c.scan.clone(), c.failed.clone()));
                 let _ = service.rescan(&id);
                 let after = service
                     .scans
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .get(&id)
-                    .map(|c| (c.scan.clone(), c.failed));
+                    .map(|c| (c.scan.clone(), c.failed.clone()));
                 if after != before {
                     notify(&service.subscribers, Notice::Tasks);
                 }
             });
         }
-        if cached.failed {
-            return Err(());
+        if let Some(why) = &cached.failed {
+            return Err(why.clone());
         }
         Ok(cached.scan.clone())
     }
@@ -1140,7 +1214,7 @@ impl Service {
         // first knows better.
         if let Some(newer) = scans
             .get_mut(id)
-            .filter(|c| (c.scan.is_some() || c.failed) && c.at > started)
+            .filter(|c| (c.scan.is_some() || c.failed.is_some()) && c.at > started)
         {
             newer.scanning = false;
             return outcome;
@@ -1151,7 +1225,7 @@ impl Service {
                 scan: outcome.as_ref().ok().cloned(),
                 at: started,
                 scanning: false,
-                failed: outcome.is_err(),
+                failed: outcome.as_ref().err().cloned(),
             },
         );
         outcome
@@ -1220,7 +1294,10 @@ impl Service {
     /// Takes the home changes at `paths` to the person's home.
     pub fn apply_home(&self, id: &str, paths: &[String]) -> Result<kule_engine::HomeApplied> {
         self.not_at_work(id)?;
-        let applied = self.open(id)?.apply_home(paths).map_err(text)?;
+        let task = self.open(id)?;
+        let applied = task.apply_home(paths);
+        self.tell_ended(&task);
+        let applied = applied.map_err(text)?;
         notify(&self.subscribers, Notice::Tasks);
         Ok(applied)
     }
@@ -1241,7 +1318,10 @@ impl Service {
     /// Takes the task's last apply of home changes back.
     pub fn undo_home(&self, id: &str) -> Result<kule_engine::HomeApplied> {
         self.not_at_work(id)?;
-        let undone = self.open(id)?.undo_home().map_err(text)?;
+        let task = self.open(id)?;
+        let undone = task.undo_home();
+        self.tell_ended(&task);
+        let undone = undone.map_err(text)?;
         notify(&self.subscribers, Notice::Tasks);
         Ok(undone)
     }
@@ -1328,6 +1408,7 @@ impl Service {
             gate(set)
         };
         let outcome = task.commit_with(include_ignored, check);
+        self.tell_ended(&task);
         let _ = self.rescan(id);
         match outcome {
             Ok(Some(checkpoint)) => {
@@ -1346,7 +1427,9 @@ impl Service {
 
     /// Throws the uncommitted work away; returns how many changes it held.
     pub fn rollback(&self, id: &str) -> Result<usize> {
-        let set = self.idle(id)?.rollback();
+        let task = self.idle(id)?;
+        let set = task.rollback();
+        self.tell_ended(&task);
         let _ = self.rescan(id);
         let thrown = set.map_err(text)?.effects.len();
         self.changed(id, TaskChange::RolledBack);
@@ -1356,7 +1439,9 @@ impl Service {
     /// Brings what the workspace changed since the last sync into the
     /// task's copy, between the agent's runs (see `Task::sync`).
     pub fn sync(&self, id: &str) -> Result<kule_engine::Synced> {
-        let synced = self.idle(id)?.sync();
+        let task = self.idle(id)?;
+        let synced = task.sync();
+        self.tell_ended(&task);
         let _ = self.rescan(id);
         let synced = synced.map_err(text)?;
         if !synced.is_empty() {
@@ -1367,7 +1452,9 @@ impl Service {
 
     /// Reverts the newest commit; returns its checkpoint, if there was one.
     pub fn undo(&self, id: &str) -> Result<Option<u32>> {
-        let undone = self.idle(id)?.undo();
+        let task = self.idle(id)?;
+        let undone = task.undo();
+        self.tell_ended(&task);
         let _ = self.rescan(id);
         let undone = undone.map_err(text)?.map(|c| c.id);
         if undone.is_some() {
@@ -1414,7 +1501,9 @@ impl Service {
     /// Puts the task's copy back as it was after step `step` (`0`: before
     /// the first); returns the step that records it.
     pub fn back_to_step(&self, id: &str, step: u32) -> Result<Step> {
-        let back = self.idle(id)?.back_to_step(step);
+        let task = self.idle(id)?;
+        let back = task.back_to_step(step);
+        self.tell_ended(&task);
         let _ = self.rescan(id);
         let back = back.map_err(text)?;
         self.changed(id, TaskChange::WentBack);
@@ -1597,9 +1686,9 @@ impl Service {
         let service = Arc::clone(self);
         std::thread::spawn(move || {
             let run = service.run(&task, &profile, &prompt, &pictures, limit, plan, &control);
-            let (error, denials) = match run {
-                Ok(denials) => (None, denials),
-                Err(e) => (Some(e), Vec::new()),
+            let (error, denials, unreported) = match run {
+                Ok(end) => (end.error, end.denials, end.unreported),
+                Err(e) => (Some(e), Vec::new(), false),
             };
             drop(at_work);
             service
@@ -1614,7 +1703,14 @@ impl Service {
                 .remove(task.id());
             // Before the window hears the run is over and asks again.
             let _ = service.rescan(task.id());
-            service.emit(task.id(), RunEvent::Finished { error, denials });
+            service.emit(
+                task.id(),
+                RunEvent::Finished {
+                    error,
+                    denials,
+                    unreported,
+                },
+            );
         });
         Ok(())
     }
@@ -1726,7 +1822,7 @@ impl Service {
         limit: Option<kule_engine::Money>,
         plan: kule_acp::governor::Plan,
         control: &kule_acp::RunControl,
-    ) -> Result<Vec<Denial>> {
+    ) -> Result<RunEnd> {
         let started = Instant::now();
         let governor = self.govern(task, plan, control);
         let outcome = self.run_governed(task, profile, prompt, pictures, limit, control, started);
@@ -1772,7 +1868,7 @@ impl Service {
         limit: Option<kule_engine::Money>,
         control: &kule_acp::RunControl,
         started: Instant,
-    ) -> Result<Vec<Denial>> {
+    ) -> Result<RunEnd> {
         let mut usage = kule_engine::RunUsage {
             agent: profile.name.clone(),
             started_unix: unix_now(),
@@ -1812,7 +1908,18 @@ impl Service {
         // MCP servers the person approved from extensions; the agent starts
         // them inside its own sandbox.
         let person = std::env::var_os("HOME").map(PathBuf::from);
-        let mcp = crate::extensions::mcp_for_runs(&self.home, person.as_deref());
+        // What cannot be read starts no server, and the run is told so.
+        let mcp = crate::extensions::mcp_for_runs(&self.home, person.as_deref()).unwrap_or_else(|e| {
+            self.emit(
+                task.id(),
+                RunEvent::Preparing {
+                    text: format!(
+                        "Kule could not read the extensions' MCP servers ({e}); this run goes without them"
+                    ),
+                },
+            );
+            Vec::new()
+        });
         let outcome = runtime.block_on(kule_acp::run_pictured(
             task,
             launch.command,
@@ -1828,22 +1935,36 @@ impl Service {
             control,
             tx,
         ));
+        let mut failed = Vec::new();
         if let Ok(mut usage) = runtime.block_on(forward) {
             usage.duration_secs = started.elapsed().as_secs();
             // Kept whether the run went well or not: it was spent either way.
-            task.record_usage(&usage).map_err(text)?;
+            if let Err(e) = task.record_usage(&usage) {
+                failed.push(format!("what the run spent could not be recorded: {e}"));
+            }
         }
-        // The agent's process group is gone by now.
-        let put_back = launch.kept.restore().map_err(text)?;
-        outcome.map_err(|e| format!("{e} (see {})", task.agent_log().display()))?;
-        let mut refused = launch
-            .sandbox
-            .denials(started.elapsed())
-            .map_err(text)?
-            .unwrap_or_default();
-        refused.extend(put_back.iter().map(Denial::put_back));
-        record_denials(task, &refused).map_err(text)?;
-        Ok(refused)
+        // The agent's process group is gone by now. Told however the run
+        // ended: a failed or stopped run did things too.
+        let after = kule_acp::after_run(task, &launch.sandbox, launch.kept, started.elapsed());
+        failed.extend(after.failed);
+        let error = match outcome {
+            Ok(_) => None,
+            // A stop says why as it is; the agent's log has nothing to add.
+            Err(e) if e.to_string().starts_with("stopped: ") => Some(e.to_string()),
+            Err(e) => Some(format!("{e} ({})", task.agent_log_hint())),
+        };
+        let error = match (error, failed.is_empty()) {
+            (error, true) => error,
+            (Some(error), false) => Some(format!("{error}; {}", failed.join("; "))),
+            (None, false) => Some(failed.join("; ")),
+        };
+        let mut denials = after.refused;
+        denials.extend(after.put_back);
+        Ok(RunEnd {
+            error,
+            denials,
+            unreported: after.unreported,
+        })
     }
 
     /// The task's view from a scan made now.
@@ -1890,6 +2011,7 @@ impl Service {
             own_limits: task.limits().map_err(text)?,
             time_used_secs: task.time_used().map_err(text)?.as_secs(),
             behind: scan.behind,
+            unreadable: None,
         })
     }
 
@@ -1991,8 +2113,6 @@ impl Service {
         Task::open(&self.home, id).map_err(text)
     }
 
-    /// The task, refused while an agent works in it: committing or rolling
-    /// back under a running agent would split its work in two.
     /// Tells the run's notes what Kule withheld from its commands in the
     /// home (see `Task::home_withheld_notes`): said where the run is
     /// watched, not left for a log.
@@ -2003,6 +2123,16 @@ impl Service {
         Ok(())
     }
 
+    /// Tells what Kule ended in the task's sandbox through `task` (see
+    /// `Task::take_ended`), whether or not what it was ended for went on.
+    fn tell_ended(&self, task: &Task) {
+        for text in task.take_ended() {
+            self.emit(task.id(), RunEvent::Ended { text });
+        }
+    }
+
+    /// The task, refused while an agent works in it: committing or rolling
+    /// back under a running agent would split its work in two.
     fn idle(&self, id: &str) -> Result<Task> {
         if self
             .running
@@ -2229,6 +2359,111 @@ mod tests {
             s.settled()
                 .iter()
                 .all(|v| v.overlaps.iter().all(|o| o.task != a))
+        );
+    }
+
+    /// A window that opens later is told how many of the task's run events
+    /// are no longer kept, before the ones that are.
+    #[test]
+    fn what_is_no_longer_kept_is_counted() {
+        let s = Setup::new();
+        let (id, _) = s.task();
+        s.app.emit(
+            &id,
+            RunEvent::Preparing {
+                text: "first".into(),
+            },
+        );
+        assert!(matches!(
+            &s.app.stream(&id)[0].event,
+            RunEvent::Preparing { text } if text == "first"
+        ));
+        for n in 0..KEPT_EVENTS + 4 {
+            s.app.emit(
+                &id,
+                RunEvent::Preparing {
+                    text: format!("{n}"),
+                },
+            );
+        }
+        let kept = s.app.stream(&id);
+        assert_eq!(kept.len(), KEPT_EVENTS + 1);
+        assert!(
+            matches!(&kept[0].event, RunEvent::Preparing { text } if text.starts_with("5 earlier events")),
+            "{:?}",
+            kept[0]
+        );
+    }
+
+    /// A task that cannot be read stays in the list with why, beside the
+    /// others, rather than drop out of sight.
+    #[test]
+    fn a_task_whose_scan_fails_is_listed_with_why() {
+        let s = Setup::new();
+        let (damaged, _) = s.task();
+        let (fine, _) = s.task();
+        fs::write(
+            s.app
+                .home
+                .join("tasks")
+                .join(&damaged)
+                .join("baseline.json"),
+            "{ not json",
+        )
+        .unwrap();
+        let views = s.settled();
+        let view = |id: &str| views.iter().find(|v| v.id == id).cloned();
+        let damaged = view(&damaged).expect("the damaged task left the list");
+        assert!(damaged.unreadable.is_some(), "{damaged:?}");
+        assert_eq!(view(&fine).unwrap().unreadable, None);
+    }
+
+    /// What Kule ended in the task's sandbox to commit is said where the
+    /// person committed (the app shows the event as it comes), by name.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn kule_tells_what_it_ended_to_commit() {
+        let s = Setup::new();
+        let (id, copy) = s.task();
+        let task = Task::open(&s.app.home, &id).unwrap();
+        let code = "import os, time\nif os.fork(): os._exit(0)\nos.setsid()\nif os.fork(): os._exit(0)\ntime.sleep(60)";
+        let status = kule_engine::Sandbox::new(&task)
+            .unwrap()
+            .command(
+                "python3",
+                &["-I".to_owned(), "-c".to_owned(), code.to_owned()],
+            )
+            .unwrap()
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .unwrap();
+        assert!(status.success());
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while kule_engine::Sandbox::processes_of(&id).is_empty() {
+            assert!(Instant::now() < deadline, "the stray never started");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        fs::write(copy.join("b.txt"), "b\n").unwrap();
+        assert!(matches!(
+            s.app.commit(&id, true, false, None).unwrap(),
+            Commit::Applied { .. }
+        ));
+        let told: Vec<String> = s
+            .app
+            .stream(&id)
+            .into_iter()
+            .filter_map(|e| match e.event {
+                RunEvent::Ended { text } => Some(text),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            told.len() == 1
+                && told[0].to_lowercase().contains("python")
+                && told[0].ends_with("to commit"),
+            "{told:?}"
         );
     }
 
@@ -3442,6 +3677,98 @@ mod tests {
         assert!(s.app.stop_run(&id).is_err() || !s.app.busy());
     }
 
+    /// An approved agent of the person's own that runs `script` in `sh`.
+    fn own_agent(s: &Setup, name: &str, script: &str) {
+        let profile = kule_acp::Profile::bare(
+            name,
+            vec!["sh".into(), "-c".into(), script.into()],
+            Default::default(),
+        );
+        s.app.save_agent(&profile).unwrap();
+        let digest = s
+            .app
+            .agent_list()
+            .unwrap()
+            .into_iter()
+            .find(|l| l.profile.name == name)
+            .unwrap()
+            .digest;
+        s.app.approve_agent(name, &digest).unwrap();
+    }
+
+    /// How the run in `id` finished, waiting a while for it, never forever.
+    fn finished(s: &Setup, id: &str) -> (Option<String>, Vec<Denial>, bool) {
+        let deadline = Instant::now() + Duration::from_secs(60);
+        loop {
+            let found = s
+                .app
+                .stream(id)
+                .into_iter()
+                .find_map(|kept| match kept.event {
+                    RunEvent::Finished {
+                        error,
+                        denials,
+                        unreported,
+                    } => Some((error, denials, unreported)),
+                    _ => None,
+                });
+            if let Some(found) = found {
+                return found;
+            }
+            assert!(Instant::now() < deadline, "the run never ended");
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    /// A run that fails still says what its sandbox refused it, where the
+    /// platform tells (macOS), or that the platform does not (Linux).
+    #[test]
+    fn a_failed_run_says_what_the_sandbox_refused() {
+        let s = Setup::new();
+        let (id, _) = s.task();
+        // Outside /tmp, which commands may write to on Linux.
+        let base = concat!(env!("CARGO_MANIFEST_DIR"), "/../../target");
+        fs::create_dir_all(base).unwrap();
+        let outside = TempDir::new_in(base).unwrap();
+        let target = fs::canonicalize(outside.path()).unwrap().join("x");
+        own_agent(
+            &s,
+            "broken",
+            &format!("echo x > {}; sleep 1; exit 3", target.display()),
+        );
+        s.app.start_run(&id, "broken", "hi", Vec::new()).unwrap();
+        let (error, denials, unreported) = finished(&s, &id);
+        let error = error.expect("the run failed");
+        assert!(error.contains("agent.log"), "{error}");
+        assert!(!target.exists());
+        if cfg!(target_os = "macos") {
+            assert!(
+                denials.iter().any(|d| d.path == target.to_string_lossy()),
+                "{denials:?}"
+            );
+            assert!(!unreported);
+        } else {
+            assert!(unreported);
+        }
+    }
+
+    /// A run the person stopped says so, as it is: no log to see, no
+    /// failure.
+    #[test]
+    fn a_person_s_stop_is_said_as_it_is() {
+        let s = Setup::new();
+        let (id, _) = s.task();
+        own_agent(&s, "slow", "sleep 60");
+        s.app.start_run(&id, "slow", "hi", Vec::new()).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while s.app.stop_run(&id).is_err() {
+            assert!(Instant::now() < deadline, "the run never started");
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        let (error, _, _) = finished(&s, &id);
+        assert_eq!(error.as_deref(), Some("stopped: you stopped the run"));
+    }
+
     #[test]
     fn an_unknown_agent_is_refused_before_anything_starts() {
         let s = Setup::new();
@@ -3714,8 +4041,10 @@ mod tests {
         ));
     }
 
-    /// One task that cannot be read (half made, half removed) does not
-    /// blank the list.
+    /// One task that cannot be read does not blank the list, and is listed
+    /// itself, with why. A task is listed only once it is made (`task.json`
+    /// is written last) and leaves the list at once when removed, so one
+    /// listed but unreadable is damaged, not on its way.
     #[test]
     fn an_unreadable_task_does_not_hide_the_others() {
         let s = Setup::new();
@@ -3730,7 +4059,11 @@ mod tests {
             ),
         )
         .unwrap();
-        let ids: Vec<String> = s.settled().into_iter().map(|t| t.id).collect();
-        assert_eq!(ids, [good]);
+        let listed: Vec<(String, bool)> = s
+            .settled()
+            .into_iter()
+            .map(|t| (t.id, t.unreadable.is_some()))
+            .collect();
+        assert_eq!(listed, [(good, false), ("broken".to_owned(), true)]);
     }
 }

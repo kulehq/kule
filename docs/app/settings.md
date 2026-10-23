@@ -112,6 +112,10 @@ what you set there holds. Each change is confirmed with the scope's name.
 | One group | What its tasks may cost together over all of their runs, and over any 24 hours; each is optional. |
 | One task | What that task's runs may cost together. *What holds its next run* lists each budget over it and marks the one that holds. |
 
+A record of what runs spent that cannot be read holds every budget it
+could count for, until it is mended or removed or the budget is turned off;
+the task header's chip says *N usage records unreadable · budget held* in red.
+
 Leave a field empty for no limit. *Where budgets are set* lists every scope
 that has one; click a scope to open it. A task's or a group's ⋮ menu
 (*Budget…*) opens its scope directly.
@@ -186,6 +190,10 @@ or change a policy.
   example *Read files in a task's copy* or *Send and receive data over the
   internet, to the hosts listed*), with **Approve**, **Turn on** / **Turn
   off** and **Remove** (click again to confirm).
+- An extension that is on says *Runs*, or *Does not run now* while no
+  extension may run in the window, with why: Kule started without
+  extensions this time (safe mode), extensions cannot be served, or they
+  wait until the window's WebRTC is off.
 - The **MCP servers** an extension offers agents each wait for their own
   approval: **Let agents use it** or **Stop offering it**. An agent starts
   such a server inside its own sandbox.

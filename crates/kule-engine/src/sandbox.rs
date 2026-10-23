@@ -540,6 +540,56 @@ fn task_mark(task: &str) -> String {
     format!("dev.kule.task.{task}")
 }
 
+/// The processes Kule ended in a task's sandbox, by the names they ran
+/// under, so the person is told what stopped (see
+/// [`Sandbox::end_strays`]).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Ended {
+    pub processes: Vec<String>,
+}
+
+impl Ended {
+    pub fn is_empty(&self) -> bool {
+        self.processes.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.processes.len()
+    }
+
+    /// The names, each once with how many ran under it, in the order they
+    /// were ended: "sleep ×2, node". At most [`LISTED`] names, then how
+    /// many more.
+    pub fn listed(&self) -> String {
+        let mut names: Vec<(&str, usize)> = Vec::new();
+        for name in &self.processes {
+            match names.iter_mut().find(|(n, _)| n == name) {
+                Some((_, count)) => *count += 1,
+                None => names.push((name, 1)),
+            }
+        }
+        let mut parts: Vec<String> = names
+            .iter()
+            .take(LISTED)
+            .map(|(name, count)| match count {
+                1 => (*name).to_owned(),
+                _ => format!("{name} ×{count}"),
+            })
+            .collect();
+        if names.len() > LISTED {
+            parts.push(format!("and {} more", names.len() - LISTED));
+        }
+        parts.join(", ")
+    }
+}
+
+/// How many names [`Ended::listed`] gives.
+const LISTED: usize = 8;
+
+/// What the person is told where [`Sandbox::denials`] has nothing to say
+/// (Linux): not that nothing was refused.
+pub const UNREPORTED: &str = "Linux does not tell Kule what the sandbox refused; each refusal reached the command as an error";
+
 /// One operation the sandbox refused.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Denial {
@@ -1164,23 +1214,32 @@ impl Sandbox {
     /// Ends what still runs in this sandbox: a process that left its
     /// command's session and parent, which ending the command's process
     /// group does not reach. Looks again until a look finds none, since one
-    /// may start another while it is being ended; returns how many it
-    /// ended, or an error when they keep coming. A process of the person's
-    /// own, outside the sandbox, is never one of them.
-    pub fn end_strays(&self) -> Result<usize> {
+    /// may start another while it is being ended; returns what it ended,
+    /// or an error when they keep coming. A process of the person's own,
+    /// outside the sandbox, is never one of them.
+    pub fn end_strays(&self) -> Result<Ended> {
         self.end_found(|| self.strays())
     }
 
     /// Ends what `find` finds until a look finds none (see
     /// [`Sandbox::end_strays`]).
-    fn end_found(&self, find: impl Fn() -> Vec<i32>) -> Result<usize> {
+    fn end_found(&self, find: impl Fn() -> Vec<i32>) -> Result<Ended> {
         let mut ended = std::collections::HashSet::new();
+        let mut names = Ended::default();
         for _ in 0..STRAY_LOOKS {
             // One already sent SIGKILL may still be there, on its way out.
             let found: Vec<i32> = find().into_iter().filter(|p| !ended.contains(p)).collect();
             if found.is_empty() {
-                return Ok(ended.len());
+                return Ok(names);
             }
+            // Its name while it still has one; one on its way out (a
+            // process group killed just before, say) was not left running.
+            names.processes.extend(
+                found
+                    .iter()
+                    .filter(|&&pid| !crate::resources::exiting(pid))
+                    .map(|&pid| crate::resources::name_of(pid)),
+            );
             crate::resources::kill(&found);
             ended.extend(found);
             std::thread::sleep(Duration::from_millis(5));
@@ -1194,7 +1253,7 @@ impl Sandbox {
     /// Ends what still runs in any of `task`'s sandboxes, its home layer's
     /// included, before Kule reads what they wrote: an error when that
     /// cannot be done, and nothing is read beside them.
-    pub fn end_all(task: &Task) -> Result<usize> {
+    pub fn end_all(task: &Task) -> Result<Ended> {
         Sandbox::finder(task)?.end_strays()
     }
 
@@ -1221,14 +1280,14 @@ impl Sandbox {
     /// reaches none of the person's terminals, and what it leaves is ended
     /// with its PID namespace, or with the task (see
     /// [`Sandbox::end_strays`]).
-    pub fn end_own(&self) -> Result<usize> {
+    pub fn end_own(&self) -> Result<Ended> {
         #[cfg(target_os = "macos")]
         {
             let mark = format!("{}.{}", task_mark(&self.task), self.own);
             self.end_found(|| self.marked(&mark))
         }
         #[cfg(not(target_os = "macos"))]
-        Ok(0)
+        Ok(Ended::default())
     }
 
     /// macOS knows which processes a task's sandboxes hold: those whose
@@ -2800,5 +2859,30 @@ mod linux_tests {
             PathBuf::from("/nonexistent-runtime"),
         ];
         assert_eq!(sandbox.runtime_dirs(&candidates), [runtime]);
+    }
+}
+
+#[cfg(test)]
+mod ended_tests {
+    use super::*;
+
+    /// What Kule ended is told by name, each once with how many, and a long
+    /// list says how many more it left out.
+    #[test]
+    fn what_was_ended_is_listed_by_name() {
+        let ended = |names: &[&str]| Ended {
+            processes: names.iter().map(|n| (*n).to_owned()).collect(),
+        };
+        assert_eq!(
+            ended(&["sleep", "node", "sleep"]).listed(),
+            "sleep ×2, node"
+        );
+        let many: Vec<String> = (0..10).map(|i| format!("p{i}")).collect();
+        let many = many.iter().map(String::as_str).collect::<Vec<_>>();
+        assert_eq!(
+            ended(&many).listed(),
+            "p0, p1, p2, p3, p4, p5, p6, p7, and 2 more"
+        );
+        assert_eq!(ended(&[]).listed(), "");
     }
 }

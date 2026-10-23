@@ -89,3 +89,49 @@ fn a_profile_that_opens_too_much_cannot_be_approved() {
         String::from_utf8_lossy(&out.stderr)
     );
 }
+
+/// A run that fails still says what it changed, what the sandbox refused
+/// it, and how long it took; the error comes last, with where the
+/// agent said why.
+#[test]
+fn a_failed_run_still_tells_what_its_sandbox_did() {
+    // The folder standing for the rest of the computer is outside /tmp,
+    // which commands may write to on Linux.
+    let (home, ws, outside) = (
+        TempDir::new().unwrap(),
+        TempDir::new().unwrap(),
+        TempDir::new_in(env!("CARGO_TARGET_TMPDIR")).unwrap(),
+    );
+    let target = fs::canonicalize(outside.path()).unwrap().join("x");
+    let script = format!("echo x > {}; sleep 1; exit 3", target.display());
+    fs::write(
+        home.path().join("agents.toml"),
+        format!("[[agent]]\nname = \"broken\"\ncommand = [\"sh\", \"-c\", {script:?}]\n"),
+    )
+    .unwrap();
+    stdout(&kule(home.path(), &["agents", "approve", "broken"]));
+    let created = stdout(&kule(home.path(), &["new", ws.path().to_str().unwrap()]));
+    let id = created.split_whitespace().nth(1).unwrap();
+
+    let run = kule(home.path(), &["run", id, "--agent", "broken", "hello"]);
+    let (out, err) = (
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr),
+    );
+    assert!(!run.status.success(), "{out}");
+    assert!(!target.exists(), "the sandbox let it write outside");
+    assert!(out.contains("policy:"), "{out}");
+    assert!(out.contains("took:"), "{out}");
+    assert!(err.contains("agent.log"), "{err}");
+    if cfg!(target_os = "macos") {
+        assert!(
+            out.contains(&format!(
+                "sandbox: refused file-write-create {}",
+                target.display()
+            )),
+            "{out}"
+        );
+    } else {
+        assert!(err.contains(kule_engine::UNREPORTED), "{err}");
+    }
+}

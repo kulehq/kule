@@ -16,7 +16,7 @@ sırayla oldu" sorusunu yanıtlar.
 | **Commits** | En yenisi önce; her biri neyi uyguladığıyla. En yenisinde **Undo** vardır. Her commit ve undo, görevin imzalı geçmişinde de (`kule history TASK`) bir kayıttır. |
 | **Steps** (adımlar) | Commit edilmemiş araç çağrıları; her biri değiştirdiği dosyalarla. Bir commit adımları baştan başlatır. |
 | **Connections** (bağlantılar) | Görevin komutlarının kurduğu ağ bağlantıları ve her birinin geçirildiği, sorulduğu ya da reddedildiği. |
-| **Refusals** (retler) | Sandbox'ın komutlara reddettiği işlemler. macOS bunları bildirir; Linux'ta komut hatayı görür ama Kule onu listeleyemez. |
+| **Refusals** (retler) | Sandbox'ın komutlara reddettiği işlemler; toplamı veren *Refused by the sandbox · N refusals* başlığı altında. Aynı ret, kaç kez olduğuyla (`×3`) tek satırdır; en yeni 50 satır görünür ve *… and N more refusals, older* kaç tanesinin dışarıda kaldığını söyler. macOS bunları bildirir; Linux'ta komut hatayı görür ama Kule onu listeleyemez. |
 
 ## Bir commit'i geri almak {#undo-a-commit}
 
@@ -36,6 +36,8 @@ Her adımın ve "ilk adımdan önce" kaydının iki eylemi vardır. Birincisi
 - Geri dönülemeyen bir adım nedenini söyler: 64 MB'ı aşan bir dosya, tek
   seferde 1 GB'tan fazlası ya da ikinci bir adı olan bir dosya (hard link).
 - `.git` geri getirilmez. Bir commit adımları baştan başlatır.
+- Görevin sandbox'ında hâlâ çalışan şey önce sonlandırılır; Kule onun adını
+  bir bildirimde ve Live'da verir.
 
 ## Bir görevden fork almak {#fork-a-task}
 

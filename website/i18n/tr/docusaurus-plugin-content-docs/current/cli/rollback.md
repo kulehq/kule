@@ -91,13 +91,19 @@ rolled back 0 changes
 `rolled back N changes`; burada `N`, taşınan klasörlerin ve `.git`'in
 içindekiler dahil, geri konan her yolu sayar.
 
+Görevin sandbox'ında hâlâ çalışan şey, kopya geri konmadan önce
+sonlandırılır ve Kule stderr'de onun adını verir:
+`kule: Kule ended <name>, still running in the task's sandbox, to roll back`
+ya da `kule: Kule ended <N> processes still running in the task's sandbox, to roll back: <names>`.
+Bkz. [Süreçler ve sunucular](../concepts/sandbox.md#processes-and-servers).
+
 ## Hatalar ve çözümleri
 
 | Mesaj | Ne yapmalı |
 | --- | --- |
 | `kule: an agent is at work in task <id> …` | Çalıştırmanın bitmesini bekleyin ya da onu durdurun. |
 | `kule: task <id> is busy: another kule command holds its lock` | Diğer komutun bitmesini bekleyin. |
-| `kule: a terminal is open on this task's copy (in Kule's app, or kule shell); close it first, then roll back` | Görevin terminalini kapatın (uygulamadaki sekmeyi ya da `kule shell`'den `exit` ile çıkın), sonra geri alın. Görevin sandbox'ında hâlâ çalışan ne varsa önce sonlandırılır; böylece kopya geri konurken hiçbir şey onu değiştirmez. |
+| `kule: a terminal is open on this task's copy (in Kule's app, or kule shell); close it first, then roll back` | Görevin terminalini kapatın (uygulamadaki sekmeyi ya da `kule shell`'den `exit` ile çıkın), sonra geri alın. Görevin sandbox'ında hâlâ çalışan ne varsa önce sonlandırılır ve adı verilir; böylece kopya geri konurken hiçbir şey onu değiştirmez. |
 
 ## Uygulamada
 

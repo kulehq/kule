@@ -175,10 +175,12 @@ fn what_exec_leaves_running_ends_with_it() {
     let s = Setup::new();
     // The command ends once its stray has beaten.
     let script = "import os, time\nif os.fork():\n  end=time.time()+10\n  while time.time()<end and not os.path.exists('beat'): time.sleep(0.01)\n  os._exit(0)\nos.setsid()\nif os.fork(): os._exit(0)\nfor fd in (0, 1, 2): os.close(fd)\nopen('pid','w').write(str(os.getpid()))\nwhile True:\n  open('beat','a').write('.')\n  time.sleep(0.02)";
-    s.ok(
+    let out = s.kule(
         &["exec", &s.id, "--no-network", "--", "python3", "-c", script],
         "",
     );
+    assert!(out.status.success(), "{}", said(&out));
+    let told = String::from_utf8_lossy(&out.stderr).to_lowercase();
     let (beat, pid) = (s.copy.join("beat"), s.copy.join("pid"));
     let len = || fs::metadata(&beat).map_or(0, |m| m.len());
     let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
@@ -205,6 +207,27 @@ fn what_exec_leaves_running_ends_with_it() {
     }
     assert!(len() > 0, "it never beat");
     assert!(stopped, "a process outlived kule exec");
+    // And the person is told what was ended, by name.
+    assert!(told.contains("kule: ended python"), "{told}");
+}
+
+/// What the shell left running is ended as it ends, and the person is told
+/// so by name (macOS); a shell that failed says, on Linux, that refusals
+/// are not reported.
+#[test]
+fn what_the_shell_left_running_is_told_as_it_ends() {
+    let s = Setup::new();
+    let out = s.kule(
+        &["shell", &s.id],
+        "nohup sleep 30 </dev/null >/dev/null 2>&1 &\nsleep 1\nexit 3\n",
+    );
+    let text = said(&out);
+    assert_eq!(out.status.code(), Some(3), "{text}");
+    if cfg!(target_os = "macos") {
+        assert!(text.contains("kule: Kule ended sleep,"), "{text}");
+    } else {
+        assert!(text.contains(kule_engine::UNREPORTED), "{text}");
+    }
 }
 
 /// On macOS, where a task's limits let its servers listen, `kule exec`

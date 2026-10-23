@@ -219,7 +219,11 @@ Events arrive only while the desktop app is open.
 
 - **When the code runs:** an extension runs while the desktop app is open
   and the extension is on and approved as it is. Nothing runs while the app
-  is closed, and events from then are not replayed.
+  is closed, and events from then are not replayed. While no extension may
+  run in the window, the card of one that is on says *Does not run now*,
+  with why: *Kule started without extensions this time (safe mode:
+  --no-extensions or KULE_NO_EXTENSIONS)*, *extensions cannot be served: …*,
+  or *extensions wait until the window's WebRTC is off*.
 - **The main script:** it runs in a hidden frame from the app's start (or
   from the approval) until the extension is turned off, removed or changed.
   A change stops it until it is approved again.

@@ -638,6 +638,18 @@ async fn perform(
             tokio::time::sleep(std::time::Duration::from_millis(200)).await;
             Ok(())
         }
+        // Leaves a process that left the agent's process group, as one
+        // started with `setsid` or `nohup ... &` from another session would.
+        "stray" => {
+            use std::os::unix::process::CommandExt;
+            let _ = std::process::Command::new("sleep")
+                .arg("30")
+                .current_dir(dir)
+                .process_group(0)
+                .spawn();
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            Ok(())
+        }
         "sleep" => {
             let ms = rest.parse().unwrap_or(100);
             tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
