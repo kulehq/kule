@@ -1218,12 +1218,20 @@ impl Sandbox {
     /// or an error when they keep coming. A process of the person's own,
     /// outside the sandbox, is never one of them.
     pub fn end_strays(&self) -> Result<Ended> {
-        self.end_found(|| self.strays())
+        self.end_found(|| self.strays(), None)
+    }
+
+    /// [`Sandbox::end_strays`] once process group `group` (an agent's) was
+    /// sent SIGKILL: its processes, which may not have taken the signal
+    /// yet, are ended again but not told as left running; those that left
+    /// the group are.
+    pub fn end_strays_after(&self, group: i32) -> Result<Ended> {
+        self.end_found(|| self.strays(), Some(group))
     }
 
     /// Ends what `find` finds until a look finds none (see
-    /// [`Sandbox::end_strays`]).
-    fn end_found(&self, find: impl Fn() -> Vec<i32>) -> Result<Ended> {
+    /// [`Sandbox::end_strays`]), naming none of process group `killed`'s.
+    fn end_found(&self, find: impl Fn() -> Vec<i32>, killed: Option<i32>) -> Result<Ended> {
         let mut ended = std::collections::HashSet::new();
         let mut names = Ended::default();
         for _ in 0..STRAY_LOOKS {
@@ -1232,12 +1240,14 @@ impl Sandbox {
             if found.is_empty() {
                 return Ok(names);
             }
-            // Its name while it still has one; one on its way out (a
-            // process group killed just before, say) was not left running.
+            // Its name while it still has one; one on its way out, or of a
+            // process group killed just before, was not left running.
+            // SAFETY: getpgid only reads.
+            let of_killed = |pid: i32| killed.is_some_and(|g| unsafe { libc::getpgid(pid) } == g);
             names.processes.extend(
                 found
                     .iter()
-                    .filter(|&&pid| !crate::resources::exiting(pid))
+                    .filter(|&&pid| !crate::resources::exiting(pid) && !of_killed(pid))
                     .map(|&pid| crate::resources::name_of(pid)),
             );
             crate::resources::kill(&found);
@@ -1284,7 +1294,7 @@ impl Sandbox {
         #[cfg(target_os = "macos")]
         {
             let mark = format!("{}.{}", task_mark(&self.task), self.own);
-            self.end_found(|| self.marked(&mark))
+            self.end_found(|| self.marked(&mark), None)
         }
         #[cfg(not(target_os = "macos"))]
         Ok(Ended::default())

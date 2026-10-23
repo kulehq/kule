@@ -757,7 +757,7 @@ impl Drop for Group {
             }
         }
         // What it cannot end now, a commit ends or refuses over.
-        let text = match self.1.end_strays() {
+        let text = match self.1.end_strays_after(self.0) {
             Ok(ended) if ended.is_empty() => return,
             Ok(ended) => format!(
                 "Kule ended {}, which the agent left running in its sandbox, as the run ended",

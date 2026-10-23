@@ -2723,6 +2723,75 @@ fn a_sandbox_ends_what_it_left_and_nothing_of_the_others() {
     assert_eq!(other.end_own().unwrap().processes, ["sleep"]);
 }
 
+/// Once an agent's process group was killed, what was in it is ended
+/// again but not told as left running, even while it has not taken the
+/// signal yet; what left the group is told, by name.
+#[cfg(target_os = "macos")]
+#[test]
+fn what_a_killed_group_held_is_ended_but_not_told_as_left_running() {
+    let s = Setup::new();
+    let copy = s.task.copy();
+    // A group of its own, as an agent's (the sandbox starts a command in a
+    // session of its own): its leader and a sleep in it, and a sleep that
+    // left it.
+    let code = "import os, subprocess, time\n\
+                subprocess.Popen(['sleep', '30'])\n\
+                subprocess.Popen(['sleep', '31'], start_new_session=True)\n\
+                open('group.tmp', 'w').write(str(os.getpgid(0)))\n\
+                os.rename('group.tmp', 'group')\n\
+                time.sleep(30)";
+    let mut leader = s
+        .sandbox()
+        .command(
+            "python3",
+            &["-I".to_owned(), "-c".to_owned(), code.to_owned()],
+        )
+        .unwrap()
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::fs::File::create(s.outside().join("err")).unwrap())
+        .spawn()
+        .unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let group: i32 = loop {
+        if let Ok(text) = fs::read_to_string(copy.join("group")) {
+            break text.trim().parse().unwrap();
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the group never started: {}",
+            fs::read_to_string(s.outside().join("err")).unwrap_or_default()
+        );
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    };
+    // Both sleeps run under their own name before they are looked at.
+    let sleeping = || {
+        let out = Command::new("pgrep")
+            .args(["-f", "^sleep 3[01]$"])
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&out.stdout).lines().count()
+    };
+    while sleeping() < 2 {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the sleeps never started"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    let ended = Sandbox::finder(&s.task)
+        .unwrap()
+        .end_strays_after(group)
+        .unwrap();
+    let _ = leader.wait();
+    assert_eq!(ended.processes, ["sleep"]);
+    let gone = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while sleeping() > 0 && std::time::Instant::now() < gone {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert_eq!(sleeping(), 0, "a process outlived the end");
+}
+
 /// Rolling back, undoing and going back to a step write in the copy, as a
 /// commit does: what still runs in the task's sandbox, having left its
 /// command's session and parent, is ended first, so nothing changes the
