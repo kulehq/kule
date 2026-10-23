@@ -87,6 +87,48 @@ fn projects_kule_opened_are_hidden_from_every_other_task() {
     assert!(sh(&sandbox, "cat a.txt").status.success());
 }
 
+/// Whatever lies at the top of the home but its settings is the person's
+/// own: a project Kule never opened, a file. The settings and toolchains
+/// there stay readable, the tools on `PATH` in such a folder too, and a
+/// link at the top leads where it leads.
+#[test]
+fn what_lies_at_the_top_of_the_home_is_the_persons_own() {
+    let (_home, home) = home_with(&[
+        "projects/never-opened/.env",
+        "notes.txt",
+        "Applications/Some.app/token",
+        ".gitconfig",
+        ".rustup/settings.toml",
+        "sdk/tool/bin/tool",
+        "sdk/other/secret",
+    ]);
+    let elsewhere_dir = TempDir::new_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
+    let elsewhere = fs::canonicalize(elsewhere_dir.path()).unwrap();
+    plant(&elsewhere.join("cellar/tool"));
+    std::os::unix::fs::symlink(&elsewhere, home.join("brew")).unwrap();
+    let s = Setup::new();
+    let mut sandbox = Sandbox::new(&s.task).unwrap();
+    sandbox
+        .hide_personal(&home, &[home.join("sdk/tool/bin")])
+        .unwrap();
+    for path in [
+        "projects/never-opened/.env",
+        "notes.txt",
+        "Applications/Some.app/token",
+        "sdk/other/secret",
+    ] {
+        assert!(!reads(&sandbox, &home.join(path)), "{path} was read");
+    }
+    for path in [
+        ".gitconfig",
+        ".rustup/settings.toml",
+        "sdk/tool/bin/tool",
+        "brew/cellar/tool",
+    ] {
+        assert!(reads(&sandbox, &home.join(path)), "{path} was not read");
+    }
+}
+
 /// A project Kule opened that holds the home itself (a task on the whole
 /// home) hides nothing more from the others: hiding it would take their
 /// toolchains away.

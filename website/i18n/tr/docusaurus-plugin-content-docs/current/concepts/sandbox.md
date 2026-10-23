@@ -42,7 +42,11 @@ Bir komut şunları okuyamaz:
 - **kimlik bilgileri**: `~/.ssh`, `~/.aws`, `~/.npmrc`, cargo'nun depo
   token'ı ve benzerleri;
 - **kendi dosyalarınız**: Documents, Desktop, Downloads, Pictures, Movies,
-  Music, iCloud Drive ve bulut depolama klasörleri;
+  Music, iCloud Drive ve bulut depolama klasörleri ile ev dizininizin en
+  üstündeki, ayarları dışında kalan her şey (`.` ile başlayan adlar ve
+  `~/Library` dışındakiler): Kule'nin açtığı ya da açmadığı diğer
+  projeleriniz ve oradaki dosyalarınız. Ev dizininizin en üstündeki bir
+  bağlantı olduğu gibi bırakılır;
 - **çalışma klasörünün yanındaki projeler**: çalışma klasörünüzün içinde
   bulunduğu klasör, o klasör ev dizininizdeyse (ev dizininin kendisi, bir
   nokta klasörü ya da `~/Library` değilse);

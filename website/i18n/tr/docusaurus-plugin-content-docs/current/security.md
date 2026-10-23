@@ -74,13 +74,13 @@ bilgisayarın geri kalanı, araçlar ihtiyaç duyduğu için okunabilir kalır:
   içlerinde gizlediği kimlik bilgileri hariç;
 - `~/Library`'nin geri kalanı (`Caches`, `Developer`, …), gizli olarak
   listelenenler hariç;
-- ev dizininizin en üstündeki, yukarıdakilerin hiçbiri olmayan dosya ve
-  klasörler ile `PATH`'inizin gösterdiği klasörler;
+- `PATH`'inizin gösterdiği klasörler, nerede olurlarsa olsunlar;
 - görevin kendi kopyası, geçici klasörü ve ev katmanı.
 
-Ev dizininizin dışında olup Kule'nin hiç açmadığı bir proje de okunabilir.
-Ajanlarla üzerinde çalıştığınız bir projeyi ev dizininizde tutun ya da
-Kule'de açın; böylece diğerlerinden gizlenir.
+Ev dizininizin dışında olup Kule'nin hiç açmadığı ya da ev dizininizin
+yalnızca bağlantıyla gösterdiği bir proje de okunabilir. Ajanlarla üzerinde
+çalıştığınız bir projeyi ev dizininizde tutun ya da Kule'de açın; böylece
+diğerlerinden gizlenir.
 
 ## Kule'nin kapsamadığı şeyler {#what-kule-does-not-cover}
 

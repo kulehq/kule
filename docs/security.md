@@ -73,13 +73,12 @@ computer stays readable, since tools need it:
   credentials Kule hides inside them;
 - the rest of `~/Library` (`Caches`, `Developer`, …) but for what is listed
   as hidden;
-- the files and folders at the top of your home that are none of the
-  above, and folders your `PATH` names;
+- folders your `PATH` names, wherever they are;
 - the task's own copy, temporary folder and home layer.
 
-A project outside your home that Kule never opened is readable too. Keep a
-project you work on with agents in your home, or open it in Kule, so it is
-hidden from the others.
+A project outside your home that Kule never opened, or one your home only
+links to, is readable too. Keep a project you work on with agents in your
+home, or open it in Kule, so it is hidden from the others.
 
 ## What Kule does not cover
 

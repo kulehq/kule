@@ -42,7 +42,10 @@ A command cannot read:
 - **credentials**: `~/.ssh`, `~/.aws`, `~/.npmrc`, cargo's registry token
   and the like;
 - **your own files**: Documents, Desktop, Downloads, Pictures, Movies,
-  Music, iCloud Drive and cloud storage folders;
+  Music, iCloud Drive and cloud storage folders, and everything else at the
+  top of your home but its settings (a name starting with `.`, and
+  `~/Library`): your other projects, whether Kule opened them or not, and
+  your files there. A link at the top of your home is left as it is;
 - **the projects beside the workspace**: the folder your workspace lies in,
   when that folder is in your home (not the home itself, a dot folder or
   `~/Library`);

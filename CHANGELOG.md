@@ -6,7 +6,10 @@
 
 - A task's commands no longer read the other projects Kule opened,
   wherever they lie, in your home or outside it, nor the projects beside
-  them.
+  them; nor anything at the top of your home but its settings (dot folders
+  and `~/Library`), so your projects there, opened in Kule or not, and your
+  files there are hidden as your own. The tools your `PATH` names stay
+  readable, and *builds from* opens one of those projects read-only.
 - Where apps and tools keep settings and data (`~/.config`,
   `~/.local/share`, `~/Library/Application Support`,
   `~/Library/Preferences`) is hidden from a task's commands, but for what

@@ -75,14 +75,30 @@ fn passes(name: &str) -> bool {
 }
 
 /// The folders [`Sandbox::hide_personal`] hides for `workspace` (resolved)
-/// in `home`: [`PERSONAL_IN_HOME`], and the folder the workspace lies in
-/// where that is one of the person's own.
+/// in `home`: [`PERSONAL_IN_HOME`], everything else at the top of the home
+/// but its settings (a name starting with `.`, or `Library`), where the
+/// person keeps projects and files of their own, and the folder the
+/// workspace lies in where that is one of the person's own. A link at the
+/// top is left as it is: what it leads to may be a toolchain's.
 pub(crate) fn personal_folders(workspace: &Path, home: &Path) -> Result<Vec<PathBuf>> {
     let home = real_or_planned(home)?;
     let mut folders: Vec<PathBuf> = PERSONAL_IN_HOME
         .iter()
         .map(|name| real_or_planned(&home.join(name)))
         .collect::<Result<_>>()?;
+    if let Ok(entries) = std::fs::read_dir(&home) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if !name.starts_with('.')
+                && name != "Library"
+                && entry.file_type().is_ok_and(|t| !t.is_symlink())
+                && !folders.contains(&entry.path())
+            {
+                folders.push(entry.path());
+            }
+        }
+    }
     if let Some(parent) = workspace.parent()
         && let Ok(within) = parent.strip_prefix(&home)
         && let Some(first) = within.components().next()
@@ -319,7 +335,8 @@ pub const SETTINGS_READ: &[&str] = &[
 /// The person's own files under the home directory, and those kept in step
 /// with other computers, hidden from every command: a task works on its
 /// copy. A folder of tools inside one stays readable (see
-/// [`Sandbox::hide_personal`]).
+/// [`Sandbox::hide_personal`]). Whatever else lies at the top of the home
+/// but its settings is hidden the same way (see `personal_folders`).
 pub const PERSONAL_IN_HOME: &[&str] = &[
     "Desktop",
     "Documents",
@@ -897,9 +914,9 @@ impl Sandbox {
         Ok(())
     }
 
-    /// Hides the person's own files under `home` ([`PERSONAL_IN_HOME`]) and
-    /// the folder the workspace lies in, with the other projects beside
-    /// it. That folder stays readable where it is `home` itself, outside
+    /// Hides the person's own files under `home` ([`PERSONAL_IN_HOME`], and
+    /// whatever else lies at its top but its settings) and the folder the
+    /// workspace lies in, with the other projects beside it. That folder stays readable where it is `home` itself, outside
     /// `home`, or among the settings in it (a name starting with `.`, or
     /// `Library`), where toolchains live. Inside a hidden folder, the
     /// workspace's git directory (a linked worktree's repository beside
