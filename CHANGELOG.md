@@ -1,6 +1,12 @@
 # Changes
 
-## Unreleased
+## 0.2.0-preview.8
+
+A security preview. Rolling back, undoing and going back to a step hold
+the task's copy still, as commit and sync do, and Kule puts files back
+through folders it opens without following a link. The copy does not
+open outside the sandbox while a `package.json` names another package
+manager.
 
 ### Security
 
