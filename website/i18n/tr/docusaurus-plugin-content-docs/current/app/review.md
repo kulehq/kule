@@ -125,6 +125,12 @@ yalnızca okunur.
 Bir commit'ten sonra [Timeline](timeline.md)'daki **Undo** (Mod+Shift+U, iki
 kez basın), en yeni commit'i klasörünüzden geri alır.
 
+Bir commit, rollback ya da sync kopyaya yazmadan önce görevin sandbox'ında
+hâlâ çalışan şey sonlandırılır. Kule neyi sonlandırdığını bir bildirimde ve
+Live'da bir notta adıyla söyler; örneğin *Kule ended node, still running in
+the task's sandbox, to commit*. Bkz.
+[Süreçler ve sunucular](../concepts/sandbox.md#processes-and-servers).
+
 :::note
 
 Klasörünüz commit'in altında değiştiyse commit reddedilir: ajanın da

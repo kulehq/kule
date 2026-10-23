@@ -95,6 +95,14 @@ pub struct Spent {
     pub cost: Vec<Money>,
     /// Runs that reported no cost.
     pub unpriced_runs: usize,
+    /// Records of runs that cannot be read: what they spent is not known,
+    /// so no budget they count for holds a run (see [`Task::run_budget`]).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub unreadable: usize,
+}
+
+fn is_zero(n: &usize) -> bool {
+    *n == 0
 }
 
 impl Spent {
@@ -142,33 +150,53 @@ impl Task {
             source,
         })?;
         line.push(b'\n');
-        std::fs::OpenOptions::new()
+        let mut file = std::fs::OpenOptions::new()
             .create(true)
+            .read(true)
             .append(true)
             .open(&path)
-            .and_then(|mut f| f.write_all(&line))
-            .at(&path)
+            .at(&path)?;
+        // A record cut short (a crash as it was written) stays one that
+        // cannot be read, and does not take this one with it.
+        if ends_unfinished(&mut file).at(&path)? {
+            line.insert(0, b'\n');
+        }
+        file.write_all(&line).at(&path)
     }
 
     /// Every run's usage, oldest first; a line that cannot be read is left
-    /// out.
+    /// out (and counted by [`Task::spent`]).
     pub fn usage(&self) -> Result<Vec<RunUsage>> {
+        Ok(self.usage_read()?.0)
+    }
+
+    /// Every run's usage that can be read, and how many records cannot.
+    fn usage_read(&self) -> Result<(Vec<RunUsage>, usize)> {
         let path = self.usage_path();
         let text = match std::fs::read_to_string(&path) {
             Ok(text) => text,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok((Vec::new(), 0)),
             Err(e) => return Err(e).at(&path),
         };
-        Ok(text
-            .lines()
-            .filter_map(|line| serde_json::from_str(line).ok())
-            .collect())
+        let mut runs = Vec::new();
+        let mut unreadable = 0;
+        for line in text.lines().filter(|l| !l.trim().is_empty()) {
+            match serde_json::from_str(line) {
+                Ok(run) => runs.push(run),
+                Err(_) => unreadable += 1,
+            }
+        }
+        Ok((runs, unreadable))
     }
 
     /// What the task's runs used together.
     pub fn spent(&self) -> Result<Spent> {
-        let mut spent = Spent::default();
-        for run in self.usage()? {
+        let (runs, unreadable) = self.usage_read()?;
+        let mut spent = Spent {
+            unreadable,
+            ..Spent::default()
+        };
+        for run in runs {
             spent.add(run);
         }
         Ok(spent)
@@ -199,33 +227,34 @@ impl Task {
         let home = self.home();
         let mut out = Vec::new();
         if let Some(budget) = self.budget()? {
-            let spent = self.spent()?.in_currency(&budget.currency);
-            out.push(BudgetLeft::new(BudgetScope::Task, budget, spent));
+            let spent = self.spent()?;
+            out.push(BudgetLeft::new(BudgetScope::Task, budget, &spent));
         }
         if let Some(group) = crate::groups::group_of(&home, group)?
             && (group.budget.is_some() || group.daily_budget.is_some())
         {
             let spent = groups_spent(&home)?.remove(&group.id).unwrap_or_default();
             if let Some(budget) = group.budget {
-                let used = spent.total.in_currency(&budget.currency);
                 let scope = BudgetScope::Group {
                     group: group.id,
                     name: group.name.clone(),
                 };
-                out.push(BudgetLeft::new(scope, budget, used));
+                out.push(BudgetLeft::new(scope, budget, &spent.total));
             }
             if let Some(budget) = group.daily_budget {
-                let used = spent.today.in_currency(&budget.currency);
                 let scope = BudgetScope::GroupDaily {
                     group: group.id,
                     name: group.name,
                 };
-                out.push(BudgetLeft::new(scope, budget, used));
+                out.push(BudgetLeft::new(scope, budget, &spent.today));
             }
         }
         if let Some(budget) = daily_budget(&home)? {
-            let used = spent_today(&home)?.in_currency(&budget.currency);
-            out.push(BudgetLeft::new(BudgetScope::Daily, budget, used));
+            out.push(BudgetLeft::new(
+                BudgetScope::Daily,
+                budget,
+                &spent_today(&home)?,
+            ));
         }
         Ok(out)
     }
@@ -235,6 +264,11 @@ impl Task {
     pub fn run_budget(&self) -> Result<Option<Money>> {
         let mut limit = None;
         for budget in self.budgets()? {
+            // What it spent is not known: the check cannot decide, and
+            // refuses.
+            if budget.unreadable > 0 {
+                return Err(Error::Invalid(budget.unreadable_reason(self.id())));
+            }
             if budget.left.amount <= 0.0 {
                 return Err(Error::Invalid(budget.spent_reason(self.id())));
             }
@@ -266,19 +300,42 @@ pub struct BudgetLeft {
     pub scope: BudgetScope,
     pub budget: Money,
     pub left: Money,
+    /// Records it counts that cannot be read: it holds no run while there
+    /// are any.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub unreadable: usize,
 }
 
 impl BudgetLeft {
-    fn new(scope: BudgetScope, budget: Money, spent: f64) -> BudgetLeft {
+    fn new(scope: BudgetScope, budget: Money, spent: &Spent) -> BudgetLeft {
         let left = Money {
-            amount: budget.amount - spent,
+            amount: budget.amount - spent.in_currency(&budget.currency),
             currency: budget.currency.clone(),
         };
         BudgetLeft {
             scope,
             budget,
             left,
+            unreadable: spent.unreadable,
         }
+    }
+
+    /// Why task `task` cannot run while records this budget counts cannot
+    /// be read.
+    fn unreadable_reason(&self, task: &str) -> String {
+        let whose = match &self.scope {
+            BudgetScope::Task => format!("task {task}'s budget"),
+            BudgetScope::Group { name, .. } => format!("group {name:?}'s budget"),
+            BudgetScope::GroupDaily { name, .. } => format!("group {name:?}'s daily budget"),
+            BudgetScope::Daily => "the daily budget".to_owned(),
+        };
+        let records = match self.unreadable {
+            1 => "1 record of what runs spent (a task's usage.jsonl) cannot be read".to_owned(),
+            n => format!("{n} records of what runs spent (in tasks' usage.jsonl) cannot be read"),
+        };
+        format!(
+            "Kule cannot tell what {whose} has left: {records}; mend or remove them, or turn the budget off, to run again"
+        )
     }
 
     /// Why task `task` cannot run while this budget is spent.
@@ -315,7 +372,17 @@ pub fn groups_spent(home: &Path) -> Result<std::collections::BTreeMap<u64, Group
     for info in Task::list(home)? {
         let task = Task::open(home, &info.id)?;
         let now_in = task.group()?;
-        for run in task.usage()? {
+        let (runs, unreadable) = task.usage_read()?;
+        // Not known when, nor for which group: it counts for the group the
+        // task is in now, today too.
+        if let Some(group) = now_in
+            && unreadable > 0
+        {
+            let entry = spent.entry(group).or_default();
+            entry.total.unreadable += unreadable;
+            entry.today.unreadable += unreadable;
+        }
+        for run in runs {
             let Some(group) = run.group.unwrap_or(now_in) else {
                 continue;
             };
@@ -420,6 +487,47 @@ mod tests {
         assert!((spent[&group.id].total.in_currency("USD") - 5.0).abs() < 1e-9);
     }
 
+    /// A record of a run that cannot be read is counted, not taken for
+    /// nothing spent: every budget it could count for holds the next run,
+    /// until it is mended or the budget turned off. A record cut short
+    /// does not take the next one with it.
+    #[test]
+    fn an_unreadable_usage_record_holds_every_budget_it_counts_for() {
+        let (home, ws) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+        let task = Task::create(home.path(), ws.path()).unwrap();
+        let other = Task::create(home.path(), ws.path()).unwrap();
+        let run = RunUsage {
+            agent: "a".into(),
+            started_unix: now_unix(),
+            cost: usd(0.5),
+            ..RunUsage::default()
+        };
+        task.record_usage(&run).unwrap();
+        // Cut short as it was written: no line end.
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(task.usage_path())
+            .and_then(|mut f| f.write_all(b"{\"agent\":\"a\",\"cost\":{\"amo"))
+            .unwrap();
+        task.record_usage(&run).unwrap();
+        let spent = task.spent().unwrap();
+        assert_eq!((spent.runs, spent.unreadable), (2, 1));
+
+        // No budget: nothing to hold.
+        assert_eq!(task.run_budget().unwrap(), None);
+        task.set_budget(usd(10.0)).unwrap();
+        let e = task.run_budget().unwrap_err().to_string();
+        assert!(e.contains("cannot be read"), "{e}");
+        assert!(e.contains("turn the budget off"), "{e}");
+        task.set_budget(None).unwrap();
+        assert_eq!(task.run_budget().unwrap(), None);
+
+        // The daily budget counts every task's runs: it holds the others too.
+        set_daily_budget(home.path(), usd(10.0)).unwrap();
+        let e = other.run_budget().unwrap_err().to_string();
+        assert!(e.contains("the daily budget"), "{e}");
+    }
+
     #[test]
     fn a_budget_is_a_positive_amount_in_a_currency() {
         let (home, ws) = (TempDir::new().unwrap(), TempDir::new().unwrap());
@@ -438,6 +546,18 @@ mod tests {
             assert!(task.set_budget(budget).is_err(), "{amount} {currency}");
         }
     }
+}
+
+/// Whether `file` has something in it and its last byte ends no line.
+fn ends_unfinished(file: &mut std::fs::File) -> std::io::Result<bool> {
+    use std::io::{Read, Seek, SeekFrom};
+    if file.metadata()?.len() == 0 {
+        return Ok(false);
+    }
+    file.seek(SeekFrom::End(-1))?;
+    let mut last = [0u8];
+    file.read_exact(&mut last)?;
+    Ok(last[0] != b'\n')
 }
 
 /// What a home's tasks may spend together, kept in `<home>/budget.json`.
@@ -483,7 +603,10 @@ pub fn spent_today(home: &Path) -> Result<Spent> {
     let mut spent = Spent::default();
     for info in Task::list(home)? {
         let task = Task::open(home, &info.id)?;
-        for run in task.usage()? {
+        let (runs, unreadable) = task.usage_read()?;
+        // Not known when: it may be today's.
+        spent.unreadable += unreadable;
+        for run in runs {
             if run.started_unix >= since {
                 spent.add(run);
             }

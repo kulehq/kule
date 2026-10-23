@@ -140,6 +140,7 @@ hint: roll back, or rerun the task on the current workspace
 | `merged with what the folder changed meanwhile: <paths>` | These files were changed in the workspace too, and merged. |
 | `not asked again on this folder: …` | With `--remember`: what Kule will let through from now on. |
 | `nothing to commit` | The copy holds what the workspace holds. |
+| `kule: Kule ended <name>, still running in the task's sandbox, to commit` | On stderr: what still ran in the task's sandbox, which Kule ended before it wrote in the copy. For more than one: `kule: Kule ended <N> processes still running in the task's sandbox, to commit: <names>`. See [Processes and servers](../concepts/sandbox.md#processes-and-servers). |
 | `policy: …` and `kule: not committed; …` | The ruling held the changes back; nothing was written (exit code `3`). |
 
 ## Errors and fixes

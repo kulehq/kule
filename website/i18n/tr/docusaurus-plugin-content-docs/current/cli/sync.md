@@ -43,7 +43,7 @@ geldiğini öğrenir.
 
 Bir ajan çalışırken ve görevde bir terminal (uygulamanınki ya da
 [kule shell](shell.md)) açıkken sync reddedilir; görevin sandbox'ında hâlâ
-çalışan programlar önce durdurulur.
+çalışan programlar önce durdurulur ve Kule onların adını verir.
 
 Birleştirmenin nasıl çalıştığı için bkz.
 [Sync ve birleştirme](../concepts/sync-and-merging.md).
@@ -106,6 +106,7 @@ hint: commit or roll back the task's changes there first, or leave the copy as i
 | `< the repository (commits, branches, the index)` | Klasörün git durumu geldi. |
 | `= path (the task's own kept: both changed it)` | Görevdeki hâliyle bırakıldı. |
 | `the copy has everything the workspace changed` | Yapılacak bir şey yok. |
+| `kule: Kule ended <name>, still running in the task's sandbox, to sync` | stderr'de: görevin sandbox'ında hâlâ çalışan ve Kule'nin kopyaya yazmadan önce sonlandırdığı şey. Birden fazlaysa: `kule: Kule ended <N> processes still running in the task's sandbox, to sync: <names>`. Bkz. [Süreçler ve sunucular](../concepts/sandbox.md#processes-and-servers). |
 
 ## Hatalar ve çözümleri
 

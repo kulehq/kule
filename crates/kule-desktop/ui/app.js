@@ -441,6 +441,7 @@ function streamOf(id) {
 const questionsOf = (id) => state.questions.filter((q) => q.task === id);
 
 function taskChip(task) {
+  if (task.unreadable) return h("span", { class: "chip deny", title: task.unreadable }, "cannot be read");
   if (questionsOf(task.id).length) return h("span", { class: "chip ask" }, "waiting for you");
   if (task.running) return h("span", { class: "chip running" }, "working");
   if (task.workspace_gone) return h("span", { class: "chip deny" }, "folder gone");
@@ -458,7 +459,10 @@ function taskName(task) {
 }
 
 function taskItem(task, list) {
-  const parts = [task.scanning ? "checking…" : task.changes ? plural(task.changes, "change") : "no changes"];
+  // What cannot be read is said as it is, not as "no changes".
+  const parts = [
+    task.unreadable ? `cannot be read: ${task.unreadable}` : task.scanning ? "checking…" : task.changes ? plural(task.changes, "change") : "no changes",
+  ];
   if (task.ignored) parts.push(`${task.ignored} ignored`);
   const others = new Set((task.overlaps || []).map((o) => o.task)).size;
   if (others) parts.push(`meets ${plural(others, "task")}`);
@@ -1559,12 +1563,19 @@ function renderSpent(task) {
     else cost.push({ ...live });
   }
   const chip = $("task-spent");
-  chip.hidden = spent.runs === 0 && !live && !task.budget;
+  chip.hidden = spent.runs === 0 && !live && !task.budget && !spent.unreadable;
   chip.className = "chip";
   const parts = [];
+  // What runs spent that cannot be read: a budget over it holds every run.
+  if (spent.unreadable) {
+    parts.push(`${plural(spent.unreadable, "usage record")} unreadable`);
+    chip.classList.add("deny");
+  }
   if (cost.length > 0) parts.push(`${cost.map(money).join(" + ")} spent`);
   else if (spent.tokens > 0) parts.push(`${spent.tokens.toLocaleString()} tokens`);
-  if (task.budget) {
+  // What is left cannot be told: the budget holds every run.
+  if (task.budget && spent.unreadable) parts.push("budget held");
+  else if (task.budget) {
     const used = cost.filter((m) => m.currency === task.budget.currency).reduce((a, m) => a + m.amount, 0);
     const rest = Math.max(0, task.budget.amount - used);
     parts.push(`${money({ amount: rest, currency: task.budget.currency })} left`);
@@ -3019,12 +3030,37 @@ function streamItem(item) {
           "span",
           {},
           item.text,
-          (item.hints || []).map((hint) => h("span", { class: "event-hint" }, hint))
+          (item.hints || []).map((hint) => h("span", { class: "event-hint" }, hint)),
+          refusedList(item)
         )
       );
     default:
       return null;
   }
+}
+
+/** What a finished run's sandbox refused, folded under its line: the newest
+ * 20, and how many more the Timeline holds. */
+function refusedList(item) {
+  if (!item.refused || !item.refused.length) return null;
+  const { shown, more } = newest(item.refused, 20);
+  return h(
+    "details",
+    {
+      class: "event-refused",
+      open: Boolean(item.expanded),
+      ontoggle: (e) => {
+        item.expanded = e.currentTarget.open;
+      },
+    },
+    h("summary", {}, "What the sandbox refused"),
+    h(
+      "ul",
+      {},
+      shown.map((d) => h("li", {}, denialLine(d))),
+      more ? h("li", { class: "muted" }, moreLine(more, " in the Timeline")) : null
+    )
+  );
 }
 
 /** `streamItem(item)`, or its text as it is should drawing it fail: one
@@ -3125,13 +3161,6 @@ function absorb(id, event) {
   }
 }
 
-/** Kule's own words for a terminal, with no control character left in
- * them: a file name they carry cannot move the cursor, set a title or
- * reach the clipboard. */
-function terminalText(text) {
-  return text.replace(/[\u0000-\u001f\u007f-\u009f]/g, "");
-}
-
 /** A command's output without terminal escapes (colours, cursor moves);
  * a carriage return keeps what was written after it, as a terminal does. */
 function stripAnsi(text) {
@@ -3150,7 +3179,7 @@ function fold(task, event) {
     streamOf(task).push({ kind: "prompt", text: event.text, agent: event.agent, refs: event.refs || [] });
   } else if (event.type === "agent") {
     absorb(task, event.event);
-  } else if (event.type === "preparing") {
+  } else if (event.type === "preparing" || event.type === "ended") {
     streamOf(task).push({ kind: "note", text: event.text });
   } else if (event.type === "resources") {
     liveMeasure.set(task, event.measured);
@@ -3164,7 +3193,9 @@ function fold(task, event) {
       error: Boolean(event.error) && event.error !== "stopped: you stopped the run",
       stopped,
       // Why a refusal keeps a tool from working, in Kule's words, once each.
-      hints: [...new Set(event.denials.map((d) => d.hint).filter(Boolean))],
+      hints: [...new Set(event.denials.map((d) => d.hint).filter(Boolean)), ...(event.unreported ? [UNREPORTED] : [])],
+      // What was refused, the same once (see the Timeline for all).
+      refused: groupDenials(event.denials),
       text: stopped
         ? `Stopped: ${event.error.slice("stopped: ".length)}. Review what it changed before it reaches the folder${refused}.`
         : event.error
@@ -3182,6 +3213,8 @@ async function onRun({ task, seq, event }) {
     liveMeasure.delete(task);
     stopping.delete(task);
   }
+  // What Kule ended to do what the person asked, said where they asked it.
+  if (event.type === "ended") toast(event.text);
   // A limit stopped a run out of sight: said where it is seen.
   if (event.type === "finished" && event.error?.startsWith("stopped: ") && task !== state.current && !event.error.includes("you stopped")) {
     const t = state.tasks.find((x) => x.id === task);
@@ -3387,7 +3420,9 @@ function tabify(container) {
       const name = head.dataset.tab || head.textContent.split(" · ")[0].trim();
       // In its own tab the ignored files show without a click.
       if (details) node.open = true;
-      sections.push({ name, body: details ? [node] : [] });
+      // A section may say how many it holds, when its lines fold some together.
+      const total = head.dataset.count === undefined ? null : Number(head.dataset.count);
+      sections.push({ name, total, body: details ? [node] : [] });
     } else if (sections.length) sections[sections.length - 1].body.push(node);
     else before.push(node);
   }
@@ -3404,7 +3439,7 @@ function tabify(container) {
   let active = sections.find((sec) => sec.name === want) || sections[0];
   const panes = sections.map((sec) => h("div", { class: "section-pane", role: "tabpanel", "aria-label": sec.name }, sec.body));
   const tabs = sections.map((sec, i) => {
-    const n = count(sec.body);
+    const n = sec.total ?? count(sec.body);
     return h(
       "button",
       {
@@ -4757,23 +4792,30 @@ async function loadTimeline(id) {
     entries.push(h("ul", { class: "files" }, network.map((line) => h("li", {}, line))));
   }
   if (timeline.denials.length) {
-    entries.push(h("h2", { class: "group-title" }, "Refused by the sandbox"));
+    entries.push(
+      h(
+        "h2",
+        { class: "group-title", "data-count": String(timeline.denials.length) },
+        `Refused by the sandbox · ${plural(timeline.denials.length, "refusal")}`
+      )
+    );
+    // The same refusal once, counted; the newest 50 of them, and how many
+    // older ones are left out.
+    const { shown, more } = newest(groupDenials(timeline.denials), 50);
     entries.push(
       h(
         "ul",
         { class: "files" },
-        timeline.denials
-          .slice(-50)
-          .map((d) =>
-            h(
-              "li",
-              {},
-              h("span", { class: "change denied" }, "×"),
-              `${d.operation} ${d.path} (${d.process})`,
-              d.saved ? ` · what was there is in ${d.saved}` : null,
-              d.hint ? h("div", { class: "muted" }, d.hint) : null
-            )
+        more ? h("li", { class: "muted" }, moreLine(more, ", older")) : null,
+        shown.map((d) =>
+          h(
+            "li",
+            {},
+            h("span", { class: "change denied" }, "×"),
+            denialLine(d),
+            d.hint ? h("div", { class: "muted" }, d.hint) : null
           )
+        )
       )
     );
   }
@@ -5610,6 +5652,7 @@ function cannotOpen(path, task) {
 async function openWithApp(taskId, path) {
   try {
     await call("open_file", { task: taskId, path });
+    toast(openedNote(path.split("/").pop()));
   } catch (err) {
     fail(err);
   }
@@ -6053,8 +6096,11 @@ async function newTerminal(taskId = state.current) {
     entry.shell = opened.shell;
     for (const note of opened.notes || []) term.write(`\x1b[33mkule: ${terminalText(note)}\x1b[0m\r\n`);
   } catch (err) {
+    // Refused: the tab says so, and does not look like a shell waiting.
     entry.ended = true;
+    term.options.cursorBlink = false;
     term.write(`\x1b[31m${terminalText(String(err))}\x1b[0m\r\n`);
+    term.write("\x1b[2m[Kule did not open this shell; press Enter to try again]\x1b[0m\r\n");
   }
   renderTerminals(taskId);
   term.focus();
@@ -6139,6 +6185,9 @@ function onTerminal(event) {
     if (event.kind === "output") entry.term.write(b64Bytes(event.data));
     else if (event.kind === "exit") {
       entry.ended = true;
+      entry.term.options.cursorBlink = false;
+      // What the sandbox refused the shell, and what Kule ended with it.
+      for (const note of event.notes || []) entry.term.write(`\r\n\x1b[33mkule: ${terminalText(note)}\x1b[0m`);
       entry.term.write("\r\n\x1b[2m[the shell ended; press Enter for a new one]\x1b[0m\r\n");
       if (taskId === state.current) renderTerminals(taskId);
     }

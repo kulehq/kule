@@ -89,6 +89,7 @@ hint: roll back, or rerun the task on the current workspace
 | --- | --- |
 | `undid checkpoint C (N changes)` | `C` kontrol noktalı commit geri alındı; `N` yol geri kondu. |
 | `nothing to undo` | Görevin geri alınacak commit'i kalmadı. |
+| `kule: Kule ended <name>, still running in the task's sandbox, to undo` | stderr'de: görevin sandbox'ında hâlâ çalışan ve Kule'nin kopyaya yazmadan önce sonlandırdığı şey. Birden fazlaysa: `kule: Kule ended <N> processes still running in the task's sandbox, to undo: <names>`. Bkz. [Süreçler ve sunucular](../concepts/sandbox.md#processes-and-servers). |
 
 ## Hatalar ve çözümleri
 

@@ -16,7 +16,7 @@ this task, and in what order".
 | **Commits** | Newest first, each with what it applied. The newest has **Undo**. Every commit and undo is also an entry in the task's signed history (`kule history TASK`). |
 | **Steps** | The uncommitted tool calls, each with the files it changed. A commit starts the steps over. |
 | **Connections** | The network connections the task's commands made, and whether each was let through, asked about or refused. |
-| **Refusals** | What the sandbox refused the commands. macOS reports them; on Linux the command sees the error but Kule cannot list it. |
+| **Refusals** | What the sandbox refused the commands, under *Refused by the sandbox · N refusals*, the total. The same refusal is one row, with how many times (`×3`); the newest 50 rows show, and *… and N more refusals, older* says how many are left out. macOS reports them; on Linux the command sees the error but Kule cannot list it. |
 
 ## Undo a commit
 
@@ -36,6 +36,8 @@ Every step, and "before the first step", has two actions. The first is
 - A step that cannot be gone back to says why: a file over 64 MB, more than
   1 GB in one go, or a file with a second name (a hard link).
 - `.git` is not put back. A commit starts the steps over.
+- What still runs in the task's sandbox is ended first, and Kule names it
+  in a notice and in Live.
 
 ## Fork a task
 

@@ -39,7 +39,7 @@ commit, and the agent hears what came in at the start of its next turn.
 
 Kule refuses a sync while an agent is at work, and while a terminal is
 open on the task (the app's, or [kule shell](shell.md)); programs still
-running in the task's sandbox are stopped first.
+running in the task's sandbox are stopped first, and Kule names them.
 
 See [Sync and merging](../concepts/sync-and-merging.md) for how the merge
 works.
@@ -102,6 +102,7 @@ hint: commit or roll back the task's changes there first, or leave the copy as i
 | `< the repository (commits, branches, the index)` | The folder's git state came in. |
 | `= path (the task's own kept: both changed it)` | Kept as the task has it. |
 | `the copy has everything the workspace changed` | Nothing to do. |
+| `kule: Kule ended <name>, still running in the task's sandbox, to sync` | On stderr: what still ran in the task's sandbox, which Kule ended before it wrote in the copy. For more than one: `kule: Kule ended <N> processes still running in the task's sandbox, to sync: <names>`. See [Processes and servers](../concepts/sandbox.md#processes-and-servers). |
 
 ## Errors and fixes
 

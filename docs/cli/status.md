@@ -166,7 +166,7 @@ policy: passes on its own
 | `task <id> changes them too:` | Another task on the same folder changes the same files; the lines under it name the file and the function, section or key. |
 | `the workspace changed since the task's copy …` | What `kule sync` would bring in. `(the task changed it too)` marks files both changed. |
 | `workspace <path> is gone (moved or deleted); commit and undo are refused` | The real folder is no longer there. |
-| `spent: …; budget …, … left` | What the task's agent runs cost so far. Shown once there has been a run or a budget is set. |
+| `spent: …; budget …, … left` | What the task's agent runs cost so far. Shown once there has been a run or a budget is set. ` (N records cannot be read)` when some records of what runs spent cannot be read; a budget over them holds the next run (see [kule budget](budget.md)). |
 
 At most 40 files are listed; the rest are counted (`… N more (kule status --json)`).
 
@@ -179,7 +179,7 @@ At most 40 files are listed; the rest are counted (`… N more (kule status --js
 | `effects` | `effects`: every changed path, with `path`, `change` (`created`, `modified`, `deleted`) and `kind` (`file`, `dir`, …); plus moves, git changes and ignored paths when there are any, and `repository` (whether the folder is a git repository). |
 | `ruling` | `verdict` (`allow`, `ask` or `deny`) and `judgements`: one per subject, with `subject`, `verdict` and the `rules` that decided it. |
 | `outline` | For each changed file, what changed inside it, or `"outline": "skipped"` with a `reason`. |
-| `spent` | `runs`, `tokens`, `cost` (a list of amounts and currencies) and `unpriced_runs`. |
+| `spent` | `runs`, `tokens`, `cost` (a list of amounts and currencies) and `unpriced_runs`, and `unreadable` (records that cannot be read) when there are any. |
 | `budget` | The task's own budget, or `null`. |
 | `home` | Writes in your home waiting for review. |
 | `behind` | `changed`: paths the workspace changed since the last sync; `both`: those the task changed too; `repository`: whether commits, branches or the index changed. |

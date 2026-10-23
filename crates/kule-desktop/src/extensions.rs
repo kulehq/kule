@@ -131,6 +131,9 @@ impl Files for StoreFiles {
 /// The window's extension host: where the files are served.
 pub struct Host {
     server: Option<Server>,
+    /// Why no extension runs this time, when none may (see
+    /// [`Host::off`]).
+    unserved: Option<String>,
     files: Arc<StoreFiles>,
     /// Whether the window has no WebRTC, which the content policy cannot
     /// close (see [`no_webrtc`]); no extension runs until it is so.
@@ -143,20 +146,27 @@ impl Host {
     /// that makes the window unusable; `kule ext disable` then turns it off.
     pub fn start(home: &Path, serve: bool) -> Host {
         let files = Arc::new(StoreFiles::new(home));
-        let server = if !serve {
+        let (server, unserved) = if !serve {
             eprintln!("kule-desktop: no extensions this time (safe mode)");
-            None
+            (
+                None,
+                Some(
+                    "Kule started without extensions this time (safe mode: --no-extensions or KULE_NO_EXTENSIONS)"
+                        .to_owned(),
+                ),
+            )
         } else {
             match ext_serve::start(files.clone()) {
-                Ok(server) => Some(server),
+                Ok(server) => (Some(server), None),
                 Err(e) => {
                     eprintln!("kule-desktop: extensions cannot be served: {e}");
-                    None
+                    (None, Some(format!("extensions cannot be served: {e}")))
                 }
             }
         };
         Host {
             server,
+            unserved,
             files,
             // WebKitGTK ships with WebRTC off; macOS turns it off at start.
             webrtc_off: std::sync::atomic::AtomicBool::new(!cfg!(target_os = "macos")),
@@ -179,6 +189,19 @@ impl Host {
     fn prefix(&self) -> Option<String> {
         let off = self.webrtc_off.load(std::sync::atomic::Ordering::SeqCst);
         self.server.as_ref().filter(|_| off).map(Server::prefix)
+    }
+
+    /// Why no extension runs now, for the window to say where it lists
+    /// them; None while they may.
+    fn off(&self) -> Option<String> {
+        if self.prefix().is_some() {
+            return None;
+        }
+        Some(
+            self.unserved
+                .clone()
+                .unwrap_or_else(|| "extensions wait until the window's WebRTC is off".to_owned()),
+        )
     }
 
     /// The origin extension frames come from, when they are served.
@@ -229,12 +252,15 @@ pub struct HostInfo {
     /// Where extension files are: `<prefix><id>/<path>`. None when they
     /// cannot be served (the window then runs no extension).
     prefix: Option<String>,
+    /// Why none runs now, when none may.
+    off: Option<String>,
 }
 
 #[tauri::command]
 pub fn extension_host(host: State<'_, Host>) -> HostInfo {
     HostInfo {
         prefix: host.prefix(),
+        off: host.off(),
     }
 }
 
@@ -332,6 +358,32 @@ pub fn revoke_mcp_server(kule: K<'_>, extension: String, name: String) -> Result
 mod tests {
     use super::*;
     use std::fs;
+
+    /// While no extension may run, the window is told why, to say so where
+    /// it lists them rather than call them running.
+    #[test]
+    fn the_window_is_told_why_no_extension_runs() {
+        let home = tempfile::TempDir::new().unwrap();
+        let safe = Host::start(home.path(), false);
+        assert!(safe.prefix().is_none());
+        assert!(
+            safe.off().unwrap().contains("safe mode"),
+            "{:?}",
+            safe.off()
+        );
+
+        let served = Host::start(home.path(), true);
+        if cfg!(target_os = "macos") {
+            assert!(
+                served.off().unwrap().contains("WebRTC"),
+                "{:?}",
+                served.off()
+            );
+            served.webrtc_is_off();
+        }
+        assert_eq!(served.off(), None);
+        assert!(served.prefix().is_some());
+    }
     use tempfile::TempDir;
 
     fn installed(home: &Path) -> String {

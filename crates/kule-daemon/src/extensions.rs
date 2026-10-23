@@ -108,11 +108,11 @@ pub fn revoke_mcp(home: &Path, extension: &str, name: &str) -> Result<()> {
 
 /// The approved MCP servers, as an agent is told to start them; npx
 /// packages are installed once under `person` (the person's home), when
-/// given.
-pub fn mcp_for_runs(home: &Path, person: Option<&Path>) -> Vec<kule_acp::McpCommand> {
-    Store::new(home)
+/// given. An error when what was approved cannot be read.
+pub fn mcp_for_runs(home: &Path, person: Option<&Path>) -> Result<Vec<kule_acp::McpCommand>> {
+    Ok(Store::new(home)
         .mcp_servers()
-        .unwrap_or_default()
+        .map_err(|e| e.to_string())?
         .into_iter()
         .filter(|o| o.approved)
         .map(|o| {
@@ -124,7 +124,7 @@ pub fn mcp_for_runs(home: &Path, person: Option<&Path>) -> Vec<kule_acp::McpComm
                 &o.server.env,
             )
         })
-        .collect()
+        .collect())
 }
 
 pub fn list(home: &Path) -> Result<Vec<Listed>> {
@@ -227,14 +227,14 @@ mod tests {
         .unwrap();
         let listed = install_folder(home.path(), src.path()).unwrap();
         approve(home.path(), "acme.tools", &listed.digest).unwrap();
-        assert!(mcp_for_runs(home.path(), None).is_empty());
+        assert!(mcp_for_runs(home.path(), None).unwrap().is_empty());
 
         let offered = mcp_servers(home.path()).unwrap();
         let web = offered.iter().find(|o| o.server.name == "web").unwrap();
         let stale = approve_mcp(home.path(), "acme.tools", "web", "not-what-you-saw").unwrap_err();
         assert!(stale.contains("changed since you looked"), "{stale}");
         approve_mcp(home.path(), "acme.tools", "web", &web.digest).unwrap();
-        let given = mcp_for_runs(home.path(), None);
+        let given = mcp_for_runs(home.path(), None).unwrap();
         assert_eq!(given.len(), 1);
         assert_eq!(
             (
@@ -247,7 +247,16 @@ mod tests {
 
         // An extension turned off offers nothing, approved or not.
         set_enabled(home.path(), "acme.tools", false).unwrap();
-        assert!(mcp_for_runs(home.path(), None).is_empty());
+        assert!(mcp_for_runs(home.path(), None).unwrap().is_empty());
+
+        // What was approved cannot be read: said, not taken for nothing.
+        set_enabled(home.path(), "acme.tools", true).unwrap();
+        fs::write(
+            home.path().join("extensions/mcp-approved.json"),
+            "{ not json",
+        )
+        .unwrap();
+        assert!(mcp_for_runs(home.path(), None).is_err());
     }
 
     /// A folder under development inside a folder a task works on: an

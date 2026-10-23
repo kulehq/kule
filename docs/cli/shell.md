@@ -41,7 +41,11 @@ agent's: `kule status` lists it and `kule commit` applies it.
 `KULE_TASK` holds the task's id inside the shell. When you `exit`, Kule
 prints the copy's changes, the connections the shell made, home writes and
 what the sandbox refused, as `kule exec` does, and `kule shell` exits with
-the shell's exit code.
+the shell's exit code. On macOS, Kule also ends what the shell left running
+in its sandbox and names it. On Linux, when the shell exited with an error,
+Kule says that Linux does not tell it what the sandbox refused. When Kule
+could not read or record what the sandbox refused, it says so, and
+`kule shell` fails even if the shell exited with 0.
 
 **While the shell is open**, no agent starts work in the task (`kule run`
 and `kule exec` are refused too), and commit, sync and applying home
@@ -151,6 +155,8 @@ kule: a terminal is open on this task's copy (in Kule's app, or kule shell); clo
 | `kule: in task <id>'s copy, outside the sandbox; exit to come back` | The same, with `--outside`. |
 | the change list after `exit` | The task's changes so far, as [kule status](status.md) shows them. |
 | `net:`, home and `sandbox:` lines after `exit` | The connections the shell made, its home writes and what the sandbox refused, as [kule exec](exec.md) prints them. Not with `--outside`. |
+| `kule: Kule ended <names>, which the shell left running in its sandbox` | macOS: what the shell left running, which Kule ended as it exited. |
+| `kule: Linux does not tell Kule what the sandbox refused; each refusal reached the command as an error` | Linux, when the shell exited with an error: no `sandbox:` line does not mean nothing was refused. |
 
 ## Errors and fixes
 

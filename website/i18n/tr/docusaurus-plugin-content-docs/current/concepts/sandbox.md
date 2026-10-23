@@ -132,7 +132,7 @@ ihtiyaç duyan bir ajan bunları profilinde `devices` altında adlandırır;
 Kule diskler, bellek, klavye ve fare, konsollar ve terminallere ulaşanları
 reddeder.
 
-## Süreçler ve sunucular
+## Süreçler ve sunucular {#processes-and-servers}
 
 Linux'ta komutlar kendilerine ait süreçler alır: bir komut başka hiçbir
 programı görmez ve ona sinyal gönderemez; arkasında çalışır bıraktığı her
@@ -141,6 +141,25 @@ başlatan ajan ya da terminal komutu yaşadığı sürece yaşar. Her sistemde,
 bir ajan çalıştırmasının ya da `kule exec`'in sandbox'ta çalışır bıraktığı
 her şey, ebeveynine ne olmuş olursa olsun, o bitince biter; çalıştırma
 sürerken de sınırları onu sayar.
+
+Kule neyi sonlandırdığını, süreçlerin çalıştığı adlarla, sizin çalıştığınız
+yerde söyler:
+
+- Bir ajan çalıştırması: Live'da ya da `kule run` çıktısında bir not:
+  `Kule ended <names>, which the agent left running in its sandbox, as the run ended`.
+- `kule exec`: `kule: ended <names>, still running in the task's sandbox as the command ended`.
+- `kule shell` ve uygulamanın terminali (macOS):
+  `Kule ended <names>, which the shell left running in its sandbox`.
+- Commit, rollback, undo, sync, bir adıma geri dönmek ve ev değişikliklerini
+  uygulamak ya da geri almak, Kule kopyaya yazmadan önce görevin
+  sandbox'ında hâlâ çalışan her şeyi sonlandırır. Komut satırında:
+  `kule: Kule ended <name>, still running in the task's sandbox, to <what you asked>`
+  ya da `kule: Kule ended <N> processes still running in the task's sandbox, to <what you asked>: <names>`.
+  Uygulamada aynı sözler bir bildirim ve Live'da bir not olarak görünür.
+
+Her ad, altında kaç süreç çalıştığıyla birlikte bir kez listelenir
+(`sleep ×2, node`); en çok sekiz ad, sonra kaç tane daha olduğu. Bir ad 32
+karakterde kesilir ve düz metin olarak gösterilir.
 
 Bir görevin başlattığı sunucular **yalnızca bu bilgisayarda** dinler, asla
 ağınızda değil. Sandbox'ın bir sunucunun adresini ayırt edemediği macOS'ta,
@@ -181,9 +200,15 @@ sandbox: refused file-read-data /Users/me/.config/gh/config.yml (gh)
 sandbox: refused file-read-data /Users/me/.ssh/id_ed25519 (ssh)
 ```
 
-Uygulama reddedilenleri [Timeline](../app/timeline.md)'da gösterir. Linux,
-Landlock'un reddettiklerini yalnızca denetim kaydına (audit log) bildirir;
-bu yüzden listelenmezler; komut yine de bir izin hatası alır.
+Uygulama reddedilenleri [Timeline](../app/timeline.md)'da gösterir;
+[Live](../app/live.md)'da biten bir çalıştırmanın satırı da onları listeler.
+Linux, Landlock'un reddettiklerini yalnızca denetim kaydına (audit log)
+bildirir; bu yüzden listelenmezler; komut yine de bir izin hatası alır.
+Kule hiç ret yokmuş gibi göstermek yerine bunu söyler: başarısız olan bir
+ajan çalıştırmasından ya da kabuktan sonra, Live'da ise her çalıştırmadan
+sonra
+`Linux does not tell Kule what the sandbox refused; each refusal reached the command as an error`
+yazar.
 
 ## Linux'ta daha zayıf yalıtım {#weaker-isolation-on-linux}
 

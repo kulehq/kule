@@ -54,6 +54,13 @@ How a budget holds:
 - A refusal names the budget that is spent.
 - A run counts for the group its task was in **when it ran**, so moving a
   task out keeps what it spent in the group's account.
+- **A record that cannot be read is counted**, not taken for nothing spent.
+  Kule cannot tell when it was made, nor for which group, so every budget
+  it could count for holds runs: the task's own, both budgets of the group
+  it is in now, and the daily one. The refusal names the budget and how many records:
+  `Kule cannot tell what <budget> has left: <N> record(s) of what runs spent … cannot be read; mend or remove them, or turn the budget off, to run again`.
+  A record cut short by a crash does not take the next run's record with
+  it.
 
 :::warning A budget holds only what agents report
 
@@ -69,7 +76,9 @@ does not hold what is not reported.
 
 What each run used (tokens, the context window, and the cost when the
 agent says) is kept in the task's `usage.jsonl`. `kule status` and the
-app's task header add it up.
+app's task header add it up. Records that cannot be read are counted there
+too: `spent:` lines add ` (N records cannot be read)`, and the header's chip
+says *N usage records unreadable · budget held* in red.
 
 While the window is elsewhere, the app tells you when 80% of a budget is
 spent, and when all of it is.

@@ -25,6 +25,8 @@ afternoon stops counting tomorrow afternoon.
   holds it (see [`kule budget`](budget.md)).
 - Costs are the ones the agents report. Runs that report no cost are not
   held.
+- A record of what a run spent that cannot be read, in any task, holds
+  every run: Kule cannot tell when it was made, so it may be today's.
 
 With an amount, the command sets the daily budget; with `off`, it removes
 it; without either, it only shows it. Every form prints what all tasks spent
@@ -88,6 +90,7 @@ what is left of it, or `no daily budget`.
 | `kule: abc: an amount like 20 or 7.50, or off` | Write a number or `off`. |
 | `kule: a budget is a positive amount in a currency like USD, not 0 USD` | Use an amount above 0 and a capitalised currency code. |
 | `the daily budget is spent: every task together, in the last 24 hours; raise it or turn it off to run again` (when a run is refused) | Wait until older runs fall out of the 24 hours, raise the budget, or turn it off. |
+| `Kule cannot tell what the daily budget has left: <N> records of what runs spent (in tasks' usage.jsonl) cannot be read; mend or remove them, or turn the budget off, to run again` (when a run is refused) | Mend or remove the lines that cannot be read in the tasks' `usage.jsonl` files, or turn the daily budget off. |
 
 ## In the app
 

@@ -127,6 +127,10 @@ onaylanır.
 | One group | Grubun görevlerinin tüm çalıştırmaları boyunca ve herhangi bir 24 saat içinde toplam neye mal olabileceği; ikisi de isteğe bağlıdır. |
 | One task | O görevin çalıştırmalarının toplam neye mal olabileceği. *What holds its next run*, onun üzerindeki her bütçeyi listeler ve bağlayıcı olanı işaretler. |
 
+Çalıştırmaların harcadıklarına dair okunamayan bir kayıt, düzeltilene ya da
+kaldırılana veya bütçe kapatılana kadar sayılabileceği her bütçeyi tutar;
+görev başlığındaki etiket kırmızıyla *N usage records unreadable · budget held* der.
+
 Sınır olmaması için bir alanı boş bırakın. *Where budgets are set*, bütçesi
 olan her kapsamı listeler; açmak için bir kapsama tıklayın. Bir görevin ya
 da grubun ⋮ menüsü (*Budget…*) kendi kapsamını doğrudan açar.
@@ -211,6 +215,10 @@ atamaz, gizli değerlerinizi okuyamaz ya da bir politikayı değiştiremez.
   files in a task's copy* ya da *Send and receive data over the internet,
   to the hosts listed*); **Approve**, **Turn on** / **Turn off** ve
   **Remove** (onaylamak için yeniden tıklayın) düğmeleriyle.
+- Açık bir eklenti *Runs* der; pencerede hiçbir eklenti çalışamıyorken ise
+  nedeniyle birlikte *Does not run now* der: Kule bu sefer eklentisiz
+  başladı (güvenli mod), eklentiler sunulamıyor ya da pencerenin WebRTC'si
+  kapanana kadar bekliyorlar.
 - Bir eklentinin ajanlara sunduğu **MCP sunucularının** her biri kendi
   onayını bekler: **Let agents use it** ya da **Stop offering it**. Bir ajan
   böyle bir sunucuyu kendi sandbox'ının içinde başlatır.

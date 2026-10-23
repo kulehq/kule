@@ -254,6 +254,69 @@ fn processes_the_agent_left_running_end_with_the_run() {
     assert!(stops_beating(&beat), "a process outlived the run");
 }
 
+/// What the agent left running outside its process group is told by name
+/// as the run ends, where the person watches it.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_stray_the_agent_left_is_told_as_the_run_ends() {
+    let s = Setup::new();
+    let events = s.run("stray");
+    let notes = notes(&events);
+    assert!(
+        notes.iter().any(|n| n.starts_with("Kule ended sleep,")),
+        "{notes:?}"
+    );
+}
+
+/// A run that leaves nothing running tells of nothing ended: its own
+/// processes, ended with it, are not news.
+#[test]
+fn a_run_that_leaves_nothing_tells_of_nothing_ended() {
+    let s = Setup::new();
+    let beat = s.task.copy().join("beat");
+    let events = s.run("background beat");
+    assert!(stops_beating(&beat));
+    let notes = notes(&events);
+    assert!(!notes.iter().any(|n| n.contains("Kule ended")), "{notes:?}");
+}
+
+/// A log that cannot be turned over is said once in the run's notes, and
+/// the agent goes on: what it writes for itself is still read, so it is
+/// never cut off for it.
+#[test]
+fn a_log_that_cannot_turn_over_says_so_and_the_agent_goes_on() {
+    let s = Setup::new();
+    let older = s.task.agent_log().with_file_name("agent.log.1");
+    fs::create_dir(&older).unwrap();
+    fs::write(older.join("in-the-way"), "x").unwrap();
+    let events =
+        s.run("exec head -c 10485760 /dev/zero >&2; exec head -c 10485760 /dev/zero >&2; say done");
+    let notes = notes(&events);
+    assert_eq!(
+        notes
+            .iter()
+            .filter(|n| n.contains("not kept for the rest of this run"))
+            .count(),
+        1,
+        "{notes:?}"
+    );
+    assert!(
+        said(&events).iter().any(|m| m == "done"),
+        "{:?}",
+        said(&events)
+    );
+}
+
+fn notes(events: &[Event]) -> Vec<String> {
+    events
+        .iter()
+        .filter_map(|e| match e {
+            Event::Note { text } => Some(text.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
 /// Whether what adds to `file` stops within a few seconds: its length then
 /// holds for a while.
 fn stops_beating(file: &std::path::Path) -> bool {

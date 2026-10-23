@@ -146,6 +146,12 @@ adlandırılmış kendi klasörünü alır.
 Katman oluşturulduğundan beri dosyanız değiştiyse uygulama reddedilir;
 böylece sizin hiçbir şeyiniz görmeden üzerine yazılmaz.
 
+Görevin sandbox'ında hâlâ çalışan şey önce sonlandırılır ve Kule stderr'de
+onun adını verir:
+`kule: Kule ended <name>, still running in the task's sandbox, to apply its home changes`
+(ya da `… <N> processes …: <names>`). `undo` da aynısını yapar,
+`to undo its home changes` ile. Bkz. [Süreçler ve sunucular](../concepts/sandbox.md#processes-and-servers).
+
 ## kule home TASK discard
 
 ```sh

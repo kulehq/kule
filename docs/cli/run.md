@@ -60,7 +60,18 @@ commands for it (in the app), it runs 32 at once at most.
 
 **Nothing it started outlives the run.** When the run ends, however it ends,
 whatever the agent left running in its sandbox ends too, whatever became of
-its parent.
+its parent. Kule names what it ended in a note:
+`· Kule ended <names>, which the agent left running in its sandbox, as the run ended`.
+
+**A run that fails or is stopped is told in full.** Kule prints what it
+changed, its connections, its home writes, what the sandbox refused, the
+paths Kule put back, the policy's ruling, what was spent and how long it
+took, as after a run that went well, and only then the error. On Linux a
+run that failed also prints
+`kule: Linux does not tell Kule what the sandbox refused; each refusal reached the command as an error`.
+If Kule could not record what the run spent, put back what it changed, or
+read or record what the sandbox refused, it says so in a `kule:` line each,
+and `kule run` fails.
 
 **The agent hears what changed.** If [kule sync](sync.md) brought the folder's
 changes into the copy since the agent's last run, or the sandbox refused it
@@ -157,8 +168,9 @@ took: 41s
 | `net:` | Each connection the run made and whether it went through. |
 | `in your home, caught for review` | Writes in your home folder, waiting in the home layer. See [kule home](home.md). |
 | `sandbox: refused …` | What the sandbox refused (macOS lists them; on Linux the command just gets an error). |
+| `sandbox: <path> changed during the run; Kule put it back …` | A path the run may not change, which Kule put back as it was. |
 | `policy:` | The ruling on the changes: *passes on its own*, *waits for approval* or *denied*, with the rule behind each. |
-| `spent:` | What the task's runs have cost so far, as the agents reported it, and what is left of its budget. |
+| `spent:` | What the task's runs have cost so far, as the agents reported it, and what is left of its budget. ` (N records cannot be read)` when some of the task's usage records cannot be read. |
 | `took:` | How long the run took. |
 
 When the output is not a terminal, every event is a plain line of its own,
@@ -171,13 +183,21 @@ which is easier to log.
 | `kule: no agent <name>; known: claude-code, gemini, codex` | Check the name. Add your own agents with [kule agents](kule-agents.md). |
 | `kule: agent <name> cannot run: <why>` | The agent is missing, not signed in, or (for your own profiles) not approved yet. Run `kule agents` to see why. |
 | `kule: task <id> has spent its budget; raise it or turn it off to run again` | Raise it with `kule budget TASK <amount>`, or `kule budget TASK off`. The message names a group's or the daily budget when that is the one spent. |
+| `kule: Kule cannot tell what <budget> has left: <N> record(s) of what runs spent … cannot be read; mend or remove them, or turn the budget off, to run again` | A usage record that cannot be read counts, so the budget holds every run until it is mended or removed (a task's `usage.jsonl`), or the budget is turned off. See [Budgets and limits](../concepts/budgets-and-limits.md). |
 | `kule: the task has used its time: its runs took N minutes together; …` | Raise or remove the task's time limit with [kule limits](limits.md). |
 | `kule: an agent is at work in task <id> …` | One agent per task. Wait, or make another task. |
 | `kule: a terminal is open on this task's copy (in Kule's app, or kule shell); close it first, then start work` | A terminal on the task (the app's, or `kule shell`) is open. Close it first. |
 | `kule: Kule opened task <id>'s copy in <app> outside the sandbox; …` | Close that terminal app or editor, then run [kule closed](closed.md) `TASK`. |
-| `kule: <error> (see <home>/tasks/<id>/agent.log)` | The agent failed. Its own messages are in `agent.log`: its last 8 MB, and the 8 MB before them in `agent.log.1`. |
-| `kule: stopped: the agent sent a message larger than 16 MiB (see …)` | The agent said more in one message than Kule takes. Run it again with a narrower prompt. |
-| `kule: stopped: the agent left more than 1024 tool calls open (see …)` | The agent started tool calls without ending them. |
+| `kule: <error> (see <home>/tasks/<id>/agent.log)` | The agent failed. It comes after what the run did. The agent's own messages are in `agent.log`: its last 8 MB. When the log was turned over during the run, the line ends `, and agent.log.1 beside it for what came before`: the 8 MB before them. |
+| `kule: stopped: <why>` | A limit or the agent's own messages stopped the run, as the rest of the line says; it names no log. |
+| `kule: stopped: the agent sent a message larger than 16 MiB` | The agent said more in one message than Kule takes. Run it again with a narrower prompt. |
+| `kule: stopped: the agent left more than 1024 tool calls open` | The agent started tool calls without ending them. |
+| `kule: Linux does not tell Kule what the sandbox refused; each refusal reached the command as an error` | On Linux, after a run that failed: no `sandbox: refused` line does not mean nothing was refused: a refused operation reached the agent's command as a permission error. |
+| `kule: what the run spent could not be recorded: …` | Kule could not write the task's `usage.jsonl`, so this run's cost is not counted. Check that Kule's home can be written. |
+| `kule: Kule could not put back the protected paths the run changed: …` | Look at the changes with [kule status](status.md) before you commit, or [roll them back](rollback.md). |
+| `kule: what the sandbox refused cannot be read: …` / `… could not be recorded: …` | The refusals are not listed, or not kept for the agent's next run and the app's Timeline. |
+| `kule: the run ended, but Kule could not do all of the above` | The run itself went well; one of the lines above says what Kule could not do. |
+| `· Kule could not write the agent's log (…); what the agent writes to it is not kept for the rest of this run` | A note, not an error: the agent goes on, but its messages from then on are not in `agent.log`. Check that Kule's home can be written. |
 | `kule: <agent> reported no cost, so the task's budget does not count this run` | A warning, not an error: agents signed in with a subscription may report tokens only, and a budget cannot hold what is not reported. |
 
 On some Linux systems no agent runs until you accept weaker isolation; see

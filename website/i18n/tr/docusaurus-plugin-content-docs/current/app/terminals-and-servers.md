@@ -44,7 +44,16 @@ edilir.
   tuşları çıkar; böylece Ctrl+L ve diğerleri kabuğa ait kalır.
 - Bir görevdeki ilk terminalin açılması, görevin paket önbellekleri
   hazırlanırken birkaç saniye sürebilir.
-- Görevde bir ajan çalışırken Kule **terminal açmayı reddeder**.
+- Görevde bir ajan çalışırken Kule **terminal açmayı reddeder**. Kule'nin
+  açmadığı bir terminal nedenini gösterir, ardından *[Kule did not open
+  this shell; press Enter to try again]* yazar ve imleci yanıp sönmeyi
+  bırakır.
+- **Kabuk bittiğinde** terminal, sarı renkle, sandbox'ın ona reddettiklerini
+  (aynı ret bir kez, kaç kez olduğuyla: `×4`), Kule'nin bu retlerle ilgili
+  ipuçlarını ve kabuğun sandbox'ında çalışır bıraktığı, Kule'nin
+  sonlandırdığı şeyi (macOS) söyler. Linux'ta, kabuk bir hatayla çıktıysa,
+  Linux'un sandbox'ın reddettiklerini Kule'ye söylemediğini belirtir.
+  Ardından *[the shell ended; press Enter for a new one]* gelir.
 - **Bir görevde terminal açıkken** o görevde hiçbir ajan çalıştırması
   başlamaz; **Commit**, **Sync**, **Roll back**, **Undo**, bir adıma geri
   dönmek ve ev değişikliklerini uygulamak ya da geri almak bekler. Kule

@@ -599,12 +599,16 @@ fn run() -> Result<ExitCode> {
             );
             let logged_before = connections(&task)?.len();
             let _watch = watch_servers(&task);
-            let (code, denials) = relay::run(&home, task.id(), &shell)?;
+            let (code, end) = relay::run(&home, task.id(), &shell)?;
             print_set(&task, &task.effects()?);
             print_connections(&connections(&task)?[logged_before..]);
             print_home(&task)?;
-            print_denials(&denials);
+            print_denials(&end.denials);
+            for note in end.notes(code != Some(0)) {
+                eprintln!("kule: {}", paint::plain_line(&note));
+            }
             return Ok(match code {
+                Some(0) if end.error.is_some() => ExitCode::FAILURE,
                 Some(0) => ExitCode::SUCCESS,
                 Some(code) => ExitCode::from(code.clamp(1, 255) as u8),
                 None => ExitCode::FAILURE,
@@ -781,7 +785,14 @@ fn run() -> Result<ExitCode> {
             // What it left running, however it left, ends with it; what
             // cannot be ended now, a commit ends or refuses over.
             if let Some(sandbox) = &used {
-                let _ = sandbox.end_strays();
+                match sandbox.end_strays() {
+                    Ok(ended) if !ended.is_empty() => eprintln!(
+                        "kule: ended {}, still running in the task's sandbox as the command ended",
+                        paint::plain_line(&ended.listed())
+                    ),
+                    Ok(_) => {}
+                    Err(e) => eprintln!("kule: {e}; a commit ends them or refuses"),
+                }
             }
             // Cuts what the command left open and logs it, so the list below
             // is complete.
@@ -886,32 +897,33 @@ fn run() -> Result<ExitCode> {
                 tx,
             ));
             let _ = governor.join();
+            let mut failed = Vec::new();
             if let Ok(mut usage) = runtime.block_on(printer) {
                 usage.duration_secs = started.elapsed().as_secs();
                 // Kept whether the run went well or not: it was spent either way.
-                task.record_usage(&usage)?;
-                if usage.cost.is_none() && task.budget()?.is_some() {
+                if let Err(e) = task.record_usage(&usage) {
+                    failed.push(format!("what the run spent could not be recorded: {e}"));
+                } else if usage.cost.is_none() && task.budget()?.is_some() {
                     eprintln!(
                         "kule: {} reported no cost, so the task's budget does not count this run",
                         profile.name
                     );
                 }
             }
-            // The agent's process group is gone by now.
-            let put_back = kept.restore()?;
-            outcome.map_err(|e| anyhow!("{e} (see {})", task.agent_log().display()))?;
+            // The agent's process group is gone by now. All of it is told
+            // however the run ended: a failed or stopped run did things too.
+            let after = kule_acp::after_run(&task, &sandbox, kept, started.elapsed());
+            failed.extend(after.failed);
             println!();
             proxy.stop();
             print_set(&task, &task.effects()?);
             print_connections(&connections(&task)?[logged_before..]);
             print_home(&task)?;
-            if let Some(denials) = sandbox.denials(started.elapsed())? {
-                record_denials(&task, &denials)?;
-                print_denials(&denials);
+            print_denials(&after.refused);
+            if after.unreported && outcome.is_err() {
+                eprintln!("kule: {}", kule_engine::UNREPORTED);
             }
-            let put_back: Vec<Denial> = put_back.iter().map(Denial::put_back).collect();
-            record_denials(&task, &put_back)?;
-            for d in &put_back {
+            for d in &after.put_back {
                 match &d.saved {
                     Some(saved) => println!(
                         "sandbox: {} changed during the run; Kule put it back and moved what was there to {}",
@@ -927,6 +939,18 @@ fn run() -> Result<ExitCode> {
             print_ruling(&load_policy(&home, &task)?.judge(&task.effects()?.to_commit(false)));
             print_spent(&task)?;
             println!("{} {}", paint::dim("took:"), paint::took(started.elapsed()));
+            for e in &failed {
+                eprintln!("kule: {}", paint::plain_line(e));
+            }
+            match outcome {
+                // A stop says why as it is; the agent's log has nothing to add.
+                Err(e) if e.to_string().starts_with("stopped: ") => bail!("{e}"),
+                Err(e) => bail!("{e} ({})", task.agent_log_hint()),
+                Ok(_) if !failed.is_empty() => {
+                    bail!("the run ended, but Kule could not do all of the above")
+                }
+                Ok(_) => {}
+            }
         }
         Cmd::Budget {
             task,
@@ -1095,7 +1119,9 @@ fn run() -> Result<ExitCode> {
             } else {
                 Vec::new()
             };
-            match task.commit_with(include_ignored, policy.gate(approve)) {
+            let outcome = task.commit_with(include_ignored, policy.gate(approve));
+            tell_ended(&task);
+            match outcome {
                 Ok(Some(cp)) => {
                     println!(
                         "committed {} changes · checkpoint {}",
@@ -1165,11 +1191,17 @@ fn run() -> Result<ExitCode> {
             }
         }
         Cmd::Rollback { task } => {
-            let set = Task::open(&home, &task)?.rollback()?;
+            let task = Task::open(&home, &task)?;
+            let set = task.rollback();
+            tell_ended(&task);
+            let set = set?;
             println!("rolled back {} changes", set.effects.len());
         }
         Cmd::Sync { task } => {
-            let synced = Task::open(&home, &task)?.sync()?;
+            let task = Task::open(&home, &task)?;
+            let synced = task.sync();
+            tell_ended(&task);
+            let synced = synced?;
             if synced.is_empty() && synced.kept.is_empty() {
                 println!("the copy has everything the workspace changed");
             }
@@ -1192,10 +1224,15 @@ fn run() -> Result<ExitCode> {
                 );
             }
         }
-        Cmd::Undo { task } => match Task::open(&home, &task)?.undo()? {
-            Some(cp) => println!("undid checkpoint {} ({} changes)", cp.id, cp.effects.len()),
-            None => println!("nothing to undo"),
-        },
+        Cmd::Undo { task } => {
+            let task = Task::open(&home, &task)?;
+            let undone = task.undo();
+            tell_ended(&task);
+            match undone? {
+                Some(cp) => println!("undid checkpoint {} ({} changes)", cp.id, cp.effects.len()),
+                None => println!("nothing to undo"),
+            }
+        }
         Cmd::History { task } => {
             let history = Task::open(&home, &task)?.history()?;
             for entry in &history {
@@ -1406,6 +1443,17 @@ fn print_spent(task: &Task) -> Result<()> {
     if spent.unpriced_runs > 0 && !spent.cost.is_empty() {
         line += &format!(" ({} without a cost)", spent.unpriced_runs);
     }
+    if spent.unreadable > 0 {
+        line += &format!(
+            " ({} {} cannot be read)",
+            spent.unreadable,
+            if spent.unreadable == 1 {
+                "record"
+            } else {
+                "records"
+            }
+        );
+    }
     if let Some(budget) = budget {
         let left = budget.amount - spent.in_currency(&budget.currency);
         line += &format!(
@@ -1465,6 +1513,14 @@ fn print_connections(log: &[Connection]) {
 }
 
 /// What the sandbox refused, each hint once after the refusals it explains.
+/// What Kule ended in the task's sandbox before it did what was asked
+/// (see `Task::take_ended`), on stderr beside what the command says.
+fn tell_ended(task: &Task) {
+    for text in task.take_ended() {
+        eprintln!("kule: {}", paint::plain_line(&text));
+    }
+}
+
 fn print_denials(denials: &[Denial]) {
     let mut hints: Vec<&str> = Vec::new();
     for d in denials {
@@ -1667,7 +1723,9 @@ fn home_cmd(home: &Path, task: &str, action: HomeCmd) -> Result<()> {
             print_home(&task)?;
         }
         HomeCmd::Apply { paths, all } => {
-            let applied = task.apply_home(&pick(paths, all)?)?;
+            let applied = task.apply_home(&pick(paths, all)?);
+            tell_ended(&task);
+            let applied = applied?;
             if applied.paths.is_empty() {
                 println!("nothing to apply at those paths");
             }
@@ -1713,7 +1771,9 @@ fn home_cmd(home: &Path, task: &str, action: HomeCmd) -> Result<()> {
             }
         }
         HomeCmd::Undo => {
-            let undone = task.undo_home()?;
+            let undone = task.undo_home();
+            tell_ended(&task);
+            let undone = undone?;
             for path in &undone.paths {
                 println!("undid ~/{}", paint::plain_line(path));
             }

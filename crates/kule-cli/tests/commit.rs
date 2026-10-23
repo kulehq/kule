@@ -69,3 +69,46 @@ fn the_second_commit_merges_and_says_so_or_names_what_both_changed() {
         CODE.replace("1;", "10;").replace("2;", "20;")
     );
 }
+
+/// What still runs in the task's sandbox is ended before Kule puts the
+/// copy back, and the person is told what, by name, where they asked for
+/// it (macOS, where such a process outlives its command).
+#[cfg(target_os = "macos")]
+#[test]
+fn rolling_back_tells_what_it_ended() {
+    let (home, ws) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+    fs::write(ws.path().join("a.txt"), "a\n").unwrap();
+    let out = kule(home.path(), &["new", ws.path().to_str().unwrap()]);
+    let id = text(&out).split_whitespace().nth(1).unwrap().to_owned();
+    let task = kule_engine::Task::open(home.path(), &id).unwrap();
+    let code = "import os, time\nif os.fork(): os._exit(0)\nos.setsid()\nif os.fork(): os._exit(0)\ntime.sleep(60)";
+    let status = kule_engine::Sandbox::new(&task)
+        .unwrap()
+        .command(
+            "python3",
+            &["-I".to_owned(), "-c".to_owned(), code.to_owned()],
+        )
+        .unwrap()
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .unwrap();
+    assert!(status.success());
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while kule_engine::Sandbox::processes_of(&id).is_empty() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the stray never started"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    let out = kule(home.path(), &["rollback", &id]);
+    let said = text(&out);
+    assert!(out.status.success(), "{said}");
+    let told = String::from_utf8_lossy(&out.stderr).to_lowercase();
+    assert!(
+        told.contains("kule: kule ended python") && told.contains("to roll back"),
+        "{said}"
+    );
+}

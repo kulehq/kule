@@ -108,7 +108,9 @@ Above the main area, the open task's header shows:
 - **server chips** such as `localhost:5173 ↗` for servers working in its
   copy (see [Terminals and servers](terminals-and-servers.md));
 - its **state**, such as "agent at work" or "3 changes · needs approval";
-- what its runs have **spent** so far, as the agents reported it;
+- what its runs have **spent** so far, as the agents reported it, and in red
+  *N usage records unreadable · budget held* when some records of what its runs spent
+  cannot be read (see [Budgets and limits](../concepts/budgets-and-limits.md));
 - a **builds from** chip when the folder builds from a project beside it
   that its tasks cannot read yet (see [`kule reveal`](../cli/reveal.md)).
 
@@ -118,7 +120,8 @@ Above the main area, the open task's header shows:
 - **Needs you** lists tasks that wait for you: a question about a
   connection, or changes that need approval.
 - **Tasks** lists every task and group. The **+** next to the title makes a
-  [group](../concepts/groups.md).
+  [group](../concepts/groups.md). A task Kule cannot read stays in the list
+  with a red *cannot be read* chip and why, rather than leaving it.
 - Each task has a **⋮ menu** (Mod+., or a right click): *Rename…*, a
   colour, *Group…*, *Budget…*, *Limits…*, *Open in terminal app*, *Open the
   copy in an editor*, *Bring in the folder's changes*, *Fork task*, *Move

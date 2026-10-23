@@ -195,6 +195,10 @@ $ kule group budget 1 off --daily
 
 When a group budget is spent, the group's tasks start no run:
 `group "clients" has spent its budget: its tasks together; raise it or turn it off to run again`.
+Nor do they while a record of what one of its tasks' runs spent cannot be
+read: it counts for the group the task is in now, in both budgets, and the
+refusal says `Kule cannot tell what group "clients"'s budget has left: …`
+(or `… daily budget …`).
 
 ## kule group put
 

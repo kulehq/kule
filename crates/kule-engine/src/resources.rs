@@ -58,6 +58,54 @@ pub fn resume(pids: &[i32]) {
     signal(pids, libc::SIGCONT);
 }
 
+/// The name `pid` runs under, as the person is told it: a process picks
+/// its own, so it is cut at [`NAME_CHARS`] characters and holds nothing
+/// that a terminal or a page would read as other than text (control and
+/// direction-changing characters). `process {pid}` when it has none.
+pub(crate) fn name_of(pid: i32) -> String {
+    #[cfg(target_os = "macos")]
+    let raw = crate::ports::macos::name_of(pid);
+    #[cfg(target_os = "linux")]
+    let raw = std::fs::read_to_string(format!("/proc/{pid}/comm")).unwrap_or_default();
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    let raw = String::new();
+    let name = shown_name(&raw);
+    if name.is_empty() {
+        format!("process {pid}")
+    } else {
+        name
+    }
+}
+
+/// Whether `pid` is on its way out (a zombie, or past where its state can
+/// be read): ended already, not something left running.
+pub(crate) fn exiting(pid: i32) -> bool {
+    #[cfg(target_os = "macos")]
+    return crate::ports::macos::exiting(pid);
+    #[cfg(target_os = "linux")]
+    return stat_fields(pid)
+        .is_none_or(|f| matches!(f.first().map(String::as_str), Some("Z" | "X")));
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    false
+}
+
+/// `raw` as [`name_of`] tells it.
+fn shown_name(raw: &str) -> String {
+    raw.trim()
+        .chars()
+        .filter(|&c| !c.is_control() && !direction(c))
+        .take(NAME_CHARS)
+        .collect()
+}
+
+/// Whether `c` changes the direction text after it is shown in.
+fn direction(c: char) -> bool {
+    matches!(c, '\u{061c}' | '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
+}
+
+/// How much of a process's name [`name_of`] keeps.
+const NAME_CHARS: usize = 32;
+
 /// Kills `pids` at once.
 pub fn kill(pids: &[i32]) {
     signal(pids, libc::SIGKILL);
@@ -240,6 +288,35 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
+
+    /// The person is told a process by the name it runs under, read from
+    /// the system while it runs.
+    #[test]
+    fn a_process_is_told_by_its_name() {
+        let mut child = Command::new("sleep").arg("30").spawn().unwrap();
+        // Until it has started `sleep`, it runs under this test's name.
+        let deadline = Instant::now() + std::time::Duration::from_secs(5);
+        let mut name = name_of(child.id() as i32);
+        while name != "sleep" && Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            name = name_of(child.id() as i32);
+        }
+        let _ = child.kill();
+        let _ = child.wait();
+        assert_eq!(name, "sleep");
+    }
+
+    /// A process picks its own name: what reaches the person is text, cut
+    /// short, and says nothing else than the name.
+    #[test]
+    fn a_name_a_process_picked_is_told_as_text() {
+        assert_eq!(
+            shown_name("ev\u{1b}[31mil\u{202e}txt.exe\n"),
+            "ev[31miltxt.exe"
+        );
+        assert_eq!(shown_name(&"a".repeat(100)).len(), NAME_CHARS);
+        assert_eq!(shown_name(" \u{7}\u{2066} "), "");
+    }
 
     fn gone(pid: i32) -> bool {
         tree(&[pid]).is_empty()

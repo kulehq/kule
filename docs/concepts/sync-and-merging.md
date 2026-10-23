@@ -53,7 +53,8 @@ What sync does:
 - the agent hears what came in at the start of its next turn.
 
 Your folder is only read. Sync is refused while an agent is at work, and stops
-programs still running in the task's sandbox first.
+programs still running in the task's sandbox first; Kule names what it
+stopped.
 
 ## Merging: two tasks, one folder
 

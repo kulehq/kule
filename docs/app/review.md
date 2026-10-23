@@ -112,6 +112,12 @@ sandbox are stopped first, as before a commit. Your folder is only read.
 After a commit, **Undo** on the [Timeline](timeline.md) (Mod+Shift+U, press
 twice) takes the newest commit back out of your folder.
 
+Before a commit, a rollback or a sync writes in the copy, what still runs in
+the task's sandbox is ended. Kule names what it ended, in a notice and in a
+note in Live, for example *Kule ended node, still running in the task's
+sandbox, to commit*. See
+[Processes and servers](../concepts/sandbox.md#processes-and-servers).
+
 :::note
 
 A commit refuses when your folder changed underneath it: you edited a file

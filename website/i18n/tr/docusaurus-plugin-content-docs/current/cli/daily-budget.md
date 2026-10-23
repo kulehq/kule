@@ -27,6 +27,9 @@ bütçedir. Son 24 saatte başlayan çalıştırmaları sayar, yani kayar: dün
   tutarla sınırlanır (bkz. [`kule budget`](budget.md)).
 - Maliyetler ajanların bildirdikleridir. Maliyet bildirmeyen çalıştırmalar
   sınırlanmaz.
+- Herhangi bir görevde, bir çalıştırmanın harcadığına dair okunamayan bir
+  kayıt her çalıştırmayı tutar: Kule onun ne zaman yazıldığını bilemez;
+  bugünkü olabilir.
 
 Bir tutarla komut günlük bütçeyi ayarlar; `off` ile kaldırır; ikisi de
 yoksa yalnızca gösterir. Her biçim, tüm görevlerin son 24 saatte ne
@@ -90,6 +93,7 @@ ve kalanı gelir, ya da `no daily budget`.
 | `kule: abc: an amount like 20 or 7.50, or off` | Bir sayı ya da `off` yazın. |
 | `kule: a budget is a positive amount in a currency like USD, not 0 USD` | 0'dan büyük bir tutar ve büyük harfle bir para birimi kodu kullanın. |
 | `the daily budget is spent: every task together, in the last 24 hours; raise it or turn it off to run again` (bir çalıştırma reddedildiğinde) | Eski çalıştırmaların 24 saatin dışına çıkmasını bekleyin, bütçeyi artırın ya da kaldırın. |
+| `Kule cannot tell what the daily budget has left: <N> records of what runs spent (in tasks' usage.jsonl) cannot be read; mend or remove them, or turn the budget off, to run again` (bir çalıştırma reddedildiğinde) | Görevlerin `usage.jsonl` dosyalarındaki okunamayan satırları düzeltin ya da kaldırın, veya günlük bütçeyi kapatın. |
 
 ## Uygulamada {#in-the-app}
 

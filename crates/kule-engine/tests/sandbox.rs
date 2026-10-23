@@ -2696,14 +2696,15 @@ fn a_sandbox_ends_what_it_left_and_nothing_of_the_others() {
     let alive = |pid: i32| unsafe { libc::kill(pid, 0) } == 0;
     let (mine, theirs) = (left(&one), left(&other));
     assert!(alive(mine) && alive(theirs));
-    assert_eq!(one.end_own().unwrap(), 1);
+    let ended = one.end_own().unwrap();
     let gone = std::time::Instant::now();
     while alive(mine) && gone.elapsed() < std::time::Duration::from_secs(5) {
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
     assert!(!alive(mine), "the sandbox's own process still runs");
     assert!(alive(theirs), "another sandbox's process was ended");
-    assert_eq!(other.end_own().unwrap(), 1);
+    assert_eq!(ended.processes, ["sleep"]);
+    assert_eq!(other.end_own().unwrap().processes, ["sleep"]);
 }
 
 /// Rolling back, undoing and going back to a step write in the copy, as a
@@ -2763,6 +2764,13 @@ fn what_still_runs_in_the_sandbox_is_ended_before_the_copy_is_put_back() {
             return;
         }
         assert!(put(&s.task), "{way}");
+        // The person is told what was ended, by name.
+        let told = s.task.take_ended();
+        assert!(
+            told.len() == 1 && told[0].to_lowercase().contains("python"),
+            "{way}: {told:?}"
+        );
+        assert!(s.task.take_ended().is_empty(), "told twice");
         let mut gone = false;
         for _ in 0..100 {
             if !alive(pid) {

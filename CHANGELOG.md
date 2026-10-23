@@ -1,5 +1,54 @@
 # Changes
 
+## Unreleased
+
+Kule tells you what it cuts, ends or refuses, where you work: in the
+command's output, the app's terminal, Live, the Timeline and the task list.
+
+### Changed
+
+- A `kule run` that fails or is stopped still prints what the run changed, its
+  connections and home writes, what the sandbox refused, what Kule put back,
+  the policy's ruling, what was spent and how long it took, and only then
+  the error. The error names `agent.log`, and `agent.log.1` beside it when
+  the log was turned over during the run; a stop says why, without a log.
+  What Kule could not record, put back or read after the run is a `kule:`
+  line each, and the command fails.
+- On Linux, a failed run or shell, and every finished run in Live, say that
+  Linux does not tell Kule what the sandbox refused, rather than list no
+  refusals.
+- Kule names what it ended in a task's sandbox, once per name with how many
+  (`sleep ×2`): before a commit, a rollback, a sync, an undo, going back to a
+  step, or applying or undoing home changes (on stderr; in the app as a
+  notice and a note in Live), and as `kule exec`, an agent's run, `kule shell`
+  or the app's terminal ends.
+- The app's terminal says, as its shell ends, what the sandbox refused it
+  (the same refusal once, with how many times), Kule's hints and what Kule
+  ended. A terminal Kule did not open says so and how to try again, and its
+  cursor stops blinking.
+- The Timeline's *Refused by the sandbox* gives the total, lists the same
+  refusal once with how many times, and says how many older refusals are
+  left out after the newest 50.
+- In Live, a finished run's line folds a list of what the sandbox refused
+  (the newest 20, and how many more the Timeline holds). A stop you asked
+  for shows as a stop, not a failure. A run's notes say when Kule cannot
+  read the extensions' MCP servers (the run goes without them) and when it
+  cannot write the agent's log (the agent goes on). A window opened later
+  says how many earlier events are no longer kept.
+- A task Kule cannot read stays in the task list, marked *cannot be read*,
+  with why.
+- A record of what a run spent that cannot be read is counted, not taken
+  for nothing spent: every budget it could count for (the task's, both of
+  its group's, the daily one) holds the next run, and says why, until the
+  record is mended or removed or the budget turned off. `spent:` lines and
+  the app's spent chip say how many records cannot be read. A record cut
+  short by a crash no longer makes the next run's record unreadable too.
+- After *Open with its app*, the app says the file opened as Kule's own
+  copy, which Kule removes after 24 hours.
+- An extension that is on but cannot run in the window now says *Does not
+  run now*, with why (safe mode, extensions cannot be served, or waiting
+  until the window's WebRTC is off), instead of *Runs*.
+
 ## 0.2.0-preview.9
 
 A security preview. A settings file Kule cannot mask no longer shows its

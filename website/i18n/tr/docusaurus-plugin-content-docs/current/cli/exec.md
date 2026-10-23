@@ -49,7 +49,9 @@ Landlock ve namespace'ler. Varsayılan olarak:
 Sandbox kurulamazsa komut çalışmaz.
 
 Komut bittiğinde sandbox'ta çalışır bıraktığı her şey de onunla biter;
-ebeveynine ne olmuş olursa olsun. Ardından Kule kopyadaki değişiklikleri (yalnızca bu komutunkileri
+ebeveynine ne olmuş olursa olsun. Kule bunların adını verir:
+`kule: ended <names>, still running in the task's sandbox as the command ended`.
+Ardından Kule kopyadaki değişiklikleri (yalnızca bu komutunkileri
 değil, hepsini), yaptığı bağlantıları, ev dizinine yazmaları ve macOS'ta
 sandbox'ın reddettiklerini yazdırır. `kule exec` komutun kendi çıkış koduyla
 çıkar.
@@ -172,6 +174,7 @@ kule exec "$TASK" --reveal ~/Library/Keychains \
 | `net: <host>:<port> · tunneled (<rule>)` | Politikanın geçirdiği bir bağlantı ve onu geçiren kural. |
 | `net: <host>:<port> · refused, …` | Politikanın geçirmediği bir bağlantı. |
 | `sandbox: refused <operation> <path> (<program>)` | macOS'ta sandbox'ın reddettikleri. Bunlar görevin `sandbox.jsonl` dosyasında da saklanır. |
+| `kule: ended <names>, still running in the task's sandbox as the command ended` | stderr'de: komutun çalışır bıraktığı ve Kule'nin onunla birlikte sonlandırdığı şey. Her ad, kaç tane olduğuyla bir kez (`sleep ×2`). |
 | `kule: running without the sandbox` | `--no-sandbox` verdiniz. |
 | `kule: network open, bypassing the proxy and the policy` | `--open-network` verdiniz. |
 

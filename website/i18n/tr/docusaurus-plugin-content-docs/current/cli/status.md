@@ -170,7 +170,7 @@ policy: passes on its own
 | `task <id> changes them too:` | Aynı klasördeki başka bir görev aynı dosyaları değiştiriyor; altındaki satırlar dosyayı ve fonksiyonu, bölümü ya da anahtarı adlandırır. |
 | `the workspace changed since the task's copy …` | `kule sync`'in kopyaya alacakları. `(the task changed it too)`, iki tarafın da değiştirdiği dosyaları işaretler. |
 | `workspace <path> is gone (moved or deleted); commit and undo are refused` | Gerçek klasör artık yerinde değil. |
-| `spent: …; budget …, … left` | Görevin ajan çalıştırmalarının şimdiye kadarki maliyeti. Bir çalıştırma olduktan ya da bir bütçe belirlendikten sonra gösterilir. |
+| `spent: …; budget …, … left` | Görevin ajan çalıştırmalarının şimdiye kadarki maliyeti. Bir çalıştırma olduktan ya da bir bütçe belirlendikten sonra gösterilir. Çalıştırmaların harcadıklarına dair bazı kayıtlar okunamıyorsa ` (N records cannot be read)`; onları sayan bir bütçe bir sonraki çalıştırmayı tutar (bkz. [kule budget](budget.md)). |
 
 En fazla 40 dosya listelenir; geri kalanlar sayılır (`… N more (kule status --json)`).
 
@@ -183,7 +183,7 @@ En fazla 40 dosya listelenir; geri kalanlar sayılır (`… N more (kule status 
 | `effects` | `effects`: değişen her yol; `path`, `change` (`created`, `modified`, `deleted`) ve `kind` (`file`, `dir`, …) ile. Varsa taşımalar, git değişiklikleri ve yok sayılan yollar, ayrıca `repository` (klasörün bir git deposu olup olmadığı). |
 | `ruling` | `verdict` (`allow`, `ask` ya da `deny`) ve `judgements`: her konu için bir tane; `subject`, `verdict` ve karar veren `rules` ile. |
 | `outline` | Değişen her dosya için içinde neyin değiştiği, ya da bir `reason` ile birlikte `"outline": "skipped"`. |
-| `spent` | `runs`, `tokens`, `cost` (tutar ve para birimlerinden oluşan bir liste) ve `unpriced_runs`. |
+| `spent` | `runs`, `tokens`, `cost` (tutar ve para birimlerinden oluşan bir liste) ve `unpriced_runs`; okunamayan kayıt varsa `unreadable` (okunamayan kayıtların sayısı). |
 | `budget` | Görevin kendi bütçesi ya da `null`. |
 | `home` | Ev dizininize yapılan ve incelemeyi bekleyen yazmalar. |
 | `behind` | `changed`: son sync'ten beri çalışma klasörünün değiştirdiği yollar; `both`: görevin de değiştirdikleri; `repository`: commit'lerin, dalların ya da index'in değişip değişmediği. |
