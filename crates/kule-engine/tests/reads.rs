@@ -87,6 +87,21 @@ fn projects_kule_opened_are_hidden_from_every_other_task() {
     assert!(sh(&sandbox, "cat a.txt").status.success());
 }
 
+/// A project Kule opened that holds the home itself (a task on the whole
+/// home) hides nothing more from the others: hiding it would take their
+/// toolchains away.
+#[test]
+fn a_project_holding_the_home_hides_nothing_more() {
+    let (_home, home) = home_with(&[".gitconfig", ".rustup/settings.toml", "work/app/a.txt"]);
+    let kule = TempDir::new_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
+    let task = Task::create(kule.path(), &home.join("work/app")).unwrap();
+    Task::create(kule.path(), &home).unwrap();
+    let sandbox = Sandbox::for_task_with(&task, Some(sources(&home))).unwrap();
+    assert!(reads(&sandbox, &home.join(".gitconfig")));
+    assert!(reads(&sandbox, &home.join(".rustup/settings.toml")));
+    assert!(sh(&sandbox, "cat a.txt").status.success());
+}
+
 /// Where apps and tools keep settings and data, an app's sign-in or a
 /// new tool's included, nothing is read but what toolchains, shells and
 /// prompts read; editors' stores and saved shell sessions neither.
@@ -150,8 +165,14 @@ fn settings_and_app_data_are_hidden_but_for_what_toolchains_read() {
     let mut sandbox = Sandbox::for_task_with(&s.task, Some(sources(&home))).unwrap();
     sandbox.reveal(&home.join(".config")).unwrap();
     assert!(reads(&sandbox, &home.join(".config/some-new-tool/token")));
-    for path in hidden.iter().filter(|p| p.starts_with(".config/") && **p != ".config/some-new-tool/token") {
-        assert!(!reads(&sandbox, &home.join(path)), "{path} was read once revealed");
+    for path in hidden
+        .iter()
+        .filter(|p| p.starts_with(".config/") && **p != ".config/some-new-tool/token")
+    {
+        assert!(
+            !reads(&sandbox, &home.join(path)),
+            "{path} was read once revealed"
+        );
     }
 }
 
@@ -174,7 +195,9 @@ fn a_tool_linked_from_path_into_app_data_runs() {
     std::os::unix::fs::symlink(home.join("notes.txt"), bin.join("notes")).unwrap();
     let s = Setup::new();
     let mut sandbox = Sandbox::new(&s.task).unwrap();
-    sandbox.hide_settings(&home, std::slice::from_ref(&bin)).unwrap();
+    sandbox
+        .hide_settings(&home, std::slice::from_ref(&bin))
+        .unwrap();
     let out = sh(&sandbox, &format!("'{}'", bin.join("a-tool").display()));
     assert!(out.status.success(), "{out:?}");
     assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "ran");
