@@ -1,9 +1,13 @@
 # Changes
 
-## Unreleased
+## 0.2.0-preview.10
 
-Kule tells you what it cuts, ends or refuses, where you work: in the
-command's output, the app's terminal, Live, the Timeline and the task list.
+A security preview. A run sets aside what it may spend before it starts,
+so runs started at once under one budget share what is left and a run
+whose usage never comes still counts. A request Kule refuses inside a
+connection is logged as cut, with why. And Kule tells you what it cuts,
+ends or refuses, where you work: in the command's output, the app's
+terminal, Live, the Timeline and the task list.
 
 ### Changed
 
