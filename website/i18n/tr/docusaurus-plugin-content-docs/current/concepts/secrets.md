@@ -112,8 +112,20 @@ değerler, yer tutucularla değiştirilir:
   değerin yer tutucusunu alır ve böylece onun host'larına ulaşır. Diğerleri
   yer tutucu olarak kalır.
 
+Kule'nin maskeleyemediği bir ayar dosyası, yani UTF-8 olmayan (bir
+Latin-1 baytı, Windows'taki bir editörden UTF-16 bir dosya) ya da 1 MB'tan
+büyük bir dosya, değerlerini olduğu gibi gösterirdi. Bu yüzden kopyada
+böyle bir dosya varken görevde hiçbir ajan çalıştırması, `kule exec`,
+`kule shell` ya da terminal başlamaz; Kule dosyayı ve nedenini söyler.
+Dosyayı 1 MB'ın altında, UTF-8 olarak kaydedin ya da klasörden çıkarın,
+sonra yeniden deneyin.
+
 Aynı maskeleme, [ev katmanının](home-layer.md) `.zshrc`, `.profile`,
-`~/.env` ve benzerlerinin klonlarına da uygulanır.
+`~/.env` ve benzerlerinin klonlarına da uygulanır. Orada Kule'nin
+maskeleyemediği bir dosya ise saklanır: komutlar onu ne katmanda ne de
+gerçek yolunda görür; Kule de bunu komutların çalıştığı yerde söyler
+(uygulamada çalıştırmanın notları, `kule run`, `exec` ve `shell` çıktısı ve
+terminal).
 
 ## Gizli değerler nerede saklanır
 

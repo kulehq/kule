@@ -278,10 +278,11 @@ fn terminal_open(
     cols: u16,
     rows: u16,
 ) -> Result<pty::Opened> {
-    let id = terms.open(app, &kule.home, &task, cols, rows)?;
+    let (id, notes) = terms.open(app, &kule.home, &task, cols, rows)?;
     Ok(pty::Opened {
         id,
         shell: pty::shell_name(),
+        notes,
     })
 }
 

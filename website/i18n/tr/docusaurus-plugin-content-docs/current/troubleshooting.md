@@ -279,6 +279,24 @@ kaydetmediğiniz hiçbir şey kaybolmaz.
 **Çözüm:** terminalin sekmesini kapatın ya da içinde `exit` yazın, sonra
 yeniden deneyin.
 
+### Hiçbir şey başlamıyor: Kule bir ayar dosyasını maskeleyemiyor
+
+**Belirti:** bir çalıştırma, `kule exec`, `kule shell` ya da bir terminal
+başlatırken "the secrets in .env.local cannot be masked (it is not UTF-8),
+so no command may read it" (ya da *larger than 1 MB*, *unreadable*) mesajı.
+
+**Neden:** görevin kopyasındaki `.env` türü bir dosya UTF-8 değil (tek bir
+Latin-1 baytı ya da Windows'taki bir editörün kaydettiği UTF-16 bir dosya
+yeter) ya da 1 MB'tan büyük. Kule değerlerini maskeleyemez; bu yüzden
+onları okuyacak hiçbir şey başlamaz.
+
+**Çözüm:** dosyayı klasörünüzde 1 MB'ın altında, UTF-8 olarak kaydedin (ya
+da klasörden çıkarın), Sync ile içeri alın, sonra yeniden deneyin.
+
+Ev dizininizdeki böyle bir dosya reddedilmez, saklanır: çalıştırmanın
+notları *~/.bashrc is hidden from the commands here* der. Geri vermek için
+UTF-8 olarak kaydedin.
+
 ### Kopyayı bir uygulamada açtıktan sonra çalıştırma reddediliyor
 
 **Belirti:** uygulama bir çalıştırmadan önce *Close … first* diye soruyor

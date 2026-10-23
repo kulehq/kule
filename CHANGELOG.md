@@ -1,5 +1,28 @@
 # Changes
 
+## 0.2.0-preview.9
+
+A security preview. A settings file Kule cannot mask no longer shows its
+values to a task's commands: in the copy nothing starts until it can be
+masked, and in your home it is withheld and Kule says so. A connection
+cut for reaching this computer's network is logged as such.
+
+### Security
+
+- A `.env`-style file in a task's copy that Kule cannot mask (not UTF-8,
+  or larger than 1 MB) no longer reaches the task's commands with its
+  values: no agent run, `kule exec`, `kule shell` or terminal starts while
+  the copy holds one, and Kule names the file and why.
+- A settings file in your home that Kule cannot mask (not UTF-8, or larger
+  than 1 MB) is withheld from the commands, in the home layer and at its
+  real path, rather than shown or linked; the run's notes in the app, the
+  output of `kule run`, `exec` and `shell`, and the terminal say so.
+- A connection whose name led to an address on this computer or its
+  network is logged as `cut`, with why, rather than as a tunnel that went
+  through.
+- The messages Kule writes into the app's terminal carry no control
+  characters, so a file name in them cannot steer the terminal.
+
 ## 0.2.0-preview.8
 
 A security preview. Rolling back, undoing and going back to a step hold

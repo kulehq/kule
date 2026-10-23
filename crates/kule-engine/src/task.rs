@@ -312,7 +312,46 @@ impl Task {
         if self.mask_copy(&mut baseline)? {
             self.save_baseline(&baseline)?;
         }
+        // One Kule cannot mask holds its values in the clear: nothing that
+        // reads the copy starts until it can be.
+        if let Some((path, why)) = self.unmaskable(&baseline).into_iter().next() {
+            return Err(Error::Invalid(format!(
+                "the secrets in {path} cannot be masked (it is {why}), so no command may read it: \
+                 save it as UTF-8 under 1 MB, or move it out of the folder, then try again"
+            )));
+        }
         Ok(())
+    }
+
+    /// The copy's settings files [`Task::mask_copy`] cannot mask, each with
+    /// why: one it cannot read, one larger than it reads, or not UTF-8.
+    fn unmaskable(&self, baseline: &Baseline) -> Vec<(String, &'static str)> {
+        let copy = self.copy();
+        baseline
+            .entries
+            .iter()
+            .filter(|(path, e)| e.copy.kind == Kind::File && secrets::is_env_file(path))
+            .filter_map(|(path, _)| {
+                let Ok(fsops::Beneath::File(file)) = fsops::beneath(&copy, path) else {
+                    return None;
+                };
+                let mut bytes = Vec::new();
+                let read = std::io::Read::read_to_end(
+                    &mut std::io::Read::take(file, MAX_SETTINGS + 1),
+                    &mut bytes,
+                );
+                let why = if read.is_err() {
+                    "unreadable"
+                } else if bytes.len() as u64 > MAX_SETTINGS {
+                    "larger than 1 MB"
+                } else if std::str::from_utf8(&bytes).is_err() {
+                    "not UTF-8"
+                } else {
+                    return None;
+                };
+                Some((path.clone(), why))
+            })
+            .collect()
     }
 
     /// Masks the copy's settings files the baseline knows; where the copy
@@ -1673,6 +1712,8 @@ impl Task {
                     .into(),
             ));
         }
+        // As before an agent's work: what the terminal runs reads the copy.
+        self.protect_secrets()?;
         Ok(open)
     }
 

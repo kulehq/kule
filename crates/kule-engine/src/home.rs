@@ -131,7 +131,15 @@ struct Layer {
     /// commands, which read the masked clones through `HOME`.
     #[serde(default)]
     masked: BTreeSet<String>,
+    /// Files Kule could not mask (not UTF-8, too large), with why: kept out
+    /// of the layer and hidden where they are, so the commands read them
+    /// nowhere.
+    #[serde(default)]
+    withheld: BTreeMap<String, String>,
 }
+
+/// The largest home settings file Kule masks; a larger one is withheld.
+const MAX_MASKED: u64 = 1024 * 1024;
 
 /// One change a task's commands made in the home layer.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -415,6 +423,10 @@ impl Task {
                         layer.entries.insert(text, Entry { work, copy });
                     }
                 }
+                // Too large to mask: a link would show its values.
+                Kind::File if masks_home(&text) => {
+                    layer.withheld.insert(text, "larger than 1 MB".to_owned());
+                }
                 Kind::Dir if captured => {
                     fs::create_dir(&to).at(&to)?;
                     if let Some(copy) = Stamp::of(&to)? {
@@ -457,6 +469,12 @@ impl Task {
                                         false
                                     }
                                 }
+                            }
+                            Kind::File if masks_home(&rel) => {
+                                layer
+                                    .withheld
+                                    .insert(rel.clone(), "larger than 1 MB".to_owned());
+                                true
                             }
                             Kind::Dir if capturable(&from) => {
                                 match fsops::clone_tree(&from, &to, &real_clock) {
@@ -825,8 +843,16 @@ impl Task {
         let mut writes = Vec::new();
         for rel in candidates {
             let file = dir.join(&rel);
-            let Ok(text) = fs::read_to_string(&file) else {
-                continue;
+            let text = match read_settings(&dir, &rel) {
+                Ok(text) => text,
+                Err(why) => {
+                    // Its values would be read in the clear: neither the
+                    // clone nor the real file is shown.
+                    fsops::remove(&file)?;
+                    layer.entries.remove(&rel);
+                    layer.withheld.insert(rel, why.to_owned());
+                    continue;
+                }
             };
             let real = layer.real.join(&rel).display().to_string();
             let masked = secrets::mask_with(&real, &text, &mut kept, &vault)?;
@@ -861,9 +887,35 @@ impl Task {
                 layer
                     .masked
                     .iter()
+                    .chain(layer.withheld.keys())
                     .map(|rel| layer.real.join(rel))
                     .collect()
             })
+            .unwrap_or_default())
+    }
+
+    /// What to tell the person of each file [`Task::home_withheld`] names,
+    /// wherever the commands run: a run's notes, a command's output, a
+    /// terminal.
+    pub fn home_withheld_notes(&self) -> Result<Vec<String>> {
+        Ok(self
+            .home_withheld()?
+            .into_iter()
+            .map(|(path, why)| {
+                format!(
+                    "~/{path} is hidden from the commands here: it is {why}, so its secrets \
+                     could not be masked"
+                )
+            })
+            .collect())
+    }
+
+    /// The home's settings files Kule withheld from the commands, each with
+    /// why: it could not mask their secrets (see [`Task::mask_layer`]).
+    pub fn home_withheld(&self) -> Result<Vec<(String, String)>> {
+        Ok(self
+            .load_layer()?
+            .map(|layer| layer.withheld.into_iter().collect())
             .unwrap_or_default())
     }
 
@@ -1178,4 +1230,19 @@ fn capturable(dir: &Path) -> bool {
     tree.len() <= MAX_DIR_ENTRIES
         && (cfg!(target_os = "macos")
             || tree.values().map(|s| s.size).sum::<u64>() <= MAX_DIR_BYTES)
+}
+
+/// The layer's settings file `rel` under `dir` as text, read without
+/// following a link; why not, where it cannot be masked.
+fn read_settings(dir: &Path, rel: &str) -> std::result::Result<String, &'static str> {
+    let Ok(fsops::Beneath::File(file)) = fsops::beneath(dir, rel) else {
+        return Err("unreadable");
+    };
+    let mut bytes = Vec::new();
+    std::io::Read::read_to_end(&mut std::io::Read::take(file, MAX_MASKED + 1), &mut bytes)
+        .map_err(|_| "unreadable")?;
+    if bytes.len() as u64 > MAX_MASKED {
+        return Err("larger than 1 MB");
+    }
+    String::from_utf8(bytes).map_err(|_| "not UTF-8")
 }

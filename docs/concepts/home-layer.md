@@ -37,6 +37,9 @@ In the clones of what shells and tools read as they start (`.zshrc`,
 `.profile`, `.gitconfig`, …) and of env files (`~/.env`), a setting that
 looks like a secret (`export GITHUB_TOKEN=…`) is **masked**: commands see a
 placeholder (see [Secrets](secrets.md)), and an apply puts your value back.
+One Kule cannot mask (not UTF-8, or larger than 1 MB) is withheld from
+the commands, in the layer and at its real path, and Kule says so where
+they run; it is never offered as a change.
 
 ## Seeing what waits
 

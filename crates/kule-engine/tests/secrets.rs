@@ -342,3 +342,47 @@ fn a_kept_secret_inside_a_value_is_masked_and_put_back_where_it_was() {
     let folder = fs::read_to_string(ws.path().join(".env")).unwrap();
     assert_eq!(folder, format!("{env}NEW_FLAG=1\n{first}\n"));
 }
+
+/// A settings file Kule cannot mask (not UTF-8, or larger than it reads)
+/// keeps its values in the clear: no agent, command or terminal starts in
+/// the task until it can be, and the person is told which file and why.
+#[test]
+fn a_settings_file_kule_cannot_mask_holds_off_everything_that_would_read_it() {
+    let s = Setup::new();
+    // One Latin-1 byte in a comment.
+    let mut latin1 = b"# caf\xe9\n".to_vec();
+    latin1.extend_from_slice(b"API_KEY=sk_live_51Hlatin\n");
+    let mut big = b"API_KEY=sk_live_51Hbig\n".to_vec();
+    big.extend(std::iter::repeat_n(b'#', 1024 * 1024 + 10));
+    for (name, bytes, why) in [
+        (".env.local", latin1.clone(), "not UTF-8"),
+        (".env.big", big, "larger than 1 MB"),
+    ] {
+        let s = Setup::new();
+        fs::write(s.ws.path().join(name), &bytes).unwrap();
+        s.task.sync().unwrap();
+        let held = |e: String| {
+            assert!(e.contains(name) && e.contains(why), "{e}");
+        };
+        held(s.task.agent_at_work().map(|_| ()).unwrap_err().to_string());
+        held(
+            s.task
+                .terminal_opened()
+                .map(|_| ())
+                .unwrap_err()
+                .to_string(),
+        );
+        assert!(s.task.terminals_open().is_empty());
+
+        // Saved as UTF-8 and small, it is masked and work starts.
+        fs::write(s.ws.path().join(name), "# cafe\nAPI_KEY=sk_live_51Hfixed\n").unwrap();
+        s.task.sync().unwrap();
+        let at_work = s.task.agent_at_work().unwrap();
+        let copy = fs::read_to_string(s.task.copy().join(name)).unwrap();
+        assert!(!copy.contains("sk_live"), "{copy}");
+        drop(at_work);
+        assert!(s.task.terminal_opened().is_ok());
+    }
+    // The plain `.env` beside them was never in the way.
+    assert!(!s.copy_env().contains("sk_live"));
+}

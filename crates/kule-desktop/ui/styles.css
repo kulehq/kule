@@ -3965,12 +3965,11 @@ body.dragging-panel * {
   gap: 10px;
 }
 
-/* "in the sandbox", in the terminal's corner. */
+/* "in the sandbox", at the right of the terminal tabs. */
 .terminal-note {
-  position: absolute;
-  top: 6px;
-  right: 12px;
-  z-index: 3;
+  flex: none;
+  align-self: center;
+  margin: 0 8px 0 auto;
   padding: 1px 8px;
   border-radius: 999px;
   background: var(--accent-soft);

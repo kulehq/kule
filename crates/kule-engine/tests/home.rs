@@ -626,6 +626,73 @@ fn a_token_in_a_shell_startup_file_is_masked_in_the_layer() {
     assert!(!layer.contains("export B=2"), "{layer}");
 }
 
+/// A startup file Kule cannot mask (not UTF-8) is withheld from the
+/// commands, there and at its real path, rather than shown with its token:
+/// Kule says which file and why, offers no change for it, and the real file
+/// stays as it was.
+#[test]
+fn a_startup_file_kule_cannot_mask_is_withheld_and_told() {
+    let s = Setup::new();
+    let p = s.person.path();
+    let token = "ghp_k3yL1ke0nlyF0rTest1ng9Latin";
+    let mut bashrc = b"# caf\xe9\n".to_vec();
+    bashrc.extend_from_slice(format!("export GITHUB_TOKEN={token}\n").as_bytes());
+    fs::write(p.join(".bashrc"), &bashrc).unwrap();
+    // Too large to mask, at the top and in a captured folder: neither
+    // cloned nor linked to the real one.
+    let mut big = format!("export NPM_TOKEN={token}\n").into_bytes();
+    big.extend(std::iter::repeat_n(b'#', 1024 * 1024 + 10));
+    fs::write(p.join(".profile"), &big).unwrap();
+    fs::create_dir_all(p.join(".config/fish")).unwrap();
+    fs::write(p.join(".config/fish/.env"), &big).unwrap();
+
+    let seen = s.run(&format!(
+        "head -c 200 \"$HOME/.bashrc\" \"$HOME/.profile\" \"$HOME/.config/fish/.env\" '{}' '{}' 2>/dev/null; echo done",
+        p.join(".bashrc").display(),
+        p.join(".profile").display()
+    ));
+    assert!(!seen.contains(token), "{seen}");
+    assert!(seen.contains("done"), "{seen}");
+    assert_eq!(
+        s.task.home_withheld().unwrap(),
+        [
+            (".bashrc".to_owned(), "not UTF-8".to_owned()),
+            (
+                ".config/fish/.env".to_owned(),
+                "larger than 1 MB".to_owned()
+            ),
+            (".profile".to_owned(), "larger than 1 MB".to_owned()),
+        ]
+    );
+    assert!(s.task.home_changes().unwrap().is_empty());
+    assert_eq!(fs::read(p.join(".bashrc")).unwrap(), bashrc);
+    // The masked startup file beside it is shown as ever.
+    assert!(s.run("cat \"$HOME/.zshrc\"").contains("export A=1"));
+}
+
+/// Made with nothing hidden, the layer still never links a settings file
+/// it cannot mask: one too large, right in `.config`, is withheld.
+#[test]
+fn a_settings_file_too_large_to_mask_is_never_linked() {
+    let s = Setup::new();
+    let p = s.person.path();
+    let mut big = b"API_KEY=ghp_k3yL1ke0nlyF0rTest1ng9Large\n".to_vec();
+    big.extend(std::iter::repeat_n(b'#', 1024 * 1024 + 10));
+    fs::write(p.join(".config/app.env"), &big).unwrap();
+    let layer = s.task.prepare_home(p, &[], &[], &[], &[]).unwrap();
+    assert!(fs::symlink_metadata(layer.join(".config/app.env")).is_err());
+    assert_eq!(
+        s.task.home_withheld().unwrap(),
+        [(".config/app.env".to_owned(), "larger than 1 MB".to_owned())]
+    );
+    assert!(
+        s.task
+            .home_masked()
+            .unwrap()
+            .contains(&p.join(".config/app.env"))
+    );
+}
+
 /// A kept secret inside a line of a startup file (an alias, a command) is
 /// masked in the layer, and so is one kept for another folder: the home is
 /// the same for every folder. An apply puts the lines back as they were.

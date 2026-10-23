@@ -333,6 +333,7 @@ impl lonca_net::Gate for Gate {
         if !may_reach(&host, &tunnel.upstream) {
             let _ = tunnel.upstream.shutdown(std::net::Shutdown::Both);
             let _ = tunnel.client.shutdown(std::net::Shutdown::Both);
+            self.note_cut(request, UNREACHABLE_CUT.to_owned());
             return None;
         }
         let Some(interceptor) = self
@@ -369,6 +370,7 @@ impl lonca_net::Gate for Gate {
         if !may_reach(&host, &tunnel.upstream) {
             let _ = tunnel.upstream.shutdown(std::net::Shutdown::Both);
             let _ = tunnel.client.shutdown(std::net::Shutdown::Both);
+            self.note_cut(request, UNREACHABLE_CUT.to_owned());
             return None;
         }
         // Every request on the connection is read, and each must be for
@@ -583,6 +585,10 @@ fn resolves_public(host: &str, port: u16) -> bool {
         .map_or(true, |mut addrs| addrs.all(|a| public_ip(a.ip())))
 }
 
+/// Why a connection is cut that reached an address [`may_reach`] refuses.
+const UNREACHABLE_CUT: &str =
+    "it reached an address on this computer or its network, which is not reachable";
+
 /// Whether a tunnel asked for by `host` may go on to where `upstream` is
 /// connected: a public address, or this computer named as such. An address
 /// that cannot be read may not.
@@ -599,6 +605,70 @@ fn loopback_by_name(host: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A connection let through by name that reached an address on this
+    /// computer or its network is shut, and recorded as cut, with why:
+    /// never as a tunnel that went through.
+    #[test]
+    fn a_connection_that_reached_a_private_address_is_recorded_as_cut() {
+        use lonca_net::Gate as _;
+        use std::net::{TcpListener, TcpStream};
+        let dir = tempfile::TempDir::new().unwrap();
+        let log_path = dir.path().join("network.jsonl");
+        let rule = r#"@id("t") permit (principal, action == Kule::Action::"auto", resource) when { resource.kind == "net.connect" && resource.host == "rebind.example" };"#;
+        let policy =
+            Policy::from_texts(&format!("{}\n{rule}", crate::DEFAULT_POLICY), None).unwrap();
+        let gate = Gate {
+            policy,
+            log: Mutex::new(File::create(&log_path).unwrap()),
+            pending: Mutex::new(HashMap::new()),
+            asker: None,
+            interceptor: None,
+        };
+        for plain in [false, true] {
+            let local = TcpListener::bind("127.0.0.1:0").unwrap();
+            let upstream = TcpStream::connect(local.local_addr().unwrap()).unwrap();
+            let proxy = TcpListener::bind("127.0.0.1:0").unwrap();
+            let _client = TcpStream::connect(proxy.local_addr().unwrap()).unwrap();
+            let (client, peer) = proxy.accept().unwrap();
+            let request = lonca_net::Request {
+                host: "rebind.example",
+                port: 443,
+                peer,
+                local: proxy.local_addr().unwrap(),
+            };
+            let judgement = gate.policy.judge_connection("rebind.example", 443);
+            assert_eq!(judgement.verdict, Verdict::Allow);
+            lock(&gate.pending).insert(peer, (judgement, None, Vec::new(), None));
+            let tunnel = lonca_net::Tunnel {
+                client,
+                upstream,
+                early: Vec::new(),
+            };
+            if plain {
+                let head = "GET / HTTP/1.1\r\nHost: rebind.example\r\n\r\n".to_owned();
+                assert!(gate.relay_plain(&request, head, tunnel).is_none());
+            } else {
+                assert!(gate.relay(&request, tunnel).is_none());
+            }
+            gate.finished(&request, lonca_net::Outcome::Tunneled);
+        }
+        let text = std::fs::read_to_string(&log_path).unwrap();
+        let records: Vec<Connection> = text
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        assert_eq!(records.len(), 2, "{text}");
+        for record in records {
+            assert_eq!(record.outcome, "cut", "{text}");
+            assert!(
+                record
+                    .cut
+                    .is_some_and(|why| why.contains("an address on this computer")),
+                "{text}"
+            );
+        }
+    }
 
     /// What a client sends first decides whether a tunnel Kule does not
     /// look inside goes on: TLS asking for its host by name (any case, a
