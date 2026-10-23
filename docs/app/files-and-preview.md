@@ -93,7 +93,8 @@ one you used last first. The editor runs outside the sandbox, as you.
 
 - It is refused, as *Open in terminal app* is, while an agent is at work in
   the task, and while the task changed what would run there by itself: git
-  config or hooks, a toolchain pin, an editor's settings and tasks.
+  config or hooks, a toolchain pin, the package manager a `package.json`
+  names, an editor's settings and tasks.
 - While the copy holds changes not committed, Kule lists the changed files
   and asks first, every time. An editor runs things by itself from a folder
   (tasks, settings, recommended extensions, git hooks), so look at the

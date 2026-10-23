@@ -98,7 +98,8 @@ birini listeler, en son kullandığınız en üstte olur. Editör sandbox'ın
 dışında, sizin kimliğinizle çalışır.
 
 - Görevde bir ajan çalışırken ve görev orada kendiliğinden çalışacak bir
-  şeyi (git config'i ya da hook'ları, bir sürüm dosyasını, bir editörün
+  şeyi (git config'i ya da hook'ları, bir sürüm dosyasını, bir
+  `package.json`'ın adını verdiği paket yöneticisini, bir editörün
   ayarlarını ve görevlerini) değiştirdiği sürece, *Open in terminal app*'te
   olduğu gibi reddedilir.
 - Kopyada commit edilmemiş değişiklikler varken Kule değişen dosyaları

@@ -241,7 +241,8 @@ opening a terminal".
 
 **Cause:** the task changed what would run in the copy by itself, outside
 the sandbox: its git config or hooks (your shell prompt's `git status`), a
-toolchain pin such as `rust-toolchain.toml` or `.nvmrc`, `.envrc`, or an
+toolchain pin such as `rust-toolchain.toml` or `.nvmrc`, the package
+manager a `package.json` names, `.envrc`, or an
 editor's settings. Or an agent is at work in the task: wait until it is
 done.
 
@@ -253,9 +254,10 @@ sandbox and open anyway.
 
 ### Commit, sync or a run waits for a terminal
 
-**Symptom:** "a terminal is open on task …'s copy (held by process …);
-close it first, then commit" (or *then sync*, *then apply its home
-changes*, *then start work*).
+**Symptom:** "a terminal is open on this task's copy (in Kule's app, or kule shell);
+close it first, then commit" (or *then sync*, *then roll back*, *then
+undo*, *then go back to a step*, *then apply its home changes*, *then undo
+its home changes*, *then start work*).
 
 **Cause:** a terminal is open on the task: a tab of the app's **Terminal**
 panel, or `kule shell`. Kule does not end what runs there, so nothing you

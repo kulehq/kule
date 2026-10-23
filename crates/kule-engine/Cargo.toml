@@ -15,8 +15,8 @@ blake3.workspace = true
 cedar-policy.workspace = true
 filetime.workspace = true
 gix.workspace = true
-kule-entities = { version = "0.2.0-preview.7", path = "../kule-entities" }
-kule-view = { version = "0.2.0-preview.7", path = "../kule-view" }
+kule-entities = { version = "0.2.0-preview.8", path = "../kule-entities" }
+kule-view = { version = "0.2.0-preview.8", path = "../kule-view" }
 libc = "0.2.190"
 # Shared with Lonca. Builds use the pinned commit; a crates.io publish uses
 # the version, so that version has to be on crates.io first.

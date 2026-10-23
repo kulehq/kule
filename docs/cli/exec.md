@@ -179,7 +179,7 @@ kule exec "$TASK" --reveal ~/Library/Keychains \
 | a `net: … refused` line and a failed download | Let the host through with [kule rules allow](rules.md), or use the app, where the connection waits for your answer. |
 | `kule: could not run <program>` | The program is not on the `PATH` the command sees, or is not executable. |
 | `kule: an agent is at work in task <id> …` | Wait for the agent's run to end. |
-| `kule: a terminal is open on task <id>'s copy …; close it first, then start work` | A terminal on the task (the app's, or `kule shell`) is open. Close it first. |
+| `kule: a terminal is open on this task's copy (in Kule's app, or kule shell); close it first, then start work` | A terminal on the task (the app's, or `kule shell`) is open. Close it first. |
 | `kule: Kule opened task <id>'s copy in <app> outside the sandbox; …` | Close that terminal app or editor, then run [kule closed](closed.md) `TASK`. |
 
 On Linux without unprivileged user namespaces, see

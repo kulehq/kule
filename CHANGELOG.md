@@ -1,5 +1,31 @@
 # Changes
 
+## 0.2.0-preview.8
+
+A security preview. Rolling back, undoing and going back to a step hold
+the task's copy still, as commit and sync do, and Kule puts files back
+through folders it opens without following a link. The copy does not
+open outside the sandbox while a `package.json` names another package
+manager.
+
+### Security
+
+- Rolling back, undoing, going back to a step and undoing home changes
+  work as commit and sync do: while a terminal Kule opened is open on the
+  task they wait, saying so, and what still runs in the task's sandbox is
+  ended before Kule writes in the copy. No terminal opens while Kule is
+  writing there.
+- Kule puts files back in a task's copy, and into your folder, through
+  folders it opens one at a time without following a link, so a folder
+  swapped for a link on the way, at any moment, takes nothing anywhere
+  else.
+- The copy does not open in a terminal app or an editor outside the
+  sandbox while a `package.json` in it names another package manager
+  (`packageManager`, `devEngines.packageManager`), which the next `pnpm` or
+  `yarn` there would fetch and run.
+- A terminal open on the task is named as such in the message (the app's,
+  or `kule shell`), without a process id.
+
 ## 0.2.0-preview.7
 
 A security preview. A task's commands read neither the other projects on

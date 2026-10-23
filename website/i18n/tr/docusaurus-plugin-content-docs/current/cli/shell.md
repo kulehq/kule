@@ -60,7 +60,8 @@ güvenmediğiniz bir şeyi çalıştırmanın yeri değildir.
   şeyi değiştirmişken reddedilir: git config ya da hook'lar
   (prompt'unuzdaki `git status` ya da yazdığınız herhangi bir git komutu
   onları çalıştırırdı) ya da prompt'unuzun klasöre girerken okuduğu bir
-  sürüm dosyası ya da `.envrc` gibi bir dosya. Bkz.
+  sürüm dosyası, bir `package.json`'ın adını verdiği paket yöneticisi ya da
+  `.envrc` gibi bir dosya. Bkz.
   [kendiliğinden çalışanlar](../concepts/git.md#what-runs-by-itself-protects-your-terminal-too).
   Önce bu değişiklikleri [kule status](status.md) ile inceleyin, sonra
   commit edin ya da atın.
@@ -141,7 +142,7 @@ kule: the copy's git config changed, and git there would run it outside the sand
 
 ```text
 $ kule commit 3422f830
-kule: a terminal is open on task 3422f830's copy (held by process 48213); close it first, then commit
+kule: a terminal is open on this task's copy (in Kule's app, or kule shell); close it first, then commit
 ```
 
 ## Çıktı
@@ -161,7 +162,7 @@ kule: a terminal is open on task 3422f830's copy (held by process 48213); close 
 | `kule: the copy's git config changed, …` / `… hooks …` | Yalnızca `--outside` ile. `kule status TASK` çalıştırın, sonra `kule commit` (değişikliğe güveniyorsanız; yeni bir hook her zaman reddedilir) ya da `kule rollback`. Ya da kabuğu `--outside` olmadan, sandbox'ta açın. |
 | `kule: review them first, or pass --yes to open your shell there anyway` | `--outside` ile, kopyada commit edilmemiş değişiklikler var ve soracak bir terminal yok. Onlara [kule status](status.md) ile bakın ya da `--yes` verin. |
 | `kule: not opened` | *Hayır* dediniz. |
-| `kule: a terminal is open on task <id>'s copy …; close it first, then commit` | Kabuk açıkken `kule commit`, `kule sync` ya da `kule home apply`'dan gelir. Önce kabuktan `exit` ile çıkın. |
+| `kule: a terminal is open on this task's copy (in Kule's app, or kule shell); close it first, then commit` | Kabuk açıkken `kule commit`, `kule sync`, `kule rollback`, `kule undo` ya da `kule home apply`/`undo`'dan gelir. Önce kabuktan `exit` ile çıkın. |
 | `kule: could not start <shell>` | `$SHELL` var olmayan bir programı gösteriyor. |
 
 ## Uygulamada

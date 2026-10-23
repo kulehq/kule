@@ -46,8 +46,9 @@ edilir.
   hazırlanırken birkaç saniye sürebilir.
 - Görevde bir ajan çalışırken Kule **terminal açmayı reddeder**.
 - **Bir görevde terminal açıkken** o görevde hiçbir ajan çalıştırması
-  başlamaz; **Commit**, **Sync** ve ev değişikliklerini uygulamak bekler.
-  Kule orada çalışanı sonlandırmak yerine *a terminal is open on task …'s
+  başlamaz; **Commit**, **Sync**, **Roll back**, **Undo**, bir adıma geri
+  dönmek ve ev değişikliklerini uygulamak ya da geri almak bekler. Kule
+  orada çalışanı sonlandırmak yerine *a terminal is open on this task's
   copy; close it first* der; böylece kaydetmediğiniz hiçbir şey kaybolmaz.
   Önce terminalin sekmesini kapatın (ya da `exit` yazın), sonra devam edin.
   [`kule shell`](../cli/shell.md) de terminal sayılır.
@@ -62,7 +63,8 @@ editörünüzde açar. İkisi de sandbox'ın **dışında**, sizin kimliğinizle
 - Görevde bir ajan çalışırken ve görev kopyada kendiliğinden çalışacak bir
   şeyi değiştirdiği sürece reddedilirler: git config ya da hook'lar
   (prompt'unuzdaki `git status` bunları çalıştırırdı), `rust-toolchain.toml`
-  ya da `.nvmrc` gibi bir sürüm dosyası, `.envrc` ya da bir editörün
+  ya da `.nvmrc` gibi bir sürüm dosyası, bir `package.json`'ın adını
+  verdiği paket yöneticisi, `.envrc` ya da bir editörün
   ayarları. Önce bunları inceleyip commit edin ya da değişiklikleri atın.
   Bkz.
   [kendiliğinden çalışanlar](../concepts/git.md#what-runs-by-itself-protects-your-terminal-too).

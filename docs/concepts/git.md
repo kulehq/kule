@@ -76,7 +76,12 @@ there by itself, outside the sandbox:
 - a file the [`automation`](../reference/policy-rules.md) rule names, such
   as a toolchain pin (`rust-toolchain.toml`, `.nvmrc`, `.python-version`,
   `.tool-versions`), `.envrc`, or an editor's settings and tasks
-  (`.vscode/`), which a prompt or an editor reads when it opens the folder.
+  (`.vscode/`), which a prompt or an editor reads when it opens the folder;
+- the package manager a `package.json` names (`packageManager`, or
+  `devEngines.packageManager`): with Corepack on, the next `pnpm` or `yarn`
+  there, an editor's included, fetches and runs that version. Other changes
+  to `package.json` leave the terminal open; they wait at commit as a
+  manifest. A `package.json` Kule cannot read as JSON closes it too.
 
 `kule path` warns on stderr. Review and commit or roll them back first.
 

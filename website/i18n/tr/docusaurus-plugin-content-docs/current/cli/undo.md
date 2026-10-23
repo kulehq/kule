@@ -97,6 +97,7 @@ hint: roll back, or rerun the task on the current workspace
 | `kule: the workspace changed since Kule last saw it, at: <paths>` | Bu dosyalar commit'ten sonra gerçek klasörde değişti. Kule bunların üzerine yazmaz. Elle eski hâline getirin ya da commit'i yerinde bırakın. |
 | `kule: workspace <path> is gone …` | Gerçek klasör taşındı ya da silindi. |
 | `kule: an agent is at work in task <id> …` | Çalıştırmanın bitmesini bekleyin. |
+| `kule: a terminal is open on this task's copy (in Kule's app, or kule shell); close it first, then undo` | Görevin terminalini kapatın (uygulamadaki sekmeyi ya da `kule shell`'den `exit` ile çıkın), sonra geri alın. |
 
 ## Uygulamada
 

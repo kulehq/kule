@@ -644,10 +644,9 @@ impl Task {
     ) -> Result<Option<Checkpoint>> {
         let _lock = self.lock()?;
         self.workspace_in_place()?;
-        self.no_terminal_open("commit")?;
         // Nothing left running in the task's sandbox changes the copy
         // while it is read and committed.
-        crate::Sandbox::end_all(self)?;
+        self.quiet_sandbox("commit")?;
         let mut baseline = self.load_baseline()?;
         let (set, derived) = self.commit_set(&baseline, include_ignored)?;
         if set.is_empty() {
@@ -904,6 +903,7 @@ impl Task {
     /// the workspace holds.
     pub fn rollback(&self) -> Result<EffectSet> {
         let _lock = self.lock()?;
+        self.quiet_sandbox("roll back")?;
         let mut baseline = self.load_baseline()?;
         let set = effects::compute(&self.copy(), self.workspace(), &baseline)?;
         if !set.is_empty() {
@@ -961,6 +961,7 @@ impl Task {
     /// gone), sorted parents first, and masks the settings files again.
     pub(crate) fn put_back(&self, staging: &Path, paths: &[String]) -> Result<()> {
         let _lock = self.lock()?;
+        self.quiet_sandbox("go back to a step")?;
         fsops::mirror(staging, &self.copy(), paths, false)?;
         let mut baseline = self.load_baseline()?;
         if self.mask_copy(&mut baseline)? {
@@ -975,6 +976,7 @@ impl Task {
     /// the commit left it.
     pub fn undo(&self) -> Result<Option<Checkpoint>> {
         let _lock = self.lock()?;
+        self.quiet_sandbox("undo")?;
         self.workspace_in_place()?;
         let mut baseline = self.load_baseline()?;
         let pending = effects::compute(&self.copy(), self.workspace(), &baseline)?;
@@ -1300,7 +1302,56 @@ impl Task {
                  terminal"
             )));
         }
+        // With Corepack on, the next `pnpm` or `yarn` there (an editor's, a
+        // prompt's) fetches and runs the version a `package.json` names.
+        for e in effects.files() {
+            let named = e.path.rsplit('/').next().unwrap_or(&e.path);
+            if e.change != Change::Deleted
+                && e.kind == Kind::File
+                && named.eq_ignore_ascii_case("package.json")
+                && self.package_manager_changed(&e.path)
+            {
+                return Err(Error::Invalid(format!(
+                    "the copy's {} names another package manager, which pnpm or yarn there \
+                     would fetch and run outside the sandbox; review it, then commit or roll it \
+                     back before opening a terminal",
+                    e.path
+                )));
+            }
+        }
         Ok(self.copy())
+    }
+
+    /// Whether the package manager `path` (a `package.json`) names in the
+    /// copy is not the one it names in the folder: `packageManager`, or
+    /// `devEngines.packageManager`. A file that cannot be read as JSON, or
+    /// is too large to, counts as changed.
+    fn package_manager_changed(&self, path: &str) -> bool {
+        let named = |root: &Path| -> std::result::Result<Option<serde_json::Value>, ()> {
+            let file = match fsops::beneath(root, path) {
+                Ok(fsops::Beneath::File(file)) => file,
+                Ok(fsops::Beneath::Missing) => return Ok(None),
+                _ => return Err(()),
+            };
+            let mut text = Vec::new();
+            let read = std::io::Read::read_to_end(
+                &mut std::io::Read::take(file, MAX_SETTINGS + 1),
+                &mut text,
+            );
+            if read.is_err() || text.len() as u64 > MAX_SETTINGS {
+                return Err(());
+            }
+            let json: serde_json::Value = serde_json::from_slice(&text).map_err(|_| ())?;
+            Ok(Some(serde_json::json!([
+                json.get("packageManager"),
+                json.pointer("/devEngines/packageManager"),
+            ])))
+        };
+        match (named(&self.copy()), named(self.workspace())) {
+            (Ok(Some(copy)), Ok(Some(folder))) => copy != folder,
+            (Ok(Some(copy)), Ok(None)) => copy != serde_json::json!([null, null]),
+            _ => true,
+        }
     }
 
     /// The task's signed history, oldest first: every commit and undo.
@@ -1613,6 +1664,15 @@ impl Task {
                 self.info.id
             )));
         }
+        // Kule may be writing in the copy (a commit, a rollback), having
+        // looked for terminals before this one was marked.
+        if self.dir.join("lock").exists() {
+            return Err(Error::Invalid(
+                "Kule is writing in this task's copy (a commit, sync or rollback); \
+                 open the terminal once that is done"
+                    .into(),
+            ));
+        }
         Ok(open)
     }
 
@@ -1641,16 +1701,27 @@ impl Task {
         pids
     }
 
+    /// Before Kule writes where the task's sandbox writes too (the copy,
+    /// the home layer): refuses `doing` while a terminal Kule opened is
+    /// open on the copy, and ends what still runs in the sandbox, so
+    /// nothing swaps a folder on the way while Kule writes there. Called
+    /// with the task's lock held: a terminal opened meanwhile sees the lock
+    /// and refuses (see [`Task::terminal_opened`]).
+    pub(crate) fn quiet_sandbox(&self, doing: &str) -> Result<()> {
+        self.no_terminal_open(doing)?;
+        crate::Sandbox::end_all(self)?;
+        Ok(())
+    }
+
     /// Refuses `doing` while a terminal Kule opened is open on the copy.
     pub(crate) fn no_terminal_open(&self, doing: &str) -> Result<()> {
-        match self.terminals_open().first() {
-            Some(pid) => Err(Error::Invalid(format!(
-                "a terminal is open on task {}'s copy (held by process {pid}); \
-                 close it first, then {doing}",
-                self.info.id
-            ))),
-            None => Ok(()),
+        if self.terminals_open().is_empty() {
+            return Ok(());
         }
+        Err(Error::Invalid(format!(
+            "a terminal is open on this task's copy (in Kule's app, or kule shell); \
+             close it first, then {doing}"
+        )))
     }
 
     /// Notes that Kule opened the copy in `what` (a terminal app, an

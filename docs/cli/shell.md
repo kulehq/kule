@@ -57,7 +57,8 @@ to run something you do not trust.
 - It is refused while an agent is at work in the task, and while the task
   has changed what would run in the copy by itself: git config or hooks
   (your prompt's `git status`, or any git command you type, would run
-  them), or a file such as a toolchain pin or `.envrc` that your prompt
+  them), or a file such as a toolchain pin, the package manager a
+  `package.json` names, or `.envrc` that your prompt
   reads on entering the folder. See
   [what runs by itself](../concepts/git.md#what-runs-by-itself-protects-your-terminal-too).
   Review those changes with [kule status](status.md), then commit or roll
@@ -139,7 +140,7 @@ kule: the copy's git config changed, and git there would run it outside the sand
 
 ```text
 $ kule commit 3422f830
-kule: a terminal is open on task 3422f830's copy (held by process 48213); close it first, then commit
+kule: a terminal is open on this task's copy (in Kule's app, or kule shell); close it first, then commit
 ```
 
 ## Output
@@ -159,7 +160,7 @@ kule: a terminal is open on task 3422f830's copy (held by process 48213); close 
 | `kule: the copy's git config changed, …` / `… hooks …` | With `--outside` only. Run `kule status TASK`, then `kule commit` (if you trust the change; a new hook is always denied) or `kule rollback`. Or open the shell in the sandbox, without `--outside`. |
 | `kule: review them first, or pass --yes to open your shell there anyway` | With `--outside`, the copy holds changes not committed and there is no terminal to ask on. Look at them with [kule status](status.md), or pass `--yes`. |
 | `kule: not opened` | You answered no. |
-| `kule: a terminal is open on task <id>'s copy …; close it first, then commit` | From `kule commit`, `kule sync` or `kule home apply` while the shell is open. `exit` the shell first. |
+| `kule: a terminal is open on this task's copy (in Kule's app, or kule shell); close it first, then commit` | From `kule commit`, `kule sync`, `kule rollback`, `kule undo` or `kule home apply`/`undo` while the shell is open. `exit` the shell first. |
 | `kule: could not start <shell>` | `$SHELL` names a program that does not exist. |
 
 ## In the app

@@ -1000,6 +1000,55 @@ fn an_open_terminal_holds_off_work_commit_and_sync() {
     assert!(e.to_string().contains("agent is at work"), "{e}");
     drop(at_work);
     assert!(s.task.terminal_opened().is_ok());
+
+    // While Kule writes in the copy, under the task's lock, none opens
+    // either: it would start after the commit looked for terminals.
+    let lock = marks.parent().unwrap().join("lock");
+    fs::write(&lock, "1\n").unwrap();
+    let e = s.task.terminal_opened().map(|_| ()).unwrap_err();
+    assert!(
+        e.to_string()
+            .contains("Kule is writing in this task's copy"),
+        "{e}"
+    );
+    assert!(s.task.terminals_open().is_empty());
+    fs::remove_file(&lock).unwrap();
+    assert!(s.task.terminal_opened().is_ok());
+}
+
+/// Rolling back, undoing and going back to a step write in the copy, as a
+/// sync does: while a terminal Kule opened is open on it, they refuse and
+/// leave the copy and the folder as they are.
+#[test]
+fn an_open_terminal_holds_off_rollback_undo_and_going_back() {
+    let s = Setup::new();
+    write(&s.copy().join("a.txt"), "one\n");
+    assert!(s.task.commit().unwrap().is_some());
+    write(&s.copy().join("b.txt"), "two\n");
+    s.task.step("b").unwrap();
+    let open = s.task.terminal_opened().unwrap();
+    let held = |r: Result<(), Error>, doing: &str| match r {
+        Err(Error::Invalid(m)) => {
+            assert!(m.contains("terminal is open") && m.contains(doing), "{m}")
+        }
+        other => panic!("expected a refusal, got {other:?}"),
+    };
+    held(s.task.rollback().map(|_| ()), "roll back");
+    // Refused before what changed since the last step is kept as one.
+    write(&s.copy().join("c.txt"), "three\n");
+    let steps = s.task.steps().unwrap().len();
+    held(s.task.back_to_step(0).map(|_| ()), "go back to a step");
+    assert_eq!(s.task.steps().unwrap().len(), steps);
+    fs::remove_file(s.copy().join("c.txt")).unwrap();
+    assert_eq!(fs::read_to_string(s.copy().join("b.txt")).unwrap(), "two\n");
+    fs::remove_file(s.copy().join("b.txt")).unwrap();
+    held(s.task.undo().map(|_| ()), "undo");
+    assert_eq!(fs::read_to_string(s.work().join("a.txt")).unwrap(), "one\n");
+    assert!(s.copy().join("a.txt").exists());
+
+    drop(open);
+    assert!(s.task.undo().unwrap().is_some());
+    assert!(!s.work().join("a.txt").exists());
 }
 
 /// Kule cannot see a terminal app or an editor it opened the copy in close:

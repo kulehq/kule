@@ -648,10 +648,10 @@ impl Task {
         let Some(mut layer) = self.load_layer()? else {
             return Ok(HomeApplied::default());
         };
-        self.no_terminal_open("apply its home changes")?;
+        let _lock = self.lock()?;
         // Nothing left running in the task's sandbox changes the layer
         // while it is applied.
-        crate::Sandbox::end_all(self)?;
+        self.quiet_sandbox("apply its home changes")?;
         let wanted: Vec<HomeChange> = self
             .home_changes()?
             .into_iter()
@@ -1083,6 +1083,10 @@ impl Task {
         let nothing = || Error::Invalid("nothing applied from this task's home to undo".into());
         let mut layer = self.load_layer()?.ok_or_else(nothing)?;
         let (record, applied) = self.last_applied()?.ok_or_else(nothing)?;
+        let _lock = self.lock()?;
+        // The layer takes the changes back, so nothing in the sandbox
+        // changes it meanwhile, as when they were applied.
+        self.quiet_sandbox("undo its home changes")?;
         let kept = record.with_extension("");
         let made: BTreeSet<&str> = applied
             .paths

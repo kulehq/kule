@@ -96,6 +96,7 @@ those inside moved folders and `.git`.
 | --- | --- |
 | `kule: an agent is at work in task <id> …` | Wait for the run to end, or stop it. |
 | `kule: task <id> is busy: another kule command holds its lock` | Wait for the other command. |
+| `kule: a terminal is open on this task's copy (in Kule's app, or kule shell); close it first, then roll back` | Close the task's terminal (the app's tab, or `exit` in `kule shell`), then roll back. What still runs in the task's sandbox is ended first, so nothing changes the copy while it is put back. |
 
 ## In the app
 

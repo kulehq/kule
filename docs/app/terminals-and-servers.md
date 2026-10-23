@@ -47,9 +47,10 @@ agent's work.
 - Kule **refuses to open a terminal** while an agent is at work in the
   task.
 - **While a terminal is open on a task**, no agent run starts in it, and
-  **Commit**, **Sync** and applying home changes wait. Kule says *a terminal
-  is open on task …'s copy; close it first*, rather than end what runs
-  there, so nothing you have not saved is lost. Close the terminal's tab (or
+  **Commit**, **Sync**, **Roll back**, **Undo**, going back to a step, and
+  applying or undoing home changes wait. Kule says *a terminal is open on
+  this task's copy; close it first*, rather than end what runs there, so
+  nothing you have not saved is lost. Close the terminal's tab (or
   type `exit`), then go on. [`kule shell`](../cli/shell.md) counts as a
   terminal too.
 
@@ -62,7 +63,8 @@ editor. Both run **outside** the sandbox, as you, so Kule asks first:
 - They are refused while an agent is at work in the task, and while the
   task has changed what would run in the copy by itself: git config or
   hooks (your prompt's `git status` would run them), a toolchain pin such
-  as `rust-toolchain.toml` or `.nvmrc`, `.envrc`, or an editor's settings.
+  as `rust-toolchain.toml` or `.nvmrc`, the package manager a
+  `package.json` names, `.envrc`, or an editor's settings.
   Review and commit, or roll them back, first. See
   [what runs by itself](../concepts/git.md#what-runs-by-itself-protects-your-terminal-too).
 - While the copy holds changes not committed, Kule lists the changed files

@@ -467,6 +467,58 @@ fn no_terminal_in_a_copy_whose_toolchain_pins_or_editor_settings_changed() {
     assert_eq!(r.task.terminal_dir().unwrap(), r.copy());
 }
 
+/// The package manager a `package.json` names: with Corepack on, the next
+/// `pnpm` or `yarn` in that folder (an editor's, a prompt's) fetches and
+/// runs that version. Other changes to the file leave the terminal open.
+#[test]
+fn no_terminal_in_a_copy_whose_package_manager_pin_changed() {
+    let r = Repo::new();
+    write(
+        &r.work().join("app/package.json"),
+        r#"{"name":"app","packageManager":"pnpm@9.1.0","scripts":{"t":"x"}}"#,
+    );
+    git(&r.work(), &["add", "-A"]);
+    git(&r.work(), &["commit", "-qm", "app"]);
+    r.task.sync().unwrap();
+    assert_eq!(r.task.terminal_dir().unwrap(), r.copy());
+
+    let pin = |text: &str| {
+        write(&r.copy().join("app/package.json"), text);
+        r.task.terminal_dir()
+    };
+    // Scripts and dependencies alone: open.
+    assert!(
+        pin(r#"{"name":"app","packageManager":"pnpm@9.1.0","scripts":{"t":"y"},"dependencies":{"a":"1"}}"#)
+            .is_ok()
+    );
+    for text in [
+        r#"{"name":"app","packageManager":"pnpm@6.6.6","scripts":{"t":"x"}}"#,
+        r#"{"name":"app","packageManager":"pnpm@9.1.0","scripts":{"t":"x"},"devEngines":{"packageManager":{"name":"yarn"}}}"#,
+        r#"{"name":"app","scripts":{"t":"x"}}"#,
+        // What cannot be read as JSON cannot be told apart from a new pin.
+        "{\"name\":\"app\",\"packageManager\":\"pnpm@9.1.0\"",
+    ] {
+        let e = pin(text).unwrap_err().to_string();
+        assert!(e.contains("app/package.json"), "{text}: {e}");
+    }
+    r.task.rollback().unwrap();
+    assert_eq!(r.task.terminal_dir().unwrap(), r.copy());
+
+    // A new one that cannot be read, or that names a package manager,
+    // closes it too; a new one naming none leaves it open.
+    write(&r.copy().join("web/package.json"), r#"{"name":"web""#);
+    let e = r.task.terminal_dir().unwrap_err().to_string();
+    assert!(e.contains("web/package.json"), "{e}");
+    write(&r.copy().join("web/package.json"), r#"{"name":"web"}"#);
+    assert_eq!(r.task.terminal_dir().unwrap(), r.copy());
+    write(
+        &r.copy().join("web/package.json"),
+        r#"{"packageManager":"yarn@4.0.0"}"#,
+    );
+    let e = r.task.terminal_dir().unwrap_err().to_string();
+    assert!(e.contains("web/package.json"), "{e}");
+}
+
 /// An agent at work could change what runs there right after the check.
 #[test]
 fn no_terminal_while_an_agent_is_at_work() {

@@ -109,7 +109,7 @@ hint: commit or roll back the task's changes there first, or leave the copy as i
 | --- | --- |
 | `kule: the folder and the task both changed: <paths>; nothing was brought in` | Both sides changed the same function, section or key. Commit or roll back the task's change there first, or leave the copy as it is and resolve it at commit time. |
 | `kule: an agent is at work in task <id> …` | Wait for the run to end. |
-| `kule: a terminal is open on task <id>'s copy …; close it first, then sync` | Close the task's terminal (the app's tab, or `exit` in `kule shell`), then sync. |
+| `kule: a terminal is open on this task's copy (in Kule's app, or kule shell); close it first, then sync` | Close the task's terminal (the app's tab, or `exit` in `kule shell`), then sync. |
 
 ## In the app
 

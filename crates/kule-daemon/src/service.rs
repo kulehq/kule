@@ -2716,6 +2716,49 @@ mod tests {
         ));
     }
 
+    /// What the app shows, word for word, when rolling back, undoing or
+    /// going back to a step waits for a terminal open on the task, and when
+    /// a terminal waits for Kule writing in the copy: nothing in it the
+    /// person cannot act on (a process id, Kule's own).
+    #[test]
+    fn what_waits_for_a_terminal_says_so_as_the_app_shows_it() {
+        let s = Setup::new();
+        let (id, copy) = s.task();
+        fs::write(copy.join("b.txt"), "b\n").unwrap();
+        let task = s.app.open(&id).unwrap();
+        task.step("b").unwrap();
+        let open = task.terminal_opened().unwrap();
+        let waits = |doing: &str| {
+            format!(
+                "a terminal is open on this task's copy (in Kule's app, or kule shell); \
+                 close it first, then {doing}"
+            )
+        };
+        assert_eq!(s.app.rollback(&id).unwrap_err(), waits("roll back"));
+        assert_eq!(s.app.undo(&id).unwrap_err(), waits("undo"));
+        assert_eq!(
+            s.app.back_to_step(&id, 0).unwrap_err(),
+            waits("go back to a step")
+        );
+        assert_eq!(
+            s.app.commit(&id, true, false, None).unwrap_err(),
+            waits("commit")
+        );
+        assert_eq!(s.app.sync(&id).unwrap_err(), waits("sync"));
+        assert!(copy.join("b.txt").exists());
+        drop(open);
+
+        let lock = s.app.home.join("tasks").join(&id).join("lock");
+        fs::write(&lock, "1\n").unwrap();
+        assert_eq!(
+            task.terminal_opened().map(|_| ()).unwrap_err().to_string(),
+            "Kule is writing in this task's copy (a commit, sync or rollback); \
+             open the terminal once that is done"
+        );
+        fs::remove_file(&lock).unwrap();
+        assert_eq!(s.app.rollback(&id).unwrap(), 1);
+    }
+
     #[test]
     fn home_changes_are_reviewed_and_applied_apart_from_the_commit() {
         let s = Setup::new();
