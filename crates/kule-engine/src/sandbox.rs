@@ -22,7 +22,7 @@ use serde::{Deserialize, Serialize};
 use crate::caches::{self, Sources};
 use crate::error::{Error, IoContext, Result};
 use crate::protect::{Kept, PutBack};
-use crate::task::Task;
+use crate::task::{CACHES_LOCK, Task};
 
 /// Credentials and keys that commands in a task never get to read.
 /// Environment variables passed on to everything the sandbox runs: what
@@ -495,6 +495,9 @@ pub struct Sandbox {
     env: Vec<(String, OsString)>,
     /// Where Kule notes protected paths it puts back after a run.
     kept: PathBuf,
+    /// The lock under which the task's caches are made (see
+    /// [`caches::prepare_locked`]).
+    caches_lock: PathBuf,
     /// The task's home layer, the commands' `HOME` (see [`crate::home`]).
     layer: Option<PathBuf>,
     /// Whether commands may use the GPU.
@@ -753,6 +756,7 @@ impl Sandbox {
             passed_env: Vec::new(),
             env: Vec::new(),
             kept: task.home().join("kept"),
+            caches_lock: task.dir().join(CACHES_LOCK),
             layer: None,
             gpu: true,
             servers: false,
@@ -860,7 +864,7 @@ impl Sandbox {
         for file in ["credentials.toml", "credentials"] {
             self.hide(&sources.cargo_home.join(file))?;
         }
-        self.env = caches::prepare(&self.tmp, sources)?;
+        self.env = caches::prepare_locked(&self.caches_lock, &self.tmp, sources, &mut |_| {})?;
         Ok(())
     }
 

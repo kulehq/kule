@@ -1325,6 +1325,23 @@ impl Task {
     /// Notes, once, what the caches at `caches` take, so a disk limit
     /// counts only what the task adds to them from then on. Measured as the
     /// first run under a disk limit starts: until then nothing counts them.
+    /// Makes the task's package caches now, if they are not made yet, as
+    /// the task's first command would: so it need not wait. `tell` hears
+    /// what a person waiting for it should know (see
+    /// [`crate::caches::STILL_PREPARING`]).
+    pub fn prepare_caches(
+        &self,
+        sources: &crate::CacheSources,
+        mut tell: impl FnMut(&str),
+    ) -> Result<()> {
+        let tmp = fs::canonicalize(self.tmp()?).at(&self.dir.join("tmp"))?;
+        crate::caches::prepare_locked(&self.dir.join(CACHES_LOCK), &tmp, sources, &mut tell)?;
+        if self.limits_in_force()?.disk_mb.is_some() {
+            self.note_caches_made(&tmp.join("caches"))?;
+        }
+        Ok(())
+    }
+
     pub(crate) fn note_caches_made(&self, caches: &Path) -> Result<()> {
         let mut settings = self.settings()?;
         if settings.caches_made.is_some() {
@@ -2021,6 +2038,10 @@ impl Task {
         lock_at(&self.dir, &self.info.id)
     }
 }
+
+/// The file in a task's folder under which its caches are made, out of the
+/// sandbox's reach.
+pub(crate) const CACHES_LOCK: &str = "caches.lock";
 
 /// Why a task's record could not be read, without the home's path: the
 /// message reaches extensions too.

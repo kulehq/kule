@@ -67,6 +67,12 @@ Everything is under `~/.kule/tasks/<id>/`:
 
 On macOS, the task's npm and cargo caches start as clones of yours, so a
 task's first install does not download again. On Linux they start empty.
+A clone of large caches takes a few seconds, so the app makes it in the
+background as soon as a task is made or forked. A command, terminal or run
+that comes before it is done waits for it and says so: *Kule is still
+preparing this task's package caches*. On the command line, the task's
+first command makes them itself and says *preparing this task's package
+caches*.
 
 What really takes space: files the agent changes or creates (build output
 too), packages a task downloads, and the old contents that steps and

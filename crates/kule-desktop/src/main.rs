@@ -277,8 +277,9 @@ fn terminal_open(
     task: String,
     cols: u16,
     rows: u16,
+    key: u64,
 ) -> Result<pty::Opened> {
-    let (id, notes) = terms.open(app, &kule.home, &task, cols, rows)?;
+    let (id, notes) = terms.open(app, &kule.home, &task, cols, rows, key)?;
     Ok(pty::Opened {
         id,
         shell: pty::shell_name(),

@@ -566,6 +566,16 @@ fn main() -> ExitCode {
     }
 }
 
+/// Makes the task's package caches before its sandbox does, saying so
+/// while that takes a while: copying the person's, or waiting for the app,
+/// which began making them as the task was made.
+fn caches_first(task: &Task) -> Result<()> {
+    if let Some(sources) = kule_engine::CacheSources::from_env() {
+        task.prepare_caches(&sources, |m| eprintln!("kule: {m}"))?;
+    }
+    Ok(())
+}
+
 /// The error and what caused it, each once: an engine error already says
 /// its cause, which `{:#}` would say again.
 fn chained(e: &anyhow::Error) -> String {
@@ -645,6 +655,7 @@ fn run() -> Result<ExitCode> {
                 "kule: in task {}'s copy, in its sandbox; exit to come back",
                 task.id()
             );
+            caches_first(&task)?;
             let logged_before = connections(&task)?.len();
             let _watch = watch_servers(&task);
             let (code, end) = relay::run(&home, task.id(), &shell)?;
@@ -780,6 +791,7 @@ fn run() -> Result<ExitCode> {
                 child.args(&command[1..]).current_dir(task.copy());
                 child
             } else {
+                caches_first(&task)?;
                 if task.measures_caches()? {
                     eprintln!("kule: {}", kule_engine::MEASURING_CACHES);
                 }
@@ -949,6 +961,7 @@ fn run() -> Result<ExitCode> {
             let person = kule_engine::CacheSources::from_env().map(|s| s.home);
             let proxy =
                 Proxy::start_with_keys(&task, policy, &profile.agent_keys(person.as_deref()))?;
+            caches_first(&task)?;
             if task.measures_caches()? {
                 eprintln!("kule: {}", kule_engine::MEASURING_CACHES);
             }

@@ -6201,7 +6201,7 @@ async function newTerminal(taskId = state.current) {
     if (entry.id && !entry.ended) call("terminal_resize", { id: entry.id, cols, rows }).catch(() => {});
   });
   try {
-    const opened = await call("terminal_open", { task: taskId, cols: term.cols, rows: term.rows });
+    const opened = await call("terminal_open", { task: taskId, cols: term.cols, rows: term.rows, key: entry.key });
     entry.id = opened.id;
     entry.shell = opened.shell;
     for (const note of opened.notes || []) term.write(`\x1b[33mkule: ${terminalText(note)}\x1b[0m\r\n`);
@@ -6296,6 +6296,15 @@ function stepTerminal(by) {
 }
 
 function onTerminal(event) {
+  // Before its shell starts, a tab is known by its key: what Kule does
+  // meanwhile is said in it.
+  if (event.kind === "preparing") {
+    for (const tabs of terminals.values()) {
+      const entry = tabs.list.find((e) => e.key === event.key);
+      if (entry) entry.term.write(`\x1b[33mkule: ${terminalText(event.text)}\x1b[0m\r\n`);
+    }
+    return;
+  }
   for (const [taskId, tabs] of terminals) {
     const entry = tabs.list.find((e) => e.id === event.id);
     if (!entry) continue;

@@ -86,6 +86,18 @@ impl ShellEnd {
     }
 }
 
+/// Makes task `task`'s package caches before a terminal's sandbox does, so
+/// `tell` can say so while that takes a while (see `Task::prepare_caches`).
+pub fn prepare_caches(home: &Path, task: &str, tell: impl FnMut(&str)) -> Result<()> {
+    let Some(sources) = kule_engine::CacheSources::from_env() else {
+        return Ok(());
+    };
+    Task::open(home, task)
+        .map_err(text)?
+        .prepare_caches(&sources, tell)
+        .map_err(text)
+}
+
 fn text(e: kule_engine::Error) -> String {
     e.to_string()
 }
