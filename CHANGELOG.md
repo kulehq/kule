@@ -31,6 +31,16 @@
   at once. Rule names a repository's own policy gives are shown with their
   control characters escaped.
 
+### Development
+
+- Release builds, the gate and publishing run on pinned runner images
+  (`macos-26`, `ubuntu-22.04` for the Linux packages, `ubuntu-24.04`), and
+  the npm publish on an exact Node version, so a change of image shows as a
+  change here first. A release run by hand publishes nothing, whatever ref
+  it runs on. Published releases are immutable, and no one, admins
+  included, publishes a release or the docs site past the environments'
+  rules.
+
 ## 0.2.0-preview.11
 
 A hardening preview. An approval card says what approving lets through,
