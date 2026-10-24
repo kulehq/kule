@@ -55,8 +55,12 @@ Ardından Kule kopyadaki değişiklikleri (yalnızca bu komutunkileri
 değil, hepsini), yaptığı bağlantıları, ev dizinine yazmaları ve macOS'ta
 sandbox'ın reddettiklerini yazdırır. `kule exec` komutun kendi çıkış koduyla
 çıkar. Kule sandbox'ın reddettiklerini okuyamaz ya da kaydedemezse bunu
-söyler ve başarılı olmuş bir komut `1` ile çıkar: yaptıklarının bir kısmı
-anlatılmadan kalmıştır. Sistem günlüğü bunların yalnızca bir kısmını zamanında
+söyler; bunlardan birini gösteremediğinde de (örneğin kopya geri
+okunamıyorsa) bir `kule: … cannot be shown` satırıyla söyler ve geri
+kalanını yine anlatır. İki durumda da başarılı olmuş bir komut `1` ile
+çıkar: yaptıklarının bir kısmı anlatılmadan kalmıştır. Linux'ta, başarısız
+olmuş bir komuttan sonra Kule, Linux'un sandbox'ın reddettiklerini kendisine
+söylemediğini belirtir. Sistem günlüğü bunların yalnızca bir kısmını zamanında
 gösterirse Kule o kısmı listeler ve bazı retlerin eksik olabileceğini söyler;
 çıkış kodu komutunki olarak kalır, çünkü sandbox hepsini yine de reddetmiştir.
 
@@ -182,7 +186,7 @@ kule exec "$TASK" --reveal ~/Library/Keychains \
 | `net: <host>:<port> · cut (<rule>)` | Politikanın geçirdiği, Kule'nin ise kestiği bir bağlantı: üzerinden geçen, geçirildiği host için değildi, adı bu bilgisayardaki ya da ağındaki bir adrese çıktı, ya da Kule içindeki bir isteği reddetti. Nedenini görevin `network.jsonl` dosyası söyler. |
 | `net: <host>:<port> · failed (<rule>)` | Politikanın geçirdiği, kendi hatasıyla biten bir bağlantı: host gitti ya da bağlantı sıfırlandı. Nedenini görevin `network.jsonl` dosyası söyler. |
 | `net: <host>:<port> · refused, …` | Politikanın geçirmediği bir bağlantı. |
-| `sandbox: refused <operation> <path> (<program>)` | macOS'ta sandbox'ın reddettikleri. Bunlar görevin `sandbox.jsonl` dosyasında da saklanır. |
+| `sandbox: refused <operation> <path> (<program>)` | macOS'ta sandbox'ın reddettikleri; N kez reddedilen bir şey bir kez, `×N` ile yazılır. Bir shell'in çevresindeki terminalleri yoklaması tek satırdır: `/dev/ttys*`. Hepsi görevin `sandbox.jsonl` dosyasında saklanır. |
 | `kule: what the sandbox refused cannot be read: …`, `kule: what the sandbox refused could not be recorded: …` | stderr'de: Kule sandbox'ın reddettiklerini okuyamadı ya da `sandbox.jsonl` içinde saklayamadı. Çıkış kodu komutunki olarak kalır; yalnızca `0`, `1` olur. |
 | `kule: The system log did not show all of what the sandbox refused; some refusals may be missing from what is listed` | stderr'de, macOS'te: Kule okumayı bıraktığında sistem günlüğü, yoğun bir bilgisayarda, henüz yetişmemişti. Üstteki `sandbox:` satırları günlüğün gösterdikleridir. Çıkış kodu komutunki olarak kalır. |
 | `kule: ended <names>, still running in the task's sandbox as the command ended` | stderr'de: komutun çalışır bıraktığı ve Kule'nin onunla birlikte sonlandırdığı şey. Her ad, kaç tane olduğuyla bir kez (`sleep ×2`). |

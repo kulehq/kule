@@ -46,9 +46,10 @@ bağlantıları, ev klasörüne yazılanları ve sandbox'ın reddettiklerini
 yazdırır; `kule shell` de kabuğun çıkış koduyla çıkar. macOS'ta Kule ayrıca
 kabuğun sandbox'ında çalışır bıraktığı şeyi sonlandırır ve adını verir.
 Linux'ta, kabuk bir hatayla çıktıysa Kule, Linux'un sandbox'ın
-reddettiklerini kendisine söylemediğini belirtir. Kule sandbox'ın
-reddettiklerini okuyamadıysa ya da kaydedemediyse bunu söyler ve kabuk 0
-ile çıksa bile `kule shell` başarısız olur.
+reddettiklerini kendisine söylemediğini belirtir. Kule bunlardan birini
+gösteremediyse ya da sandbox'ın reddettiklerini okuyamadıysa veya
+kaydedemediyse bunu söyler, geri kalanını yine anlatır ve kabuk 0 ile çıksa
+bile `kule shell` başarısız olur.
 
 **Kabuk açıkken** görevde hiçbir ajan işe başlamaz (`kule run` ve
 `kule exec` de reddedilir); commit, sync ve ev değişikliklerini uygulamak

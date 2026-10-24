@@ -12,17 +12,33 @@ const told = require(path.join(__dirname, "..", "told.js"));
 const refusal = (process, operation, path, saved) => ({ process, operation, path, saved: saved || null, hint: null });
 
 test("the same refusal is one line with how many times, newest last", () => {
-  const probes = Array.from({ length: 30 }, () => refusal("zsh", "file-read-data", "/dev/ttys004"));
+  const writes = Array.from({ length: 30 }, () => refusal("node", "file-write-create", "/x"));
+  const groups = told.groupDenials([
+    refusal("sh", "file-read-data", "/etc/y"),
+    ...writes,
+    refusal("python", "file-write-create", "/z"),
+    refusal("sh", "file-read-data", "/etc/y"),
+  ]);
+  assert.deepEqual(groups.map(told.denialLine), ["file-write-create /x (node) ×30", "file-write-create /z (python)", "file-read-data /etc/y (sh) ×2"]);
+});
+
+test("a shell probing the terminals around it is one line, whichever terminals", () => {
   const groups = told.groupDenials([
     refusal("zsh", "file-read-data", "/dev/ttys003"),
-    ...probes,
-    refusal("node", "file-write-create", "/x"),
-    refusal("zsh", "file-read-data", "/dev/ttys003"),
+    ...Array.from({ length: 30 }, (_, i) => refusal("zsh", "file-read-data", `/dev/ttys${String(i).padStart(3, "0")}`)),
+    refusal("bash", "file-read-data", "/dev/pts/7"),
+    refusal("bash", "file-read-data", "/dev/pts/12"),
+    refusal("zsh", "file-read-data", "/dev/tty"),
   ]);
-  assert.deepEqual(
-    groups.map(told.denialLine),
-    ["file-read-data /dev/ttys004 (zsh) ×30", "file-write-create /x (node)", "file-read-data /dev/ttys003 (zsh) ×2"]
-  );
+  assert.deepEqual(groups.map(told.denialLine), ["file-read-data /dev/ttys* (zsh) ×31", "file-read-data /dev/pts/* (bash) ×2", "file-read-data /dev/tty (zsh)"]);
+});
+
+test("what a list leaves out is counted in refusals, not lines", () => {
+  const groups = told.groupDenials([
+    ...Array.from({ length: 5 }, () => refusal("a", "file-read-data", "/old")),
+    refusal("b", "file-read-data", "/new"),
+  ]);
+  assert.equal(told.newest(groups, 1).more, 5);
 });
 
 test("a put-back is apart from the same path refused", () => {
@@ -155,4 +171,17 @@ test("a question takes an approval only once its card has been there a moment", 
   assert.ok(told.answerableYet(1000, 1000 + told.QUESTION_GUARD_MS));
   assert.ok(!told.answerableYet(undefined, 5000));
   assert.ok(told.QUESTION_GUARD_MS >= 500);
+});
+
+test("a terminal the person closed tells its end in the task's Live", () => {
+  assert.deepEqual(told.closedTerminalNotes(["sandbox: refused file-write-create /x (sh)", "Kule ended sleep, which the shell left running in its sandbox"]), [
+    { kind: "note", text: "A terminal you closed: sandbox: refused file-write-create /x (sh)" },
+    { kind: "note", text: "A terminal you closed: Kule ended sleep, which the shell left running in its sandbox" },
+  ]);
+  assert.deepEqual(told.closedTerminalNotes(undefined), []);
+});
+
+test("a task whose record cannot be read is listed by its id", () => {
+  assert.equal(told.taskFolder({ id: "6c2816d8", workspace: "/Users/me/code/app" }), "app");
+  assert.equal(told.taskFolder({ id: "6c2816d8", unreadable: "its record cannot be read: EOF" }), "6c2816d8");
 });

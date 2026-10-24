@@ -454,7 +454,7 @@ const COLORS = ["red", "orange", "yellow", "green", "teal", "blue", "purple", "p
 
 /** The folder's name, and the one the person gave the task after it. */
 function taskName(task) {
-  const folder = baseName(task.workspace);
+  const folder = taskFolder(task);
   return task.label ? `${folder} – ${task.label}` : folder;
 }
 
@@ -479,7 +479,7 @@ function taskItem(task, list) {
       type: "button",
       "aria-current": task.id === state.current ? "true" : "false",
       "aria-keyshortcuts": ordered ? "Alt+ArrowUp Alt+ArrowDown" : undefined,
-      title: ordered ? `${task.workspace}\nDrag, or Alt+↑/↓, to move it in the list.` : task.workspace,
+      title: task.unreadable || (ordered ? `${task.workspace}\nDrag, or Alt+↑/↓, to move it in the list.` : task.workspace),
       onclick: (e) => {
         // The click a drag ends with does not open the task.
         if (dragged) {
@@ -502,7 +502,7 @@ function taskItem(task, list) {
     h(
       "span",
       { class: "task-item-name" },
-      h("span", { class: "task-folder" }, baseName(task.workspace)),
+      h("span", { class: "task-folder" }, taskFolder(task)),
       task.label ? h("span", { class: "task-label" }, ` – ${task.label}`) : null
     ),
     taskChip(task),
@@ -556,6 +556,13 @@ function taskMenu(task, list, e) {
     closeMenu();
     await removeTask(task);
   });
+
+  // One whose record cannot be read can only be deleted: while it is
+  // there, nothing that needs every task goes on.
+  if (task.unreadable) {
+    showMenu(h("div", { class: "menu", id: "task-menu", role: "menu", "aria-label": `Task ${name}` }, remove), [remove], opener, e);
+    return;
+  }
 
   const siblings = groupMates(task);
   const at = siblings.findIndex((t) => t.id === task.id);
@@ -1368,10 +1375,18 @@ function renderTask() {
     return;
   }
   const task = currentTask();
+  // One whose record cannot be read opens nothing: what would load it
+  // fails. It is said as it is, with the one thing to do about it.
+  const unreadable = Boolean(task && task.unreadable);
   $("empty").hidden = Boolean(task);
-  $("task").hidden = !task;
+  $("task").hidden = !task || unreadable;
+  $("unreadable").hidden = !unreadable;
   renderLayout();
   if (!task) return;
+  if (unreadable) {
+    renderUnreadable(task);
+    return;
+  }
 
   $("task-name").textContent = shown(taskName(task));
   $("titlebar-title").textContent = shown(`${taskName(task)} — Kule`);
@@ -1415,6 +1430,36 @@ function renderTask() {
   if (isShown("files")) loadFiles(task.id);
   if (isShown("preview")) loadPreview(task);
   if (isShown("terminal")) showTerminal(task.id);
+}
+
+/** A task whose record cannot be read: why, what it holds, and Delete,
+ * armed as the task menu's is. */
+function renderUnreadable(task) {
+  $("titlebar-title").textContent = shown(`${taskName(task)} — Kule`);
+  const remove = h("button", { class: "button danger", type: "button" }, "Delete task");
+  remove.addEventListener("click", () => {
+    if (!remove.classList.contains("armed")) {
+      remove.classList.add("armed");
+      remove.textContent = shown(`Click again to delete ${task.id}`);
+      setTimeout(() => {
+        remove.classList.remove("armed");
+        remove.textContent = "Delete task";
+      }, 4000);
+      return;
+    }
+    removeTask(task);
+  });
+  replace(
+    $("unreadable"),
+    h("h1", {}, shown(`Task ${task.id}'s record cannot be read`)),
+    h("p", { class: "muted" }, shown(task.unreadable)),
+    h(
+      "p",
+      {},
+      "Kule cannot tell which folder it was made from, so no command or run starts in any task while it is here. Deleting it takes it and its copy away; no folder of yours is touched."
+    ),
+    remove
+  );
 }
 
 function renderComposer(task) {
@@ -3234,6 +3279,8 @@ function fold(task, event) {
         ...new Set(event.denials.map((d) => d.hint).filter(Boolean)),
         ...(event.unreported ? [UNREPORTED] : []),
         ...(event.incomplete ? [INCOMPLETE] : []),
+        // Kule's own notes on the end: a budget that does not count the run.
+        ...(event.notes || []),
       ],
       // What was refused, the same once (see the Timeline for all).
       refused: groupDenials(event.denials),
@@ -6213,11 +6260,18 @@ async function showTerminal(taskId) {
   renderTerminals(taskId);
 }
 
+/** Terminals the person closed while their shell ran, by id: what each
+ * says as it ends goes to its task's Live (see `onTerminal`). */
+const closedTerminals = new Map();
+
 async function closeTerminal(taskId, key) {
   const tabs = terminals.get(taskId);
   const entry = tabs && tabs.list.find((e) => e.key === key);
   if (!entry) return;
-  if (entry.id && !entry.ended) await call("terminal_close", { id: entry.id }).catch(() => {});
+  if (entry.id && !entry.ended) {
+    closedTerminals.set(entry.id, taskId);
+    await call("terminal_close", { id: entry.id }).catch(() => {});
+  }
   entry.term.dispose();
   entry.el.remove();
   const at = tabs.list.indexOf(entry);
@@ -6255,6 +6309,16 @@ function onTerminal(event) {
       if (taskId === state.current) renderTerminals(taskId);
     }
     return;
+  }
+  // Its tab is gone: what it says as it ends is told in its task's Live.
+  const taskId = closedTerminals.get(event.id);
+  if (event.kind === "exit" && taskId) {
+    closedTerminals.delete(event.id);
+    const notes = closedTerminalNotes(event.notes);
+    if (notes.length) {
+      streamOf(taskId).push(...notes);
+      if (taskId === state.current) renderStream(taskId);
+    }
   }
 }
 

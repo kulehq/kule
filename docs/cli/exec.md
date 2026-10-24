@@ -53,8 +53,11 @@ whatever became of its parent, and Kule names it:
 Kule then prints the copy's changes (all of them, not only
 this command's), the connections it made, home writes, and on macOS what the
 sandbox refused. `kule exec` exits with the command's own exit code. When
-Kule cannot read or record what the sandbox refused, it says so, and a
-command that succeeded exits with `1`: part of what it did went untold.
+Kule cannot show one of these (the copy cannot be read back, say) or cannot
+read or record what the sandbox refused, it says so in a `kule: … cannot
+be shown` line, still tells the rest, and a command that succeeded exits
+with `1`: part of what it did went untold. On Linux, after a command that
+failed, Kule says that Linux does not tell it what the sandbox refused.
 When the system log shows only part of it in time, Kule lists that part and
 says some refusals may be missing; the exit code stays the command's, since
 the sandbox refused them all the same.
@@ -180,7 +183,7 @@ kule exec "$TASK" --reveal ~/Library/Keychains \
 | `net: <host>:<port> · cut (<rule>)` | A connection the policy let through, which Kule ended: what went over it was not for the host it was let through to, its name led to an address on this computer or its network, or Kule refused a request in it. The task's `network.jsonl` says why. |
 | `net: <host>:<port> · failed (<rule>)` | A connection the policy let through, which ended in an error of its own: the host went away, or the connection was reset. The task's `network.jsonl` says why. |
 | `net: <host>:<port> · refused, …` | A connection the policy did not let through. |
-| `sandbox: refused <operation> <path> (<program>)` | What the sandbox refused, on macOS. They are also kept in the task's `sandbox.jsonl`. |
+| `sandbox: refused <operation> <path> (<program>)` | What the sandbox refused, on macOS, each once with `×N` when it was refused N times; a shell's probes of the terminals around it are one line, `/dev/ttys*`. They are all kept in the task's `sandbox.jsonl`. |
 | `kule: what the sandbox refused cannot be read: …`, `kule: what the sandbox refused could not be recorded: …` | On stderr: Kule could not read what the sandbox refused, or could not keep it in `sandbox.jsonl`. The exit code stays the command's, except that `0` becomes `1`. |
 | `kule: The system log did not show all of what the sandbox refused; some refusals may be missing from what is listed` | On stderr, on macOS: the system log had not caught up, on a busy computer, when Kule stopped reading it. The `sandbox:` lines above are what it showed. The exit code stays the command's. |
 | `kule: ended <names>, still running in the task's sandbox as the command ended` | On stderr: what the command left running, which Kule ended with it. Each name once, with how many (`sleep ×2`). |

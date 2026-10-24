@@ -24,6 +24,10 @@ Sıra uygulamanınkiyle aynıdır: sürükleyerek (ya da Alt+Shift+↑/↓ ile)
 yerleştirdiğiniz görevler o sırayı korur; hiç taşımadığınız görevler en
 başta, en yenisi en üstte gelir.
 
+Kaydı (`task.json`) okunamayan bir görev stderr'de
+`kule: task <id> cannot be read: …` ile adlandırılır ve diğerleri yine
+listelenir. Uygulama da onu okunamayan bir görev olarak listeler.
+
 Yalnızca okur; hiçbir şeyi değiştirmez.
 
 ## Argümanlar

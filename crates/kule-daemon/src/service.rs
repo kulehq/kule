@@ -364,6 +364,8 @@ struct RunEnd {
     denials: Vec<Denial>,
     unreported: bool,
     incomplete: bool,
+    /// Kule's notes on its end (see `RunEvent::Finished`).
+    notes: Vec<String>,
 }
 
 /// What a run reports.
@@ -424,6 +426,10 @@ pub enum RunEvent {
         /// (see `kule_engine::INCOMPLETE`): `denials` may not be all.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         incomplete: bool,
+        /// What else Kule says of how it ended, a sentence each: that a
+        /// budget does not count a run whose agent reported no cost.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        notes: Vec<String>,
     },
 }
 
@@ -1133,9 +1139,14 @@ impl Service {
     /// and newest first, from each one's last scan; scans older than
     /// [`FRESH`] are made again in the background.
     pub fn tasks(self: &Arc<Self>) -> Result<Vec<TaskView>> {
-        let infos = kule_engine::arranged(&self.home).map_err(text)?;
+        let (infos, unreadable) = kule_engine::arranged_told(&self.home).map_err(text)?;
         // One task that cannot be read (damaged) does not hide the others,
         // and is listed with why; one being removed is left out.
+        let damaged = unreadable.into_iter().map(|u| TaskView {
+            id: u.id,
+            unreadable: Some(format!("its record cannot be read: {}", u.why)),
+            ..TaskView::default()
+        });
         Ok(infos
             .iter()
             .filter_map(|info| {
@@ -1161,6 +1172,7 @@ impl Service {
                     }),
                 }
             })
+            .chain(damaged)
             .collect())
     }
 
@@ -1569,7 +1581,15 @@ impl Service {
 
     /// Deletes the task and its copy; the workspace is not touched.
     pub fn remove(&self, id: &str) -> Result<()> {
-        self.idle(id)?.remove().map_err(text)?;
+        // One whose record cannot be read can be removed too: while it is
+        // there, nothing that needs every task goes on.
+        match self.idle(id) {
+            Ok(task) => task.remove().map_err(text)?,
+            Err(_) if !self.is_running(id) => {
+                Task::remove_unreadable(&self.home, id).map_err(text)?
+            }
+            Err(e) => return Err(e),
+        }
         self.live
             .streams
             .lock()
@@ -1686,9 +1706,15 @@ impl Service {
         let service = Arc::clone(self);
         std::thread::spawn(move || {
             let run = service.run(&task, &profile, &prompt, &pictures, plan, &control);
-            let (error, denials, unreported, incomplete) = match run {
-                Ok(end) => (end.error, end.denials, end.unreported, end.incomplete),
-                Err(e) => (Some(e), Vec::new(), false, false),
+            let (error, denials, unreported, incomplete, notes) = match run {
+                Ok(end) => (
+                    end.error,
+                    end.denials,
+                    end.unreported,
+                    end.incomplete,
+                    end.notes,
+                ),
+                Err(e) => (Some(e), Vec::new(), false, false, Vec::new()),
             };
             drop(at_work);
             service
@@ -1710,6 +1736,7 @@ impl Service {
                     denials,
                     unreported,
                     incomplete,
+                    notes,
                 },
             );
         });
@@ -1868,6 +1895,8 @@ impl Service {
         control: &kule_acp::RunControl,
         started: Instant,
     ) -> Result<RunEnd> {
+        // The agent's log, as it was before this run, is told apart by it.
+        let log_before = task.agent_log_mark();
         let mut usage = kule_engine::RunUsage {
             agent: profile.name.clone(),
             started_unix: unix_now(),
@@ -1954,6 +1983,7 @@ impl Service {
             tx,
         ));
         let mut failed = Vec::new();
+        let mut notes = Vec::new();
         let kept_whole = |why: String| match &reserved {
             Some(r) => format!(
                 "{why}, so the {:.2} {} set aside for it stays counted",
@@ -1970,6 +2000,15 @@ impl Service {
                     failed.push(kept_whole(format!(
                         "what the run spent could not be recorded ({e})"
                     )));
+                } else if usage.cost.is_none() {
+                    match task.budget() {
+                        Ok(Some(_)) => notes.push(format!(
+                            "{} reported no cost, so the task's budget does not count this run",
+                            profile.name
+                        )),
+                        Ok(None) => {}
+                        Err(e) => failed.push(format!("the task's budget cannot be read ({e})")),
+                    }
                 }
             }
             Err(e) => failed.push(kept_whole(format!(
@@ -1984,7 +2023,7 @@ impl Service {
             Ok(_) => None,
             // A stop says why as it is; the agent's log has nothing to add.
             Err(e) if e.to_string().starts_with("stopped: ") => Some(e.to_string()),
-            Err(e) => Some(format!("{e} ({})", task.agent_log_hint())),
+            Err(e) => Some(format!("{e} ({})", task.agent_log_hint(&log_before))),
         };
         let error = match (error, failed.is_empty()) {
             (error, true) => error,
@@ -1998,6 +2037,7 @@ impl Service {
             denials,
             unreported: after.unreported,
             incomplete: after.incomplete,
+            notes,
         })
     }
 
@@ -2167,13 +2207,15 @@ impl Service {
 
     /// The task, refused while an agent works in it: committing or rolling
     /// back under a running agent would split its work in two.
-    fn idle(&self, id: &str) -> Result<Task> {
-        if self
-            .running
+    fn is_running(&self, id: &str) -> bool {
+        self.running
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .contains(id)
-        {
+    }
+
+    fn idle(&self, id: &str) -> Result<Task> {
+        if self.is_running(id) {
             return Err(format!(
                 "an agent is at work in task {id}; wait until it is done"
             ));
@@ -3910,6 +3952,53 @@ mod tests {
     /// A run sets aside what it may spend before its agent starts: while it
     /// is at work, another task's run under the same daily budget is
     /// refused, saying why; once it ends, only what it spent counts.
+    /// Kule's notes on how the run in `id` finished, waiting a while for it.
+    fn finished_notes(s: &Setup, id: &str) -> Vec<String> {
+        let deadline = Instant::now() + Duration::from_secs(60);
+        loop {
+            let found = s
+                .app
+                .stream(id)
+                .into_iter()
+                .find_map(|kept| match kept.event {
+                    RunEvent::Finished { notes, .. } => Some(notes),
+                    _ => None,
+                });
+            if let Some(found) = found {
+                return found;
+            }
+            assert!(Instant::now() < deadline, "the run never ended");
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    /// A run whose agent reports no cost, in a task with a budget, says
+    /// in the app that the budget does not count it, as the CLI does.
+    #[test]
+    fn a_run_without_a_cost_says_the_budget_does_not_count_it() {
+        let s = Setup::new();
+        let (id, _) = s.task();
+        let usd = |amount| kule_engine::Money {
+            amount,
+            currency: "USD".into(),
+        };
+        s.app.set_budget(&id, Some(usd(1.0))).unwrap();
+        own_agent(&s, "silent", "exit 3");
+        s.app.start_run(&id, "silent", "hi", Vec::new()).unwrap();
+        let notes = finished_notes(&s, &id);
+        assert!(
+            notes
+                .iter()
+                .any(|n| n
+                    == "silent reported no cost, so the task's budget does not count this run"),
+            "{notes:?}"
+        );
+        // Without a budget, nothing to say.
+        let (other, _) = s.task();
+        s.app.start_run(&other, "silent", "hi", Vec::new()).unwrap();
+        assert!(finished_notes(&s, &other).is_empty());
+    }
+
     #[test]
     fn a_run_reserves_before_its_agent_starts() {
         let s = Setup::new();
@@ -4396,5 +4485,30 @@ mod tests {
             .map(|t| (t.id, t.unreadable.is_some()))
             .collect();
         assert_eq!(listed, [(good, false), ("broken".to_owned(), true)]);
+    }
+
+    /// A task whose record itself cannot be read is listed too, by its
+    /// folder's name and why, and the others with it.
+    #[test]
+    fn a_task_whose_record_cannot_be_read_does_not_hide_the_others() {
+        let s = Setup::new();
+        let (good, _) = s.task();
+        let garbled = s.app.home.join("tasks/garbled");
+        fs::create_dir_all(&garbled).unwrap();
+        fs::write(garbled.join("task.json"), "{ not json").unwrap();
+        let listed: Vec<(String, bool)> = s
+            .settled()
+            .into_iter()
+            .map(|t| (t.id, t.unreadable.is_some()))
+            .collect();
+        assert_eq!(
+            listed,
+            [(good.clone(), false), ("garbled".to_owned(), true)]
+        );
+        // It can be deleted as the others are; the others stay.
+        s.app.remove("garbled").unwrap();
+        assert!(!garbled.exists());
+        let listed: Vec<String> = s.settled().into_iter().map(|t| t.id).collect();
+        assert_eq!(listed, [good]);
     }
 }

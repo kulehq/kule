@@ -1107,19 +1107,112 @@ fn tasks_made_at_once_in_different_homes_have_different_ids() {
 }
 
 /// A failed run points to where its agent said why: the log, and the one
-/// before it once the log was turned over.
+/// before it once the log was turned over during that run, never one an
+/// earlier run left.
 #[test]
 fn a_run_error_points_to_the_older_log_too() {
     let (home, folder) = (TempDir::new().unwrap(), TempDir::new().unwrap());
     let task = Task::create(home.path(), folder.path()).unwrap();
     let log = task.agent_log();
-    assert_eq!(task.agent_log_hint(), format!("see {}", log.display()));
-    std::fs::write(log.with_extension("log.1"), "older\n").unwrap();
+    let before = task.agent_log_mark();
     assert_eq!(
-        task.agent_log_hint(),
-        format!(
-            "see {}, and agent.log.1 beside it for what came before",
-            log.display()
-        )
+        task.agent_log_hint(&before),
+        format!("see {}", log.display())
     );
+    // Turned over during the run, at once: whatever the clocks say.
+    std::fs::write(&log, "this run\n").unwrap();
+    std::fs::rename(&log, log.with_extension("log.1")).unwrap();
+    let turned = format!(
+        "see {}, and agent.log.1 beside it for what came before",
+        log.display()
+    );
+    assert_eq!(task.agent_log_hint(&before), turned);
+    // There before the run started: another run's.
+    let later = task.agent_log_mark();
+    assert_eq!(
+        task.agent_log_hint(&later),
+        format!("see {}", log.display())
+    );
+    // Turned over again during the next run, over the one before.
+    std::fs::write(&log, "next run\n").unwrap();
+    std::fs::rename(&log, log.with_extension("log.1")).unwrap();
+    assert_eq!(task.agent_log_hint(&later), turned);
+}
+
+/// A task whose record cannot be read is named apart, with why, for a list
+/// a person reads; what counts every task (budgets, say) still fails rather
+/// than leave it out.
+#[test]
+fn a_task_whose_record_cannot_be_read_is_named_apart() {
+    let (home, folder) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+    let task = Task::create(home.path(), folder.path()).unwrap();
+    let garbled = home.path().join("tasks/garbled");
+    std::fs::create_dir_all(&garbled).unwrap();
+    std::fs::write(garbled.join("task.json"), "{ not json").unwrap();
+    let (infos, unreadable) = Task::list_told(home.path()).unwrap();
+    assert_eq!(
+        infos.iter().map(|i| i.id.as_str()).collect::<Vec<_>>(),
+        [task.id()]
+    );
+    assert_eq!(unreadable.len(), 1);
+    assert_eq!(unreadable[0].id, "garbled");
+    // Why, without the home's path: it reaches extensions too.
+    let why = &unreadable[0].why;
+    assert!(why.contains("expected") || why.contains("key"), "{why}");
+    assert!(!why.contains(home.path().to_str().unwrap()), "{why}");
+    // What counts every task fails, naming it and what to do.
+    let err = Task::list(home.path()).unwrap_err().to_string();
+    assert!(
+        err.contains("task garbled's record cannot be read"),
+        "{err}"
+    );
+    assert!(err.contains("`kule rm garbled`"), "{err}");
+    // Opened by its id, it says the same, without the home's path.
+    let err = Task::open(home.path(), "garbled")
+        .err()
+        .unwrap()
+        .to_string();
+    assert!(
+        err.contains("task garbled's record cannot be read"),
+        "{err}"
+    );
+    assert!(err.contains("`kule rm garbled`"), "{err}");
+    assert!(!err.contains(home.path().to_str().unwrap()), "{err}");
+}
+
+/// A task whose record cannot be read can be removed by its id, with its
+/// copy; one that can be read is removed as any task is, and none is
+/// removed while an agent is at work in it.
+#[test]
+fn a_task_whose_record_cannot_be_read_can_be_removed() {
+    let (home, folder) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+    let task = Task::create(home.path(), folder.path()).unwrap();
+    let id = task.id().to_owned();
+    let garbled = home.path().join("tasks/garbled");
+    std::fs::create_dir_all(garbled.join("w")).unwrap();
+    std::fs::write(garbled.join("task.json"), "{ not json").unwrap();
+    assert!(Task::remove_unreadable(home.path(), &id).is_err());
+    assert!(Task::remove_unreadable(home.path(), "missing").is_err());
+    // A folder there without a record is not a task, and stays.
+    let other = home.path().join("tasks/other");
+    std::fs::create_dir_all(&other).unwrap();
+    assert!(Task::remove_unreadable(home.path(), "other").is_err());
+    assert!(other.is_dir());
+    std::fs::remove_dir(&other).unwrap();
+    // An agent at work in it (this process, alive) holds it.
+    std::fs::write(garbled.join("agent"), std::process::id().to_string()).unwrap();
+    let err = Task::remove_unreadable(home.path(), "garbled").unwrap_err();
+    assert!(err.to_string().contains("an agent is at work"), "{err}");
+    std::fs::remove_file(garbled.join("agent")).unwrap();
+    Task::remove_unreadable(home.path(), "garbled").unwrap();
+    assert!(!garbled.exists());
+    // Once it is gone, what counts every task goes on.
+    let listed: Vec<String> = Task::list(home.path())
+        .unwrap()
+        .into_iter()
+        .map(|i| i.id)
+        .collect();
+    assert_eq!(listed, std::slice::from_ref(&id));
+    assert!(folder.path().is_dir());
+    assert!(Task::open(home.path(), &id).is_ok());
 }

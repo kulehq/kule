@@ -141,6 +141,20 @@ impl Clone for Told {
     }
 }
 
+/// The log before the agent's as a run found it: the file itself, not a
+/// time, since a filesystem keeps its times coarser than the system's
+/// clock (a file written just after a run starts can look older).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentLogMark(Option<(u64, u64, i64, i64)>);
+
+/// A task under Kule's home whose record cannot be read: its folder's
+/// name, and why (see [`Task::list_told`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Unreadable {
+    pub id: String,
+    pub why: String,
+}
+
 impl Task {
     /// Copies `workspace` into a new task under `home`.
     pub fn create(home: &Path, workspace: &Path) -> Result<Task> {
@@ -503,7 +517,14 @@ impl Task {
             // Without the home's path: the message reaches extensions too.
             return Err(Error::Invalid(format!("no task {id}")));
         }
-        let info: TaskInfo = read_json(&dir.join("task.json"))?;
+        // Without the home's path, and saying what it holds.
+        let info: TaskInfo = read_json(&dir.join("task.json")).map_err(|e| {
+            Error::Invalid(format!(
+                "task {id}'s record cannot be read ({}); remove it with `kule rm {id}`, \
+                 or Delete task in the app",
+                why_unread(e)
+            ))
+        })?;
         if info.id != id {
             return Err(Error::Invalid(format!("task {id} says it is another")));
         }
@@ -514,22 +535,53 @@ impl Task {
         })
     }
 
-    pub fn list(home: &Path) -> Result<Vec<TaskInfo>> {
+    /// Every task under `home`, and apart, those whose record cannot be
+    /// read, by their folder's name with why: a list a person reads names
+    /// them rather than failing whole. What counts or judges every task
+    /// (budgets, say) uses [`Task::list`], which fails instead.
+    pub fn list_told(home: &Path) -> Result<(Vec<TaskInfo>, Vec<Unreadable>)> {
         let tasks = home.join("tasks");
         let entries = match fs::read_dir(&tasks) {
             Ok(entries) => entries,
-            Err(e) if e.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) if e.kind() == ErrorKind::NotFound => return Ok((Vec::new(), Vec::new())),
             Err(e) => return Err(e).at(&tasks),
         };
-        let mut infos = Vec::new();
+        let (mut infos, mut unreadable) = (Vec::new(), Vec::new());
         for entry in entries {
-            let file = entry.at(&tasks)?.path().join("task.json");
+            let entry = entry.at(&tasks)?;
+            let file = entry.path().join("task.json");
             if file.is_file() {
-                infos.push(read_json::<TaskInfo>(&file)?);
+                match read_json::<TaskInfo>(&file) {
+                    Ok(info) => infos.push(info),
+                    Err(e) => unreadable.push(Unreadable {
+                        id: entry.file_name().to_string_lossy().into_owned(),
+                        why: why_unread(e),
+                    }),
+                }
             }
         }
         infos.sort_by_key(|i| (i.created_unix, i.id.clone()));
-        Ok(infos)
+        unreadable.sort_by(|a, b| a.id.cmp(&b.id));
+        Ok((infos, unreadable))
+    }
+
+    /// Every task under `home`, for what counts or judges every task: it
+    /// fails while one's record cannot be read, saying which and what to
+    /// do, since which folder that task hides from the others' commands
+    /// and what it spent cannot be told.
+    pub fn list(home: &Path) -> Result<Vec<TaskInfo>> {
+        let (infos, unreadable) = Task::list_told(home)?;
+        match unreadable.first() {
+            None => Ok(infos),
+            Some(u) => Err(Error::Invalid(format!(
+                "task {id}'s record cannot be read ({why}): Kule cannot tell which folder it \
+                 was made from, so no command or run starts in any task, and nothing that \
+                 counts every task goes on, until it is removed: `kule rm {id}`, or Delete task \
+                 in the app (its copy goes with it; no folder of yours is touched)",
+                id = u.id,
+                why = u.why
+            ))),
+        }
     }
 
     /// The task's own directory: state, checkpoints, logs and the copy.
@@ -554,12 +606,27 @@ impl Task {
         self.dir.join("agent.log")
     }
 
+    /// What the log before the agent's (`agent.log.1`) is as a run starts,
+    /// for [`Task::agent_log_hint`] as it ends.
+    pub fn agent_log_mark(&self) -> AgentLogMark {
+        use std::os::unix::fs::MetadataExt;
+        let older = self.agent_log().with_extension("log.1");
+        AgentLogMark(
+            fs::symlink_metadata(older)
+                .ok()
+                .map(|m| (m.dev(), m.ino(), m.mtime(), m.mtime_nsec())),
+        )
+    }
+
     /// Where a failed run's agent said why: its log, and the one before it
-    /// when the log was turned over during the run (see `agent.log.1`).
-    pub fn agent_log_hint(&self) -> String {
+    /// when the log was turned over during the run, which found it as
+    /// `before` (otherwise `agent.log.1` is an earlier run's).
+    pub fn agent_log_hint(&self, before: &AgentLogMark) -> String {
         let log = self.agent_log();
         let older = log.with_extension("log.1");
-        if older.exists() {
+        let now = self.agent_log_mark();
+        let turned = now.0.is_some() && now != *before;
+        if turned {
             format!(
                 "see {}, and {} beside it for what came before",
                 log.display(),
@@ -1528,13 +1595,28 @@ impl Task {
     /// its caches.
     pub fn remove(self) -> Result<()> {
         let _lock = self.lock()?;
-        let trash = trash_dir(&self.home());
-        fs::create_dir_all(&trash).at(&trash)?;
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_or(0, |d| d.as_nanos());
-        let to = trash.join(format!("{}-{nanos:x}", self.info.id));
-        fs::rename(&self.dir, &to).at(&self.dir)
+        to_trash(&self.home(), &self.dir, &self.info.id)
+    }
+
+    /// Deletes the task `id` whose record cannot be read, and its copy, as
+    /// [`Task::remove`] does: what needs every task refuses to go on while
+    /// it is there (see [`Task::list`]). The folder it was made from cannot
+    /// be told and is not touched. Refused for a task that can be read,
+    /// and while an agent is at work in it or another command holds it.
+    pub fn remove_unreadable(home: &Path, id: &str) -> Result<()> {
+        let made =
+            !id.is_empty() && id.len() <= 64 && id.bytes().all(|b| b.is_ascii_alphanumeric());
+        let dir = home.join("tasks").join(id);
+        if !made || !dir.join("task.json").is_file() {
+            return Err(Error::Invalid(format!("no task {id}")));
+        }
+        if read_json::<TaskInfo>(&dir.join("task.json")).is_ok_and(|info| info.id == id) {
+            return Err(Error::Invalid(format!(
+                "task {id}'s record can be read; it is removed as any task is"
+            )));
+        }
+        let _lock = lock_at(&dir, id)?;
+        to_trash(home, &dir, id)
     }
 
     /// Deletes what removed tasks left in Kule's trash under `home`.
@@ -1932,33 +2014,62 @@ impl Task {
 
     /// The process with an agent at work in the task, if it is still alive.
     pub fn agent_pid(&self) -> Option<u32> {
-        let pid: u32 = fs::read_to_string(self.dir.join("agent"))
-            .ok()?
-            .trim()
-            .parse()
-            .ok()?;
-        alive(pid).then_some(pid)
+        agent_pid_at(&self.dir)
     }
 
     pub(crate) fn lock(&self) -> Result<Lock> {
-        if let Some(pid) = self.agent_pid() {
-            return Err(Error::Invalid(format!(
-                "an agent is at work in task {} (process {pid}); wait until it is done",
-                self.info.id
-            )));
-        }
-        let path = self.dir.join("lock");
-        match OpenOptions::new().write(true).create_new(true).open(&path) {
-            Ok(mut file) => {
-                let _ = writeln!(file, "{}", std::process::id());
-                Ok(Lock(path))
-            }
-            Err(e) if e.kind() == ErrorKind::AlreadyExists => {
-                Err(Error::Busy(self.info.id.clone()))
-            }
-            Err(e) => Err(e).at(&path),
-        }
+        lock_at(&self.dir, &self.info.id)
     }
+}
+
+/// Why a task's record could not be read, without the home's path: the
+/// message reaches extensions too.
+fn why_unread(e: Error) -> String {
+    match e {
+        Error::State { source, .. } => source.to_string(),
+        Error::Io { source, .. } => source.to_string(),
+        other => other.to_string(),
+    }
+}
+
+/// The process with an agent at work in the task in `dir`, if it is alive.
+fn agent_pid_at(dir: &Path) -> Option<u32> {
+    let pid: u32 = fs::read_to_string(dir.join("agent"))
+        .ok()?
+        .trim()
+        .parse()
+        .ok()?;
+    alive(pid).then_some(pid)
+}
+
+/// The lock of the task `id` in `dir`: refused while an agent is at work
+/// there or another Kule command holds it.
+fn lock_at(dir: &Path, id: &str) -> Result<Lock> {
+    if let Some(pid) = agent_pid_at(dir) {
+        return Err(Error::Invalid(format!(
+            "an agent is at work in task {id} (process {pid}); wait until it is done"
+        )));
+    }
+    let path = dir.join("lock");
+    match OpenOptions::new().write(true).create_new(true).open(&path) {
+        Ok(mut file) => {
+            let _ = writeln!(file, "{}", std::process::id());
+            Ok(Lock(path))
+        }
+        Err(e) if e.kind() == ErrorKind::AlreadyExists => Err(Error::Busy(id.to_owned())),
+        Err(e) => Err(e).at(&path),
+    }
+}
+
+/// Moves the task `id`'s folder `dir` to Kule's trash under `home`.
+fn to_trash(home: &Path, dir: &Path, id: &str) -> Result<()> {
+    let trash = trash_dir(home);
+    fs::create_dir_all(&trash).at(&trash)?;
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos());
+    let to = trash.join(format!("{id}-{nanos:x}"));
+    fs::rename(dir, &to).at(dir)
 }
 
 /// An agent at work in a task, marked until dropped (see

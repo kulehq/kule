@@ -52,7 +52,11 @@ agent's work.
   hints about those refusals, and what Kule ended that the shell left
   running in its sandbox (macOS). On Linux, when the shell exited with an
   error, it says that Linux does not tell Kule what the sandbox refused.
-  Then comes *[the shell ended; press Enter for a new one]*.
+  Then comes *[the shell ended; press Enter for a new one]*. When you
+  closed its tab first, the same lines are in the task's **Live**, each
+  after *A terminal you closed:*. When you quit Kule with a terminal open,
+  its shell ends with Kule, and what the sandbox refused it is still kept
+  for the task's Timeline and its next run.
 - **While a terminal is open on a task**, no agent run starts in it, and
   **Commit**, **Sync**, **Roll back**, **Undo**, going back to a step, and
   applying or undoing home changes wait. Kule says *a terminal is open on

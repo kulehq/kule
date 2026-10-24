@@ -812,7 +812,8 @@ impl<R: futures::io::AsyncRead + Unpin> futures::io::AsyncRead for Capped<R> {
 
 /// The agent's log, turned over at [`MAX_LOG`]: what it held becomes
 /// `agent.log.1`, in place of the one before, so the log keeps its end
-/// and never more than twice that. Kule writes it, outside the task's
+/// and never more than twice that. The new log's first line says so, and
+/// that the one before was let go when there was one. Kule writes it, outside the task's
 /// limits. Once it cannot be written, the run's notes say so and what the
 /// agent writes goes nowhere, still read, so the agent is not cut off.
 struct TurnedLog {
@@ -839,15 +840,26 @@ impl TurnedLog {
 
     fn turn(&mut self) -> std::io::Result<()> {
         use std::os::unix::fs::OpenOptionsExt;
-        std::fs::rename(&self.path, self.path.with_file_name("agent.log.1"))?;
-        self.file = Some(
-            std::fs::OpenOptions::new()
-                .create_new(true)
-                .append(true)
-                .mode(0o600)
-                .open(&self.path)?,
+        let older = self.path.with_file_name("agent.log.1");
+        let let_go = std::fs::symlink_metadata(&older).is_ok();
+        std::fs::rename(&self.path, &older)?;
+        let mut file = std::fs::OpenOptions::new()
+            .create_new(true)
+            .append(true)
+            .mode(0o600)
+            .open(&self.path)?;
+        let marker = format!(
+            "--- Kule turned this log over here, at {} MiB: what came before is in agent.log.1{} ---\n",
+            MAX_LOG >> 20,
+            if let_go {
+                "; the log before that was let go"
+            } else {
+                ""
+            }
         );
-        self.len = 0;
+        std::io::Write::write_all(&mut file, marker.as_bytes())?;
+        self.file = Some(file);
+        self.len = marker.len() as u64;
         Ok(())
     }
 

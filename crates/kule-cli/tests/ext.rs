@@ -412,3 +412,78 @@ fn a_change_from_the_cli_reaches_a_running_app() {
     let _ = daemon.wait();
     assert!(heard, "the app heard nothing of the change");
 }
+
+/// `kule run` gives the agent the MCP servers approved from extensions, and
+/// only those, as the app's runs do.
+#[test]
+fn kule_run_gives_the_agent_only_the_mcp_servers_approved() {
+    let target = env!("CARGO_TARGET_TMPDIR");
+    let (home, work, src, ws) = (
+        TempDir::new_in(target).unwrap(),
+        TempDir::new_in(target).unwrap(),
+        TempDir::new_in(target).unwrap(),
+        TempDir::new().unwrap(),
+    );
+    fs::write(
+        src.path().join("kule-extension.json"),
+        r#"{ "kule_extension": 1, "id": "acme.tools", "name": "Tools", "version": "1.0.0",
+             "publisher": "acme", "contributes": { "mcpServers": [
+               { "name": "web", "command": "uvx", "args": ["acme-web==2.0.0"] },
+               { "name": "db", "command": "uvx", "args": ["acme-db==1.0.0"] } ] } }"#,
+    )
+    .unwrap();
+    let run = |args: &[&str]| kule(home.path(), work.path(), args);
+    stdout(&run(&["ext", "dev", src.path().to_str().unwrap()]));
+    stdout(&run(&["ext", "approve", "acme.tools", "--yes"]));
+    stdout(&run(&["ext", "mcp", "approve", "acme.tools/web", "--yes"]));
+
+    let created = stdout(&run(&["new", ws.path().to_str().unwrap()]));
+    let id = created.split_whitespace().nth(1).unwrap().to_owned();
+    let copy = fs::canonicalize(stdout(&run(&["path", &id])).trim()).unwrap();
+    // An agent that writes down the MCP servers it is given, then stops; it
+    // lives in the copy, which its sandbox lets it read.
+    let given = copy.join("given.json");
+    let probe = copy.join("probe.py");
+    fs::write(
+        &probe,
+        format!(
+            "import json, sys\nfor line in sys.stdin:\n    m = json.loads(line)\n    if m.get('method') == 'initialize':\n        print(json.dumps({{'jsonrpc': '2.0', 'id': m['id'], 'result': {{'protocolVersion': 1, 'agentCapabilities': {{}}, 'authMethods': []}}}}), flush=True)\n    elif m.get('method') == 'session/new':\n        open({:?}, 'w').write(json.dumps(m['params'].get('mcpServers', [])))\n        sys.exit(1)\n",
+            given.display().to_string()
+        ),
+    )
+    .unwrap();
+    fs::write(
+        home.path().join("agents.toml"),
+        format!(
+            "[[agent]]\nname = \"probe\"\ncommand = [\"python3\", \"-I\", {:?}]\n",
+            probe.display().to_string()
+        ),
+    )
+    .unwrap();
+    stdout(&run(&["agents", "approve", "probe"]));
+    run(&["run", &id, "--agent", "probe", "hello"]);
+
+    let given: Vec<serde_json::Value> =
+        serde_json::from_str(&fs::read_to_string(&given).expect("the agent was never started"))
+            .unwrap();
+    let names: Vec<_> = given.iter().map(|s| s["name"].as_str().unwrap()).collect();
+    assert_eq!(names, ["web"], "{given:?}");
+
+    // What was approved cannot be read: the run goes without, and says so.
+    fs::write(
+        home.path().join("extensions/mcp-approved.json"),
+        "{ not json",
+    )
+    .unwrap();
+    let out = run(&["run", &id, "--agent", "probe", "hello"]);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("kule: Kule could not read the extensions' MCP servers"),
+        "{err}"
+    );
+    assert_eq!(
+        fs::read_to_string(copy.join("given.json")).unwrap(),
+        "[]",
+        "{err}"
+    );
+}

@@ -296,6 +296,22 @@ A file like that in your home is not refused but withheld: the run's notes
 say *~/.bashrc is hidden from the commands here*. Save it as UTF-8 to give
 it back.
 
+### Nothing starts: a task's record cannot be read
+
+**Symptom:** "task 6c2816d8's record cannot be read (…): Kule cannot tell
+which folder it was made from, so no command or run starts in any task" when
+you start a run, `kule exec`, `kule shell` or a terminal in any task, or
+look at budgets. The task list shows that task by its id as *cannot be
+read*.
+
+**Cause:** that task's `task.json` under Kule's home was damaged (a disk
+that filled up, an edit by hand). Kule hides every folder it opened from the
+other tasks' commands, and cannot tell which folder this one was, so it
+starts nothing rather than leave that folder open.
+
+**Fix:** delete the task: `kule rm 6c2816d8`, or *Delete task* from its menu
+in the app. Its copy goes with it; no folder of yours is touched.
+
 ### A run is refused after opening the copy in an app
 
 **Symptom:** the app asks *Close … first* before a run, or `kule run` and

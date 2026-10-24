@@ -310,6 +310,23 @@ Ev dizininizdeki böyle bir dosya reddedilmez, saklanır: çalıştırmanın
 notları *~/.bashrc is hidden from the commands here* der. Geri vermek için
 UTF-8 olarak kaydedin.
 
+### Hiçbir şey başlamıyor: bir görevin kaydı okunamıyor {#nothing-starts-a-tasks-record-cannot-be-read}
+
+**Belirti:** herhangi bir görevde bir çalıştırma, `kule exec`, `kule shell`
+ya da bir terminal başlatırken ya da bütçelere bakarken "task 6c2816d8's
+record cannot be read (…): Kule cannot tell which folder it was made from,
+so no command or run starts in any task". Görev listesi o görevi id'siyle
+*cannot be read* olarak gösterir.
+
+**Neden:** Kule'nin evindeki o görevin `task.json` dosyası bozulmuş (dolan
+bir disk, elle yapılan bir düzenleme). Kule açtığı her klasörü diğer
+görevlerin komutlarından gizler; bu görevin hangi klasör olduğunu bilemediği
+için o klasörü açık bırakmak yerine hiçbir şey başlatmaz.
+
+**Çözüm:** görevi silin: `kule rm 6c2816d8` ya da uygulamada görevin
+menüsünden *Delete task*. Kopyası da onunla gider; sizin hiçbir klasörünüze
+dokunulmaz.
+
 ### Kopyayı bir uygulamada açtıktan sonra çalıştırma reddediliyor
 
 **Belirti:** uygulama bir çalıştırmadan önce *Close … first* diye soruyor

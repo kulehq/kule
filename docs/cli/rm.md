@@ -33,6 +33,11 @@ empty.
 
 A task an agent is working in cannot be deleted; stop the run first.
 
+A task whose record (`task.json`) cannot be read can be deleted too, by its
+id. While it is there, no command or run starts in any task, since Kule
+cannot tell which folder that task hides from the others' commands; see
+[Troubleshooting](../troubleshooting.md#nothing-starts-a-tasks-record-cannot-be-read).
+
 ## Arguments
 
 | Name | Required | Meaning |

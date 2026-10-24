@@ -91,7 +91,9 @@ pub use history::{Entry as HistoryEntry, Event as HistoryEvent};
 pub use home::{HomeApplied, HomeChange, home_digest};
 pub use isolation::{Isolation, isolation, isolation_gaps, set_isolation};
 pub use kule_entities as entities;
-pub use labels::{MAX_LABEL, ORDER_FILE, TaskColor, arranged, set_task_order, task_order};
+pub use labels::{
+    MAX_LABEL, ORDER_FILE, TaskColor, arranged, arranged_told, set_task_order, task_order,
+};
 pub use limits::{Limits, TaskLimits, limits, set_limits};
 pub use manifest::Kind;
 pub use meet::{Meeting, Touched, changed_entities, meet, touched};
@@ -121,7 +123,10 @@ pub use secrets::{
 };
 pub use steps::{Step, StepChange};
 pub use sync::{Behind, Synced};
-pub use task::{AgentAtWork, MEASURING_CACHES, OpenTerminal, OpenedOutside, Task, TaskInfo};
+pub use task::{
+    AgentAtWork, AgentLogMark, MEASURING_CACHES, OpenTerminal, OpenedOutside, Task, TaskInfo,
+    Unreadable,
+};
 pub use textdiff::{DiffSkip, Hunk, Line, LineKind, TextDiff};
 pub use usage::{
     BudgetLeft, BudgetScope, GroupSpent, Money, Reserved, RunUsage, Spent, daily_budget,

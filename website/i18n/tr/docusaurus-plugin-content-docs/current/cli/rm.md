@@ -35,6 +35,11 @@ silme işlemi sonradan tamamlanır. Disk alanı, çöp boşaldığında geri gel
 Bir ajanın içinde çalıştığı bir görev silinemez; önce çalıştırmayı
 durdurun.
 
+Kaydı (`task.json`) okunamayan bir görev de id'siyle silinebilir. O görev
+durdukça hiçbir görevde komut ya da çalıştırma başlamaz, çünkü Kule o
+görevin diğerlerinin komutlarından hangi klasörü gizlediğini bilemez; bkz.
+[Sorun giderme](../troubleshooting.md#nothing-starts-a-tasks-record-cannot-be-read).
+
 ## Argümanlar
 
 | Ad | Zorunlu | Anlamı |

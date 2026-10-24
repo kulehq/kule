@@ -1,5 +1,47 @@
 # Changes
 
+## Unreleased
+
+### Fixes
+
+- `kule exec`, `kule run` and `kule shell` tell all of what came after a
+  command, a run or a shell even when one part cannot be shown (a folder in
+  the copy that cannot be read back, say): that part is a `kule: … cannot
+  be shown` line, what the sandbox refused is still listed and recorded, and
+  the command's, run's or shell's own exit code or error still comes back.
+  One that succeeded fails, as part of it went untold. On Linux, `kule exec`
+  says after a failed command that Linux does not tell Kule what the
+  sandbox refused, as `kule run` and `kule shell` do.
+- `kule run` gives the agent the MCP servers you approved from extensions,
+  as the app's runs do; it ran without them before, saying nothing. When
+  what you approved cannot be read, the run goes without them and says so.
+- What the sandbox refused a terminal in the app is no longer lost when you
+  close its tab before its shell ends (the lines go to the task's Live) or
+  quit Kule with it open (its shell ends with Kule, and the refusals are
+  kept for the Timeline and the task's next run; the window closes at once
+  meanwhile).
+- A turned-over `agent.log` starts with a line saying so, and that the log
+  before was let go when there was one. A failed run points to
+  `agent.log.1` only when the log was turned over during that run, not to
+  one an earlier run left.
+- A run whose agent reported no cost, in a task with a budget, says in the
+  app that the budget does not count it, as `kule run` already did.
+- A shell's probes of the terminals around it are one line (`/dev/ttys*`,
+  `/dev/pts/*`, counted) whichever terminals it tried: in the Timeline, in
+  Live, where a terminal's shell ends, and after `kule exec`, `kule run` and
+  `kule shell`, which also list the same refusal once with how many times.
+  In the Timeline, *… and N more refusals* counts the refusals left out,
+  not the rows.
+- One task whose record cannot be read no longer fails the whole task list:
+  `kule list` names it on stderr and lists the rest, and the app lists it
+  by its id as one that cannot be read; selected, it shows why, with
+  *Delete task*, instead of trying to load it. What needs every task (commands and
+  runs in any task, since Kule cannot tell which folder that one hides, and
+  budgets) still refuses while it is there, and now says which task and
+  that `kule rm <id>` (or *Delete task* in the app) removes it; that works
+  without reading its record.
+- `kule` says an error's cause once, not twice (`state file …: EOF …`).
+
 ## 0.2.0-preview.12
 
 What passes on its own under the balanced policy is now an allow-list:

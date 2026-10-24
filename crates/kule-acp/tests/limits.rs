@@ -315,10 +315,13 @@ fn a_message_past_its_limit_ends_the_run() {
 }
 
 /// What the agent prints for itself goes to its log, which Kule writes
-/// outside the task's limits; it keeps the end of it, not all of it.
+/// outside the task's limits; it keeps the end of it, not all of it, and
+/// says where it turned the log over and what it let go of.
 #[test]
 fn the_agent_s_log_keeps_its_end_within_a_limit() {
     let s = Setup::new();
+    // A log turned over before, which this run's turn replaces.
+    fs::write(s.task.agent_log().with_file_name("agent.log.1"), "older\n").unwrap();
     let ran = s.run(
         // Three bytes first, so the pieces read from the pipe do not end on
         // the limit by chance before it turns over the first time.
@@ -345,6 +348,19 @@ fn the_agent_s_log_keeps_its_end_within_a_limit() {
         len(&older)
     );
     assert!(len(&older) > 0, "it never turned over");
+    let first = fs::read_to_string(&log)
+        .unwrap()
+        .lines()
+        .next()
+        .unwrap_or_default()
+        .to_owned();
+    assert!(
+        first.starts_with("--- Kule turned this log over here")
+            && first.contains("agent.log.1")
+            && first.contains("the log before that was let go"),
+        "{:?}",
+        first.chars().take(120).collect::<String>()
+    );
     use std::os::unix::fs::PermissionsExt;
     assert_eq!(
         fs::metadata(&older).unwrap().permissions().mode() & 0o777,
