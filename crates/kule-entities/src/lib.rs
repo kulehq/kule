@@ -29,8 +29,10 @@ pub use merge::{Conflict, merge};
 pub const MAX_BYTES: usize = 1 << 20;
 /// More entities than this on one side and the file is not outlined.
 const MAX_ENTITIES: usize = 20_000;
-/// What parsing one side of a file may take.
-const PARSE_TIME: Duration = Duration::from_millis(500);
+/// What parsing one side of a file may take. This crate's own tests,
+/// built without optimisation on a busy machine, give it more: they check
+/// the other limits, not the clock.
+const PARSE_TIME: Duration = Duration::from_millis(if cfg!(test) { 10_000 } else { 500 });
 /// Names are cut here.
 const MAX_NAME: usize = 120;
 
