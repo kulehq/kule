@@ -1742,18 +1742,6 @@ impl Service {
         };
         let service = Arc::clone(self);
         std::thread::spawn(move || {
-            // The task's caches, made before the agent starts, are told
-            // while it waits; what fails here fails the run's sandbox too.
-            if let Some(sources) = kule_engine::CacheSources::from_env() {
-                let _ = task.prepare_caches(&sources, |text| {
-                    service.emit(
-                        task.id(),
-                        RunEvent::Preparing {
-                            text: text.to_owned(),
-                        },
-                    );
-                });
-            }
             let run = service.run(&task, &profile, &prompt, &pictures, plan, &control);
             let (error, denials, unreported, incomplete, notes) = match run {
                 Ok(end) => (
@@ -1969,6 +1957,19 @@ impl Service {
                     ),
                 },
             );
+        }
+        // The task's caches, made before its sandbox is, once what can fail
+        // at once has not: told while the run waits for them.
+        if let Some(sources) = kule_engine::CacheSources::from_env() {
+            task.prepare_caches(&sources, |text| {
+                self.emit(
+                    task.id(),
+                    RunEvent::Preparing {
+                        text: text.to_owned(),
+                    },
+                );
+            })
+            .map_err(text)?;
         }
         if task.measures_caches().map_err(text)? {
             self.emit(
@@ -3921,6 +3922,14 @@ mod tests {
         };
         let error = finished.expect("the run failed");
         assert!(error.contains("cannot be read"), "{error}");
+        // What failed at once did not first make the task's caches, which
+        // takes seconds where the person's are large.
+        let caches = Task::open(&s.app.home, &id)
+            .unwrap()
+            .tmp()
+            .unwrap()
+            .join("caches/npm");
+        assert!(!caches.exists());
         assert!(!s.app.view(&id).unwrap().running);
         assert!(s.app.stop_run(&id).is_err() || !s.app.busy());
     }
