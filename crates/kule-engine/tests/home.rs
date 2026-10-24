@@ -237,6 +237,59 @@ fn an_apply_never_brings_setuid_into_the_home() {
     assert!(!s.person.path().join(".newrc").exists());
 }
 
+/// An undo puts nothing back through a link on the way: a folder swapped
+/// for a link to a look-alike after the apply would lead the undo there.
+#[test]
+fn an_undo_refuses_a_link_on_the_way() {
+    let s = Setup::new();
+    s.run(SCRIPT);
+    s.task
+        .apply_reviewed(&[
+            ".config/new".into(),
+            ".config/new/n.toml".into(),
+            ".newrc".into(),
+        ])
+        .unwrap();
+    let p = s.person.path();
+    let elsewhere = TempDir::new_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
+    fs::rename(p.join(".config"), elsewhere.path().join(".config")).unwrap();
+    std::os::unix::fs::symlink(elsewhere.path().join(".config"), p.join(".config")).unwrap();
+    let e = s.task.undo_home().unwrap_err();
+    assert!(
+        e.to_string().contains("~/.config is a link in your home"),
+        "{e}"
+    );
+    assert!(elsewhere.path().join(".config/new/n.toml").exists());
+    // Refused before anything was put back, not halfway.
+    assert_eq!(s.real(".newrc"), "hi\n");
+}
+
+/// Kule writes in the home through the folders on the way, opened without
+/// following a link: one found on the way is refused, never written
+/// through.
+#[test]
+fn an_apply_writes_through_no_link_on_the_way() {
+    let s = Setup::new();
+    s.run(SCRIPT);
+    let p = s.person.path();
+    // The same folder, moved and linked to: every file in it is as it was.
+    let elsewhere = TempDir::new_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
+    fs::rename(p.join(".config"), elsewhere.path().join(".config")).unwrap();
+    std::os::unix::fs::symlink(elsewhere.path().join(".config"), p.join(".config")).unwrap();
+    let e = s
+        .task
+        .apply_reviewed(&[".config/git/settings.toml".into()])
+        .unwrap_err();
+    assert!(
+        e.to_string().contains("~/.config is a link in your home"),
+        "{e}"
+    );
+    assert_eq!(
+        fs::read_to_string(elsewhere.path().join(".config/git/settings.toml")).unwrap(),
+        "x = 1\n"
+    );
+}
+
 // Filesystems keep time in ticks (milliseconds on Linux ext4, two seconds on
 // FAT), so a same-size save right after Kule reads a stamp can leave the
 // stamp as it was. The test below repeats a race that a coarse clock loses

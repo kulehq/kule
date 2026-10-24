@@ -15,7 +15,10 @@
 //!
 //! `io_uring`, which can bind without a system call, is refused, and so are
 //! system calls of another architecture (32-bit), which have their own
-//! numbers. A process that swaps a Unix socket's descriptor for a TCP one
+//! numbers. So, by name, are the calls that reach past the command without
+//! namespaces of its own ([`REFUSED`]): `ptrace`, `process_vm_writev`,
+//! `keyctl`, `userfaultfd`, `perf_event_open` and `setns`; the host's
+//! sysctls are not left to decide them. A process that swaps a Unix socket's descriptor for a TCP one
 //! between Kule's look and the kernel's could still bind the latter as it
 //! asked; only a program racing its own threads on purpose can.
 
@@ -144,8 +147,8 @@ fn jump(code: u16, k: u32, jt: u8, jf: u8) -> libc::sock_filter {
     libc::sock_filter { code, jt, jf, k }
 }
 
-/// The program: another architecture's calls and io_uring refused, bind
-/// and listen to Kule, everything else allowed.
+/// The program: another architecture's calls, io_uring and [`REFUSED`]
+/// refused, bind and listen to Kule, everything else allowed.
 fn program() -> Vec<libc::sock_filter> {
     const LD_W_ABS: u16 = (libc::BPF_LD | libc::BPF_W | libc::BPF_ABS) as u16;
     const JEQ: u16 = (libc::BPF_JMP | libc::BPF_JEQ | libc::BPF_K) as u16;
@@ -164,12 +167,37 @@ fn program() -> Vec<libc::sock_filter> {
         statement(RET, errno(libc::ENOSYS)),
         jump(JEQ, libc::SYS_io_uring_setup as u32, 0, 1),
         statement(RET, errno(libc::ENOSYS)),
+    ]
+    .into_iter()
+    // Refused by name, whatever the host's sysctls allow: without
+    // namespaces of its own, these reach other processes of the person's,
+    // the kernel's keys, or another namespace.
+    .chain(REFUSED.iter().flat_map(|nr| {
+        [
+            jump(JEQ, *nr as u32, 0, 1),
+            statement(RET, errno(libc::EPERM)),
+        ]
+    }))
+    .chain([
         jump(JEQ, libc::SYS_bind as u32, 2, 0),
         jump(JEQ, libc::SYS_listen as u32, 1, 0),
         statement(RET, libc::SECCOMP_RET_ALLOW),
         statement(RET, libc::SECCOMP_RET_USER_NOTIF),
-    ]
+    ])
+    .collect()
 }
+
+/// The calls the filter refuses with `EPERM`: tracing and writing into
+/// other processes, the kernel's key store, page faults handled by the
+/// caller, performance counters, and joining another namespace.
+pub(crate) const REFUSED: [libc::c_long; 6] = [
+    libc::SYS_ptrace,
+    libc::SYS_process_vm_writev,
+    libc::SYS_keyctl,
+    libc::SYS_userfaultfd,
+    libc::SYS_perf_event_open,
+    libc::SYS_setns,
+];
 
 fn check(r: libc::c_int) -> io::Result<libc::c_int> {
     if r == -1 {

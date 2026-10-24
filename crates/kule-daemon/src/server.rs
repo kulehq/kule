@@ -41,8 +41,9 @@ pub fn socket_path(home: &Path) -> PathBuf {
 /// client connected, no agent at work, no question waiting. Refuses to
 /// start when another daemon holds `home`.
 pub fn run(home: &Path, idle_after: Duration) -> io::Result<()> {
-    fs::create_dir_all(home)?;
-    fs::set_permissions(home, fs::Permissions::from_mode(0o700))?;
+    if let Some(note) = crate::check_home(home).map_err(io::Error::other)? {
+        eprintln!("kuled: {note}");
+    }
     let _lock = lock(&home.join("kuled.lock"))?;
     let token = new_token(home)?;
     let socket = socket_path(home);

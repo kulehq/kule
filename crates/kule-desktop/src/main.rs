@@ -1011,6 +1011,14 @@ fn main() {
             std::process::exit(2);
         }
     };
+    match kule_daemon::check_home(&home) {
+        Ok(Some(note)) => eprintln!("kule-desktop: {note}"),
+        Ok(None) => {}
+        Err(e) => {
+            eprintln!("kule-desktop: {e}");
+            std::process::exit(2);
+        }
+    }
     if std::env::args().nth(1).as_deref() == Some("daemon") {
         eprintln!("kule-desktop: daemon for {}", home.display());
         if let Err(e) = kule_daemon::run(&home, Duration::from_secs(600)) {

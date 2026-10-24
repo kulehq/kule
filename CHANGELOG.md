@@ -54,6 +54,23 @@
 - Approve on a question's card, and its shortcut, take nothing for a moment
   after the card appears, so a card that shows up under the pointer is not
   approved by accident.
+- The command line and the app talk only to a daemon of your own user: what
+  listens at the daemon's place as anyone else is sent nothing, its token
+  included. Kule's home must be a folder of yours and not a link; one open
+  to others is closed to `0700`, saying so.
+- A task is refused on a folder that holds `~/.kule`, also while its own
+  home is elsewhere (`--home`, `KULE_HOME`).
+- A scan reads at most 1,000,000 files and folders, and a review hashes no
+  file over 8 GiB; past either, Kule refuses, naming the path and the limit.
+- `kule exec --allow-write`, `--reveal` and `--pass-env` each say what they
+  open, as `--no-sandbox` does.
+- On Linux without namespaces of its own, a command's filter refuses
+  `ptrace`, `process_vm_writev`, `keyctl`, `userfaultfd`, `perf_event_open`
+  and `setns` by name, whatever the host's sysctls allow.
+- Applying and undoing home changes write, remove and link through the
+  folders on the way, opened without following a link, as a commit does in
+  the workspace; an undo refuses a link on the way before it puts anything
+  back.
 
 - A task's first run no longer waits while Kule walks the package caches it
   starts with. Only a disk limit needs them measured: the first run under

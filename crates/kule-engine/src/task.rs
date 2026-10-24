@@ -159,6 +159,18 @@ impl Task {
                 home.display()
             )));
         }
+        // Kule's home where it is by default, when this task's is another:
+        // its tasks, secrets and the daemon's token would be copied in, and
+        // a commit could write there.
+        if let Some(default) = std::env::var_os("HOME").map(|h| Path::new(&h).join(".kule"))
+            && let Ok(default) = fs::canonicalize(&default)
+            && default.starts_with(&workspace)
+        {
+            return Err(Error::Invalid(format!(
+                "Kule's home {} is inside the workspace, though this task's home is another",
+                default.display()
+            )));
+        }
         let tasks = home.join("tasks");
         fs::create_dir_all(&tasks).at(&tasks)?;
         let (id, dir) = new_task_dir(&tasks)?;

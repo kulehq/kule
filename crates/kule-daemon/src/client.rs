@@ -121,13 +121,24 @@ impl Client {
             .map(|t| t.trim().to_owned())
     }
 
+    /// A connection to the daemon, once its other end is shown to be this
+    /// user's: the token goes to nothing else listening there.
     fn connect(&self) -> Result<UnixStream> {
-        UnixStream::connect(&self.socket).map_err(|e| {
+        let stream = UnixStream::connect(&self.socket).map_err(|e| {
             format!(
                 "cannot reach the Kule daemon at {}: {e}",
                 self.socket.display()
             )
-        })
+        })?;
+        // SAFETY: geteuid has no preconditions and cannot fail.
+        let me = unsafe { libc::geteuid() };
+        if crate::peer_uid(&stream) != Some(me) {
+            return Err(format!(
+                "what listens at {} is not your own Kule daemon; Kule sends it nothing",
+                self.socket.display()
+            ));
+        }
+        Ok(stream)
     }
 }
 

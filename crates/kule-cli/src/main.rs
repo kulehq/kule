@@ -567,6 +567,9 @@ fn run() -> Result<ExitCode> {
             .map(|h| PathBuf::from(h).join(".kule"))
             .ok_or_else(|| anyhow!("HOME is not set; pass --home or KULE_HOME"))?,
     };
+    if let Some(note) = kule_daemon::check_home(&home).map_err(|e| anyhow!(e))? {
+        eprintln!("kule: {note}");
+    }
     match cli.command {
         Cmd::New { workspace } => {
             let task = Task::create(&home, &workspace)?;
@@ -760,17 +763,30 @@ fn run() -> Result<ExitCode> {
                         eprintln!("kule: {note}");
                     }
                 }
+                // What opens the sandbox wider is said, as --no-sandbox is.
                 for path in &allow_write {
                     sandbox.allow_write(path)?;
+                    eprintln!(
+                        "kule: the command may write {}, outside the task's copy",
+                        paint::plain_line(&path.display().to_string())
+                    );
                 }
                 for path in &hide {
                     sandbox.hide(path)?;
                 }
                 for path in &reveal {
                     sandbox.reveal(path)?;
+                    eprintln!(
+                        "kule: the command may read {}, which the sandbox hides",
+                        paint::plain_line(&path.display().to_string())
+                    );
                 }
                 for name in &pass_env {
                     sandbox.pass_env(name);
+                    eprintln!(
+                        "kule: the command gets {} from your environment",
+                        paint::plain_line(name)
+                    );
                 }
                 let network = if no_network {
                     Network::Deny

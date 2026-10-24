@@ -87,7 +87,10 @@ Neyin gizlendiğinin ve nedeninin tam listesi için bkz.
 `--reveal`, `--allow-write`, `--open-network` ve `--no-sandbox`, Kule'nin
 bilerek kapattığı delikleri açar. Bunları güvendiğiniz bir komut için ve
 olabildiğince dar kullanın: üst klasörü değil, tek bir klasörü `--reveal`
-edin.
+edin. Her biri, komut çalışmadan önce neyi açtığını stderr'e yazar
+(`kule: the command may write PATH, outside the task's copy`, `kule: the
+command may read PATH, which the sandbox hides`, `kule: the command gets
+NAME from your environment`).
 
 :::
 

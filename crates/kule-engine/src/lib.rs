@@ -19,6 +19,14 @@ mod approvals;
 mod beside;
 #[cfg(target_os = "linux")]
 mod bind_filter;
+
+/// Whether the filter that holds a command's servers to loopback, and
+/// refuses the calls that reach past it, can be used here, where a command
+/// has no network of its own (Linux).
+#[cfg(target_os = "linux")]
+pub fn bind_filter_available() -> bool {
+    bind_filter::available()
+}
 mod caches;
 mod checkpoint;
 mod clienthello;

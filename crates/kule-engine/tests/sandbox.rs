@@ -2918,3 +2918,42 @@ fn what_still_runs_in_the_sandbox_is_ended_before_the_copy_is_put_back() {
         assert!(gone, "the stray still runs after {way}");
     }
 }
+
+/// Without a network of its own, the command's filter refuses by name the
+/// calls that reach past it (tracing or writing other processes, the key
+/// store, user page faults, performance counters, another namespace),
+/// whatever the host's sysctls allow.
+#[cfg(target_os = "linux")]
+#[test]
+fn calls_that_reach_past_the_command_are_refused_without_namespaces() {
+    if !kule_engine::bind_filter_available() {
+        eprintln!("no seccomp user notifications here");
+        return;
+    }
+    let s = Setup::new();
+    let mut sandbox = s.sandbox();
+    sandbox.set_network(Network::Allow);
+    let calls = [
+        ("ptrace", libc::SYS_ptrace),
+        ("process_vm_writev", libc::SYS_process_vm_writev),
+        ("keyctl", libc::SYS_keyctl),
+        ("userfaultfd", libc::SYS_userfaultfd),
+        ("perf_event_open", libc::SYS_perf_event_open),
+        ("setns", libc::SYS_setns),
+    ];
+    let script = format!(
+        "import ctypes\nlibc = ctypes.CDLL(None, use_errno=True)\nfor name, nr in {:?}:\n    r = libc.syscall(nr, 0, 0, 0, 0, 0)\n    print(name, r, ctypes.get_errno())\n",
+        calls.iter().map(|(n, nr)| (n.to_string(), *nr as i64)).collect::<Vec<_>>()
+    )
+    .replace('"', "'");
+    let out = sandbox_python(&sandbox, &script);
+    let text = String::from_utf8_lossy(&out.stdout);
+    for (name, _) in calls {
+        assert!(
+            text.lines()
+                .any(|l| l == format!("{name} -1 {}", libc::EPERM)),
+            "{name}: {text}{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+}

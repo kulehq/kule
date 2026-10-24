@@ -113,3 +113,23 @@ fn a_home_path_is_found_however_it_is_typed_and_only_inside_the_home() {
     );
     assert!(fs::read_to_string(&expanded).unwrap().contains("alias ll="));
 }
+
+/// A task is refused on a folder that holds Kule's home where it is by
+/// default (`~/.kule`), also while this task's home is another: its tasks,
+/// secrets and token would be copied in.
+#[test]
+fn a_folder_holding_the_default_kule_home_is_refused() {
+    let (home, person) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+    fs::create_dir(person.path().join(".kule")).unwrap();
+    fs::write(person.path().join("notes.txt"), "n\n").unwrap();
+    let said = refused(
+        home.path(),
+        person.path(),
+        &["new", person.path().to_str().unwrap()],
+    );
+    assert!(said.contains("is inside the workspace"), "{said}");
+    // A folder beside it is fine.
+    let ws = person.path().join("project");
+    fs::create_dir(&ws).unwrap();
+    ok(home.path(), person.path(), &["new", ws.to_str().unwrap()]);
+}
