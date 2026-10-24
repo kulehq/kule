@@ -28,17 +28,76 @@ pub struct Question {
     pub asked_unix: u64,
     /// When it is refused unless answered.
     pub deadline_unix: u64,
+    /// What Kule does inside the connection once approved; `None` when it
+    /// only tunnels it, seeing the host and port alone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inside: Option<Inside>,
+}
+
+/// What Kule does inside a connection it looks into: the hosts a stored
+/// secret or an agent's key goes to, and the package registries. An
+/// approval never adds a host to these.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Inside {
+    /// The secrets Kule puts into its requests, by name.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fills: Vec<String>,
+    /// A registry Kule lets commands read from, never send to.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub read_only: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Answer {
+    /// By the person.
     Approved,
+    /// By the person.
     Denied,
+    /// Nobody answered in time.
     TimedOut,
+    /// Refused by Kule: the run ended, and its proxy with it, before anyone
+    /// answered.
+    Withdrawn,
+    /// Refused by Kule without asking: [`MAX_WAITING`] questions of the run
+    /// were waiting already.
+    TooMany,
+}
+
+impl Answer {
+    /// Whether a person gave it, rather than the clock or Kule.
+    pub fn by_a_person(self) -> bool {
+        matches!(self, Answer::Approved | Answer::Denied)
+    }
+}
+
+/// A question that stopped waiting, or one Kule refused without putting
+/// it to anyone: what became of it, told once.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Settled {
+    pub task: String,
+    pub host: String,
+    pub port: u16,
+    /// The question it was, if one was put to the person.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub question: Option<u64>,
+    pub answer: Answer,
+}
+
+/// A connection a person approved that did not go through as approved:
+/// Kule cut it, refused it for where it led, or it failed on its own.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AfterApproval {
+    pub task: String,
+    pub host: String,
+    pub port: u16,
+    /// What became of it, in Kule's words (see `Connection::told`).
+    pub why: String,
 }
 
 type Listener = Box<dyn Fn(Vec<Question>) + Send + Sync>;
+type SettledListener = Box<dyn Fn(&Settled) + Send + Sync>;
+type AfterListener = Box<dyn Fn(&AfterApproval) + Send + Sync>;
 
 /// Where questions wait and answers come from; clones share them.
 #[derive(Clone, Default)]
@@ -51,6 +110,8 @@ struct Inner {
     state: Mutex<State>,
     answered: Condvar,
     listeners: Mutex<Vec<Listener>>,
+    settled: Mutex<Vec<SettledListener>>,
+    after: Mutex<Vec<AfterListener>>,
 }
 
 #[derive(Default)]
@@ -63,6 +124,8 @@ struct State {
     /// A person's answers, kept for the rest of the proxy's run: one answer
     /// per host and port, not one per connection.
     remembered: HashMap<(u64, String, u16), Answer>,
+    /// Hosts and ports a proxy was refused at once, told once each.
+    refused_told: HashSet<(u64, String, u16)>,
 }
 
 /// The most questions one proxy can have waiting; more are refused at once,
@@ -86,6 +149,25 @@ impl Approvals {
         lock(&self.inner.listeners).push(Box::new(listener));
     }
 
+    /// Calls `listener` once for each question that stops waiting, with
+    /// what became of it, and for each host and port Kule refuses without
+    /// asking (see [`Answer`]); not for an answer kept from earlier.
+    pub fn on_settled(&self, listener: impl Fn(&Settled) + Send + Sync + 'static) {
+        lock(&self.inner.settled).push(Box::new(listener));
+    }
+
+    /// Calls `listener` for each approved connection that did not go
+    /// through as approved (see [`AfterApproval`]).
+    pub fn on_after_approval(&self, listener: impl Fn(&AfterApproval) + Send + Sync + 'static) {
+        lock(&self.inner.after).push(Box::new(listener));
+    }
+
+    pub(crate) fn after_approval(&self, after: &AfterApproval) {
+        for listener in lock(&self.inner.after).iter() {
+            listener(after);
+        }
+    }
+
     /// The questions waiting, oldest first.
     pub fn waiting(&self) -> Vec<Question> {
         Self::open(&lock(&self.inner.state))
@@ -104,6 +186,7 @@ impl Approvals {
     /// Asks and waits up to `timeout` for the answer. A person answers once
     /// per host and port in a proxy's run: a question already waiting for
     /// them is shared, and their answer is kept for the rest of the run.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn ask(
         &self,
         source: u64,
@@ -111,14 +194,23 @@ impl Approvals {
         host: &str,
         port: u16,
         rules: &[String],
+        inside: Option<Inside>,
         timeout: Duration,
     ) -> Answer {
         let now = unix_now();
         let key = (source, host.to_owned(), port);
+        let refused = |state: &mut State, answer: Answer| {
+            // Told once per host and port: a task asking again and again
+            // does not bury the person in notes either.
+            let first = state.refused_told.insert(key.clone());
+            (answer, first)
+        };
         let (id, owner) = {
             let mut state = lock(&self.inner.state);
             if state.withdrawn.contains(&source) {
-                return Answer::Denied;
+                let told = refused(&mut state, Answer::Withdrawn);
+                drop(state);
+                return self.refused(task, host, port, told);
             }
             if let Some(answer) = state.remembered.get(&key) {
                 return *answer;
@@ -136,7 +228,9 @@ impl Approvals {
                 .count()
                 >= MAX_WAITING
             {
-                return Answer::Denied;
+                let told = refused(&mut state, Answer::TooMany);
+                drop(state);
+                return self.refused(task, host, port, told);
             } else {
                 state.next += 1;
                 let id = state.next;
@@ -148,6 +242,7 @@ impl Approvals {
                     rules: rules.to_vec(),
                     asked_unix: now,
                     deadline_unix: now + timeout.as_secs(),
+                    inside,
                 };
                 state.waiting.insert(
                     id,
@@ -197,21 +292,58 @@ impl Approvals {
                 .0;
         };
         if owner {
-            if answer != Answer::TimedOut {
+            // Only a person's answer stands for the rest of the run.
+            if answer.by_a_person() {
                 state.remembered.insert(key.clone(), answer);
             }
-            state.waiting.remove(&id);
+            let question = state.waiting.remove(&id).map(|w| w.question);
             drop(state);
             self.inner.answered.notify_all();
             self.changed();
+            if let Some(q) = question {
+                self.tell(&Settled {
+                    task: q.task,
+                    host: q.host,
+                    port: q.port,
+                    question: Some(q.id),
+                    answer,
+                });
+            }
         }
         answer
     }
 
-    /// Denies every question proxy `source` has waiting or asks later.
+    /// `answer`, told to the listeners when `first` (see [`Self::ask`]).
+    fn refused(
+        &self,
+        task: &str,
+        host: &str,
+        port: u16,
+        (answer, first): (Answer, bool),
+    ) -> Answer {
+        if first {
+            self.tell(&Settled {
+                task: task.to_owned(),
+                host: host.to_owned(),
+                port,
+                question: None,
+                answer,
+            });
+        }
+        answer
+    }
+
+    fn tell(&self, settled: &Settled) {
+        for listener in lock(&self.inner.settled).iter() {
+            listener(settled);
+        }
+    }
+
+    /// Refuses every question proxy `source` has waiting or asks later, as
+    /// [`Answer::Withdrawn`].
     pub(crate) fn withdraw(&self, source: u64) {
         lock(&self.inner.state).withdrawn.insert(source);
-        self.settle(|w| (w.source == source).then_some(Answer::Denied));
+        self.settle(|w| (w.source == source).then_some(Answer::Withdrawn));
     }
 
     /// A number no other proxy using these approvals has.
@@ -270,4 +402,46 @@ fn unix_now() -> u64 {
 /// behind it are still good.
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A proxy that stopped asks no one: what it asks after is Kule's
+    /// refusal, told once per host and port, never a person's.
+    #[test]
+    fn what_a_stopped_proxy_asks_is_refused_by_kule() {
+        let approvals = Approvals::new();
+        let told = Arc::new(Mutex::new(Vec::new()));
+        let into = Arc::clone(&told);
+        approvals.on_settled(move |s| lock(&into).push(s.clone()));
+        let source = approvals.new_source();
+        approvals.withdraw(source);
+        for _ in 0..2 {
+            let answer = approvals.ask(
+                source,
+                "t",
+                "example.com",
+                443,
+                &[],
+                None,
+                Duration::from_secs(60),
+            );
+            assert_eq!(answer, Answer::Withdrawn);
+            assert!(!answer.by_a_person());
+        }
+        let told = lock(&told).clone();
+        assert_eq!(
+            told,
+            [Settled {
+                task: "t".into(),
+                host: "example.com".into(),
+                port: 443,
+                question: None,
+                answer: Answer::Withdrawn,
+            }]
+        );
+        assert!(approvals.waiting().is_empty());
+    }
 }

@@ -945,8 +945,23 @@ fn relay(app: AppHandle, home: &Path) {
             }
             let _ = kule.client.subscribe(|notice| match notice {
                 Notice::Run { task, seq, event } => {
-                    if let RunEvent::Finished { error, .. } = &event {
-                        tell(&app, vec![alerts.finished(&task, error.as_deref())]);
+                    match &event {
+                        RunEvent::Finished { error, .. } => {
+                            tell(&app, vec![alerts.finished(&task, error.as_deref())]);
+                        }
+                        RunEvent::Answered {
+                            host, port, answer, ..
+                        } => tell(
+                            &app,
+                            alerts
+                                .answered(&task, host, *port, *answer)
+                                .into_iter()
+                                .collect(),
+                        ),
+                        RunEvent::AfterApproval { host, port, why } => {
+                            tell(&app, vec![alerts.after_approval(&task, host, *port, why)]);
+                        }
+                        _ => {}
                     }
                     let _ = app.emit("run", RunMessage { task, seq, event });
                 }

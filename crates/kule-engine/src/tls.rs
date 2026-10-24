@@ -31,6 +31,7 @@ use rustls::{
     ClientConfig, ClientConnection, RootCertStore, ServerConfig, ServerConnection, StreamOwned,
 };
 
+use crate::approvals::Inside;
 use crate::error::{Error, Result};
 use crate::secrets::Vault;
 
@@ -129,6 +130,19 @@ impl Interceptor {
     /// however the name is cased or ends.
     pub fn wants(&self, host: &str, port: u16) -> bool {
         port == 443 && self.hosts.contains(&crate::network::normal_host(host))
+    }
+
+    /// What the proxy does inside a connection to `host` on `port`, as a
+    /// person asked about it is told: `None` when it only tunnels it.
+    pub fn inside(&self, host: &str, port: u16) -> Option<Inside> {
+        if !self.wants(host, port) {
+            return None;
+        }
+        let host = crate::network::normal_host(host);
+        Some(Inside {
+            fills: self.vault.names_going_to(&host),
+            read_only: self.read_only.contains(&host),
+        })
     }
 
     fn leaf(&self, host: &str) -> Result<(CertificateDer<'static>, Vec<u8>)> {

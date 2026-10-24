@@ -207,7 +207,7 @@ await kule.net.fetch("https://hooks.slack.com/…", { method: "POST", headers, b
 | --- | --- | --- |
 | `run` | `{ task, seq, event }`: an agent's events | `events.read` |
 | `task` | `{ task, change }`: `created`, `committed`, `rolled_back`, `undone`, `removed`, `went_back`, `synced` | `events.read` |
-| `questions` | The questions waiting now | `questions.read` |
+| `questions` | The questions waiting now. Each says what kind of connection it is (`inside`: `null` for a tunnel, or `{ read_only, fills_secrets }`), never the names of the secrets Kule would fill | `questions.read` |
 | `review` | `{ task, digest }`: a review was drawn with new changes | `review.read` |
 | `task-selected` | `{ task }`: the person chose another task | — |
 | `theme` | `{ scheme, colors }`. The SDK already set `--kule-<part>` CSS variables (`--kule-bg`, `--kule-text`, `--kule-accent`, …) | — |

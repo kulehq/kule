@@ -346,6 +346,7 @@ mod tests {
             secrets: Vec::new(),
             cut: None,
             failed: None,
+            refused: None,
         }
     }
 

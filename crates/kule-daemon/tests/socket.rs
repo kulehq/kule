@@ -11,8 +11,8 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use kule_daemon::{
-    Call, Client, Hello, MAX_REQUEST, Notice, PROTOCOL, Service, TaskView, bind, new_token, run,
-    serve, socket_path, token_path,
+    Call, Client, Hello, MAX_REQUEST, Notice, PROTOCOL, RunEvent, Service, TaskView, bind,
+    new_token, run, serve, socket_path, token_path,
 };
 use kule_engine::{Policy, Proxy, Task};
 use tempfile::TempDir;
@@ -229,9 +229,24 @@ fn subscribers_hear_questions_come_and_go() {
             remember: true,
         })
         .unwrap();
-    match rx.recv_timeout(Duration::from_secs(10)).unwrap() {
-        Notice::Questions { waiting } => assert!(waiting.is_empty()),
-        other => panic!("expected questions, heard {other:?}"),
+    // Gone from the questions, and what became of it told on the task's
+    // events, in either order.
+    let mut heard = (false, false);
+    while heard != (true, true) {
+        match rx.recv_timeout(Duration::from_secs(10)).unwrap() {
+            Notice::Questions { waiting } => {
+                assert!(waiting.is_empty());
+                heard.0 = true;
+            }
+            Notice::Run {
+                event: RunEvent::Answered { answer, .. },
+                ..
+            } => {
+                assert_eq!(answer, kule_engine::Answer::Denied);
+                heard.1 = true;
+            }
+            other => panic!("expected questions, heard {other:?}"),
+        }
     }
     // Denied: nothing to remember, whatever was asked.
     let rules: Vec<kule_engine::Remembered> = client.call(Call::Rules).unwrap();
@@ -244,7 +259,8 @@ fn subscribers_hear_questions_come_and_go() {
     let asked = loop {
         match rx.recv_timeout(Duration::from_secs(10)).unwrap() {
             Notice::Questions { waiting } if !waiting.is_empty() => break waiting,
-            Notice::Questions { .. } => {}
+            // What became of the last question, told on its task's events.
+            Notice::Questions { .. } | Notice::Run { .. } => {}
             other => panic!("expected questions, heard {other:?}"),
         }
     };

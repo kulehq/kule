@@ -30,14 +30,19 @@ ekrana basılır:
 ```text
 net: registry.npmjs.org:443 · tunneled (package-registries)
 net: example.com:443 · refused, would wait for approval; the command line asks no one (no-rule-lets-it-pass)
+net: cdn.example:443 · cut by Kule: its TLS hello asks for other.example, and this tunnel is to cdn.example (agent-api)
 ```
+
+İstendiği gibi geçmeyen bir bağlantı, satırında nedenini söyler: Kule
+kesmiştir, adının götürdüğü adres yüzünden Kule reddetmiştir, kendi
+kendine başarısız olmuştur ya da adı çözülmemiştir.
 
 Her bağlantının sonucu (`outcome`) ona ne olduğunu söyler:
 
 | Sonuç | Ne oldu |
 | --- | --- |
 | `tunneled` | Geçti. Kule'nin içine baktığı yerde, içindeki her istek de geçti. |
-| `refused` | Politika onu geçirmedi ya da kimse onaylamadı. |
+| `refused` | Politika onu geçirmedi, kimse onaylamadı ya da Kule onu adının götürdüğü adres yüzünden reddetti (hangisi olduğunu kaydın `refused` alanı söyler). |
 | `cut` | Kule onu geçirdi, sonra kesti ve nedenini günlüğün `cut` alanında söyler: aşağıdaki *HTTPS ve gizli değerler* bölümüne bakın. |
 | `failed` | Kendi hatasıyla bitti, Kule'nin yaptığı değil: host gitti, bağlantı sıfırlandı. Nedenini günlüğün `failed` alanı söyler. Bu, düz HTTP için de Kule'nin içine baktığı bağlantılar için de geçerlidir. |
 | `unresolved`, `private`, `unreachable` | Adı çözümlenmedi, çıktığı her adres özel ya da bu bilgisayarın adresiydi, ya da host bağlantıyı kabul etmedi. |
@@ -57,6 +62,25 @@ you** (sizi bekleyenler) altına taşınır. Kart host'u ve portu, bekletilmesin
 yol açan kuralı ve bir geri sayımı gösterir. Pencere önde değilken bir
 sistem bildirimi size haber verir.
 
+Kart, onaylamanın neyi geçireceğini de söyler:
+
+- **Tünellenir, içine bakılmaz.** Olağan durum budur. Kule host'u ve portu
+  görür, bağlantının üzerinden geçeni görmez; TLS hello'sunun bu host'u
+  istediğini denetler. Onay hello'dan önce gelir, bu yüzden kart yalnızca
+  kuralı söyleyebilir: hello başka bir host isterse ya da adını gizlerse,
+  Kule bağlantıyı onayınızdan sonra keser.
+- **İçine bakılır.** Host, Kule'nin bir gizli değer doldurduğu bir host'tur
+  (kart gizli değerlerin adını verir: "fills STRIPE_KEY into its requests")
+  ya da Kule'nin yalnızca okumaya izin verdiği bir paket kayıt deposudur.
+  Bir onay, Kule'nin içine baktığı host'lara asla yeni bir host eklemez.
+
+Yanıtlandıktan sonra kart, sorulduğu yerde çalıştırmanın bir satırına
+dönüşür: "You approved api.example:443". Kule ardından bağlantıyı keserse ya
+da adı bu bilgisayardaki veya ağındaki bir adrese gittiği için reddederse,
+aynı satır bunu nedeniyle birlikte, çalıştırma sürerken söyler ve bir
+bildirim size haber verir: "You approved api.example:443; then cut by Kule:
+…".
+
 | Yanıt | Kısayol | Etkisi |
 | --- | --- | --- |
 | **Approve** | Mod+Shift+Y | Bu bağlantı kurulur. |
@@ -66,6 +90,14 @@ sistem bildirimi size haber verir.
 **Yanıtlanmazsa**, görevin bekleme süresi dolunca bağlantı reddedilir:
 varsayılan 15 dakikadır, 1 dakika ile 8 saat arasında ayarlanabilir
 (istemin altındaki **waits** seçicisi). Kapatılamaz.
+
+Kule bir soruyu sizin yanıtınız olmadan üç durumda reddeder ve bunu sizin
+değil kendi reddi olarak söyler: kimse zamanında yanıtlamadı; çalıştırma,
+kimse yanıtlamadan bitti; ya da çalıştırmanın 16 sorusu zaten bekliyordu,
+bu yüzden sıradaki sorulmadan reddedildi (her host ve port için bir kez
+söylenir). Her biri çalıştırmada bir satır ("Kule refused api.example:443:
+nobody answered in time"), bir bildirim ve Timeline'da bir kayıt olarak
+görünür.
 
 **Komut satırında** soracak kimse yoktur, bu yüzden `kule exec` ve
 `kule run` böyle bağlantıları hemen reddeder (`would wait for approval; the

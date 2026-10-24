@@ -20,7 +20,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
-use crate::approvals::{Answer, Approvals};
+use crate::approvals::{AfterApproval, Answer, Approvals, MAX_WAITING};
 use crate::error::{Error, IoContext, Result};
 use crate::policy::{Judgement, Policy, Verdict};
 use crate::secrets::AgentKey;
@@ -54,6 +54,34 @@ pub struct Connection {
     /// that went through as asked either.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub failed: Option<String>,
+    /// Why Kule refused a connection the policy or a person let through,
+    /// before it connected: the address the host resolves to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refused: Option<String>,
+}
+
+impl Connection {
+    /// How it ended, in Kule's words, for one that did not go through as
+    /// asked; `None` for one that did, or that the policy refused (its
+    /// rules say why).
+    pub fn told(&self) -> Option<String> {
+        let said = |what: &str, why: &Option<String>| match why {
+            Some(why) => format!("{what}: {why}"),
+            None => what.to_owned(),
+        };
+        Some(match self.outcome.as_str() {
+            "cut" => said("cut by Kule", &self.cut),
+            "failed" => said("failed on its own", &self.failed),
+            "refused" if self.refused.is_some() => said("refused by Kule", &self.refused),
+            "unresolved" => "the host's name did not resolve".to_owned(),
+            "private" => {
+                "refused by Kule: every address the host resolves to is on this computer or its network"
+                    .to_owned()
+            }
+            "unreachable" => "the host did not accept the connection".to_owned(),
+            _ => return None,
+        })
+    }
 }
 
 /// The proxy of one task, serving until it is dropped. Dropping it closes
@@ -289,6 +317,8 @@ struct Pending {
     cut: Option<String>,
     /// Why it failed on its own, if it did.
     failed: Option<String>,
+    /// Why Kule refused it before it connected, if it did.
+    refused: Option<String>,
 }
 
 impl lonca_net::Gate for Gate {
@@ -301,14 +331,21 @@ impl lonca_net::Gate for Gate {
         // Each connection has its own thread, so waiting here holds only
         // this one.
         let answer = match (&self.asker, judgement.verdict) {
-            (Some(asker), Verdict::Ask) => Some(asker.approvals.ask(
-                asker.source,
-                &asker.task,
-                &host,
-                request.port,
-                &judgement.rules,
-                asker.timeout,
-            )),
+            (Some(asker), Verdict::Ask) => Some(
+                asker.approvals.ask(
+                    asker.source,
+                    &asker.task,
+                    &host,
+                    request.port,
+                    &judgement.rules,
+                    // What the card says the person approves: only the tunnel,
+                    // or what Kule does inside it.
+                    self.interceptor
+                        .as_ref()
+                        .and_then(|i| i.inside(&host, request.port)),
+                    asker.timeout,
+                ),
+            ),
             _ => None,
         };
         let mut allow = judgement.verdict == Verdict::Allow || answer == Some(Answer::Approved);
@@ -319,6 +356,12 @@ impl lonca_net::Gate for Gate {
             (Verdict::Ask, Some(Answer::TimedOut)) => {
                 format!("nobody approved it in time ({rules}); skip this step and go on without it")
             }
+            (Verdict::Ask, Some(Answer::Withdrawn)) => {
+                format!("refused by Kule: the run ended before anyone answered ({rules})")
+            }
+            (Verdict::Ask, Some(Answer::TooMany)) => format!(
+                "refused by Kule without asking: {MAX_WAITING} questions of this run are waiting already ({rules}); skip this step and go on without it"
+            ),
             (Verdict::Deny, _) => format!("denied ({rules})"),
         };
         // Loopback by name only, and only when the policy let it pass; the
@@ -326,9 +369,23 @@ impl lonca_net::Gate for Gate {
         // name is resolved here too and judged by Kule's own stricter
         // check (see `relay` for the address actually reached).
         let allow_private = allow && loopback_by_name(&host);
-        if allow && !allow_private && !resolves_public(&host, request.port) {
+        let mut refused = None;
+        if allow
+            && !allow_private
+            && let Some(address) = private_address(&host, request.port)
+        {
             allow = false;
+            // The address is the person's to see: the command is told only
+            // that such addresses are out of reach, nothing of the network.
             reason = "addresses on this computer or its network are not reachable".to_owned();
+            let named = if host.parse::<std::net::IpAddr>().is_ok() {
+                format!("{host} is")
+            } else {
+                format!("{host} resolves to {address},")
+            };
+            refused = Some(format!(
+                "{named} an address on this computer or its network, which commands may not reach"
+            ));
         }
         lock(&self.pending).insert(
             request.peer,
@@ -338,6 +395,7 @@ impl lonca_net::Gate for Gate {
                 secrets: Vec::new(),
                 cut: None,
                 failed: None,
+                refused,
             },
         );
         lonca_net::Verdict {
@@ -413,6 +471,7 @@ impl lonca_net::Gate for Gate {
             secrets,
             cut,
             failed,
+            refused,
         }) = lock(&self.pending).remove(&request.peer)
         else {
             return;
@@ -436,10 +495,23 @@ impl lonca_net::Gate for Gate {
             secrets,
             cut,
             failed,
+            refused,
         };
         if let Ok(mut line) = serde_json::to_vec(&record) {
             line.push(b'\n');
             let _ = lock(&self.log).write_all(&line);
+        }
+        // A connection the person approved that did not go through as
+        // approved: told where they answered, while the run is live.
+        if let (Some(asker), Some(Answer::Approved), Some(why)) =
+            (&self.asker, record.answer, record.told())
+        {
+            asker.approvals.after_approval(&AfterApproval {
+                task: asker.task.clone(),
+                host: normal_host(&record.host),
+                port: record.port,
+                why,
+            });
         }
     }
 }
@@ -637,13 +709,15 @@ fn public_v4(ip: Ipv4Addr) -> bool {
         || a >= 240) // reserved
 }
 
-/// Whether every address `host` resolves to is public. A name that does not
-/// resolve is left to the proxy, which says so.
-fn resolves_public(host: &str, port: u16) -> bool {
+/// An address `host` resolves to that is not public, if any. A name that
+/// does not resolve is left to the proxy, which says so.
+fn private_address(host: &str, port: u16) -> Option<std::net::IpAddr> {
     use std::net::ToSocketAddrs;
     (host, port)
         .to_socket_addrs()
-        .map_or(true, |mut addrs| addrs.all(|a| public_ip(a.ip())))
+        .ok()?
+        .map(|a| a.ip())
+        .find(|ip| !public_ip(*ip))
 }
 
 /// Why a connection is cut that reached an address [`may_reach`] refuses.
@@ -708,6 +782,7 @@ mod tests {
                     secrets: Vec::new(),
                     cut: None,
                     failed: None,
+                    refused: None,
                 },
             );
             gate.record_served(&request, served, ["API_KEY".to_owned()].into());
@@ -795,6 +870,7 @@ mod tests {
                     secrets: Vec::new(),
                     cut: None,
                     failed: None,
+                    refused: None,
                 },
             );
             let tunnel = lonca_net::Tunnel {
@@ -866,6 +942,7 @@ mod tests {
                     secrets: Vec::new(),
                     cut: None,
                     failed: None,
+                    refused: None,
                 },
             );
             let tunnel = lonca_net::Tunnel {

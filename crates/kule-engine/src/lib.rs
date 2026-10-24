@@ -62,7 +62,8 @@ mod tls;
 mod usage;
 
 pub use approvals::{
-    Answer, Approvals, DEFAULT_TIMEOUT, MAX_TIMEOUT, MAX_WAITING, MIN_TIMEOUT, Question,
+    AfterApproval, Answer, Approvals, DEFAULT_TIMEOUT, Inside, MAX_TIMEOUT, MAX_WAITING,
+    MIN_TIMEOUT, Question, Settled,
 };
 pub use beside::{
     BESIDE_FILE, Beside, add_beside, beside_unopened, besides, remove_beside, suggest_beside,

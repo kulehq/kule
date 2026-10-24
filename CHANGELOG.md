@@ -4,6 +4,25 @@
 
 ### Changed
 
+- An approval card says what approving lets through: a tunnel Kule does not
+  look into (it checks only that the TLS hello asks for that host), or a
+  connection Kule looks inside, naming the secrets it fills there or that a
+  registry stays read only. Extensions with `questions.read` learn the
+  kind, never the secrets' names.
+- Once answered, a question stays in the run as a line. A connection you
+  approved that Kule then cuts, or refuses because its name led to an
+  address on this computer or its network, says so on that line with why,
+  while the run is live, and in a notification. The Timeline and what
+  `kule run` and `kule exec` print say why a connection was cut, refused or
+  failed.
+- A question Kule refused without your answer is told as Kule's, never as
+  "denied by you": nobody answered in time, the run ended first, or too
+  many of the run's questions were waiting (told once per host and port).
+  Each is a line in the run and a notification, and the log records it as
+  `timed_out`, `withdrawn` or `too_many`.
+- A connection refused for the address its name led to names that address
+  to you; the command is told only that such addresses are out of reach.
+
 - A task's first run no longer waits while Kule walks the package caches it
   starts with. Only a disk limit needs them measured: the first run under
   one measures them once and says so ("Measuring the task's package caches

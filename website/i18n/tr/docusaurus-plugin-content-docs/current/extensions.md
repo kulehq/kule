@@ -211,7 +211,7 @@ await kule.net.fetch("https://hooks.slack.com/…", { method: "POST", headers, b
 | --- | --- | --- |
 | `run` | `{ task, seq, event }`: bir ajanın olayları | `events.read` |
 | `task` | `{ task, change }`: `created`, `committed`, `rolled_back`, `undone`, `removed`, `went_back`, `synced` | `events.read` |
-| `questions` | Şu an bekleyen sorular | `questions.read` |
+| `questions` | Şu an bekleyen sorular. Her biri bağlantının türünü söyler (`inside`: tünel için `null`, ya da `{ read_only, fills_secrets }`), Kule'nin dolduracağı gizli değerlerin adlarını asla söylemez | `questions.read` |
 | `review` | `{ task, digest }`: yeni değişikliklerle bir inceleme çizildi | `review.read` |
 | `task-selected` | `{ task }`: kişi başka bir görev seçti | — |
 | `theme` | `{ scheme, colors }`. SDK `--kule-<part>` CSS değişkenlerini zaten ayarlamıştır (`--kule-bg`, `--kule-text`, `--kule-accent`, …) | — |

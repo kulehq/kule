@@ -9,7 +9,8 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use kule_engine::{
-    Answer, Approvals, DEFAULT_TIMEOUT, Network, Policy, Proxy, Sandbox, Task, connections,
+    AfterApproval, Answer, Approvals, DEFAULT_TIMEOUT, Network, Policy, Proxy, Sandbox, Settled,
+    Task, connections,
 };
 use tempfile::TempDir;
 
@@ -111,6 +112,8 @@ fn an_approved_connection_goes_through() {
     let asked = &approvals.waiting()[0];
     assert_eq!((asked.host.as_str(), asked.port), ("127.0.0.1", s.up));
     assert_eq!(asked.task, s.task.id());
+    // Tunneled: Kule does not look inside it.
+    assert_eq!(asked.inside, None);
     assert!(approvals.answer(id, true));
 
     let reply = client.join().unwrap();
@@ -146,6 +149,7 @@ fn a_denied_connection_is_refused() {
 fn nobody_answering_refuses_it_with_a_reason_to_go_on() {
     let s = Setup::new();
     let approvals = Approvals::new();
+    let settled = settled(&approvals);
     let proxy = s.asking(&approvals, Duration::from_millis(300));
     let reply = s.connect(&proxy).join().unwrap();
 
@@ -156,6 +160,12 @@ fn nobody_answering_refuses_it_with_a_reason_to_go_on() {
     assert!(approvals.waiting().is_empty());
     proxy.stop();
     assert_eq!(s.answers(), [Some(Answer::TimedOut)]);
+    // Told, though nobody answered: the card is gone, the person learns why.
+    let told = settled.lock().unwrap().clone();
+    assert!(
+        matches!(&told[..], [Settled { question: Some(_), answer: Answer::TimedOut, port, .. }] if *port == s.up),
+        "{told:?}"
+    );
 }
 
 #[test]
@@ -175,6 +185,7 @@ fn without_approvals_nobody_is_asked() {
 fn stopping_the_proxy_withdraws_its_questions() {
     let s = Setup::new();
     let approvals = Approvals::new();
+    let settled = settled(&approvals);
     let proxy = s.asking(&approvals, DEFAULT_TIMEOUT);
     let client = s.connect(&proxy);
     question(&approvals);
@@ -190,7 +201,21 @@ fn stopping_the_proxy_withdraws_its_questions() {
     // The client hears the refusal, or the cut if that comes first.
     let reply = client.join().unwrap();
     assert!(!reply.contains("200"), "{reply}");
-    assert_eq!(s.answers(), [Some(Answer::Denied)]);
+    assert!(!reply.contains("by a person"), "{reply}");
+    // Kule's doing, not the person's.
+    assert_eq!(s.answers(), [Some(Answer::Withdrawn)]);
+    let told = settled.lock().unwrap().clone();
+    assert!(
+        matches!(
+            &told[..],
+            [Settled {
+                question: Some(_),
+                answer: Answer::Withdrawn,
+                ..
+            }]
+        ),
+        "{told:?}"
+    );
 }
 
 #[test]
@@ -253,6 +278,7 @@ fn one_answer_per_host_and_port_in_a_run() {
 fn a_task_cannot_bury_the_person_in_questions() {
     let s = Setup::new();
     let approvals = Approvals::new();
+    let settled = settled(&approvals);
     let proxy = s.asking(&approvals, DEFAULT_TIMEOUT);
     let waiting: Vec<_> = (0..kule_engine::MAX_WAITING)
         .map(|i| ask_through(&proxy, &format!("host{i}.invalid:443")))
@@ -262,11 +288,215 @@ fn a_task_cannot_bury_the_person_in_questions() {
         assert!(start.elapsed() < Duration::from_secs(10));
         std::thread::sleep(Duration::from_millis(10));
     }
-    let one_more = ask_through(&proxy, "one-more.invalid:443").join().unwrap();
+    let one_more = reply_through(&proxy, "one-more.invalid:443");
     assert!(one_more.contains("403"), "{one_more}");
+    // Kule refused it, without asking: never "denied by a person".
+    assert!(
+        one_more.contains("refused by Kule without asking") && !one_more.contains("by a person"),
+        "{one_more}"
+    );
+    let again = reply_through(&proxy, "one-more.invalid:443");
+    assert!(again.contains("refused by Kule without asking"), "{again}");
     assert_eq!(approvals.waiting().len(), kule_engine::MAX_WAITING);
+    // Told once, though asked twice.
+    let told: Vec<Settled> = settled
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|t| t.host == "one-more.invalid")
+        .cloned()
+        .collect();
+    assert!(
+        matches!(
+            &told[..],
+            [Settled {
+                question: None,
+                answer: Answer::TooMany,
+                ..
+            }]
+        ),
+        "{told:?}"
+    );
     proxy.stop();
     for client in waiting {
         let _ = client.join();
     }
+}
+
+/// What the `approvals` listeners are told of questions that stop waiting.
+fn settled(approvals: &Approvals) -> std::sync::Arc<std::sync::Mutex<Vec<Settled>>> {
+    let told = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let into = std::sync::Arc::clone(&told);
+    approvals.on_settled(move |s| into.lock().unwrap().push(s.clone()));
+    told
+}
+
+/// What the `approvals` listeners are told of approved connections that
+/// did not go through as approved.
+fn after(approvals: &Approvals) -> std::sync::Arc<std::sync::Mutex<Vec<AfterApproval>>> {
+    let told = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let into = std::sync::Arc::clone(&told);
+    approvals.on_after_approval(move |a| into.lock().unwrap().push(a.clone()));
+    told
+}
+
+/// Asks `proxy` for a tunnel to `target` and reads all it answers.
+fn reply_through(proxy: &Proxy, target: &str) -> String {
+    use std::io::Read;
+    let mut s = std::net::TcpStream::connect(("127.0.0.1", proxy.port())).unwrap();
+    write!(s, "CONNECT {target} HTTP/1.1\r\n\r\n").unwrap();
+    s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    let mut reply = Vec::new();
+    let _ = s.read_to_end(&mut reply);
+    String::from_utf8_lossy(&reply).into_owned()
+}
+
+/// Waits until `told` holds something, and returns it.
+fn told<T: Clone>(told: &std::sync::Mutex<Vec<T>>) -> Vec<T> {
+    let start = Instant::now();
+    while start.elapsed() < Duration::from_secs(10) {
+        let now = told.lock().unwrap().clone();
+        if !now.is_empty() {
+            return now;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    panic!("nothing was told");
+}
+
+/// A question says what Kule does inside the connection once approved:
+/// for a host a stored secret goes to, the secrets it fills; for a
+/// registry, that it is read only; otherwise nothing, as it is tunneled.
+#[test]
+fn a_question_says_whether_kule_looks_inside() {
+    let (home, ws) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+    kule_engine::add_secret(
+        home.path(),
+        "STRIPE_KEY",
+        "real-value",
+        &["api.stripe.example".into()],
+        None,
+    )
+    .unwrap();
+    let task = Task::create(home.path(), ws.path()).unwrap();
+    let approvals = Approvals::new();
+    let proxy =
+        Proxy::start_asking(&task, Policy::builtin(), &approvals, DEFAULT_TIMEOUT, &[]).unwrap();
+    let asking = |target: &'static str| {
+        let client = ask_through(&proxy, target);
+        let id = question(&approvals);
+        let asked = approvals.waiting()[0].clone();
+        approvals.answer(id, false);
+        let _ = client.join();
+        asked
+    };
+    let filled = asking("API.Stripe.example.:443");
+    let inside = filled.inside.expect("looked into");
+    assert_eq!(inside.fills, ["STRIPE_KEY"]);
+    assert!(!inside.read_only);
+    // Not on 443: tunneled, secret or not.
+    assert_eq!(asking("api.stripe.example:8443").inside, None);
+    assert_eq!(asking("elsewhere.example:443").inside, None);
+    proxy.stop();
+}
+
+/// A connection the person approved and Kule then cut (its TLS hello asks
+/// for another host) is told with why, as it happens, beside the approval.
+#[test]
+fn an_approved_connection_kule_cuts_is_told_with_why() {
+    use std::io::Read;
+    let s = Setup::new();
+    let approvals = Approvals::new();
+    let after = after(&approvals);
+    let proxy = s.asking(&approvals, DEFAULT_TIMEOUT);
+    let (port, up) = (proxy.port(), s.up);
+    let client = std::thread::spawn(move || {
+        let mut c = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+        write!(c, "CONNECT 127.0.0.1:{up} HTTP/1.1\r\n\r\n").unwrap();
+        c.write_all(&client_hello("other.example")).unwrap();
+        c.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        let mut reply = Vec::new();
+        let _ = c.read_to_end(&mut reply);
+        String::from_utf8_lossy(&reply).into_owned()
+    });
+    approvals.answer(question(&approvals), true);
+    // The upstream speaks first, so the client may hear it before the cut.
+    let reply = client.join().unwrap();
+    assert!(reply.contains("200"), "{reply}");
+    let told = told(&after);
+    assert_eq!(told.len(), 1, "{told:?}");
+    assert_eq!((told[0].host.as_str(), told[0].port), ("127.0.0.1", s.up));
+    assert!(
+        told[0].why.starts_with("cut by Kule") && told[0].why.contains("other.example"),
+        "{told:?}"
+    );
+    // One that goes through as approved is not news.
+    let quiet = Setup::new();
+    let fine = after_quiet(&quiet);
+    assert!(fine.is_empty(), "{fine:?}");
+    proxy.stop();
+}
+
+/// An approved connection to `s`'s upstream that goes through: what the
+/// listeners are told after it.
+fn after_quiet(s: &Setup) -> Vec<AfterApproval> {
+    let approvals = Approvals::new();
+    let after = after(&approvals);
+    let proxy = s.asking(&approvals, DEFAULT_TIMEOUT);
+    let client = s.connect(&proxy);
+    approvals.answer(question(&approvals), true);
+    assert!(client.join().unwrap().contains("hello from upstream"));
+    proxy.stop();
+    after.lock().unwrap().clone()
+}
+
+/// An approved connection to an address on this computer's network is
+/// refused all the same. The person is told the address; the command only
+/// that such addresses are out of reach.
+#[test]
+fn an_approved_private_address_is_refused_saying_where_to_the_person_only() {
+    let s = Setup::new();
+    let approvals = Approvals::new();
+    let after = after(&approvals);
+    let proxy = s.asking(&approvals, DEFAULT_TIMEOUT);
+    let client = ask_through(&proxy, "10.255.0.1:443");
+    approvals.answer(question(&approvals), true);
+    let status = client.join().unwrap();
+    assert!(status.contains("403"), "{status}");
+    let reply = reply_through(&proxy, "10.255.0.1:443");
+    assert!(
+        reply.contains("not reachable") && !reply.contains("10.255"),
+        "{reply}"
+    );
+    let told = told(&after);
+    assert!(
+        told[0].why.starts_with("refused by Kule")
+            && told[0].why.contains("10.255.0.1 is an address"),
+        "{told:?}"
+    );
+    proxy.stop();
+    let logged = connections(&s.task).unwrap();
+    assert!(
+        logged.iter().any(|c| c.answer == Some(Answer::Approved)
+            && c.refused
+                .as_deref()
+                .is_some_and(|r| r.contains("10.255.0.1"))),
+        "{logged:?}"
+    );
+}
+
+/// The first bytes a TLS client sends to `name`: its hello, made by rustls.
+fn client_hello(name: &str) -> Vec<u8> {
+    let config = rustls::ClientConfig::builder_with_provider(std::sync::Arc::new(
+        rustls::crypto::ring::default_provider(),
+    ))
+    .with_safe_default_protocol_versions()
+    .unwrap()
+    .with_root_certificates(rustls::RootCertStore::empty())
+    .with_no_client_auth();
+    let name = rustls::pki_types::ServerName::try_from(name.to_owned()).unwrap();
+    let mut conn = rustls::ClientConnection::new(std::sync::Arc::new(config), name).unwrap();
+    let mut out = Vec::new();
+    conn.write_tls(&mut out).unwrap();
+    out
 }

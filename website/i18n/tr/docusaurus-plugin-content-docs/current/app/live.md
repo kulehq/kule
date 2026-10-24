@@ -107,7 +107,18 @@ Live'da bir kart görünür. Görev ayrıca Tasks panelinde *Needs you* altına
 taşınır ve pencere öndeyken değilse sistem bildirimleri size haber verir.
 
 Kart host'u ve port'u, bağlantıyı bekleten kuralı ve bağlantının ne zaman
-reddedileceğini gösteren bir geri sayımı içerir.
+reddedileceğini gösteren bir geri sayımı içerir. Onaylamanın neyi
+geçireceğini de söyler: Kule'nin içine bakmadığı bir tünel (yalnızca TLS
+hello'sunun bu host'u istediğini denetler, istemiyorsa keser) ya da Kule'nin
+içine baktığı bir bağlantı (orada doldurduğu gizli değerlerle ya da kayıt
+deposunun yalnızca okunabildiği bilgisiyle).
+
+Yanıtlandıktan sonra kart çalıştırmada bir satıra dönüşür: "You approved
+api.example:443". Kule ardından bağlantıyı keserse, satır bunu nedeniyle
+birlikte, çalıştırma sürerken söyler ve bir bildirim size haber verir.
+Kule'nin sizin yanıtınız olmadan reddettiği bir soru (kimse zamanında
+yanıtlamadı, çalıştırma bitti, çok fazla soru bekliyordu), bunu Kule'nin
+yaptığını söyleyen ayrı bir satırdır.
 
 | Düğme | Tuşlar | Ne yapar |
 | --- | --- | --- |

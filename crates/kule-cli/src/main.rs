@@ -1529,13 +1529,22 @@ fn print_spent(task: &Task) -> Result<()> {
     Ok(())
 }
 
-/// The connections a command made, grouped by host, port and outcome.
+/// The connections a command made, grouped by host, port and outcome, and
+/// for one that did not go through as asked, why.
 fn print_connections(log: &[Connection]) {
+    for line in connection_lines(log) {
+        println!("{line}");
+    }
+}
+
+/// [`print_connections`]' lines.
+fn connection_lines(log: &[Connection]) -> Vec<String> {
+    let mut lines = Vec::new();
     let mut seen: Vec<(&Connection, usize)> = Vec::new();
     for c in log {
         match seen.iter_mut().find(|(s, _)| {
-            (&s.host, s.port, s.verdict, &s.outcome, &s.secrets)
-                == (&c.host, c.port, c.verdict, &c.outcome, &c.secrets)
+            (&s.host, s.port, s.verdict, &s.outcome, &s.secrets, s.told())
+                == (&c.host, c.port, c.verdict, &c.outcome, &c.secrets, c.told())
         }) {
             Some((_, n)) => *n += 1,
             None => seen.push((c, 1)),
@@ -1551,7 +1560,11 @@ fn print_connections(log: &[Connection]) {
         // is refused at once.
         let what = match c.verdict {
             Verdict::Allow if c.outcome == "tunneled" => paint::green(&c.outcome),
-            Verdict::Allow => paint::yellow(&c.outcome),
+            // Why comes from what went over it (a name the client chose,
+            // say): one line, nothing a terminal would act on.
+            Verdict::Allow => paint::yellow(&paint::plain_line(
+                &c.told().unwrap_or_else(|| c.outcome.clone()),
+            )),
             Verdict::Ask => {
                 paint::red("refused, would wait for approval; the command line asks no one")
             }
@@ -1562,14 +1575,15 @@ fn print_connections(log: &[Connection]) {
         } else {
             format!(" · with {}", paint::cyan(&c.secrets.join(", ")))
         };
-        println!(
+        lines.push(format!(
             "{} {}:{}{times} · {what}{secrets} {}",
             paint::dim("net:"),
             c.host,
             c.port,
             paint::dim(&format!("({})", c.rules.join(", ")))
-        );
+        ));
     }
+    lines
 }
 
 /// What the sandbox refused, each hint once after the refusals it explains.
@@ -3029,5 +3043,48 @@ fn describe_ref(change: &RefChange) -> String {
             }
             line
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn connection(outcome: &str) -> Connection {
+        Connection {
+            time_unix: 0,
+            host: "api.example".into(),
+            port: 443,
+            verdict: Verdict::Allow,
+            rules: vec!["agent-api".into()],
+            outcome: outcome.into(),
+            answer: None,
+            secrets: Vec::new(),
+            cut: None,
+            failed: None,
+            refused: None,
+        }
+    }
+
+    /// A connection that did not go through as asked says why, and each
+    /// why stays its own line; what the client chose cannot make a line of
+    /// its own.
+    #[test]
+    fn a_cut_connection_is_printed_with_why() {
+        let mut cut = connection("cut");
+        cut.cut = Some("its TLS hello asks for other.example\nnet: fake".into());
+        let mut other = connection("cut");
+        other.cut = Some("it hid the name it asks for".into());
+        let lines = connection_lines(&[cut, other, connection("tunneled")]);
+        assert_eq!(lines.len(), 3, "{lines:?}");
+        assert!(
+            lines[0].contains("cut by Kule: its TLS hello asks for other.example\\u{a}net: fake"),
+            "{lines:?}"
+        );
+        assert!(
+            lines[1].contains("cut by Kule: it hid the name"),
+            "{lines:?}"
+        );
+        assert!(lines[2].contains("tunneled"), "{lines:?}");
     }
 }

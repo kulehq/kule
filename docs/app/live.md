@@ -97,7 +97,16 @@ in Live. The task also moves under *Needs you* in the Tasks panel, and, while
 the window is not in front, the system's notifications tell you.
 
 The card names the host and port, the rule that made it wait, and a
-countdown to when it is refused.
+countdown to when it is refused. It also says what approving lets through:
+a tunnel Kule does not look into (it checks only that the TLS hello asks
+for this host, and cuts it if not), or a connection Kule looks inside, with
+the secrets it fills there or that a registry stays read only.
+
+Once answered, the card becomes a line in the run: "You approved
+api.example:443". If Kule then cuts the connection, the line says so with
+why, while the run goes on, and a notification tells you. A question Kule
+refused without your answer (nobody answered in time, the run ended, too
+many were waiting) is a line of its own that says it was Kule.
 
 | Button | Keys | What it does |
 | --- | --- | --- |

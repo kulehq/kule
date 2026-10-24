@@ -771,6 +771,16 @@ impl Vault {
         (out, used.into_iter().collect())
     }
 
+    /// The names of the secrets that may go to `host`, once each.
+    pub(crate) fn names_going_to(&self, host: &str) -> Vec<String> {
+        let names: BTreeSet<String> = self
+            .going_to(host)
+            .into_iter()
+            .map(|h| h.name.clone())
+            .collect();
+        names.into_iter().collect()
+    }
+
     fn going_to(&self, host: &str) -> Vec<&Held> {
         self.held
             .iter()

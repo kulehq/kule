@@ -2886,6 +2886,7 @@ function renderQuestions() {
             "div",
             { class: "question-text" },
             h("p", { class: "question-title" }, `The agent wants to connect to ${q.host}:${q.port}`),
+            h("p", { class: "question-inside" }, insideLine(q.inside)),
             h(
               "p",
               { class: "muted" },
@@ -2957,7 +2958,7 @@ async function answer(id, approve, remember) {
 }
 
 async function onQuestions(waiting) {
-  tellExtensions("questions", waiting, "questions.read");
+  tellExtensions("questions", questionsForExtensions(waiting), "questions.read");
   const before = new Set(state.questions.map((q) => q.id));
   state.questions = waiting;
   for (const q of waiting) {
@@ -3030,6 +3031,17 @@ function streamItem(item) {
     }
     case "note":
       return h("div", { class: "event" }, h("span", { class: "event-mark" }, "·"), h("span", {}, item.text));
+    case "answered": {
+      // Approved and through: done; refused, by the person or by Kule, or
+      // approved and then cut: said as what it is.
+      const fine = item.answer === "approved" && !item.after;
+      return h(
+        "div",
+        { class: `event ${fine ? "done" : "failed"}`, role: item.after ? "alert" : null },
+        h("span", { class: "event-mark" }, fine ? "✓" : "✗"),
+        h("span", {}, answeredLine(item.host, item.port, item.answer, item.after))
+      );
+    }
     case "finished":
       return h(
         "div",
@@ -3190,6 +3202,14 @@ function fold(task, event) {
     absorb(task, event.event);
   } else if (event.type === "preparing" || event.type === "ended") {
     streamOf(task).push({ kind: "note", text: event.text });
+  } else if (event.type === "answered") {
+    streamOf(task).push({ kind: "answered", host: event.host, port: event.port, answer: event.answer, after: null });
+  } else if (event.type === "after_approval") {
+    // Beside the approval that let it in, while the run is live.
+    const items = streamOf(task);
+    const approved = items.findLast((i) => i.kind === "answered" && i.answer === "approved" && i.host === event.host && i.port === event.port && !i.after);
+    if (approved) approved.after = event.why;
+    else items.push({ kind: "answered", host: event.host, port: event.port, answer: "approved", after: event.why });
   } else if (event.type === "resources") {
     liveMeasure.set(task, event.measured);
   } else if (event.type === "finished") {
@@ -3224,6 +3244,14 @@ async function onRun({ task, seq, event }) {
   }
   // What Kule ended to do what the person asked, said where they asked it.
   if (event.type === "ended") toast(event.text);
+  // A card that leaves without the person's answer, or a connection they
+  // approved that Kule then cut: told wherever the person looks.
+  if ((event.type === "answered" && refusedByKule(event.answer)) || event.type === "after_approval") {
+    const t = state.tasks.find((x) => x.id === task);
+    const line =
+      event.type === "answered" ? answeredLine(event.host, event.port, event.answer, null) : answeredLine(event.host, event.port, "approved", event.why);
+    toast(`${t ? taskName(t) : task}: ${line}`, "error");
+  }
   // A limit stopped a run out of sight: said where it is seen.
   if (event.type === "finished" && event.error?.startsWith("stopped: ") && task !== state.current && !event.error.includes("you stopped")) {
     const t = state.tasks.find((x) => x.id === task);
@@ -4854,32 +4882,6 @@ async function goBack(id, step) {
   } catch (err) {
     fail(err);
   }
-}
-
-function summarizeConnections(log) {
-  const seen = new Map();
-  for (const c of log) {
-    const secrets = (c.secrets || []).join(", ");
-    const key = `${c.host}:${c.port} ${c.verdict} ${c.outcome} ${c.answer || ""} ${secrets}`;
-    const entry = seen.get(key) || { c, n: 0 };
-    entry.n += 1;
-    seen.set(key, entry);
-  }
-  return [...seen.values()].map(({ c, n }) => {
-    const asked = {
-      approved: `approved by you · ${c.outcome}`,
-      denied: "denied by you",
-      timed_out: "refused, nobody answered in time",
-    };
-    const what =
-      c.verdict === "allow"
-        ? c.outcome
-        : c.verdict === "ask"
-          ? asked[c.answer] || "refused, waits for approval"
-          : "refused, denied";
-    const secrets = (c.secrets || []).length ? ` · with ${c.secrets.join(", ")}` : "";
-    return `${c.host}:${c.port}${n > 1 ? ` ×${n}` : ""} · ${what}${secrets}`;
-  });
 }
 
 async function undo(id) {
