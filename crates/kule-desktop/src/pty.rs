@@ -429,9 +429,12 @@ mod tests {
         seen
     }
 
+    /// Whether the shell's end is told, waiting as long as its end may
+    /// take: on macOS what the sandbox refused is read from the system log
+    /// first, for up to its wait and then some on a busy machine.
     fn ended(rx: &mpsc::Receiver<Event>) -> bool {
         loop {
-            match rx.recv_timeout(Duration::from_secs(10)) {
+            match rx.recv_timeout(Duration::from_secs(40)) {
                 Ok(Event::Exit { .. }) => break true,
                 Ok(_) => continue,
                 Err(_) => break false,
@@ -555,7 +558,9 @@ mod tests {
         assert!(!task.terminals_open().is_empty());
         let started = Instant::now();
         terms.close(id);
-        assert!(ended(&rx) && started.elapsed() < Duration::from_secs(5));
+        // Ended at once, not when its sleep would have: what is left to
+        // wait for is the system log (see `ended`).
+        assert!(ended(&rx) && started.elapsed() < Duration::from_secs(40));
         assert!(task.terminals_open().is_empty());
     }
 

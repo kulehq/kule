@@ -1,9 +1,27 @@
 # Changes
 
-## Unreleased
+## 0.2.0-preview.13
+
+Kule tells you, where you work, more of what it cut, ended or refused, and
+says it once: in the terminal and Live, after `kule exec`, `run` and
+`shell`, and for a task whose record cannot be read, which no longer fails
+the whole list and can be deleted. A task's first command, terminal or run
+no longer waits silently for its package caches: the app makes them as the
+task is made, and a terminal shows what it waits for. A connection cut for
+Encrypted Client Hello says what turns it off in each tool, as measured.
 
 ### Fixes
 
+- On Linux, a command starting in one task is no longer ended by another
+  task's clean-up (before a commit, sync or rollback) that happens at the
+  same moment: Kule looks again once the command runs its program.
+- A connection cut for Encrypted Client Hello says what turns it off, as
+  measured in #34: for Chromium-based browsers the policy
+  `EncryptedClientHelloEnabled` set to false (the `--disable-features`
+  switch Kule named before no longer does anything), for Firefox
+  `security.tls.ech.grease_probability` set to 0. Troubleshooting has a
+  table per tool, also of those with no setting (Playwright's headless
+  shell, Electron) and of those that need none.
 - A task's first command, terminal or run no longer waits silently while
   Kule makes the task's own package caches (on macOS, a clone of your npm
   and cargo caches, which takes seconds for large ones). The app starts

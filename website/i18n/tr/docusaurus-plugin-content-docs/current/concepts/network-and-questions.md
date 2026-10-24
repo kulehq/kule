@@ -124,9 +124,10 @@ portu görür. Bir tünel devam etmeden önce istemcinin TLS hello'sunu okur:
 istediği ad, tünelin açıldığı host olmalıdır (bir adres için hiçbir ad
 olmamalıdır); yoksa tünel, host'a tek bir bayt ulaşmadan kesilir, çünkü
 birçok host tek bir adresi paylaşır ve bir hello hangi adı isterse onu
-sunar. Adını gizleyen bir hello (Encrypted Client Hello) da kesilir;
-Chromium tabanlı araçlarda bunu
-`--disable-features=EncryptedClientHello` ile kapatın. Port 443 TLS'ten
+sunar. Adını gizleyen bir hello (Encrypted Client Hello) da kesilir: her
+tarayıcıda ve araçta bunu neyin kapattığı
+[Sorun giderme](../troubleshooting.md#a-connection-is-cut-for-encrypted-client-hello)
+sayfasında. Port 443 TLS'ten
 başka bir şey taşımaz. Düz `http://` istekleri tek tek okunur ve her biri,
 geçirildiği host için olmalıdır. Adı bu bilgisayardaki ya da ağındaki bir
 adrese çıkan bir bağlantı da kesilir. Kesilen bir bağlantı, nedeniyle
