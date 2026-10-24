@@ -27,10 +27,12 @@ ekranıyla ve üç adımla açılır:
    bir terminalde bir kez oturum açın.
 2. **How careful (ne kadar dikkatli).** Bütün görevler için bir politika
    seçin:
-   - **Balanced**: sıradan dosyalardaki değişiklikler kendiliğinden geçer.
-     Neyin kurulacağını, derleneceğini ya da çalışacağını belirleyenler
-     (manifest'ler, lock dosyaları, CI dosyaları, editör ayarları), git
-     geçmişinin yeniden yazılması ve toplu silmeler sizi bekler.
+   - **Balanced**: kaynak kod, belge ve veri dosyaları kendiliğinden geçer;
+     projenizin git'te zaten izlediği dosya türleri de öyle. Diğer türler
+     (betikler de dahil), gizli dosya ve klasörler, neyin kurulacağını,
+     derleneceğini ya da çalışacağını belirleyenler (manifest'ler, lock
+     dosyaları, CI, editör ayarları), git geçmişinin yeniden yazılması ve
+     toplu silmeler sizi bekler.
    - **Careful**: bir dosyadaki ya da git'teki her değişiklik sizi bekler.
      Sormadan yalnızca paket depolarına ve ajanların kendi API'lerine
      ulaşılır.

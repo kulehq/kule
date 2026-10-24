@@ -47,9 +47,10 @@ Kule gives you a third option:
 - **Its network goes through a proxy.** Package registries and the agent's
   own model API pass. Anything else waits for your answer, and every
   connection is logged.
-- **A policy judges what changed.** Ordinary file edits pass on their own.
-  Changes that decide what gets installed, built or run (`package.json`,
-  lockfiles, CI files, git hooks…) wait for your approval.
+- **A policy judges what changed.** Source, docs and data pass on their
+  own, and so do kinds of file your project already tracks. Other kinds,
+  hidden files and changes that decide what gets installed, built or run
+  (`package.json`, lockfiles, CI files, git hooks…) wait for your approval.
 - **Nothing reaches your folder until you commit.** A commit keeps a
   checkpoint, so `undo` puts the folder back.
 - **Secrets stay secret.** The agent sees placeholders; Kule's proxy puts

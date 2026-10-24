@@ -19,10 +19,16 @@ En üstte karar üç şeyden birini ve bunu hangi kuralın söylediğini belirti
   ulaşabilir.
 - **Some wait for your approval (bazıları onayınızı bekler)**: örneğin
   balanced politikada değişmiş bir `package.json`, lockfile ya da CI
-  dosyası.
+  dosyası, bir betik ya da gizli bir dosya.
 - **Some are denied (bazıları reddedilir)**: örneğin yeni bir git hook'u.
   Reddedilen değişiklikler, siz onaylasanız bile klasöre hiçbir zaman
   ulaşmaz.
+
+Altında, onay bekleyenler ya da reddedilenler nedenlerine göre bir araya
+toplanır: sade sözcüklerle bir neden ("runs code when a tool or an agent
+opens the folder"), kurallar ve tuttuğu dosyalar. Yalnızca türü yüzünden
+bekleyen dosyalar her tür için tek bir grup olur ("a kind of file this
+project has none of: vue") ve hep birlikte yanıtlanır.
 
 ## Neler değişti {#what-changed}
 
@@ -119,7 +125,8 @@ yalnızca okunur.
 | --- | --- | --- |
 | **Commit** | Her şey geçtiğinde. Değişiklikleri klasörünüze uygular ve bir kontrol noktası saklar. | Mod+Shift+Enter |
 | **Approve and commit** | Bir şey sizi beklediğinde. Geçenleri ve onayladıklarınızı uygular; reddedilen değişiklikler geride tutulur. | Mod+Shift+Enter |
-| **Don't ask again in this folder** | Bekletilen bir dosyada (bir manifest, CI ya da proje dosyası): önce neleri geçireceğini gösterir, sonra bunu bu klasör için hatırlar. | yok |
+| **Don't ask again in this folder** | Bekletilen bir dosyada (bir manifest, bir proje dosyası ya da gizli bir dosya): önce neleri geçireceğini gösterir, sonra bunu bu klasör için hatırlar. Kendiliğinden kod çalıştıran şeylerde (CI, editör ve ajan ayarları) yoktur: bunlar her seferinde sorulur. | yok |
+| **Don't ask again about files of kind X in this folder** | Yalnızca türü yüzünden bekletilen bir dosya grubunda: önce neleri geçireceğini gösterir, sonra türü bu klasör için hatırlar. | yok |
 | **Roll back** | Değişiklikleri atar; kopya yeniden klasörle aynı olur. İki kez basın. | Mod+Shift+Backspace |
 
 Bir commit'ten sonra [Timeline](timeline.md)'daki **Undo** (Mod+Shift+U, iki

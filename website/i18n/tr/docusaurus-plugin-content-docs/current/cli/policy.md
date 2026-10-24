@@ -32,13 +32,17 @@ Kule'nin kendine ait iki politikası vardır:
 
 | Politika | Kendiliğinden geçenler | Onay bekleyenler |
 | --- | --- | --- |
-| `balanced` (varsayılan) | Sıradan dosya değişiklikleri, ileri sarma (fast-forward) dal hareketleri ve yeni dallar, HTTPS üzerinden paket kayıt depoları. | Manifest ve kilit dosyaları, CI ve editör ayarları, kod çalıştıran ya da bir ajanı yönlendiren dosyalar, bağlantılar (link), iç içe depolar, git config, geçmişi yeniden yazma, toplu silmeler. Git hook'ları reddedilir. |
+| `balanced` (varsayılan) | Kaynak kod, belge ve veri dosyalarındaki ve projenin git'te zaten izlediği dosya türlerindeki değişiklikler; ileri sarma (fast-forward) dal hareketleri ve yeni dallar; HTTPS üzerinden paket kayıt depoları. | Diğer dosya türleri (betikler de dahil), gizli dosya ve klasörler, manifest ve kilit dosyaları, CI ve editör ayarları, kod çalıştıran ya da bir ajanı yönlendiren dosyalar, bağlantılar (link), iç içe depolar, git config, geçmişi yeniden yazma, toplu silmeler. Git hook'ları reddedilir. |
 | `careful` | Yalnızca `balanced`'ın geçirdiği bağlantılar (paket kayıt depoları ve her ajanın çalışırken kendi host'ları). | Bir dosyaya ya da git'e yapılan her değişiklik. |
 
 Seçim vermeden `kule policy`, tüm görevler için geçerli kuralları yazdırır.
 `kule policy balanced` ve `kule policy careful` bunlardan birini devreye
-alır. Kendi politikası olan bir [gruptaki](group.md) görev ise grubun
-politikasına göre değerlendirilir.
+alır. Kule careful seçimini metninin bir kopyası olarak değil, seçim olarak
+`~/.kule/policy-choice` içinde saklar; bu yüzden careful her zaman bu
+sürümün kurallarını ifade eder. Önceki bir sürümün yazdığı balanced ya da
+careful metnini tutan bir `~/.kule/policy.cedar` o seçim sayılır. Kendi
+politikası olan bir [gruptaki](group.md) görev ise grubun politikasına göre
+değerlendirilir.
 
 ### Kendi politikanız {#your-own-policy}
 
@@ -101,11 +105,13 @@ $ kule status 1046fb30
 1 file changes: +0 ~1 -0
   ~ Cargo.toml
 policy: waits for approval
-  Cargo.toml · waits for approval (manifests-and-lockfiles)
+  decides what gets installed (manifests-and-lockfiles) · waits for approval
+    Cargo.toml
 ```
 
-Parantez içindeki sözcük kuralın `@id`'sidir; [Politika kuralları](../reference/policy-rules.md)
-her birini açıklar.
+Onay bekleyenler nedenlerine göre bir araya toplanır: sade sözcüklerle
+neden, parantez içinde kuralın `@id`'si, karar ve altında tuttuğu yollar.
+[Politika kuralları](../reference/policy-rules.md) her kuralı açıklar.
 
 ## Çıktı {#output}
 

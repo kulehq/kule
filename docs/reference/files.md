@@ -31,7 +31,8 @@ can make Kule refuse to work until it is fixed or removed.
 | --- | --- | --- |
 | `tasks/<id>/` | One folder per task. See [A task's folder](#a-tasks-folder). | no |
 | `trash/` | Deleted tasks, on their way out. Kule empties it in the background right away and whenever the daemon starts. | no |
-| `policy.cedar` | The policy for every task when it is not Kule's balanced one: either Kule's careful policy, written by `kule policy careful`, or **your own**. Kule never overwrites a policy you wrote. See [Policy rules](policy-rules.md). | **yes** |
+| `policy.cedar` | **Your own** policy for every task, in place of Kule's. Kule never writes or overwrites it. A file holding the balanced or careful text an earlier version wrote (0.2.0-preview.1 to preview.11) counts as that choice and is judged by today's rules. See [Policy rules](policy-rules.md). | **yes** |
+| `policy-choice` | `careful` when you chose Kule's careful policy (`kule policy careful`); absent under balanced. A choice, never the text, so it always means this version's rules. | no: choose with `kule policy` |
 | `group-policies/<id>.cedar` | A group's own policy, kept by `kule group policy ID own --file PATH` after it was checked. | no: set it again with the command |
 | `groups.json` | Groups: id, name, colour, policy choice, budgets and limits. | no |
 | `order.json` | The order of tasks in the app and in `kule list`. | no |

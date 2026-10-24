@@ -65,9 +65,13 @@ What passes on its own, what waits for you and what never passes. See
 ## Rules
 
 What you told Kule not to ask about again: a connection's *Approve and
-remember*, or *Don't ask again in this folder* on a held file in Review,
-which first shows what it would have let through. Each rule has **Forget**
-(click again to confirm), after which Kule asks again.
+remember*, or *Don't ask again in this folder* on a held file in Review
+(*Don't ask again about files of kind X in this folder* for a kind), which
+first shows what it would have let through. Each rule has **Forget**
+(click again to confirm), after which Kule asks again. An answer an earlier
+version kept for what runs code on its own (`automation`) is marked **No
+longer applies**: such files are asked about every time. Forget it to clear
+it away.
 
 A denied change is never here, nor anything under `.kule/`, where a
 repository keeps its own rules.

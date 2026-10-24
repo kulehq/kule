@@ -16,9 +16,14 @@ At the top, the ruling says one of three things, and which rule said so:
 
 - **All pass**: every change may reach the folder on its own.
 - **Some wait for your approval**: for example a changed `package.json`,
-  lockfile or CI file under the balanced policy.
+  lockfile or CI file, a script, or a hidden file under the balanced policy.
 - **Some are denied**: for example a new git hook. Denied changes never
   reach the folder, even when you approve.
+
+Under it, what waits or is denied is put together by why: a reason in plain
+words ("runs code when a tool or an agent opens the folder"), the rules, and
+the files it holds. Files that wait only for their kind are one group per
+kind ("a kind of file this project has none of: vue"), answered at once.
 
 ## What changed
 
@@ -106,7 +111,8 @@ sandbox are stopped first, as before a commit. Your folder is only read.
 | --- | --- | --- |
 | **Commit** | Everything passes. Applies the changes to your folder and keeps a checkpoint. | Mod+Shift+Enter |
 | **Approve and commit** | Something waits for you. Applies what passes and what you approve; denied changes are held back. | Mod+Shift+Enter |
-| **Don't ask again in this folder** | On a held file (a manifest, CI or project file): first shows what it would have let through, then remembers it for this folder. | none |
+| **Don't ask again in this folder** | On a held file (a manifest, a project file or a hidden file): first shows what it would have let through, then remembers it for this folder. What runs code on its own (CI, editor and agent settings) has none: it is asked every time. | none |
+| **Don't ask again about files of kind X in this folder** | On a group of files held only for their kind: first shows what it would have let through, then remembers the kind for this folder. | none |
 | **Roll back** | Throws the changes away; the copy matches the folder again. Press twice. | Mod+Shift+Backspace |
 
 After a commit, **Undo** on the [Timeline](timeline.md) (Mod+Shift+U, press

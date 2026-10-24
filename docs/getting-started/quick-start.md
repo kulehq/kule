@@ -100,8 +100,8 @@ kule status $T
 policy: passes on its own
 ```
 
-The last line is the **policy's verdict**. Ordinary file edits pass on
-their own. See [`kule status`](../cli/status.md) (it also has `--json`).
+The last line is the **policy's verdict**. Source, docs and data pass on
+their own; other kinds of file and hidden files wait for you. See [`kule status`](../cli/status.md) (it also has `--json`).
 
 ## 5. Commit
 
@@ -159,7 +159,8 @@ kule status $T
   + package.json
       + key name
 policy: waits for approval
-  package.json · waits for approval (manifests-and-lockfiles)
+  decides what gets installed (manifests-and-lockfiles) · waits for approval
+    package.json
 ```
 
 `manifests-and-lockfiles` is the name of the rule that asked. A plain
@@ -171,7 +172,8 @@ kule commit $T
 
 ```text
 policy: waits for approval
-  package.json · waits for approval (manifests-and-lockfiles)
+  decides what gets installed (manifests-and-lockfiles) · waits for approval
+    package.json
 kule: not committed; rerun with --approve to approve the changes above
 ```
 

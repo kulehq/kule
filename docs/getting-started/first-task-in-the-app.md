@@ -24,10 +24,11 @@ and three steps:
    Node.js (`npx`), Gemini its own CLI. Sign each one in once, in a
    terminal, as you would without Kule.
 2. **How careful.** Pick a policy for every task:
-   - **Balanced**: changes to ordinary files pass on their own. What
-     decides what gets installed, built or run (manifests, lockfiles, CI
-     files, editor settings), git history rewrites and mass deletes wait
-     for you.
+   - **Balanced**: source, docs and data pass on their own, and so do
+     kinds of file your project already tracks in git. Other kinds (scripts
+     among them), hidden files and folders, what decides what gets
+     installed, built or run (manifests, lockfiles, CI, editor settings),
+     git history rewrites and mass deletes wait for you.
    - **Careful**: every change to a file or to git waits for you. Only
      package registries and the agents' own APIs are reached without
      asking.

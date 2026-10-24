@@ -35,7 +35,8 @@ açabilir.
 | --- | --- | --- |
 | `tasks/<id>/` | Her görev için bir klasör. Bkz. [Bir görevin klasörü](#a-tasks-folder). | hayır |
 | `trash/` | Silinen, kaldırılmak üzere olan görevler. Kule onu arka planda hemen ve daemon her başladığında boşaltır. | hayır |
-| `policy.cedar` | Kule'nin balanced politikası olmadığında her görev için geçerli politika: ya `kule policy careful`'ın yazdığı Kule'nin careful politikası ya da **sizin kendi politikanız**. Kule yazdığınız bir politikanın üzerine asla yazmaz. Bkz. [Politika kuralları](policy-rules.md). | **evet** |
+| `policy.cedar` | Her görev için Kule'ninkinin yerine geçen **kendi politikanız**. Kule ona asla yazmaz, üzerine de yazmaz. Önceki bir sürümün yazdığı (0.2.0-preview.1 ile preview.11 arası) balanced ya da careful metnini tutan bir dosya o seçim sayılır ve bugünün kurallarıyla değerlendirilir. Bkz. [Politika kuralları](policy-rules.md). | **evet** |
+| `policy-choice` | Kule'nin careful politikasını seçtiyseniz (`kule policy careful`) `careful`; balanced altında yoktur. Metin değil seçimdir; bu yüzden her zaman bu sürümün kurallarını ifade eder. | hayır: `kule policy` ile seçin |
 | `group-policies/<id>.cedar` | Bir grubun kendi politikası; denetlendikten sonra `kule group policy ID own --file PATH` tarafından saklanır. | hayır: komutla yeniden ayarlayın |
 | `groups.json` | Gruplar: kimlik, ad, renk, politika seçimi, bütçeler ve sınırlar. | hayır |
 | `order.json` | Görevlerin uygulamadaki ve `kule list`'teki sırası. | hayır |

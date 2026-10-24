@@ -19,11 +19,13 @@ permission rules.
 | **ask** | The change waits for your approval; the connection waits for your answer. | `policy: waits for approval` |
 | **deny** | Never goes in, even when you approve. | `policy: denied` |
 
-Each change that does not pass names the **rule** that stopped it:
+What does not pass is put together by why: a reason in plain words, the
+**rule** that stopped it, and the paths under it:
 
 ```text
 policy: waits for approval
-  package.json · waits for approval (manifests-and-lockfiles)
+  decides what gets installed (manifests-and-lockfiles) · waits for approval
+    package.json
 ```
 
 A rule that cannot decide, or a policy with an error, refuses.
@@ -37,7 +39,9 @@ You pick one on the first-run screen, in *Settings → Policy*, or with
 
 **Pass on their own:**
 
-- edits to ordinary files (source code, notes, documents, data);
+- changes to source, docs and data (source code, notes, documents, data
+  files, pictures and fonts), and to kinds of file your project already
+  tracks in git;
 - a git branch moved forward (fast-forward) or a new branch;
 - connections to package registries over HTTPS (npm, Yarn, crates.io,
   NuGet, PyPI, RubyGems, Maven Central), and each agent's own model API
@@ -45,6 +49,10 @@ You pick one on the first-run screen, in *Settings → Policy*, or with
 
 **Wait for you (ask):**
 
+- other kinds of file, scripts (`.sh`, `.ps1`, `.bat`, …) among them, until
+  you answer the kind once for good or the project tracks it;
+- whatever the task writes in a hidden file or folder (a path part that
+  starts with a dot), of any kind;
 - manifests and lockfiles: `package.json`, `package-lock.json`,
   `yarn.lock`, `Cargo.toml`, `Cargo.lock`, `go.mod`, `pyproject.toml`,
   `requirements*.txt`, `*.csproj`, `pom.xml`, `build.gradle` and the rest;
@@ -106,7 +114,8 @@ When something waits for you:
 - `kule commit TASK --approve`, or **Approve and commit** in the app, lets
   it in. Denied changes stay out.
 - `--remember` (or *Don't ask again in this folder*) stops asking, on this
-  folder, about the files approved now (manifests, CI and project files).
+  folder, about the files approved now: manifests and project files and
+  hidden files by path, kinds of file the project had none of by kind.
 - **Approve and remember** on a connection question lets that host and port
   through on this folder.
 
@@ -120,10 +129,12 @@ kule rules                                  # lists what you told Kule
 kule rules forget ID                        # asks again
 ```
 
-A remembered connection becomes a Cedar `permit`; a remembered file, a
-narrow exception to the rule that asked about it. **Never remembered:**
-what is denied, what asks for reasons other than a file's name (a mass
-delete, a history rewrite), and anything under `.kule/`.
+A remembered connection becomes a Cedar `permit`; a remembered file or
+kind, a narrow exception to the rule that asked about it. **Never
+remembered:** what is denied, what asks for reasons other than a file's
+name, place or kind (a mass delete, a history rewrite), what runs code on
+its own (CI, editor and agent settings, asked every time), and anything
+under `.kule/`.
 
 ## Related
 

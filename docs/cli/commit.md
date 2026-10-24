@@ -24,8 +24,9 @@ changes [kule status](status.md) shows and applies them to the workspace.
 [Policy](../concepts/policy.md)):
 
 - changes that **pass on their own** are committed;
-- changes that **wait for approval** (manifests, lockfiles, CI files, git
-  config, mass deletes, a file made executable, … under the built-in
+- changes that **wait for approval** (manifests, lockfiles, CI files,
+  unfamiliar kinds of file, hidden files, git config, mass deletes, a file
+  made executable, … under the built-in
   *balanced* policy) are committed only with `--approve`, and only as you
   reviewed them;
 - changes that are **denied** (a new git hook, for example) are never
@@ -76,7 +77,7 @@ in the task, and while a terminal is open on it (the app's, or
 | Option | Value | Default | Meaning |
 | --- | --- | --- | --- |
 | `--approve` | | | Also commit the changes the policy puts to a person. Denied changes still never pass. |
-| `--remember` | | | With `--approve`: do not ask again, on this folder, about the files approved now (manifests, CI and project files). See [kule rules](rules.md). |
+| `--remember` | | | With `--approve`: do not ask again, on this folder, about the files approved now: manifests and project files and hidden files by path, and kinds of file the project had none of by kind. What runs code on its own (CI, editor and agent settings) is asked every time. See [kule rules](rules.md). |
 | `--reviewed` | digest | | With `--approve`: the digest `kule status` printed for the changes you reviewed. Only those are committed. Without it, Kule asks on a terminal and refuses elsewhere. |
 | `--include-ignored` | | | Also take the paths the workspace's `.gitignore` excludes. |
 | `--home` | path | `~/.kule` | Kule's home (also `KULE_HOME`). See [global options](index.md). |
@@ -95,7 +96,8 @@ committed 1 changes · checkpoint 2
 ```text
 $ kule commit 3efe1ca8
 policy: waits for approval
-  Cargo.toml · waits for approval (manifests-and-lockfiles)
+  decides what gets installed (manifests-and-lockfiles) · waits for approval
+    Cargo.toml
 kule: not committed; rerun with --approve to approve the changes above
 $ echo $?
 3
@@ -125,7 +127,8 @@ not asked again on this folder: changes to Cargo.toml (manifests-and-lockfiles)
 ```text
 $ kule commit 3422f830 --approve --reviewed 51d0…7c3b
 policy: denied
-  git hook pre-commit · denied (git-hooks)
+  a git hook, which runs on its own (git-hooks) · denied
+    git hook pre-commit
 kule: not committed; the policy denies the changes above
 ```
 

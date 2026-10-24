@@ -54,7 +54,9 @@ ebeveynine ne olmuş olursa olsun. Kule bunların adını verir:
 Ardından Kule kopyadaki değişiklikleri (yalnızca bu komutunkileri
 değil, hepsini), yaptığı bağlantıları, ev dizinine yazmaları ve macOS'ta
 sandbox'ın reddettiklerini yazdırır. `kule exec` komutun kendi çıkış koduyla
-çıkar.
+çıkar. Kule sandbox'ın reddettiklerini okuyamaz ya da kaydedemezse bunu
+söyler ve başarılı olmuş bir komut `1` ile çıkar: yaptıklarının bir kısmı
+anlatılmadan kalmıştır.
 
 `exec` adım oluşturmaz; adımlar bir ajanın araç çağrılarıdır. Görevde bir
 `exec` çalışırken commit ve rollback reddedilir.
@@ -179,6 +181,7 @@ kule exec "$TASK" --reveal ~/Library/Keychains \
 | `net: <host>:<port> · failed (<rule>)` | Politikanın geçirdiği, kendi hatasıyla biten bir bağlantı: host gitti ya da bağlantı sıfırlandı. Nedenini görevin `network.jsonl` dosyası söyler. |
 | `net: <host>:<port> · refused, …` | Politikanın geçirmediği bir bağlantı. |
 | `sandbox: refused <operation> <path> (<program>)` | macOS'ta sandbox'ın reddettikleri. Bunlar görevin `sandbox.jsonl` dosyasında da saklanır. |
+| `kule: what the sandbox refused cannot be read: …`, `kule: what the sandbox refused could not be recorded: …` | stderr'de: Kule sandbox'ın reddettiklerini okuyamadı ya da `sandbox.jsonl` içinde saklayamadı. Çıkış kodu komutunki olarak kalır; yalnızca `0`, `1` olur. |
 | `kule: ended <names>, still running in the task's sandbox as the command ended` | stderr'de: komutun çalışır bıraktığı ve Kule'nin onunla birlikte sonlandırdığı şey. Her ad, kaç tane olduğuyla bir kez (`sleep ×2`). |
 | `kule: running without the sandbox` | `--no-sandbox` verdiniz. |
 | `kule: network open, bypassing the proxy and the policy` | `--open-network` verdiniz. |
