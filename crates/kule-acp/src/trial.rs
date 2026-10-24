@@ -177,10 +177,6 @@ fn try_in(
                 TRIAL_TIME.as_secs()
             )),
         };
-        // The system's log takes a moment to show the last refusals.
-        if cfg!(target_os = "macos") {
-            std::thread::sleep(Duration::from_secs(2));
-        }
         let denials = launch
             .sandbox
             .denials(started.elapsed())?

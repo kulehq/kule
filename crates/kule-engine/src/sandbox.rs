@@ -2154,38 +2154,110 @@ impl Sandbox {
         (text, params)
     }
 
+    /// The system log shows a refusal a moment after the kernel made it,
+    /// longer on a busy machine. So Kule makes one more refusal under this
+    /// sandbox's tag, after the commands', and reads the log until that one
+    /// shows: an empty list then means nothing was refused, not that the
+    /// log was late. A log that never shows it is an error, never an empty
+    /// list.
     fn platform_denials(&self, window: Duration) -> Result<Option<Vec<Denial>>> {
-        let seconds = window.as_secs() + 2;
+        let asked = std::time::Instant::now();
+        let flush = self.flush()?;
         let predicate = format!(
             "sender == \"Sandbox\" AND eventMessage CONTAINS \"{}\"",
             self.tag
         );
         let log = Path::new("/usr/bin/log");
-        let out = Command::new(log)
-            .args([
-                "show",
-                "--last",
-                &format!("{seconds}s"),
-                "--style",
-                "ndjson",
-            ])
-            .args(["--predicate", &predicate])
-            .output()
-            .at(log)?;
-        let mut denials = Vec::new();
-        for line in String::from_utf8_lossy(&out.stdout).lines() {
-            let Ok(entry) = serde_json::from_str::<serde_json::Value>(line) else {
-                continue;
-            };
-            let Some(denial) = entry["eventMessage"].as_str().and_then(parse_denial) else {
-                continue;
-            };
-            if !denials.contains(&denial) {
-                denials.push(denial);
+        loop {
+            let seconds = (window + asked.elapsed()).as_secs() + 2;
+            let out = Command::new(log)
+                .args([
+                    "show",
+                    "--last",
+                    &format!("{seconds}s"),
+                    "--style",
+                    "ndjson",
+                ])
+                .args(["--predicate", &predicate])
+                .output()
+                .at(log)?;
+            let shown = out
+                .status
+                .success()
+                .then(|| refusals_through(&String::from_utf8_lossy(&out.stdout), &flush))
+                .flatten();
+            if let Some(denials) = shown {
+                return Ok(Some(denials));
             }
+            if asked.elapsed() >= LOG_WAIT {
+                return Err(Error::Invalid(format!(
+                    "the system log did not show the sandbox's refusals within {} seconds{}",
+                    LOG_WAIT.as_secs(),
+                    match String::from_utf8_lossy(&out.stderr).trim() {
+                        "" => String::new(),
+                        said => format!(" ({said})"),
+                    }
+                )));
+            }
+            std::thread::sleep(Duration::from_millis(200));
         }
-        Ok(Some(denials))
     }
+
+    /// Makes a refusal of Kule's own under this sandbox's tag, and returns
+    /// the words it carries in the log.
+    fn flush(&self) -> Result<String> {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos());
+        let flush = format!("{}-flush-{nanos:x}", self.tag);
+        let exec = Path::new("/usr/bin/sandbox-exec");
+        // Refused by design: sandbox-exec cannot start true, and says so.
+        Command::new(exec)
+            .arg("-p")
+            .arg(format!(
+                "(version 1)\n(allow default)\n\
+                 (deny process-exec (literal \"/usr/bin/true\") (with message \"{flush}\"))\n"
+            ))
+            .arg("/usr/bin/true")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .at(exec)?;
+        Ok(flush)
+    }
+}
+
+/// How long Kule waits for the system log to show a sandbox's refusals.
+#[cfg(target_os = "macos")]
+const LOG_WAIT: Duration = Duration::from_secs(10);
+
+/// The refusals in `ndjson` (what `log show` printed), once it holds the
+/// refusal carrying `flush`, made after them; `None` until then. That one
+/// is Kule's own and is left out.
+#[cfg(target_os = "macos")]
+fn refusals_through(ndjson: &str, flush: &str) -> Option<Vec<Denial>> {
+    let mut denials = Vec::new();
+    let mut flushed = false;
+    for line in ndjson.lines() {
+        let Ok(entry) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        let Some(message) = entry["eventMessage"].as_str() else {
+            continue;
+        };
+        if message.contains(flush) {
+            flushed = true;
+            continue;
+        }
+        let Some(denial) = parse_denial(message) else {
+            continue;
+        };
+        if !denials.contains(&denial) {
+            denials.push(denial);
+        }
+    }
+    flushed.then_some(denials)
 }
 
 /// `Sandbox: bash(89964) deny(1) file-write-create /some/path` (and the tag
@@ -2758,6 +2830,32 @@ mod tests {
             );
         }
         assert!(parse_denial("something else").is_none());
+    }
+
+    #[test]
+    fn refusals_are_told_only_once_the_log_shows_the_last_one() {
+        let line = |message: &str| {
+            format!(
+                "{}\n",
+                serde_json::json!({ "eventMessage": message, "sender": "Sandbox" })
+            )
+        };
+        let refused = line("Sandbox: bash(1) deny(1) file-write-create /Users/me/x\nkule-1-2");
+        let flush =
+            line("Sandbox: sandbox-exec(2) deny(1) process-exec* /usr/bin/true\nkule-1-2-flush-9");
+        // The log has not caught up: not even an empty list.
+        assert_eq!(refusals_through("", "kule-1-2-flush-9"), None);
+        assert_eq!(refusals_through(&refused, "kule-1-2-flush-9"), None);
+        // Caught up, Kule's own refusal is not the command's.
+        let told = refusals_through(&format!("{refused}{flush}"), "kule-1-2-flush-9").unwrap();
+        assert_eq!(
+            told.iter().map(|d| d.path.as_str()).collect::<Vec<_>>(),
+            ["/Users/me/x"]
+        );
+        assert_eq!(
+            refusals_through(&flush, "kule-1-2-flush-9"),
+            Some(Vec::new())
+        );
     }
 
     #[test]

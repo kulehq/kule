@@ -77,6 +77,10 @@
   one measures them once and says so ("Measuring the task's package caches
   for its disk limit"). Without a disk limit nothing walks them, and the
   disk figure a run shows leaves them out.
+- On macOS, what the sandbox refused is read once the system log shows all
+  of it, so a busy machine no longer drops the last refusals from what a
+  run, a terminal or `kule exec` tells. A log that has not caught up after
+  ten seconds is told as refusals that could not be read, never as none.
 
 ## 0.2.0-preview.10
 
