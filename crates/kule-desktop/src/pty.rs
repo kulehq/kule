@@ -268,6 +268,20 @@ impl Terminals {
         Ok(())
     }
 
+    /// Whether a terminal is open, or a closed one's shell is still ending.
+    pub fn any(&self) -> bool {
+        !self
+            .open
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .is_empty()
+            || !self
+                .ending
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .is_empty()
+    }
+
     /// As the app quits: ends every terminal's shell, and waits up to
     /// `within` for each end to be done, so what the sandbox refused them is
     /// recorded and their tasks are let go of.
@@ -553,8 +567,11 @@ mod tests {
             ),
         );
         until(&rx, "up");
+        // What keeps the app from going until its end is recorded.
+        assert!(terms.any());
         let started = Instant::now();
         terms.end_all(Duration::from_secs(30));
+        assert!(!terms.any());
         let task = kule_engine_task(&s);
         assert!(task.terminals_open().is_empty());
         assert!(started.elapsed() < Duration::from_secs(30));

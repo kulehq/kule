@@ -18,7 +18,8 @@
 - What the sandbox refused a terminal in the app is no longer lost when you
   close its tab before its shell ends (the lines go to the task's Live) or
   quit Kule with it open (its shell ends with Kule, and the refusals are
-  kept for the Timeline and the task's next run).
+  kept for the Timeline and the task's next run; the window closes at once
+  meanwhile).
 - A turned-over `agent.log` starts with a line saying so, and that the log
   before was let go when there was one. A failed run points to
   `agent.log.1` only when the log was turned over during that run, not to

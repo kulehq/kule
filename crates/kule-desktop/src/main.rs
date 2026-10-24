@@ -1208,13 +1208,33 @@ fn main() {
         ])
         .build(context)
         .expect("the window could not start")
-        .run(|app, event| {
+        .run(|app, event| match event {
             // A terminal open as the app quits ends with it, and what its
-            // sandbox refused is recorded first.
-            if let tauri::RunEvent::Exit = event {
+            // sandbox refused is recorded first: with the windows already
+            // gone, so quitting does not look stuck meanwhile.
+            tauri::RunEvent::ExitRequested { code, api, .. }
+                if app.state::<pty::Terminals>().any() =>
+            {
+                api.prevent_exit();
+                for window in app.webview_windows().values() {
+                    let _ = window.hide();
+                }
+                static ENDING: std::sync::atomic::AtomicBool =
+                    std::sync::atomic::AtomicBool::new(false);
+                if !ENDING.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                    let app = app.clone();
+                    std::thread::spawn(move || {
+                        app.state::<pty::Terminals>()
+                            .end_all(std::time::Duration::from_secs(15));
+                        app.exit(code.unwrap_or(0));
+                    });
+                }
+            }
+            tauri::RunEvent::Exit => {
                 app.state::<pty::Terminals>()
                     .end_all(std::time::Duration::from_secs(15));
             }
+            _ => {}
         });
 }
 
