@@ -4021,6 +4021,17 @@ const rememberable = (j) =>
 function rememberBox(id, task, subjects, allowance, label) {
   const picks = state.remember.get(id) || new Set();
   const note = h("span", { class: "remember-note" });
+  // What it would have let through, said while it is ticked: also when the
+  // review is drawn again with it still ticked.
+  const tellImpact = async () => {
+    if (!task) return;
+    try {
+      const impact = await call("rule_impact", { allowance, workspace: task.workspace });
+      if (box.checked) note.textContent = ` · would have passed ${plural(impact.changes, "earlier change")} on its own`;
+    } catch (err) {
+      fail(err);
+    }
+  };
   const box = h("input", {
     type: "checkbox",
     checked: subjects.every((s) => picks.has(s)),
@@ -4033,15 +4044,10 @@ function rememberBox(id, task, subjects, allowance, label) {
       }
       state.remember.set(id, set);
       note.textContent = "";
-      if (!e.currentTarget.checked || !task) return;
-      try {
-        const impact = await call("rule_impact", { allowance, workspace: task.workspace });
-        note.textContent = ` · would have passed ${plural(impact.changes, "earlier change")} on its own`;
-      } catch (err) {
-        fail(err);
-      }
+      if (e.currentTarget.checked) await tellImpact();
     },
   });
+  if (box.checked) tellImpact();
   return h("label", { class: "check remember" }, box, label, note);
 }
 
