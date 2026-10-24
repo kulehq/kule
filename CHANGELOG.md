@@ -33,8 +33,12 @@
   not the rows.
 - One task whose record cannot be read no longer fails the whole task list:
   `kule list` names it on stderr and lists the rest, and the app lists it
-  as one that cannot be read. Budgets still count every task, and refuse
-  when one cannot be read.
+  by its id as one that cannot be read. What needs every task (commands and
+  runs in any task, since Kule cannot tell which folder that one hides, and
+  budgets) still refuses while it is there, and now says which task and
+  that `kule rm <id>` (or *Delete task* in the app) removes it; that works
+  without reading its record.
+- `kule` says an error's cause once, not twice (`state file …: EOF …`).
 
 ## 0.2.0-preview.12
 

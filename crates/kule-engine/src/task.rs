@@ -542,7 +542,13 @@ impl Task {
                     Ok(info) => infos.push(info),
                     Err(e) => unreadable.push(Unreadable {
                         id: entry.file_name().to_string_lossy().into_owned(),
-                        why: e.to_string(),
+                        // Without the home's path: the message reaches
+                        // extensions too.
+                        why: match e {
+                            Error::State { source, .. } => source.to_string(),
+                            Error::Io { source, .. } => source.to_string(),
+                            other => other.to_string(),
+                        },
                     }),
                 }
             }
@@ -552,22 +558,23 @@ impl Task {
         Ok((infos, unreadable))
     }
 
+    /// Every task under `home`, for what counts or judges every task: it
+    /// fails while one's record cannot be read, saying which and what to
+    /// do, since which folder that task hides from the others' commands
+    /// and what it spent cannot be told.
     pub fn list(home: &Path) -> Result<Vec<TaskInfo>> {
-        let tasks = home.join("tasks");
-        let entries = match fs::read_dir(&tasks) {
-            Ok(entries) => entries,
-            Err(e) if e.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
-            Err(e) => return Err(e).at(&tasks),
-        };
-        let mut infos = Vec::new();
-        for entry in entries {
-            let file = entry.at(&tasks)?.path().join("task.json");
-            if file.is_file() {
-                infos.push(read_json::<TaskInfo>(&file)?);
-            }
+        let (infos, unreadable) = Task::list_told(home)?;
+        match unreadable.first() {
+            None => Ok(infos),
+            Some(u) => Err(Error::Invalid(format!(
+                "task {id}'s record cannot be read ({why}): Kule cannot tell which folder it \
+                 was made from, so no command or run starts in any task, and nothing that \
+                 counts every task goes on, until it is removed: `kule rm {id}` (its copy \
+                 goes with it; no folder of yours is touched)",
+                id = u.id,
+                why = u.why
+            ))),
         }
-        infos.sort_by_key(|i| (i.created_unix, i.id.clone()));
-        Ok(infos)
     }
 
     /// The task's own directory: state, checkpoints, logs and the copy.
@@ -1570,13 +1577,28 @@ impl Task {
     /// its caches.
     pub fn remove(self) -> Result<()> {
         let _lock = self.lock()?;
-        let trash = trash_dir(&self.home());
-        fs::create_dir_all(&trash).at(&trash)?;
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_or(0, |d| d.as_nanos());
-        let to = trash.join(format!("{}-{nanos:x}", self.info.id));
-        fs::rename(&self.dir, &to).at(&self.dir)
+        to_trash(&self.home(), &self.dir, &self.info.id)
+    }
+
+    /// Deletes the task `id` whose record cannot be read, and its copy, as
+    /// [`Task::remove`] does: what needs every task refuses to go on while
+    /// it is there (see [`Task::list`]). The folder it was made from cannot
+    /// be told and is not touched. Refused for a task that can be read,
+    /// and while an agent is at work in it or another command holds it.
+    pub fn remove_unreadable(home: &Path, id: &str) -> Result<()> {
+        let made =
+            !id.is_empty() && id.len() <= 64 && id.bytes().all(|b| b.is_ascii_alphanumeric());
+        let dir = home.join("tasks").join(id);
+        if !made || !dir.join("task.json").is_file() {
+            return Err(Error::Invalid(format!("no task {id}")));
+        }
+        if read_json::<TaskInfo>(&dir.join("task.json")).is_ok_and(|info| info.id == id) {
+            return Err(Error::Invalid(format!(
+                "task {id}'s record can be read; it is removed as any task is"
+            )));
+        }
+        let _lock = lock_at(&dir, id)?;
+        to_trash(home, &dir, id)
     }
 
     /// Deletes what removed tasks left in Kule's trash under `home`.
@@ -1974,33 +1996,52 @@ impl Task {
 
     /// The process with an agent at work in the task, if it is still alive.
     pub fn agent_pid(&self) -> Option<u32> {
-        let pid: u32 = fs::read_to_string(self.dir.join("agent"))
-            .ok()?
-            .trim()
-            .parse()
-            .ok()?;
-        alive(pid).then_some(pid)
+        agent_pid_at(&self.dir)
     }
 
     pub(crate) fn lock(&self) -> Result<Lock> {
-        if let Some(pid) = self.agent_pid() {
-            return Err(Error::Invalid(format!(
-                "an agent is at work in task {} (process {pid}); wait until it is done",
-                self.info.id
-            )));
-        }
-        let path = self.dir.join("lock");
-        match OpenOptions::new().write(true).create_new(true).open(&path) {
-            Ok(mut file) => {
-                let _ = writeln!(file, "{}", std::process::id());
-                Ok(Lock(path))
-            }
-            Err(e) if e.kind() == ErrorKind::AlreadyExists => {
-                Err(Error::Busy(self.info.id.clone()))
-            }
-            Err(e) => Err(e).at(&path),
-        }
+        lock_at(&self.dir, &self.info.id)
     }
+}
+
+/// The process with an agent at work in the task in `dir`, if it is alive.
+fn agent_pid_at(dir: &Path) -> Option<u32> {
+    let pid: u32 = fs::read_to_string(dir.join("agent"))
+        .ok()?
+        .trim()
+        .parse()
+        .ok()?;
+    alive(pid).then_some(pid)
+}
+
+/// The lock of the task `id` in `dir`: refused while an agent is at work
+/// there or another Kule command holds it.
+fn lock_at(dir: &Path, id: &str) -> Result<Lock> {
+    if let Some(pid) = agent_pid_at(dir) {
+        return Err(Error::Invalid(format!(
+            "an agent is at work in task {id} (process {pid}); wait until it is done"
+        )));
+    }
+    let path = dir.join("lock");
+    match OpenOptions::new().write(true).create_new(true).open(&path) {
+        Ok(mut file) => {
+            let _ = writeln!(file, "{}", std::process::id());
+            Ok(Lock(path))
+        }
+        Err(e) if e.kind() == ErrorKind::AlreadyExists => Err(Error::Busy(id.to_owned())),
+        Err(e) => Err(e).at(&path),
+    }
+}
+
+/// Moves the task `id`'s folder `dir` to Kule's trash under `home`.
+fn to_trash(home: &Path, dir: &Path, id: &str) -> Result<()> {
+    let trash = trash_dir(home);
+    fs::create_dir_all(&trash).at(&trash)?;
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos());
+    let to = trash.join(format!("{id}-{nanos:x}"));
+    fs::rename(dir, &to).at(dir)
 }
 
 /// An agent at work in a task, marked until dropped (see

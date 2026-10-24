@@ -454,8 +454,7 @@ const COLORS = ["red", "orange", "yellow", "green", "teal", "blue", "purple", "p
 
 /** The folder's name, and the one the person gave the task after it. */
 function taskName(task) {
-  // One whose record cannot be read has no folder to name it by: its id.
-  const folder = baseName(task.workspace || "") || task.id;
+  const folder = taskFolder(task);
   return task.label ? `${folder} – ${task.label}` : folder;
 }
 
@@ -480,7 +479,7 @@ function taskItem(task, list) {
       type: "button",
       "aria-current": task.id === state.current ? "true" : "false",
       "aria-keyshortcuts": ordered ? "Alt+ArrowUp Alt+ArrowDown" : undefined,
-      title: ordered ? `${task.workspace}\nDrag, or Alt+↑/↓, to move it in the list.` : task.workspace,
+      title: task.unreadable || (ordered ? `${task.workspace}\nDrag, or Alt+↑/↓, to move it in the list.` : task.workspace),
       onclick: (e) => {
         // The click a drag ends with does not open the task.
         if (dragged) {
@@ -503,7 +502,7 @@ function taskItem(task, list) {
     h(
       "span",
       { class: "task-item-name" },
-      h("span", { class: "task-folder" }, baseName(task.workspace)),
+      h("span", { class: "task-folder" }, taskFolder(task)),
       task.label ? h("span", { class: "task-label" }, ` – ${task.label}`) : null
     ),
     taskChip(task),
@@ -557,6 +556,13 @@ function taskMenu(task, list, e) {
     closeMenu();
     await removeTask(task);
   });
+
+  // One whose record cannot be read can only be deleted: while it is
+  // there, nothing that needs every task goes on.
+  if (task.unreadable) {
+    showMenu(h("div", { class: "menu", id: "task-menu", role: "menu", "aria-label": `Task ${name}` }, remove), [remove], opener, e);
+    return;
+  }
 
   const siblings = groupMates(task);
   const at = siblings.findIndex((t) => t.id === task.id);

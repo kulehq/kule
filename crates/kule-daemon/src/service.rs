@@ -1581,7 +1581,15 @@ impl Service {
 
     /// Deletes the task and its copy; the workspace is not touched.
     pub fn remove(&self, id: &str) -> Result<()> {
-        self.idle(id)?.remove().map_err(text)?;
+        // One whose record cannot be read can be removed too: while it is
+        // there, nothing that needs every task goes on.
+        match self.idle(id) {
+            Ok(task) => task.remove().map_err(text)?,
+            Err(_) if !self.is_running(id) => {
+                Task::remove_unreadable(&self.home, id).map_err(text)?
+            }
+            Err(e) => return Err(e),
+        }
         self.live
             .streams
             .lock()
@@ -2199,13 +2207,15 @@ impl Service {
 
     /// The task, refused while an agent works in it: committing or rolling
     /// back under a running agent would split its work in two.
-    fn idle(&self, id: &str) -> Result<Task> {
-        if self
-            .running
+    fn is_running(&self, id: &str) -> bool {
+        self.running
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .contains(id)
-        {
+    }
+
+    fn idle(&self, id: &str) -> Result<Task> {
+        if self.is_running(id) {
             return Err(format!(
                 "an agent is at work in task {id}; wait until it is done"
             ));
@@ -4491,6 +4501,14 @@ mod tests {
             .into_iter()
             .map(|t| (t.id, t.unreadable.is_some()))
             .collect();
-        assert_eq!(listed, [(good, false), ("garbled".to_owned(), true)]);
+        assert_eq!(
+            listed,
+            [(good.clone(), false), ("garbled".to_owned(), true)]
+        );
+        // It can be deleted as the others are; the others stay.
+        s.app.remove("garbled").unwrap();
+        assert!(!garbled.exists());
+        let listed: Vec<String> = s.settled().into_iter().map(|t| t.id).collect();
+        assert_eq!(listed, [good]);
     }
 }

@@ -551,7 +551,7 @@ fn main() -> ExitCode {
         Ok(code) => code,
         Err(e) => {
             // An error can carry what an agent wrote or named.
-            eprintln!("kule: {}", paint::plain(&format!("{e:#}")));
+            eprintln!("kule: {}", paint::plain(&chained(&e)));
             match e.downcast_ref::<Error>() {
                 Some(Error::Conflict(_)) => {
                     eprintln!("hint: roll back, or rerun the task on the current workspace");
@@ -564,6 +564,19 @@ fn main() -> ExitCode {
             ExitCode::from(2)
         }
     }
+}
+
+/// The error and what caused it, each once: an engine error already says
+/// its cause, which `{:#}` would say again.
+fn chained(e: &anyhow::Error) -> String {
+    let mut said = e.to_string();
+    for cause in e.chain().skip(1) {
+        let cause = cause.to_string();
+        if !said.ends_with(&cause) {
+            said = format!("{said}: {cause}");
+        }
+    }
+    said
 }
 
 fn run() -> Result<ExitCode> {
@@ -1434,7 +1447,12 @@ fn run() -> Result<ExitCode> {
                 .with_context(|| format!("daemon for {}", home.display()))?;
         }
         Cmd::Rm { task } => {
-            Task::open(&home, &task)?.remove()?;
+            // One whose record cannot be read can be removed too: while it
+            // is there, nothing that needs every task goes on.
+            match Task::open(&home, &task) {
+                Ok(open) => open.remove()?,
+                Err(_) => Task::remove_unreadable(&home, &task)?,
+            }
             Task::empty_trash(&home)?;
             println!("removed task {task}");
         }

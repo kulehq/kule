@@ -200,6 +200,38 @@ fn a_task_whose_record_cannot_be_read_does_not_hide_the_others() {
     assert!(out.status.success(), "{err}");
     assert!(said.contains(&id), "{said}");
     assert!(err.contains("kule: task garbled cannot be read"), "{err}");
+    // No command starts in any task while it is there, and the person is
+    // told which one and what to do, each cause once.
+    let out = kule(&["exec", &id, "--", "true"]);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "{err}");
+    assert!(
+        err.contains("task garbled's record cannot be read"),
+        "{err}"
+    );
+    assert!(err.contains("`kule rm garbled`"), "{err}");
+    assert_eq!(err.matches("key must be a string").count(), 1, "{err}");
+    // It can be removed, and then the others work again.
+    let out = kule(&["rm", "garbled"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(!garbled.exists());
+    let out = kule(&["exec", &id, "--", "true"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    // An error that names its cause says it once.
+    let settings = home.path().join("tasks").join(&id).join("settings.json");
+    fs::write(&settings, "{").unwrap();
+    let out = kule(&["status", &id]);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "{err}");
+    assert_eq!(err.matches("EOF while parsing").count(), 1, "{err}");
 }
 
 /// A command's probes of terminals other than its own are one line after

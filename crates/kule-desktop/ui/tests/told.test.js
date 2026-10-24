@@ -180,3 +180,8 @@ test("a terminal the person closed tells its end in the task's Live", () => {
   ]);
   assert.deepEqual(told.closedTerminalNotes(undefined), []);
 });
+
+test("a task whose record cannot be read is listed by its id", () => {
+  assert.equal(told.taskFolder({ id: "6c2816d8", workspace: "/Users/me/code/app" }), "app");
+  assert.equal(told.taskFolder({ id: "6c2816d8", unreadable: "its record cannot be read: EOF" }), "6c2816d8");
+});

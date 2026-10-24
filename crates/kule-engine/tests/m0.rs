@@ -1149,10 +1149,52 @@ fn a_task_whose_record_cannot_be_read_is_named_apart() {
     );
     assert_eq!(unreadable.len(), 1);
     assert_eq!(unreadable[0].id, "garbled");
+    // Why, without the home's path: it reaches extensions too.
+    let why = &unreadable[0].why;
+    assert!(why.contains("expected") || why.contains("key"), "{why}");
+    assert!(!why.contains(home.path().to_str().unwrap()), "{why}");
+    // What counts every task fails, naming it and what to do.
+    let err = Task::list(home.path()).unwrap_err().to_string();
     assert!(
-        unreadable[0].why.contains("task.json"),
-        "{:?}",
-        unreadable[0]
+        err.contains("task garbled's record cannot be read"),
+        "{err}"
     );
-    assert!(Task::list(home.path()).is_err());
+    assert!(err.contains("`kule rm garbled`"), "{err}");
+}
+
+/// A task whose record cannot be read can be removed by its id, with its
+/// copy; one that can be read is removed as any task is, and none is
+/// removed while an agent is at work in it.
+#[test]
+fn a_task_whose_record_cannot_be_read_can_be_removed() {
+    let (home, folder) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+    let task = Task::create(home.path(), folder.path()).unwrap();
+    let id = task.id().to_owned();
+    let garbled = home.path().join("tasks/garbled");
+    std::fs::create_dir_all(garbled.join("w")).unwrap();
+    std::fs::write(garbled.join("task.json"), "{ not json").unwrap();
+    assert!(Task::remove_unreadable(home.path(), &id).is_err());
+    assert!(Task::remove_unreadable(home.path(), "missing").is_err());
+    // A folder there without a record is not a task, and stays.
+    let other = home.path().join("tasks/other");
+    std::fs::create_dir_all(&other).unwrap();
+    assert!(Task::remove_unreadable(home.path(), "other").is_err());
+    assert!(other.is_dir());
+    std::fs::remove_dir(&other).unwrap();
+    // An agent at work in it (this process, alive) holds it.
+    std::fs::write(garbled.join("agent"), std::process::id().to_string()).unwrap();
+    let err = Task::remove_unreadable(home.path(), "garbled").unwrap_err();
+    assert!(err.to_string().contains("an agent is at work"), "{err}");
+    std::fs::remove_file(garbled.join("agent")).unwrap();
+    Task::remove_unreadable(home.path(), "garbled").unwrap();
+    assert!(!garbled.exists());
+    // Once it is gone, what counts every task goes on.
+    let listed: Vec<String> = Task::list(home.path())
+        .unwrap()
+        .into_iter()
+        .map(|i| i.id)
+        .collect();
+    assert_eq!(listed, std::slice::from_ref(&id));
+    assert!(folder.path().is_dir());
+    assert!(Task::open(home.path(), &id).is_ok());
 }

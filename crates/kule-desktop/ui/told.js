@@ -215,12 +215,20 @@ function permissionLine(title, chosen, granted) {
 /** What a terminal the person closed said as its shell ended (what the
  * sandbox refused it, what Kule ended), as notes for the task's Live: its
  * tab is gone, so they would be lost there. */
+/** The name a task is listed by: its folder's, or its id when its record
+ * cannot be read and there is no folder to name it by. */
+function taskFolder(task) {
+  const parts = String(task.workspace || "").split("/").filter(Boolean);
+  return parts.length ? parts[parts.length - 1] : task.id;
+}
+
 function closedTerminalNotes(notes) {
   return (notes || []).map((note) => ({ kind: "note", text: `A terminal you closed: ${note}` }));
 }
 
 if (typeof module !== "undefined") {
   module.exports = {
+    taskFolder,
     closedTerminalNotes,
     UNREPORTED,
     INCOMPLETE,
