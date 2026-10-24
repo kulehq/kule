@@ -95,7 +95,9 @@ Bir bütçe nasıl uygulanır:
 - **Gemini** ikisini de bildirmez.
 
 Abonelikle oturum açmış bir ajan hiç maliyet bildirmeyebilir; bir bütçe
-bildirilmeyeni sınırlayamaz.
+bildirilmeyeni sınırlayamaz. Görevin bir bütçesi varsa böyle bir
+çalıştırma bittiğinde bunu söyler: `kule run` son satırlarında, uygulama ise
+Live'da çalıştırmanın sonunda.
 
 :::
 

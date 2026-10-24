@@ -364,6 +364,8 @@ struct RunEnd {
     denials: Vec<Denial>,
     unreported: bool,
     incomplete: bool,
+    /// Kule's notes on its end (see `RunEvent::Finished`).
+    notes: Vec<String>,
 }
 
 /// What a run reports.
@@ -424,6 +426,10 @@ pub enum RunEvent {
         /// (see `kule_engine::INCOMPLETE`): `denials` may not be all.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         incomplete: bool,
+        /// What else Kule says of how it ended, a sentence each: that a
+        /// budget does not count a run whose agent reported no cost.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        notes: Vec<String>,
     },
 }
 
@@ -1686,9 +1692,15 @@ impl Service {
         let service = Arc::clone(self);
         std::thread::spawn(move || {
             let run = service.run(&task, &profile, &prompt, &pictures, plan, &control);
-            let (error, denials, unreported, incomplete) = match run {
-                Ok(end) => (end.error, end.denials, end.unreported, end.incomplete),
-                Err(e) => (Some(e), Vec::new(), false, false),
+            let (error, denials, unreported, incomplete, notes) = match run {
+                Ok(end) => (
+                    end.error,
+                    end.denials,
+                    end.unreported,
+                    end.incomplete,
+                    end.notes,
+                ),
+                Err(e) => (Some(e), Vec::new(), false, false, Vec::new()),
             };
             drop(at_work);
             service
@@ -1710,6 +1722,7 @@ impl Service {
                     denials,
                     unreported,
                     incomplete,
+                    notes,
                 },
             );
         });
@@ -1956,6 +1969,7 @@ impl Service {
             tx,
         ));
         let mut failed = Vec::new();
+        let mut notes = Vec::new();
         let kept_whole = |why: String| match &reserved {
             Some(r) => format!(
                 "{why}, so the {:.2} {} set aside for it stays counted",
@@ -1972,6 +1986,15 @@ impl Service {
                     failed.push(kept_whole(format!(
                         "what the run spent could not be recorded ({e})"
                     )));
+                } else if usage.cost.is_none() {
+                    match task.budget() {
+                        Ok(Some(_)) => notes.push(format!(
+                            "{} reported no cost, so the task's budget does not count this run",
+                            profile.name
+                        )),
+                        Ok(None) => {}
+                        Err(e) => failed.push(format!("the task's budget cannot be read ({e})")),
+                    }
                 }
             }
             Err(e) => failed.push(kept_whole(format!(
@@ -2000,6 +2023,7 @@ impl Service {
             denials,
             unreported: after.unreported,
             incomplete: after.incomplete,
+            notes,
         })
     }
 
@@ -3912,6 +3936,53 @@ mod tests {
     /// A run sets aside what it may spend before its agent starts: while it
     /// is at work, another task's run under the same daily budget is
     /// refused, saying why; once it ends, only what it spent counts.
+    /// Kule's notes on how the run in `id` finished, waiting a while for it.
+    fn finished_notes(s: &Setup, id: &str) -> Vec<String> {
+        let deadline = Instant::now() + Duration::from_secs(60);
+        loop {
+            let found = s
+                .app
+                .stream(id)
+                .into_iter()
+                .find_map(|kept| match kept.event {
+                    RunEvent::Finished { notes, .. } => Some(notes),
+                    _ => None,
+                });
+            if let Some(found) = found {
+                return found;
+            }
+            assert!(Instant::now() < deadline, "the run never ended");
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    /// A run whose agent reports no cost, in a task with a budget, says
+    /// in the app that the budget does not count it, as the CLI does.
+    #[test]
+    fn a_run_without_a_cost_says_the_budget_does_not_count_it() {
+        let s = Setup::new();
+        let (id, _) = s.task();
+        let usd = |amount| kule_engine::Money {
+            amount,
+            currency: "USD".into(),
+        };
+        s.app.set_budget(&id, Some(usd(1.0))).unwrap();
+        own_agent(&s, "silent", "exit 3");
+        s.app.start_run(&id, "silent", "hi", Vec::new()).unwrap();
+        let notes = finished_notes(&s, &id);
+        assert!(
+            notes
+                .iter()
+                .any(|n| n
+                    == "silent reported no cost, so the task's budget does not count this run"),
+            "{notes:?}"
+        );
+        // Without a budget, nothing to say.
+        let (other, _) = s.task();
+        s.app.start_run(&other, "silent", "hi", Vec::new()).unwrap();
+        assert!(finished_notes(&s, &other).is_empty());
+    }
+
     #[test]
     fn a_run_reserves_before_its_agent_starts() {
         let s = Setup::new();

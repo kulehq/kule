@@ -3234,6 +3234,8 @@ function fold(task, event) {
         ...new Set(event.denials.map((d) => d.hint).filter(Boolean)),
         ...(event.unreported ? [UNREPORTED] : []),
         ...(event.incomplete ? [INCOMPLETE] : []),
+        // Kule's own notes on the end: a budget that does not count the run.
+        ...(event.notes || []),
       ],
       // What was refused, the same once (see the Timeline for all).
       refused: groupDenials(event.denials),

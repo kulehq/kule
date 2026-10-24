@@ -91,7 +91,9 @@ How a budget holds:
 - **Gemini** reports neither.
 
 An agent signed in with a subscription may report no cost at all; a budget
-does not hold what is not reported.
+does not hold what is not reported. When a task has a budget, such a run
+says so as it ends: `kule run` on its last lines, the app at the end of
+the run in Live.
 
 :::
 

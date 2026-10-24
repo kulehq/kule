@@ -23,6 +23,8 @@
   before was let go when there was one. A failed run points to
   `agent.log.1` only when the log was turned over during that run, not to
   one an earlier run left.
+- A run whose agent reported no cost, in a task with a budget, says in the
+  app that the budget does not count it, as `kule run` already did.
 
 ## 0.2.0-preview.12
 
