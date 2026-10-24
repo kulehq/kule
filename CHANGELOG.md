@@ -1,5 +1,15 @@
 # Changes
 
+## Unreleased
+
+### Changed
+
+- A task's first run no longer waits while Kule walks the package caches it
+  starts with. Only a disk limit needs them measured: the first run under
+  one measures them once and says so ("Measuring the task's package caches
+  for its disk limit"). Without a disk limit nothing walks them, and the
+  disk figure a run shows leaves them out.
+
 ## 0.2.0-preview.10
 
 A security preview. A run sets aside what it may spend before it starts,

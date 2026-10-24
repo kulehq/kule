@@ -2508,6 +2508,12 @@ fn names_resolve_only_with_the_network_open() {
 #[test]
 fn the_caches_as_made_are_not_the_task_growing() {
     let s = Setup::new();
+    s.task
+        .set_limits(&kule_engine::TaskLimits {
+            disk_mb: Some(Some(10_000)),
+            ..Default::default()
+        })
+        .unwrap();
     let home = TempDir::new().unwrap();
     let npm = home.path().join(".npm/_cacache");
     fs::create_dir_all(&npm).unwrap();
@@ -2532,6 +2538,48 @@ fn the_caches_as_made_are_not_the_task_growing() {
     let grown = s.task.disk_grown().unwrap() - made;
     assert!((2_900_000..4_000_000).contains(&grown), "{grown}");
     drop(sandbox);
+}
+
+/// Without a disk limit nothing walks the caches: a person's package
+/// caches can take many seconds to walk, and only a disk limit needs them
+/// counted. What the task writes elsewhere still shows as growth.
+#[test]
+fn without_a_disk_limit_the_caches_are_not_walked() {
+    let s = Setup::new();
+    let home = TempDir::new().unwrap();
+    let npm = home.path().join(".npm/_cacache");
+    fs::create_dir_all(&npm).unwrap();
+    fs::write(npm.join("content"), vec![7u8; 1 << 20]).unwrap();
+    let sources = CacheSources {
+        home: fs::canonicalize(home.path()).unwrap(),
+        cargo_home: home.path().join(".cargo"),
+    };
+    assert!(!s.task.measures_caches().unwrap());
+    let sandbox = Sandbox::for_task_with(&s.task, Some(sources)).unwrap();
+    assert!(!s.task.measures_caches().unwrap());
+    let before = s.task.disk_grown().unwrap();
+    let out = sh(
+        &sandbox,
+        "head -c 2000000 /dev/zero > grown.bin && head -c 3000000 /dev/zero > \"$npm_config_cache/added\"",
+    );
+    assert!(ok(&out), "{out:?}");
+    let grown = s.task.disk_grown().unwrap() - before;
+    assert!((1_900_000..2_900_000).contains(&grown), "{grown}");
+
+    // The first sandbox under a disk limit measures them, once.
+    s.task
+        .set_limits(&kule_engine::TaskLimits {
+            disk_mb: Some(Some(10_000)),
+            ..Default::default()
+        })
+        .unwrap();
+    assert!(s.task.measures_caches().unwrap());
+    let sources = CacheSources {
+        home: fs::canonicalize(home.path()).unwrap(),
+        cargo_home: home.path().join(".cargo"),
+    };
+    drop(Sandbox::for_task_with(&s.task, Some(sources)).unwrap());
+    assert!(!s.task.measures_caches().unwrap());
 }
 
 /// What the sandbox refused, where Kule knows why a tool cannot work

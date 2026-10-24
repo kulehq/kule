@@ -1892,6 +1892,14 @@ impl Service {
                 },
             );
         }
+        if task.measures_caches().map_err(text)? {
+            self.emit(
+                task.id(),
+                RunEvent::Preparing {
+                    text: kule_engine::MEASURING_CACHES.to_owned(),
+                },
+            );
+        }
         let launch = profile.launch(task, &proxy).map_err(text)?;
         self.tell_withheld(task)?;
         let (tx, mut rx) = futures::channel::mpsc::unbounded::<kule_acp::Event>();

@@ -110,7 +110,7 @@ pub use secrets::{
 };
 pub use steps::{Step, StepChange};
 pub use sync::{Behind, Synced};
-pub use task::{AgentAtWork, OpenTerminal, OpenedOutside, Task, TaskInfo};
+pub use task::{AgentAtWork, MEASURING_CACHES, OpenTerminal, OpenedOutside, Task, TaskInfo};
 pub use textdiff::{DiffSkip, Hunk, Line, LineKind, TextDiff};
 pub use usage::{
     BudgetLeft, BudgetScope, GroupSpent, Money, Reserved, RunUsage, Spent, daily_budget,

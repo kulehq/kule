@@ -136,7 +136,12 @@ Notes on how they count:
   on Linux.
 - **Disk** counts only what the task added, measured as often as a walk
   allows (at most every second). A large folder does not use up its own
-  limit, nor do the package caches a task starts with.
+  limit, nor do the package caches a task starts with. Those caches are
+  measured once, as the first run under a disk limit starts ("Measuring
+  the task's package caches for its disk limit"), which can take a while
+  when your caches are large. From then on what the task adds to them
+  counts. Without a disk limit nothing walks them, and the disk figure a
+  run shows leaves them out.
 - **Doing nothing** means no message, tool call or output from the agent,
   no processor use and no new process. A long, quiet build is not doing
   nothing. A question waiting on you does not count.

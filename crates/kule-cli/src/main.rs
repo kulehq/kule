@@ -735,6 +735,9 @@ fn run() -> Result<ExitCode> {
                 child.args(&command[1..]).current_dir(task.copy());
                 child
             } else {
+                if task.measures_caches()? {
+                    eprintln!("kule: {}", kule_engine::MEASURING_CACHES);
+                }
                 let mut sandbox = Sandbox::for_task(&task)?;
                 if let Some(person) = std::env::var_os("HOME") {
                     let person = Path::new(&person);
@@ -864,6 +867,9 @@ fn run() -> Result<ExitCode> {
             let person = kule_engine::CacheSources::from_env().map(|s| s.home);
             let proxy =
                 Proxy::start_with_keys(&task, policy, &profile.agent_keys(person.as_deref()))?;
+            if task.measures_caches()? {
+                eprintln!("kule: {}", kule_engine::MEASURING_CACHES);
+            }
             let kule_acp::Launch {
                 command,
                 sandbox,

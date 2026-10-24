@@ -57,6 +57,11 @@ pub struct TaskInfo {
 /// puts beside it.
 pub(crate) const BESIDE_DIR: &str = "w";
 
+/// What the person is told while a task's caches are measured for its disk
+/// limit (see [`Task::measures_caches`]).
+pub const MEASURING_CACHES: &str =
+    "Measuring the task's package caches for its disk limit, once; this can take a while";
+
 /// The name a copy of `workspace` takes under `w/`: its own, where that is
 /// a plain name.
 fn copy_name(workspace: &Path) -> Option<String> {
@@ -1196,18 +1201,49 @@ impl Task {
     }
 
     /// What the task's folders grew by since it was made, the caches as
-    /// they were made left out: what a disk limit holds.
+    /// they were made left out: what a disk limit holds. Until a disk limit
+    /// first held for one of its runs, the caches were never measured, and
+    /// are left out whole: walking a person's package caches takes long.
     pub fn disk_grown(&self) -> Result<u64> {
-        let used = crate::resources::disk_used(&self.disk_dirs());
         let base = self.disk_base()?;
-        let made = self.settings()?.caches_made.unwrap_or(0);
+        let Some(made) = self.settings()?.caches_made else {
+            let dirs = self.disk_dirs_but_caches()?;
+            return Ok(crate::resources::disk_used(&dirs).saturating_sub(base));
+        };
+        let used = crate::resources::disk_used(&self.disk_dirs());
         Ok(used.saturating_sub(base).saturating_sub(made))
     }
 
-    /// Notes, once, what the caches at `caches` take as they were made, so
-    /// a disk limit counts only what the task adds to them. A task whose
-    /// caches were made before Kule kept this has them counted as they are
-    /// when first seen here.
+    /// [`Task::disk_dirs`] with the caches in the temporary directory left
+    /// out.
+    fn disk_dirs_but_caches(&self) -> Result<Vec<PathBuf>> {
+        let tmp = self.dir.join("tmp");
+        let mut dirs = vec![self.copy(), self.dir.join("home")];
+        match fs::read_dir(&tmp) {
+            Ok(entries) => {
+                for entry in entries {
+                    let entry = entry.at(&tmp)?;
+                    if entry.file_name() != "caches" {
+                        dirs.push(entry.path());
+                    }
+                }
+            }
+            Err(e) if e.kind() == ErrorKind::NotFound => {}
+            Err(e) => return Err(e).at(&tmp),
+        }
+        Ok(dirs)
+    }
+
+    /// Whether the next sandbox made for the task measures its caches
+    /// first, as the first one under a disk limit does, once; that can take
+    /// a while, and the person is told ([`MEASURING_CACHES`]).
+    pub fn measures_caches(&self) -> Result<bool> {
+        Ok(self.limits_in_force()?.disk_mb.is_some() && self.settings()?.caches_made.is_none())
+    }
+
+    /// Notes, once, what the caches at `caches` take, so a disk limit
+    /// counts only what the task adds to them from then on. Measured as the
+    /// first run under a disk limit starts: until then nothing counts them.
     pub(crate) fn note_caches_made(&self, caches: &Path) -> Result<()> {
         let mut settings = self.settings()?;
         if settings.caches_made.is_some() {
