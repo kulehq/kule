@@ -3230,7 +3230,11 @@ function fold(task, event) {
       error: Boolean(event.error) && event.error !== "stopped: you stopped the run",
       stopped,
       // Why a refusal keeps a tool from working, in Kule's words, once each.
-      hints: [...new Set(event.denials.map((d) => d.hint).filter(Boolean)), ...(event.unreported ? [UNREPORTED] : [])],
+      hints: [
+        ...new Set(event.denials.map((d) => d.hint).filter(Boolean)),
+        ...(event.unreported ? [UNREPORTED] : []),
+        ...(event.incomplete ? [INCOMPLETE] : []),
+      ],
       // What was refused, the same once (see the Timeline for all).
       refused: groupDenials(event.denials),
       text: stopped

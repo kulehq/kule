@@ -1457,7 +1457,9 @@ fn refusals_are_reported_where_the_platform_allows() {
         d.operation.starts_with(op) && Path::new(&d.path) == path
     };
     let token = secrets.join("token");
-    let denials = sandbox.denials(window).unwrap().unwrap();
+    let refusals = sandbox.denials(window).unwrap().unwrap();
+    assert!(!refusals.incomplete);
+    let denials = refusals.denials;
     assert!(
         denials.iter().any(|d| wanted(d, "file-write", &evil)),
         "{denials:?}"
@@ -1466,7 +1468,10 @@ fn refusals_are_reported_where_the_platform_allows() {
         denials.iter().any(|d| wanted(d, "file-read", &token)),
         "{denials:?}"
     );
-    assert_eq!(bystander.denials(window).unwrap(), Some(Vec::new()));
+    assert_eq!(
+        bystander.denials(window).unwrap(),
+        Some(kule_engine::Refusals::default())
+    );
 }
 
 /// Shells and tools write to /tmp by hard-coded path. On Linux the

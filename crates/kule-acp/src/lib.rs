@@ -694,6 +694,9 @@ pub struct AfterRun {
     /// The platform does not report refusals (see
     /// [`kule_engine::UNREPORTED`]).
     pub unreported: bool,
+    /// The system log did not show all of them (see
+    /// [`kule_engine::INCOMPLETE`]).
+    pub incomplete: bool,
     /// What Kule could not do or read of it, one sentence each.
     pub failed: Vec<String>,
 }
@@ -719,7 +722,10 @@ pub fn after_run(
         )),
     }
     match sandbox.denials(took) {
-        Ok(Some(refused)) => after.refused = refused,
+        Ok(Some(refused)) => {
+            after.refused = refused.denials;
+            after.incomplete = refused.incomplete;
+        }
         Ok(None) => after.unreported = true,
         Err(e) => after
             .failed

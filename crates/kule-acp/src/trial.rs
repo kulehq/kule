@@ -180,6 +180,7 @@ fn try_in(
         let denials = launch
             .sandbox
             .denials(started.elapsed())?
+            .map(|r| r.denials)
             .unwrap_or_default();
         Ok::<_, Error>((reply, error, denials))
     })();

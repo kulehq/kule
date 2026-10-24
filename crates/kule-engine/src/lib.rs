@@ -110,8 +110,9 @@ pub use remembered::{
 #[cfg(target_os = "macos")]
 pub use sandbox::ProcessFinder;
 pub use sandbox::{
-    Denial, Ended, HIDDEN_IN_HOME, Network, PASSED_ENV, PERSONAL_IN_HOME, Sandbox, UNREPORTED,
-    denials, isolates_network, own_processes, protects_in_place, record_denials,
+    Denial, Ended, HIDDEN_IN_HOME, INCOMPLETE, Network, PASSED_ENV, PERSONAL_IN_HOME, Refusals,
+    Sandbox, UNREPORTED, denials, isolates_network, own_processes, protects_in_place,
+    record_denials,
 };
 pub use sealing::KeyHome;
 pub use secrets::{

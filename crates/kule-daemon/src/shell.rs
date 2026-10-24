@@ -22,6 +22,9 @@ pub struct ShellEnd {
     /// The platform does not report refusals (see
     /// `kule_engine::UNREPORTED`).
     pub unreported: bool,
+    /// The system log did not show all of them (see
+    /// `kule_engine::INCOMPLETE`).
+    pub incomplete: bool,
     /// What it left running, which Kule ended with it, by name.
     pub ended: Vec<String>,
     /// What Kule could not do or read of it.
@@ -30,9 +33,9 @@ pub struct ShellEnd {
 
 impl ShellEnd {
     /// What the person is told as the shell ends, a line each: what was
-    /// ended, what Kule could not do, and on Linux, when the shell failed
-    /// (`failed`), that refusals are not reported. The refusals
-    /// themselves are listed apart.
+    /// ended, what Kule could not do, that the refusals listed may not be
+    /// all, and on Linux, when the shell failed (`failed`), that refusals
+    /// are not reported. The refusals themselves are listed apart.
     pub fn notes(&self, failed: bool) -> Vec<String> {
         let mut notes = Vec::new();
         if !self.ended.is_empty() {
@@ -45,6 +48,9 @@ impl ShellEnd {
             ));
         }
         notes.extend(self.error.clone());
+        if self.incomplete {
+            notes.push(kule_engine::INCOMPLETE.to_owned());
+        }
         if self.unreported && failed {
             notes.push(kule_engine::UNREPORTED.to_owned());
         }
@@ -181,7 +187,10 @@ impl Sandboxed {
         }
         self.proxy.stop();
         match self.sandbox.denials(self.started.elapsed()) {
-            Ok(Some(denials)) => end.denials = denials,
+            Ok(Some(refused)) => {
+                end.denials = refused.denials;
+                end.incomplete = refused.incomplete;
+            }
             Ok(None) => end.unreported = true,
             Err(e) => failed.push(format!("what the sandbox refused cannot be read: {e}")),
         }
@@ -236,5 +245,11 @@ mod tests {
         };
         assert!(linux.lines(false).is_empty());
         assert_eq!(linux.lines(true), [kule_engine::UNREPORTED]);
+        // Told whether the shell failed or not: the list may not be all.
+        let late = ShellEnd {
+            incomplete: true,
+            ..ShellEnd::default()
+        };
+        assert_eq!(late.lines(false), [kule_engine::INCOMPLETE]);
     }
 }

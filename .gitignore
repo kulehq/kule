@@ -7,3 +7,6 @@ website/build/
 website/.docusaurus/
 # The video tour harness: kept locally (it drives a private recording tool)
 website/video/
+
+# Editors
+.idea/
