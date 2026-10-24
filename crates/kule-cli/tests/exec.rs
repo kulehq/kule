@@ -170,3 +170,34 @@ fn what_cannot_be_shown_after_a_command_hides_nothing_else() {
         }
     }
 }
+
+/// `kule list` lists every task it can read, and names one whose record
+/// cannot be read, with why, rather than failing whole.
+#[test]
+fn a_task_whose_record_cannot_be_read_does_not_hide_the_others() {
+    let (home, ws) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+    let kule = |args: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_kule"))
+            .args(args)
+            .env("KULE_HOME", home.path())
+            .output()
+            .unwrap()
+    };
+    let out = kule(&["new", ws.path().to_str().unwrap()]);
+    let id = String::from_utf8_lossy(&out.stdout)
+        .split_whitespace()
+        .nth(1)
+        .unwrap()
+        .to_owned();
+    let garbled = home.path().join("tasks/garbled");
+    fs::create_dir_all(&garbled).unwrap();
+    fs::write(garbled.join("task.json"), "{ not json").unwrap();
+    let out = kule(&["list"]);
+    let (said, err) = (
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+    assert!(out.status.success(), "{err}");
+    assert!(said.contains(&id), "{said}");
+    assert!(err.contains("kule: task garbled cannot be read"), "{err}");
+}

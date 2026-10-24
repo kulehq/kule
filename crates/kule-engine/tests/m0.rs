@@ -1131,3 +1131,28 @@ fn a_run_error_points_to_the_older_log_too() {
     let later = std::time::SystemTime::now() + std::time::Duration::from_secs(2);
     assert_eq!(task.agent_log_hint(later), format!("see {}", log.display()));
 }
+
+/// A task whose record cannot be read is named apart, with why, for a list
+/// a person reads; what counts every task (budgets, say) still fails rather
+/// than leave it out.
+#[test]
+fn a_task_whose_record_cannot_be_read_is_named_apart() {
+    let (home, folder) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+    let task = Task::create(home.path(), folder.path()).unwrap();
+    let garbled = home.path().join("tasks/garbled");
+    std::fs::create_dir_all(&garbled).unwrap();
+    std::fs::write(garbled.join("task.json"), "{ not json").unwrap();
+    let (infos, unreadable) = Task::list_told(home.path()).unwrap();
+    assert_eq!(
+        infos.iter().map(|i| i.id.as_str()).collect::<Vec<_>>(),
+        [task.id()]
+    );
+    assert_eq!(unreadable.len(), 1);
+    assert_eq!(unreadable[0].id, "garbled");
+    assert!(
+        unreadable[0].why.contains("task.json"),
+        "{:?}",
+        unreadable[0]
+    );
+    assert!(Task::list(home.path()).is_err());
+}

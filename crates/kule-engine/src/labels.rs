@@ -131,8 +131,19 @@ pub fn set_task_order(home: &Path, ids: &[String]) -> Result<()> {
 /// The tasks under `home` as a list shows them: those the person has not
 /// put in order yet first, newest first, then the rest in their order.
 pub fn arranged(home: &Path) -> Result<Vec<TaskInfo>> {
+    let infos = Task::list(home)?;
+    in_order(home, infos)
+}
+
+/// [`arranged`], and apart, the tasks whose record cannot be read (see
+/// [`Task::list_told`]), for a list a person reads.
+pub fn arranged_told(home: &Path) -> Result<(Vec<TaskInfo>, Vec<crate::Unreadable>)> {
+    let (infos, unreadable) = Task::list_told(home)?;
+    Ok((in_order(home, infos)?, unreadable))
+}
+
+fn in_order(home: &Path, mut infos: Vec<TaskInfo>) -> Result<Vec<TaskInfo>> {
     let order = task_order(home)?;
-    let mut infos = Task::list(home)?;
     let at = |info: &TaskInfo| order.iter().position(|id| *id == info.id);
     infos.sort_by(|a, b| match (at(a), at(b)) {
         (Some(x), Some(y)) => x.cmp(&y),

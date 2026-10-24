@@ -584,7 +584,16 @@ fn run() -> Result<ExitCode> {
             print_suggested(&home, task.workspace())?;
         }
         Cmd::List => {
-            for info in kule_engine::arranged(&home)? {
+            // A task whose record cannot be read is named, not the list's end.
+            let (infos, unreadable) = kule_engine::arranged_told(&home)?;
+            for task in &unreadable {
+                eprintln!(
+                    "kule: task {} cannot be read: {}",
+                    paint::plain_line(&task.id),
+                    paint::plain_line(&task.why)
+                );
+            }
+            for info in infos {
                 let task = Task::open(&home, &info.id)?;
                 let mut line = format!("{}  {}", info.id, info.workspace.display());
                 if let Some(label) = task.label()? {

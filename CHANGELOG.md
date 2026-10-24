@@ -28,6 +28,10 @@
 - In the Timeline and Live, a shell's probes of the terminals around it
   are one row (`/dev/ttys*`) whichever terminals it tried, and *… and N
   more refusals* counts the refusals left out, not the rows.
+- One task whose record cannot be read no longer fails the whole task list:
+  `kule list` names it on stderr and lists the rest, and the app lists it
+  as one that cannot be read. Budgets still count every task, and refuse
+  when one cannot be read.
 
 ## 0.2.0-preview.12
 

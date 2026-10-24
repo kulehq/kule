@@ -454,7 +454,8 @@ const COLORS = ["red", "orange", "yellow", "green", "teal", "blue", "purple", "p
 
 /** The folder's name, and the one the person gave the task after it. */
 function taskName(task) {
-  const folder = baseName(task.workspace);
+  // One whose record cannot be read has no folder to name it by: its id.
+  const folder = baseName(task.workspace || "") || task.id;
   return task.label ? `${folder} – ${task.label}` : folder;
 }
 

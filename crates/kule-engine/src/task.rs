@@ -141,6 +141,14 @@ impl Clone for Told {
     }
 }
 
+/// A task under Kule's home whose record cannot be read: its folder's
+/// name, and why (see [`Task::list_told`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Unreadable {
+    pub id: String,
+    pub why: String,
+}
+
 impl Task {
     /// Copies `workspace` into a new task under `home`.
     pub fn create(home: &Path, workspace: &Path) -> Result<Task> {
@@ -512,6 +520,36 @@ impl Task {
             dir,
             ended: Told::default(),
         })
+    }
+
+    /// Every task under `home`, and apart, those whose record cannot be
+    /// read, by their folder's name with why: a list a person reads names
+    /// them rather than failing whole. What counts or judges every task
+    /// (budgets, say) uses [`Task::list`], which fails instead.
+    pub fn list_told(home: &Path) -> Result<(Vec<TaskInfo>, Vec<Unreadable>)> {
+        let tasks = home.join("tasks");
+        let entries = match fs::read_dir(&tasks) {
+            Ok(entries) => entries,
+            Err(e) if e.kind() == ErrorKind::NotFound => return Ok((Vec::new(), Vec::new())),
+            Err(e) => return Err(e).at(&tasks),
+        };
+        let (mut infos, mut unreadable) = (Vec::new(), Vec::new());
+        for entry in entries {
+            let entry = entry.at(&tasks)?;
+            let file = entry.path().join("task.json");
+            if file.is_file() {
+                match read_json::<TaskInfo>(&file) {
+                    Ok(info) => infos.push(info),
+                    Err(e) => unreadable.push(Unreadable {
+                        id: entry.file_name().to_string_lossy().into_owned(),
+                        why: e.to_string(),
+                    }),
+                }
+            }
+        }
+        infos.sort_by_key(|i| (i.created_unix, i.id.clone()));
+        unreadable.sort_by(|a, b| a.id.cmp(&b.id));
+        Ok((infos, unreadable))
     }
 
     pub fn list(home: &Path) -> Result<Vec<TaskInfo>> {

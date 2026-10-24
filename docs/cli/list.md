@@ -23,6 +23,10 @@ The order is the app's: tasks you dragged into place (or moved with
 Alt+Shift+↑/↓) keep that order, and tasks you never moved come first,
 newest at the top.
 
+A task whose record (`task.json`) cannot be read is named on stderr,
+`kule: task <id> cannot be read: …`, and the others are listed all the
+same. The app lists it too, as one that cannot be read.
+
 It only reads; nothing changes.
 
 ## Arguments

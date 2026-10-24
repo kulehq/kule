@@ -1139,9 +1139,14 @@ impl Service {
     /// and newest first, from each one's last scan; scans older than
     /// [`FRESH`] are made again in the background.
     pub fn tasks(self: &Arc<Self>) -> Result<Vec<TaskView>> {
-        let infos = kule_engine::arranged(&self.home).map_err(text)?;
+        let (infos, unreadable) = kule_engine::arranged_told(&self.home).map_err(text)?;
         // One task that cannot be read (damaged) does not hide the others,
         // and is listed with why; one being removed is left out.
+        let damaged = unreadable.into_iter().map(|u| TaskView {
+            id: u.id,
+            unreadable: Some(format!("its record cannot be read: {}", u.why)),
+            ..TaskView::default()
+        });
         Ok(infos
             .iter()
             .filter_map(|info| {
@@ -1167,6 +1172,7 @@ impl Service {
                     }),
                 }
             })
+            .chain(damaged)
             .collect())
     }
 
@@ -4469,5 +4475,22 @@ mod tests {
             .map(|t| (t.id, t.unreadable.is_some()))
             .collect();
         assert_eq!(listed, [(good, false), ("broken".to_owned(), true)]);
+    }
+
+    /// A task whose record itself cannot be read is listed too, by its
+    /// folder's name and why, and the others with it.
+    #[test]
+    fn a_task_whose_record_cannot_be_read_does_not_hide_the_others() {
+        let s = Setup::new();
+        let (good, _) = s.task();
+        let garbled = s.app.home.join("tasks/garbled");
+        fs::create_dir_all(&garbled).unwrap();
+        fs::write(garbled.join("task.json"), "{ not json").unwrap();
+        let listed: Vec<(String, bool)> = s
+            .settled()
+            .into_iter()
+            .map(|t| (t.id, t.unreadable.is_some()))
+            .collect();
+        assert_eq!(listed, [(good, false), ("garbled".to_owned(), true)]);
     }
 }
