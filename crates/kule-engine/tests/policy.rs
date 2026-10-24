@@ -652,7 +652,7 @@ fn a_user_policy_replaces_the_default() {
         r#"@id("trust-everything") permit (principal, action, resource);"#,
     );
 
-    let ruling = Policy::load(Some(&user), s.task.workspace())
+    let ruling = Policy::load(Some(user_dir.path()), s.task.workspace())
         .unwrap()
         .judge(&s.task.effects().unwrap());
     assert_eq!(
@@ -714,7 +714,7 @@ fn a_person_chooses_between_kules_policies_but_keeps_their_own() {
     let home = TempDir::new().unwrap();
     let user = home.path().join(USER_POLICY);
     let readme = |home: &Path| {
-        let policy = Policy::load(Some(&home.join(USER_POLICY)), s.task.workspace()).unwrap();
+        let policy = Policy::load(Some(home), s.task.workspace()).unwrap();
         on(&policy.judge(&s.task.effects().unwrap()), "README.md")
     };
     assert_eq!(policy_choice(home.path()).unwrap(), PolicyChoice::Balanced);
@@ -723,6 +723,8 @@ fn a_person_chooses_between_kules_policies_but_keeps_their_own() {
     choose_policy(home.path(), PolicyChoice::Careful).unwrap();
     assert_eq!(policy_choice(home.path()).unwrap(), PolicyChoice::Careful);
     assert_eq!(readme(home.path()), (Verdict::Ask, rules(&["careful"])));
+    // A choice, not a copy of the text.
+    assert!(!user.exists());
 
     choose_policy(home.path(), PolicyChoice::Balanced).unwrap();
     assert!(!user.exists());
@@ -741,6 +743,48 @@ fn a_person_chooses_between_kules_policies_but_keeps_their_own() {
         assert!(choose_policy(home.path(), choice).is_err());
     }
     assert_eq!(fs::read_to_string(&user).unwrap(), own);
+}
+
+/// The careful policy an earlier version wrote out whole is still the
+/// careful choice, judged by this version's rules, and never a policy of
+/// the person's own that Kule may not replace.
+#[test]
+fn an_earlier_versions_careful_policy_stays_the_careful_choice() {
+    use kule_engine::{
+        CAREFUL_POLICY, PolicyChoice, USER_POLICY, choose_policy, policy_choice, policy_text,
+    };
+    let home = TempDir::new().unwrap();
+    let user = home.path().join(USER_POLICY);
+    let earlier = include_str!("fixtures/careful-0.2.0-preview.10.cedar");
+    assert_ne!(earlier, CAREFUL_POLICY);
+    write(&user, earlier);
+    assert_eq!(policy_choice(home.path()).unwrap(), PolicyChoice::Careful);
+    assert_eq!(policy_text(home.path()).unwrap(), CAREFUL_POLICY);
+
+    // A word changed is the person's own.
+    write(&user, &earlier.replace("careful", "carefull"));
+    assert_eq!(policy_choice(home.path()).unwrap(), PolicyChoice::Own);
+    write(&user, earlier);
+
+    choose_policy(home.path(), PolicyChoice::Balanced).unwrap();
+    assert!(!user.exists());
+    assert_eq!(policy_choice(home.path()).unwrap(), PolicyChoice::Balanced);
+
+    write(&user, earlier);
+    choose_policy(home.path(), PolicyChoice::Careful).unwrap();
+    assert!(!user.exists());
+    assert_eq!(policy_text(home.path()).unwrap(), CAREFUL_POLICY);
+}
+
+/// A choice Kule cannot read is refused, never taken for the balanced one.
+#[test]
+fn a_policy_choice_kule_cannot_read_is_refused() {
+    use kule_engine::{Policy, policy_choice};
+    let s = Setup::new(PROJECT, false);
+    let home = TempDir::new().unwrap();
+    write(&home.path().join("policy-choice"), "lenient\n");
+    assert!(policy_choice(home.path()).is_err());
+    assert!(Policy::load(Some(home.path()), s.task.workspace()).is_err());
 }
 
 #[test]

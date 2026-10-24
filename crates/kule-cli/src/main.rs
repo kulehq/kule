@@ -11,7 +11,7 @@ use std::time::Instant;
 use anyhow::{Context, Result, anyhow, bail};
 use clap::{Parser, Subcommand};
 use kule_engine::entities::{Change as EntityChange, Edit, Outline, Skip};
-use kule_engine::{CAREFUL_POLICY, PolicyChoice, USER_POLICY, choose_policy, policy_choice};
+use kule_engine::{CAREFUL_POLICY, PolicyChoice, choose_policy, policy_text};
 use kule_engine::{
     Change, Connection, DEFAULT_POLICY, Denial, DiffSkip, Effect, EffectSet, Error, GitSummary,
     Kind, LineKind, Money, Network, Policy, Proxy, RefChange, Ruling, RunUsage, Sandbox, Task,
@@ -1324,25 +1324,18 @@ fn run() -> Result<ExitCode> {
         }
         Cmd::Secrets { action } => secrets_cmd(&home, action.unwrap_or(SecretsCmd::List))?,
         Cmd::Home { task, action } => home_cmd(&home, &task, action.unwrap_or(HomeCmd::List))?,
-        Cmd::Policy { choice } => {
-            let path = home.join(USER_POLICY);
-            match choice.as_deref() {
-                None => match policy_choice(&home)? {
-                    PolicyChoice::Balanced => print!("{DEFAULT_POLICY}"),
-                    PolicyChoice::Careful => print!("{CAREFUL_POLICY}"),
-                    PolicyChoice::Own => print!("{}", std::fs::read_to_string(&path)?),
-                },
-                Some(name) => {
-                    let choice = match name {
-                        "balanced" => PolicyChoice::Balanced,
-                        "careful" => PolicyChoice::Careful,
-                        _ => bail!("{name}: the policies to choose are balanced and careful"),
-                    };
-                    choose_policy(&home, choice)?;
-                    println!("policy: {name}");
-                }
+        Cmd::Policy { choice } => match choice.as_deref() {
+            None => print!("{}", policy_text(&home)?),
+            Some(name) => {
+                let choice = match name {
+                    "balanced" => PolicyChoice::Balanced,
+                    "careful" => PolicyChoice::Careful,
+                    _ => bail!("{name}: the policies to choose are balanced and careful"),
+                };
+                choose_policy(&home, choice)?;
+                println!("policy: {name}");
             }
-        }
+        },
         Cmd::Rollback { task } => {
             let task = Task::open(&home, &task)?;
             let set = task.rollback();
@@ -2177,11 +2170,7 @@ fn group_cmd(home: &Path, action: GroupCmd) -> Result<()> {
             let Some(choice) = choice else {
                 let group = find_group(home, id)?;
                 let text = match group.policy {
-                    GroupPolicy::Default => match policy_choice(home)? {
-                        PolicyChoice::Balanced => DEFAULT_POLICY.to_owned(),
-                        PolicyChoice::Careful => CAREFUL_POLICY.to_owned(),
-                        PolicyChoice::Own => std::fs::read_to_string(home.join(USER_POLICY))?,
-                    },
+                    GroupPolicy::Default => policy_text(home)?,
                     GroupPolicy::Balanced => DEFAULT_POLICY.to_owned(),
                     GroupPolicy::Careful => CAREFUL_POLICY.to_owned(),
                     GroupPolicy::Own => {

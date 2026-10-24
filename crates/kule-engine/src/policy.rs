@@ -44,6 +44,42 @@ pub const REPO_POLICY: &str = ".kule/policy.cedar";
 /// holds while there is none.
 pub const USER_POLICY: &str = "policy.cedar";
 
+/// Where the choice of Kule's careful policy is kept, under Kule's home: a
+/// choice, never the text, so it always means this version's rules.
+const POLICY_CHOICE: &str = "policy-choice";
+
+/// The blake3 of every balanced and careful text earlier versions wrote to
+/// [`USER_POLICY`] or a person copied there, from 0.2.0-preview.1 to
+/// 0.2.0-preview.11: such a file is that choice, judged by today's rules,
+/// never a policy of the person's own. Choices are no longer kept as text,
+/// so the list does not grow.
+const EARLIER_TEXTS: [(&str, PolicyChoice); 6] = [
+    (
+        "09832ff8257708d5147645cd0ed832e35744f7db9c5274037261e7744db295ef",
+        PolicyChoice::Balanced,
+    ),
+    (
+        "54b7d8bcaf14f8315892266a2ab77c9f947da7933e41938fb3595a1d70c2e431",
+        PolicyChoice::Careful,
+    ),
+    (
+        "7364d81e982d84ee86f65ca4ca9f41d43123376e744d056b0220a4e26ee5f94f",
+        PolicyChoice::Balanced,
+    ),
+    (
+        "df0c87af894168f287f7e150185d595d2e06196cae14ba941dd8c538230b5907",
+        PolicyChoice::Careful,
+    ),
+    (
+        "b38b5e97d82ed1e7f76cb76c025b40248cc7df3ba4947003368fd435549fc2bb",
+        PolicyChoice::Balanced,
+    ),
+    (
+        "14757aef6b0547e99cfd4d89c0c4aab237a0b5ba766e0eb8b8563d070ee4bccd",
+        PolicyChoice::Careful,
+    ),
+];
+
 /// Which policy holds: one of Kule's two, or one the person wrote.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -57,16 +93,57 @@ pub enum PolicyChoice {
     Own,
 }
 
-/// Which policy holds under `home`.
+/// Which policy holds under `home`. A [`USER_POLICY`] holding one of Kule's
+/// texts, today's or an earlier version's, is that choice.
 pub fn policy_choice(home: &Path) -> Result<PolicyChoice> {
     let path = home.join(USER_POLICY);
-    if !path.is_file() {
-        return Ok(PolicyChoice::Balanced);
+    if path.is_file() {
+        let text = read(&path)?;
+        return Ok(kules_text(&text).unwrap_or(PolicyChoice::Own));
     }
-    Ok(match read(&path)?.as_str() {
-        DEFAULT_POLICY => PolicyChoice::Balanced,
-        CAREFUL_POLICY => PolicyChoice::Careful,
-        _ => PolicyChoice::Own,
+    let marker = home.join(POLICY_CHOICE);
+    Ok(match std::fs::read_to_string(&marker) {
+        Ok(choice) if choice.trim() == "careful" => PolicyChoice::Careful,
+        Ok(choice) => {
+            return Err(Error::Invalid(format!(
+                "{}: {:?} is not a policy Kule knows; choose balanced or careful again",
+                marker.display(),
+                choice.trim()
+            )));
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => PolicyChoice::Balanced,
+        Err(source) => {
+            return Err(Error::Io {
+                path: marker,
+                source,
+            });
+        }
+    })
+}
+
+/// Which of Kule's policies `text` is, today's or an earlier version's.
+fn kules_text(text: &str) -> Option<PolicyChoice> {
+    match text {
+        DEFAULT_POLICY => Some(PolicyChoice::Balanced),
+        CAREFUL_POLICY => Some(PolicyChoice::Careful),
+        _ => {
+            let hash = blake3::hash(text.as_bytes()).to_hex();
+            EARLIER_TEXTS
+                .iter()
+                .find(|(earlier, _)| *earlier == hash.as_str())
+                .map(|(_, choice)| *choice)
+        }
+    }
+}
+
+/// The text every task is judged by under `home` unless its group chose
+/// another: Kule's balanced or careful policy as this version has it, or
+/// the person's own.
+pub fn policy_text(home: &Path) -> Result<String> {
+    Ok(match policy_choice(home)? {
+        PolicyChoice::Balanced => DEFAULT_POLICY.to_owned(),
+        PolicyChoice::Careful => CAREFUL_POLICY.to_owned(),
+        PolicyChoice::Own => read(&home.join(USER_POLICY))?,
     })
 }
 
@@ -80,19 +157,30 @@ pub fn choose_policy(home: &Path, choice: PolicyChoice) -> Result<()> {
             path.display()
         )));
     }
+    let marker = home.join(POLICY_CHOICE);
+    let remove = |path: &Path| match std::fs::remove_file(path) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(Error::Io {
+            path: path.to_path_buf(),
+            source: e,
+        }),
+        _ => Ok(()),
+    };
     match choice {
-        PolicyChoice::Balanced => match std::fs::remove_file(&path) {
-            Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
-                Err(Error::Io { path, source: e })
-            }
-            _ => Ok(()),
-        },
+        PolicyChoice::Balanced => {
+            remove(&path)?;
+            remove(&marker)
+        }
         PolicyChoice::Careful => {
             std::fs::create_dir_all(home).map_err(|source| Error::Io {
                 path: home.to_path_buf(),
                 source,
             })?;
-            std::fs::write(&path, CAREFUL_POLICY).map_err(|source| Error::Io { path, source })
+            std::fs::write(&marker, "careful\n").map_err(|source| Error::Io {
+                path: marker.clone(),
+                source,
+            })?;
+            // An earlier version's text goes: the choice says it now.
+            remove(&path)
         }
         PolicyChoice::Own => Err(Error::Invalid(format!(
             "a policy of your own is written to {}",
@@ -153,14 +241,15 @@ impl Policy {
         Policy::from_texts(DEFAULT_POLICY, None).expect("the built-in policy parses")
     }
 
-    /// The user's policy (or the built-in one when `user` is absent) plus
-    /// the repository's `forbid` rules from `workspace`, when it has any.
-    pub fn load(user: Option<&Path>, workspace: &Path) -> Result<Policy> {
-        let base = match user.filter(|p| p.is_file()) {
-            Some(path) => read(path)?,
+    /// The policy for every task under `home` ([`policy_text`]; the
+    /// built-in one when `home` is absent) plus the repository's `forbid`
+    /// rules from `workspace`, when it has any, and what was remembered.
+    pub fn load(home: Option<&Path>, workspace: &Path) -> Result<Policy> {
+        let base = match home {
+            Some(home) => policy_text(home)?,
             None => DEFAULT_POLICY.to_owned(),
         };
-        Policy::assemble(&base, workspace, user.and_then(Path::parent))
+        Policy::assemble(&base, workspace, home)
     }
 
     /// The policy `task` is judged by: its group's, when the group chose
@@ -183,17 +272,10 @@ impl Policy {
     /// text judge alike.
     pub fn base_text(task: &crate::Task, group: Option<u64>) -> Result<String> {
         let home = task.home();
-        Ok(match crate::groups::base_policy(&home, group)? {
-            Some(text) => text,
-            None => {
-                let user = home.join(USER_POLICY);
-                if user.is_file() {
-                    read(&user)?
-                } else {
-                    DEFAULT_POLICY.to_owned()
-                }
-            }
-        })
+        match crate::groups::base_policy(&home, group)? {
+            Some(text) => Ok(text),
+            None => policy_text(&home),
+        }
     }
 
     /// `base`, the forbids of the repository at `workspace`, and what was

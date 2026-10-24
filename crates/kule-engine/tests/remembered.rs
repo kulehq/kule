@@ -16,7 +16,7 @@ fn manifest(path: &str) -> Allowance {
 /// The policy as Kule loads it for `workspace`, with `home`'s remembered
 /// allowances.
 fn policy(home: &Path, workspace: &Path) -> Policy {
-    Policy::load(Some(&home.join("policy.cedar")), workspace).unwrap()
+    Policy::load(Some(home), workspace).unwrap()
 }
 
 struct Setup {

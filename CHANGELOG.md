@@ -1,5 +1,15 @@
 # Changes
 
+## Unreleased
+
+### Changed
+
+- Choosing Kule's careful policy is kept as a choice
+  (`~/.kule/policy-choice`), not a copy of its text, so it always means this
+  version's rules. A careful policy an earlier version wrote out whole is
+  that choice too: it is judged by today's rules and can be changed again,
+  where it read as a policy of your own before.
+
 ## 0.2.0-preview.11
 
 A hardening preview. An approval card says what approving lets through,
