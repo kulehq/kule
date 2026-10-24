@@ -1,13 +1,5 @@
 # Changes
 
-## Unreleased
-
-### Changed
-
-- `kule exec` says what of the sandbox's refusals Kule could not read or
-  record, and still exits with the command's own code; a command that
-  succeeded fails then, since part of what it did went untold.
-
 ## 0.2.0-preview.11
 
 A hardening preview. An approval card says what approving lets through,
@@ -98,7 +90,11 @@ refusals of a run are no longer lost on a busy machine.
 - On macOS, what the sandbox refused is read once the system log shows all
   of it, so a busy machine no longer drops the last refusals from what a
   run, a terminal or `kule exec` tells. A log that has not caught up after
-  ten seconds is told as refusals that could not be read, never as none.
+  ten seconds and three reads is told as refusals that could not be read,
+  never as none.
+- `kule exec` says what of the sandbox's refusals Kule could not read or
+  record, and still exits with the command's own code; a command that
+  succeeded fails then, since part of what it did went untold.
 
 ## 0.2.0-preview.10
 

@@ -406,7 +406,11 @@ probe() {
   [ -n "$task" ] || fail "kule new made no task"
   copy=$(timed 60 "$kule" path "$task")
   # A first command makes the task's home and seals the token there.
-  timed 300 "$kule" exec "$task" --no-network -- true >/dev/null 2>&1 || fail "a command did not run in the task"
+  if ! timed 300 "$kule" exec "$task" --no-network -- true >/dev/null 2>"$work/first-exec.err"; then
+    # What Kule said, so a failure says why.
+    sed 's/^/  /' "$work/first-exec.err" >&2
+    fail "a command did not run in the task"
+  fi
   for f in "$KULE_HOME/secrets.key" "$KULE_HOME/tasks/$task/secrets.json"; do
     [ -f "$f" ] || fail "nothing sealed the token: no $f"
   done

@@ -2168,7 +2168,8 @@ impl Sandbox {
             self.tag
         );
         let log = Path::new("/usr/bin/log");
-        loop {
+        let mut said = String::new();
+        let read = || {
             let seconds = (window + asked.elapsed()).as_secs() + 2;
             let out = Command::new(log)
                 .args([
@@ -2181,25 +2182,23 @@ impl Sandbox {
                 .args(["--predicate", &predicate])
                 .output()
                 .at(log)?;
-            let shown = out
+            said = String::from_utf8_lossy(&out.stderr).trim().to_owned();
+            Ok(out
                 .status
                 .success()
                 .then(|| refusals_through(&String::from_utf8_lossy(&out.stdout), &flush))
-                .flatten();
-            if let Some(denials) = shown {
-                return Ok(Some(denials));
-            }
-            if asked.elapsed() >= LOG_WAIT {
-                return Err(Error::Invalid(format!(
-                    "the system log did not show the sandbox's refusals within {} seconds{}",
-                    LOG_WAIT.as_secs(),
-                    match String::from_utf8_lossy(&out.stderr).trim() {
-                        "" => String::new(),
-                        said => format!(" ({said})"),
-                    }
-                )));
-            }
-            std::thread::sleep(Duration::from_millis(200));
+                .flatten())
+        };
+        match read_until(read, || asked.elapsed(), Duration::from_millis(200))? {
+            Some(denials) => Ok(Some(denials)),
+            None => Err(Error::Invalid(format!(
+                "the system log did not show the sandbox's refusals within {} seconds{}",
+                asked.elapsed().as_secs(),
+                match said.as_str() {
+                    "" => String::new(),
+                    said => format!(" ({said})"),
+                }
+            ))),
         }
     }
 
@@ -2212,7 +2211,7 @@ impl Sandbox {
         let flush = format!("{}-flush-{nanos:x}", self.tag);
         let exec = Path::new("/usr/bin/sandbox-exec");
         // Refused by design: sandbox-exec cannot start true, and says so.
-        Command::new(exec)
+        let status = Command::new(exec)
             .arg("-p")
             .arg(format!(
                 "(version 1)\n(allow default)\n\
@@ -2224,6 +2223,12 @@ impl Sandbox {
             .stderr(std::process::Stdio::null())
             .status()
             .at(exec)?;
+        // It ran: no refusal was made, and none will show.
+        if status.success() {
+            return Err(Error::Invalid(
+                "Kule could not make the refusal it reads the system log up to".into(),
+            ));
+        }
         Ok(flush)
     }
 }
@@ -2231,6 +2236,32 @@ impl Sandbox {
 /// How long Kule waits for the system log to show a sandbox's refusals.
 #[cfg(target_os = "macos")]
 const LOG_WAIT: Duration = Duration::from_secs(10);
+
+/// How often Kule reads the log at least before it gives up: the first
+/// read on a machine that just started can take the whole wait by itself.
+#[cfg(target_os = "macos")]
+const LOG_READS: usize = 3;
+
+/// Calls `read` until it has an answer: for [`LOG_WAIT`] by `elapsed`, and
+/// [`LOG_READS`] times at least, `pause` apart; `None` when it never has.
+#[cfg(target_os = "macos")]
+fn read_until<T>(
+    mut read: impl FnMut() -> Result<Option<T>>,
+    mut elapsed: impl FnMut() -> Duration,
+    pause: Duration,
+) -> Result<Option<T>> {
+    let mut reads = 0;
+    loop {
+        if let Some(found) = read()? {
+            return Ok(Some(found));
+        }
+        reads += 1;
+        if reads >= LOG_READS && elapsed() >= LOG_WAIT {
+            return Ok(None);
+        }
+        std::thread::sleep(pause);
+    }
+}
 
 /// The refusals in `ndjson` (what `log show` printed), once it holds the
 /// refusal carrying `flush`, made after them; `None` until then. That one
@@ -2830,6 +2861,34 @@ mod tests {
             );
         }
         assert!(parse_denial("something else").is_none());
+    }
+
+    /// One slow read, the first on a machine that just started, does not
+    /// use up the wait: the log is read again before Kule gives up.
+    #[test]
+    fn a_slow_first_read_of_the_log_is_not_the_last() {
+        let mut reads = 0;
+        let found = read_until(
+            || {
+                reads += 1;
+                Ok((reads == 2).then_some("shown"))
+            },
+            || LOG_WAIT + Duration::from_secs(1),
+            Duration::ZERO,
+        )
+        .unwrap();
+        assert_eq!(found, Some("shown"));
+        let mut reads = 0;
+        let never = read_until(
+            || {
+                reads += 1;
+                Ok(None::<()>)
+            },
+            || LOG_WAIT,
+            Duration::ZERO,
+        )
+        .unwrap();
+        assert_eq!((never, reads), (None, LOG_READS));
     }
 
     #[test]
