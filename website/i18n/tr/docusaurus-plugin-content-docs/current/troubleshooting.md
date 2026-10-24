@@ -192,6 +192,34 @@ görevde kapalı kalır.
 
 **Çözüm:** `pip install --use-deprecated=legacy-certs …`.
 
+### Bir bağlantı Encrypted Client Hello yüzünden kesiliyor {#a-connection-is-cut-for-encrypted-client-hello}
+
+**Belirti:** bir tarayıcı ya da tarayıcı üzerine kurulu bir araç, görevin
+ulaşabildiği bir host'a ulaşamıyor ve kesme nedeni *hides the name it asks
+for (Encrypted Client Hello)* diyor.
+
+**Neden:** Chromium ve Firefox, kendisi için hiçbir ECH yapılandırması
+yayımlamayan host'lar da dahil her host'a bir Encrypted Client Hello
+uzantısı gönderir ("GREASE"). Kule böyle bir hello'nun istediği adı
+denetleyemez, bu yüzden tüneli keser. Gerçek ECH ile GREASE ağda aynı
+görünür.
+
+**Çözüm:** araçta kapatın. Ekim 2026'da ölçüldü ([#34](https://github.com/kulehq/kule/issues/34)):
+
+| Araç | Kule üzerinden gönderiyor mu | Çalışmasını sağlayan |
+| --- | --- | --- |
+| Chromium (Debian), Chrome for Testing | evet | Yönetilen politika klasöründe bir JSON dosyasıyla `{"EncryptedClientHelloEnabled": false}` politikası: Chromium için `/etc/chromium/policies/managed/`, Chrome for Testing için `/etc/opt/chrome_for_testing/policies/managed/`. `--disable-features=EncryptedClientHello` artık hiçbir şey yapmıyor. |
+| Chrome, Brave | evet | `--disable-features=EncryptedClientHello` burada da hiçbir şey yapmıyor; aynı politikanın kendi politika klasörlerinde işe yarayıp yaramadığı ölçülmedi. |
+| `channel: "chromium"` ile Playwright | evet | Yukarıdaki Chrome for Testing politikası. |
+| Playwright'ın varsayılan Chromium'u (headless shell) | evet | Bulunamadı: headless shell politikayı yok sayar. `channel: "chromium"` kullanın. |
+| Electron (`net`, pencerelerindeki `fetch`) | evet | Bulunamadı. Electron'un Node tarafı (`https`, ana süreçteki `fetch`) göndermez. |
+| Firefox, Firefox ESR, Playwright'ın Firefox'u | evet | `security.tls.ech.grease_probability` tercihini `0` yapın (`user.js` içinde ya da Playwright'ta `firefoxUserPrefs` ile). `network.dns.echconfig.enabled` bunu durdurmaz. |
+| Node (`tls`, `fetch`), Python, Go, curl, Claude Code, Gemini CLI | hayır | Gerek yok. |
+
+macOS'ta bir tarayıcı zaten görevin içinde başlamaz: pencere sunucusuna
+ihtiyaç duyar; Chromium'un headless shell'i de `--single-process
+--no-sandbox` ile çalışmadıkça bir servis kaydetmek ister.
+
 ### macOS'ta NuGet, Maven ya da Go
 
 Bunların macOS'taki araçları yalnızca sistemin kök sertifikalarına güvenir;

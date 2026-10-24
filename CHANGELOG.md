@@ -4,6 +4,13 @@
 
 ### Fixes
 
+- A connection cut for Encrypted Client Hello says what turns it off, as
+  measured in #34: for Chromium-based browsers the policy
+  `EncryptedClientHelloEnabled` set to false (the `--disable-features`
+  switch Kule named before no longer does anything), for Firefox
+  `security.tls.ech.grease_probability` set to 0. Troubleshooting has a
+  table per tool, also of those with no setting (Playwright's headless
+  shell, Electron) and of those that need none.
 - A task's first command, terminal or run no longer waits silently while
   Kule makes the task's own package caches (on macOS, a clone of your npm
   and cargo caches, which takes seconds for large ones). The app starts

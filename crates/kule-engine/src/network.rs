@@ -576,7 +576,10 @@ fn judge_first(
         Read::NotTls => Ok(()),
         Read::Bad(why) => Err(format!("its TLS hello to {host} has {why}")),
         Read::Hello(hello) if hello.hidden => Err(format!(
-            "its TLS hello to {host} hides the name it asks for (Encrypted Client Hello), which Kule cannot check; in Chromium, turn it off with --disable-features=EncryptedClientHello"
+            "its TLS hello to {host} hides the name it asks for (Encrypted Client Hello), which Kule cannot check. \
+             Chromium-based browsers send one to every host unless their policy EncryptedClientHelloEnabled is false \
+             (the --disable-features switch no longer turns it off); Firefox unless security.tls.ech.grease_probability is 0. \
+             What works per tool: Kule's troubleshooting page, \"A connection is cut for Encrypted Client Hello\""
         )),
         Read::Hello(hello) => {
             let address = host.trim_matches(['[', ']']).parse::<IpAddr>().is_ok();
@@ -1021,6 +1024,23 @@ mod tests {
         ));
         assert!(!ok("registry.npmjs.org", 443, Read::Bad("x")));
         assert_eq!(judge_first("a.example", 443, &Read::More), None);
+        // A hidden name is told with what turns it off, as measured (#34):
+        // the switch Chromium once had does nothing now.
+        let why = judge_first("a.example", 443, &hello(&["a.example"], true))
+            .unwrap()
+            .unwrap_err();
+        assert!(
+            why.contains("EncryptedClientHelloEnabled is false"),
+            "{why}"
+        );
+        assert!(
+            why.contains("security.tls.ech.grease_probability is 0"),
+            "{why}"
+        );
+        assert!(
+            !why.contains("turn it off with --disable-features"),
+            "{why}"
+        );
         assert_eq!(normal_host("Registry.NPMJS.org."), "registry.npmjs.org");
     }
 

@@ -122,9 +122,10 @@ content. Before a tunnel goes on, it reads the client's TLS hello: the name
 it asks for must be the host the tunnel was opened to (none for an
 address), or the tunnel is cut before a byte reaches the host, as many
 hosts share one address and serve whichever name a hello asks for. A
-hello that hides its name (Encrypted Client Hello) is cut too; in
-Chromium-based tools, turn it off with
-`--disable-features=EncryptedClientHello`. Port 443 carries nothing but
+hello that hides its name (Encrypted Client Hello) is cut too: what turns
+it off in each browser and tool is in
+[Troubleshooting](../troubleshooting.md#a-connection-is-cut-for-encrypted-client-hello).
+Port 443 carries nothing but
 TLS. Plain `http://` requests are read one by one, and each must be for the
 host it was let through to. A connection whose name led to an address on
 this computer or its network is cut too. A cut connection is logged as

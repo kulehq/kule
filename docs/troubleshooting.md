@@ -181,6 +181,33 @@ proxy.
 
 **Fix:** `pip install --use-deprecated=legacy-certs …`.
 
+### A connection is cut for Encrypted Client Hello
+
+**Symptom:** a browser or a tool built on one cannot reach a host the task
+may reach, and the cut says *hides the name it asks for (Encrypted Client
+Hello)*.
+
+**Cause:** Chromium and Firefox send an Encrypted Client Hello extension to
+every host, also to hosts that publish no ECH config for it ("GREASE").
+Kule cannot check the name such a hello asks for, so it cuts the tunnel. A
+real one and a GREASE one look alike on the wire.
+
+**Fix:** turn it off in the tool. Measured in October 2026 ([#34](https://github.com/kulehq/kule/issues/34)):
+
+| Tool | Sends it through Kule | What keeps it working |
+| --- | --- | --- |
+| Chromium (Debian), Chrome for Testing | yes | The policy `{"EncryptedClientHelloEnabled": false}` in a JSON file in its managed policy folder: `/etc/chromium/policies/managed/` for Chromium, `/etc/opt/chrome_for_testing/policies/managed/` for Chrome for Testing. `--disable-features=EncryptedClientHello` no longer does anything. |
+| Chrome, Brave | yes | `--disable-features=EncryptedClientHello` does nothing here either; the same policy in their own policy folder was not measured. |
+| Playwright with `channel: "chromium"` | yes | The Chrome for Testing policy above. |
+| Playwright's default Chromium (the headless shell) | yes | None found: the headless shell ignores the policy. Use `channel: "chromium"`. |
+| Electron (`net`, `fetch` in its windows) | yes | None found. Electron's Node side (`https`, `fetch` in the main process) does not send it. |
+| Firefox, Firefox ESR, Playwright's Firefox | yes | The preference `security.tls.ech.grease_probability` set to `0` (in `user.js`, or `firefoxUserPrefs` in Playwright). `network.dns.echconfig.enabled` does not stop it. |
+| Node (`tls`, `fetch`), Python, Go, curl, Claude Code, Gemini CLI | no | Nothing needed. |
+
+On macOS a browser does not start in a task in the first place: it needs
+the window server, and Chromium's headless shell needs to register a
+service unless it runs with `--single-process --no-sandbox`.
+
 ### NuGet, Maven or Go on macOS
 
 Their tools on macOS trust the system's roots alone, so their registries
