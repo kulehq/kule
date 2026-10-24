@@ -350,6 +350,7 @@ struct RunEnd {
     /// What its sandbox refused, then what Kule put back.
     denials: Vec<Denial>,
     unreported: bool,
+    incomplete: bool,
 }
 
 /// What a run reports.
@@ -406,6 +407,10 @@ pub enum RunEvent {
         /// `kule_engine::UNREPORTED`): not that nothing was.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         unreported: bool,
+        /// The system log did not show all of what the sandbox refused
+        /// (see `kule_engine::INCOMPLETE`): `denials` may not be all.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        incomplete: bool,
     },
 }
 
@@ -1671,9 +1676,9 @@ impl Service {
         let service = Arc::clone(self);
         std::thread::spawn(move || {
             let run = service.run(&task, &profile, &prompt, &pictures, plan, &control);
-            let (error, denials, unreported) = match run {
-                Ok(end) => (end.error, end.denials, end.unreported),
-                Err(e) => (Some(e), Vec::new(), false),
+            let (error, denials, unreported, incomplete) = match run {
+                Ok(end) => (end.error, end.denials, end.unreported, end.incomplete),
+                Err(e) => (Some(e), Vec::new(), false, false),
             };
             drop(at_work);
             service
@@ -1694,6 +1699,7 @@ impl Service {
                     error,
                     denials,
                     unreported,
+                    incomplete,
                 },
             );
         });
@@ -1981,6 +1987,7 @@ impl Service {
             error,
             denials,
             unreported: after.unreported,
+            incomplete: after.incomplete,
         })
     }
 
@@ -3846,6 +3853,7 @@ mod tests {
                         error,
                         denials,
                         unreported,
+                        ..
                     } => Some((error, denials, unreported)),
                     _ => None,
                 });

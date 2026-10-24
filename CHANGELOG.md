@@ -89,9 +89,10 @@ refusals of a run are no longer lost on a busy machine.
   disk figure a run shows leaves them out.
 - On macOS, what the sandbox refused is read once the system log shows all
   of it, so a busy machine no longer drops the last refusals from what a
-  run, a terminal or `kule exec` tells. A log that has not caught up after
-  ten seconds and three reads is told as refusals that could not be read,
-  never as none.
+  run, a terminal or `kule exec` tells. Where the log still has not shown
+  all of them after ten seconds and three reads, what it showed is listed
+  and Kule says that some refusals may be missing, in the command's output,
+  the terminal and Live; the command's exit code stays its own.
 - `kule exec` says what of the sandbox's refusals Kule could not read or
   record, and still exits with the command's own code; a command that
   succeeded fails then, since part of what it did went untold.

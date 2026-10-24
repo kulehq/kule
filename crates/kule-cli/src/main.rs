@@ -842,9 +842,14 @@ fn run() -> Result<ExitCode> {
             let mut untold = false;
             if let Some(sandbox) = used {
                 match sandbox.denials(started.elapsed()) {
-                    Ok(Some(denials)) => {
-                        print_denials(&denials);
-                        if let Err(e) = record_denials(&task, &denials) {
+                    Ok(Some(refused)) => {
+                        print_denials(&refused.denials);
+                        // Told, and the command's own code kept: the
+                        // sandbox refused them all the same.
+                        if refused.incomplete {
+                            eprintln!("kule: {}", kule_engine::INCOMPLETE);
+                        }
+                        if let Err(e) = record_denials(&task, &refused.denials) {
                             eprintln!("kule: what the sandbox refused could not be recorded: {e}");
                             untold = true;
                         }
@@ -1002,6 +1007,9 @@ fn run() -> Result<ExitCode> {
             print_denials(&after.refused);
             if after.unreported && outcome.is_err() {
                 eprintln!("kule: {}", kule_engine::UNREPORTED);
+            }
+            if after.incomplete {
+                eprintln!("kule: {}", kule_engine::INCOMPLETE);
             }
             for d in &after.put_back {
                 match &d.saved {

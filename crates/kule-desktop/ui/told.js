@@ -9,6 +9,11 @@
  * that there were none. The engine's words (`kule_engine::UNREPORTED`). */
 const UNREPORTED = "Linux does not tell Kule what the sandbox refused; each refusal reached the command as an error";
 
+/** What the window says where the system log did not show all of what the
+ * sandbox refused: the list may not be all. The engine's words
+ * (`kule_engine::INCOMPLETE`). */
+const INCOMPLETE = "The system log did not show all of what the sandbox refused; some refusals may be missing from what is listed";
+
 /**
  * The sandbox's refusals with the same one (process, operation, path, and
  * where what was there was moved) once, counted, in the order each was
@@ -201,6 +206,7 @@ function permissionLine(title, chosen, granted) {
 if (typeof module !== "undefined") {
   module.exports = {
     UNREPORTED,
+    INCOMPLETE,
     groupDenials,
     newest,
     denialLine,
