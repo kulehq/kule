@@ -949,6 +949,17 @@ fn run() -> Result<ExitCode> {
                 }
             };
             let limit = reserved.as_ref().map(|r| r.limit.clone());
+            // MCP servers the person approved from extensions, as the app's
+            // runs get them; what cannot be read starts no server, and says so.
+            let person = std::env::var_os("HOME").map(PathBuf::from);
+            let mcp = kule_daemon::extensions::mcp_for_runs(&home, person.as_deref())
+                .unwrap_or_else(|e| {
+                    eprintln!(
+                        "kule: Kule could not read the extensions' MCP servers ({}); this run goes without them",
+                        paint::plain_line(&e)
+                    );
+                    Vec::new()
+                });
             let (tx, rx) = futures::channel::mpsc::unbounded();
             let runtime = tokio::runtime::Runtime::new()?;
             let printer = runtime.spawn(print_events(rx, usage, profile.name.clone()));
@@ -970,7 +981,7 @@ fn run() -> Result<ExitCode> {
                 &[],
                 mode.as_deref(),
                 limit,
-                &[],
+                &mcp,
                 // What the agent leaves running ends with the run; the
                 // CLI runs no commands for it.
                 &sandbox,

@@ -12,6 +12,9 @@
   One that succeeded fails, as part of it went untold. On Linux, `kule exec`
   says after a failed command that Linux does not tell Kule what the
   sandbox refused, as `kule run` and `kule shell` do.
+- `kule run` gives the agent the MCP servers you approved from extensions,
+  as the app's runs do; it ran without them before, saying nothing. When
+  what you approved cannot be read, the run goes without them and says so.
 
 ## 0.2.0-preview.12
 
