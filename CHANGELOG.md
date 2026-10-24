@@ -1,5 +1,83 @@
 # Changes
 
+## Unreleased
+
+### Changed
+
+- An approval card says what approving lets through: a tunnel Kule does not
+  look into (it checks only that the TLS hello asks for that host), or a
+  connection Kule looks inside, naming the secrets it fills there or that a
+  registry stays read only. Extensions with `questions.read` learn the
+  kind, never the secrets' names.
+- Once answered, a question stays in the run as a line. A connection you
+  approved that Kule then cuts, or refuses because its name led to an
+  address on this computer or its network, says so on that line with why,
+  while the run is live, and in a notification. The Timeline and what
+  `kule run` and `kule exec` print say why a connection was cut, refused or
+  failed.
+- A question Kule refused without your answer is told as Kule's, never as
+  "denied by you": nobody answered in time, the run ended first, or too
+  many of the run's questions were waiting (told once per host and port).
+  Each is a line in the run and a notification, and the log records it as
+  `timed_out`, `withdrawn` or `too_many`.
+- A connection refused for the address its name led to names that address
+  to you; the command is told only that such addresses are out of reach.
+- Approving a commit takes the changes you reviewed: the app names them,
+  and `kule commit --approve` takes `--reviewed DIGEST` (the digest
+  `kule status` prints) or, on a terminal, lists them and asks. Without
+  either, nothing is approved.
+- Applying home changes takes them as reviewed too (`kule home` prints a
+  home digest; `kule home apply --reviewed`, or a yes on a terminal), and
+  never brings a setuid or setgid file into your home where yours was not.
+- A file made executable, or a file or folder made writable by anyone,
+  waits for you under the balanced policy (`permissions`). On macOS, a file
+  whose extended attributes differ from the folder's (a quarantine mark
+  added or removed, say) is part of what you review and waits too
+  (`extended-attributes`); what macOS sets on its own on every write is left
+  out. Policies can read both (`gains`, `xattrs_changed`).
+- A repository's own rules are named `repo:<id>`, and no answer you
+  remembered cancels one, whatever its `@id`.
+- A permission note says what Kule did, from the kind of option it chose
+  ("Kule allowed", "Kule did not allow"), with the agent's label only
+  quoted after.
+- An extension's approval warns when, together with another that runs, it
+  can read your work and send data (one reads, the other sends). Approving
+  it approves the pair; a pair nobody approved holds both until one is
+  approved beside the other.
+- A folder under development is approved as all its files are: any change
+  to its code waits for approval again. One that a task's folder takes in
+  after it was installed is held from then on, saying why.
+- Extensions learn which task is chosen only with `tasks.read`.
+- What an extension shows (names, notifications) is checked against the
+  same set of characters that show nothing as the window uses, zero-width
+  ones and line separators included.
+- Approve on a question's card, and its shortcut, take nothing for a moment
+  after the card appears, so a card that shows up under the pointer is not
+  approved by accident.
+- The command line and the app talk only to a daemon of your own user: what
+  listens at the daemon's place as anyone else is sent nothing, its token
+  included. Kule's home must be a folder of yours and not a link; one open
+  to others is closed to `0700`, saying so.
+- A task is refused on a folder that holds `~/.kule`, also while its own
+  home is elsewhere (`--home`, `KULE_HOME`).
+- A scan reads at most 1,000,000 files and folders, and a review hashes no
+  file over 8 GiB; past either, Kule refuses, naming the path and the limit.
+- `kule exec --allow-write`, `--reveal` and `--pass-env` each say what they
+  open, as `--no-sandbox` does.
+- On Linux without namespaces of its own, a command's filter refuses
+  `ptrace`, `process_vm_writev`, `keyctl`, `userfaultfd`, `perf_event_open`
+  and `setns` by name, whatever the host's sysctls allow.
+- Applying and undoing home changes write, remove and link through the
+  folders on the way, opened without following a link, as a commit does in
+  the workspace; an undo refuses a link on the way before it puts anything
+  back.
+
+- A task's first run no longer waits while Kule walks the package caches it
+  starts with. Only a disk limit needs them measured: the first run under
+  one measures them once and says so ("Measuring the task's package caches
+  for its disk limit"). Without a disk limit nothing walks them, and the
+  disk figure a run shows leaves them out.
+
 ## 0.2.0-preview.10
 
 A security preview. A run sets aside what it may spend before it starts,

@@ -346,14 +346,11 @@ fn notice(
     }
 }
 
-/// Text from an extension made fit to show: no control or direction
-/// characters, at most `max` characters.
+/// Text from an extension made fit to show: nothing that shows nothing
+/// (see [`kule_ext::unseen`]), at most `max` characters.
 fn shown(text: &str, max: usize) -> String {
     text.chars()
-        .filter(|c| {
-            !c.is_control()
-                && !matches!(c, '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}' | '\u{200E}' | '\u{200F}' | '\u{061C}')
-        })
+        .filter(|c| !kule_ext::unseen(*c))
         .take(max)
         .collect()
 }
@@ -518,5 +515,31 @@ mod tests {
     fn shown_text_hides_nothing() {
         assert_eq!(shown("Pay\u{202E}lacol\nx", 80), "Paylacolx");
         assert_eq!(shown(&"a".repeat(100), 10).len(), 10);
+    }
+
+    /// What an extension shows is checked with the window's own set of
+    /// characters that show nothing: the list the window's tests read too.
+    #[test]
+    fn what_shows_nothing_is_the_window_s_set() {
+        let fixture: serde_json::Value =
+            serde_json::from_str(include_str!("../ui/tests/unseen.json")).unwrap();
+        let chars = |key: &str| -> Vec<char> {
+            fixture[key]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|v| {
+                    let hex = v.as_str().unwrap().trim_start_matches("U+");
+                    char::from_u32(u32::from_str_radix(hex, 16).unwrap()).unwrap()
+                })
+                .collect()
+        };
+        for c in chars("unseen") {
+            assert!(kule_ext::unseen(c), "U+{:04X}", c as u32);
+            assert_eq!(shown(&format!("a{c}b"), 10), "ab", "U+{:04X}", c as u32);
+        }
+        for c in chars("seen") {
+            assert!(!kule_ext::unseen(c), "U+{:04X}", c as u32);
+        }
     }
 }

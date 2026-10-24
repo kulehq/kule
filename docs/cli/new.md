@@ -107,6 +107,8 @@ builds from /Users/me/code/shared, which its tasks cannot read: kule reveal add 
 | `kule: <path>: No such file or directory (os error 2)` | The folder does not exist. Check the path. |
 | `kule: <path> is not a directory` | Pass a folder, not a file. |
 | `kule: Kule's home <home> is inside the workspace, so the copy would contain itself` | You asked for a copy of a folder that holds Kule's home (your whole home folder, for example). Pick a folder inside it, or move Kule's home with `--home`. |
+| `kule: Kule's home <~/.kule> is inside the workspace, though this task's home is another` | The folder holds Kule's home where it is by default, even with `--home` or `KULE_HOME` pointing elsewhere: its tasks and secrets would be copied in. Pick a folder inside it. |
+| `kule: <folder> holds more than 1000000 files and folders, more than Kule reads; …` | Pick a smaller folder. A file over 8 GiB is refused the same way when Kule hashes it for a review. |
 
 ## In the app
 

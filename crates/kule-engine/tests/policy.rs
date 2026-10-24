@@ -611,7 +611,7 @@ fn a_repository_policy_can_only_forbid() {
     let ruling = policy.judge(&s.task.effects().unwrap());
     assert_eq!(
         on(&ruling, "docs/guide.md"),
-        (Verdict::Ask, rules(&["docs-reviewed"]))
+        (Verdict::Ask, rules(&["repo:docs-reviewed"]))
     );
 }
 
@@ -634,7 +634,7 @@ fn the_repository_policy_is_read_from_the_workspace() {
     let ruling = policy.judge(&s.task.effects().unwrap());
     assert_eq!(
         on(&ruling, "docs/guide.md"),
-        (Verdict::Ask, rules(&["docs-reviewed"]))
+        (Verdict::Ask, rules(&["repo:docs-reviewed"]))
     );
 }
 
@@ -804,4 +804,111 @@ fn a_tasks_group_chooses_the_policy_it_is_judged_by() {
     delete_group(home, group.id).unwrap();
     assert_eq!(s.task.group().unwrap(), None);
     assert_eq!(judged("README.md"), allowed);
+}
+
+/// What the commit would take, read as a commit reads it, judged.
+fn pending_judged(s: &Setup) -> Ruling {
+    Policy::builtin().judge(&s.task.pending(false).unwrap())
+}
+
+/// A file anyone may run now, or anything anything may change, waits for a
+/// person, whatever its name; one that was executable already does not.
+#[test]
+fn a_file_made_executable_or_world_writable_waits_for_a_person() {
+    use std::os::unix::fs::PermissionsExt;
+    let (home, ws) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+    for (path, text) in [
+        ("run.sh", "echo a\n"),
+        ("tool.sh", "echo b\n"),
+        ("notes.txt", "n\n"),
+    ] {
+        write(&ws.path().join(path), text);
+    }
+    // In the folder already: tool.sh runs as it is.
+    fs::set_permissions(ws.path().join("tool.sh"), fs::Permissions::from_mode(0o755)).unwrap();
+    let s = Setup {
+        task: Task::create(home.path(), ws.path()).unwrap(),
+        _home: home,
+        _ws: ws,
+    };
+    let mode = |path: &str, mode: u32| {
+        fs::set_permissions(s.copy().join(path), fs::Permissions::from_mode(mode)).unwrap()
+    };
+    mode("run.sh", 0o755);
+    write(&s.copy().join("tool.sh"), "echo c\n");
+    mode("notes.txt", 0o666);
+    write(&s.copy().join("new.sh"), "echo d\n");
+    mode("new.sh", 0o700);
+    write(&s.copy().join("plain.txt"), "p\n");
+
+    let ruling = pending_judged(&s);
+    for path in ["run.sh", "notes.txt", "new.sh"] {
+        assert_eq!(
+            on(&ruling, path),
+            (Verdict::Ask, rules(&["permissions"])),
+            "{path}"
+        );
+    }
+    assert_eq!(on(&ruling, "tool.sh").0, Verdict::Allow);
+    assert_eq!(on(&ruling, "plain.txt").0, Verdict::Allow);
+    let set = s.task.pending(false).unwrap();
+    assert_eq!(set.gains["notes.txt"], ["world-writable"]);
+    assert_eq!(set.gains["run.sh"], ["executable"]);
+}
+
+/// On macOS a commit carries a file's extended attributes into the folder:
+/// one that differs from the folder's is part of what is reviewed and
+/// waits for a person. What macOS sets on its own on every write does not.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_file_s_extended_attributes_are_reviewed() {
+    let s = Setup::new(&[("a.txt", "a\n"), ("b.txt", "b\n")], false);
+    let set_xattr = |path: &Path, name: &str, value: &str| {
+        let out = std::process::Command::new("/usr/bin/xattr")
+            .args(["-w", name, value])
+            .arg(path)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{out:?}");
+    };
+    write(&s.copy().join("a.txt"), "a2\n");
+    write(&s.copy().join("b.txt"), "b2\n");
+    set_xattr(
+        &s.copy().join("a.txt"),
+        "com.apple.quarantine",
+        "0081;00000000;Kule;",
+    );
+    // Written in the sandbox, as an agent writes: macOS marks where it came
+    // from, which says nothing of what it holds.
+    let sandbox = kule_engine::Sandbox::new(&s.task).unwrap();
+    let out = sandbox
+        .command("sh", &["-c".to_owned(), "echo c > c.txt".to_owned()])
+        .unwrap()
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{out:?}");
+
+    let set = s.task.pending(false).unwrap();
+    assert_eq!(
+        set.xattrs.keys().collect::<Vec<_>>(),
+        ["a.txt"],
+        "{:?}",
+        set.xattrs
+    );
+    let ruling = pending_judged(&s);
+    assert_eq!(
+        on(&ruling, "a.txt"),
+        (Verdict::Ask, rules(&["extended-attributes"]))
+    );
+    assert_eq!(on(&ruling, "b.txt").0, Verdict::Allow);
+    assert_eq!(on(&ruling, "c.txt").0, Verdict::Allow);
+
+    // Another value is another review.
+    let before = set.digest();
+    set_xattr(
+        &s.copy().join("a.txt"),
+        "com.apple.quarantine",
+        "0081;00000001;Kule;",
+    );
+    assert_ne!(s.task.pending(false).unwrap().digest(), before);
 }

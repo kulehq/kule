@@ -39,9 +39,12 @@ Some things are never remembered:
 
 - what the policy **denies** (a new git hook, for example);
 - what waits for a reason other than a file's name: a mass delete, a history
-  rewrite, a link, git config. Only the rules `manifests-and-lockfiles`,
-  `project-files` and `automation` can be answered for good;
-- anything under `.kule/`, where a repository keeps its own rules.
+  rewrite, a link, git config, a file made executable, changed extended
+  attributes. Only the rules `manifests-and-lockfiles`, `project-files` and
+  `automation` can be answered for good;
+- anything under `.kule/`, where a repository keeps its own rules;
+- a repository's own rule (`repo:<id>`), whatever its `@id`: a remembered
+  answer never cancels what the repository asks.
 
 Under the careful policy, every file change also waits for the `careful` rule,
 which cannot be remembered, so a remembered file does not pass there.

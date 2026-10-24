@@ -37,7 +37,7 @@ These work on every command and subcommand.
 
 | Option | Value | Default | Meaning |
 | --- | --- | --- | --- |
-| `--home` | path | `~/.kule` | Where Kule keeps tasks, settings, secrets and policy. Also set by the `KULE_HOME` environment variable. The flag wins over the variable. |
+| `--home` | path | `~/.kule` | Where Kule keeps tasks, settings, secrets and policy. Also set by the `KULE_HOME` environment variable. The flag wins over the variable. It must be a folder of yours, not a link: Kule makes it `0700` when it is missing, closes one that is open to others (and says so), and refuses anything else. |
 | `-h`, `--help` | | | Print help for the command. |
 | `-V`, `--version` | | | Print Kule's version (top level only). |
 

@@ -2,10 +2,23 @@
 
 use crate::error::{Result, invalid};
 
-/// Characters that reorder or hide text: a name with them can read as
-/// something else.
-fn bidi(c: char) -> bool {
-    matches!(c, '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}' | '\u{200E}' | '\u{200F}' | '\u{061C}')
+/// Characters that show nothing yet change what text means or how it
+/// reads: control characters, the marks that turn text around, zero-width
+/// ones, the soft hyphen, line and paragraph separators, and the tag
+/// characters text can hide words in. The window's own set (`UNSEEN` in
+/// the app's highlight.js); the app's tests keep the two the same.
+pub fn unseen(c: char) -> bool {
+    c.is_control()
+        || matches!(
+            c,
+            '\u{00AD}'
+                | '\u{061C}'
+                | '\u{200B}'..='\u{200F}'
+                | '\u{2028}'..='\u{202E}'
+                | '\u{2060}'..='\u{2069}'
+                | '\u{FEFF}'
+                | '\u{E0000}'..='\u{E007F}'
+        )
 }
 
 /// Text shown to the person: not empty, at most `max` characters, no control
@@ -20,9 +33,9 @@ pub(crate) fn words(what: &str, value: &str, max: usize) -> Result<()> {
     if value.chars().count() > max {
         return Err(invalid(format!("{what} is longer than {max} characters")));
     }
-    if value.chars().any(|c| c.is_control() || bidi(c)) {
+    if value.chars().any(unseen) {
         return Err(invalid(format!(
-            "{what} holds a control or text-direction character"
+            "{what} holds a control, text-direction or invisible character"
         )));
     }
     Ok(())
@@ -119,6 +132,25 @@ mod tests {
         }
         for bad in ["1.0", "1.0.0.0", "v1.0.0", "1.0.0-", "1.x.0", "1.0.0-a b"] {
             assert!(!version_ok(bad), "{bad}");
+        }
+    }
+
+    #[test]
+    fn what_shows_nothing_is_refused_in_words() {
+        for c in [
+            '\u{200B}',
+            '\u{2028}',
+            '\u{FEFF}',
+            '\u{E0041}',
+            '\u{00AD}',
+            '\u{202E}',
+        ] {
+            assert!(unseen(c), "U+{:04X}", c as u32);
+            assert!(
+                words("name", &format!("a{c}b"), 40).is_err(),
+                "U+{:04X}",
+                c as u32
+            );
         }
     }
 

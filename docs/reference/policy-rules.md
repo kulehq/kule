@@ -54,6 +54,8 @@ This is the default. Print it with `kule policy` while it holds.
 | `other-vcs` | forbid `auto` | Another version control system's repository, at any depth: anything in `.hg`, `.sl`, `.jj`, `_darcs`, `.pijul`, `.bzr`, `.svn`, `.fossil-settings`, and `.fslckout` or `_FOSSIL_`. Its config and hooks run on its next command, and Kule reads none of it as a repository. Kule's terminal and editor refuse a copy where one changed. | **Waits.** Cannot be remembered. |
 | `nested-repository` | forbid `auto` | Files inside a `.git` folder of a repository nested in the workspace. | **Waits.** |
 | `nested-git-hooks` | forbid all | A hook created or changed in a nested repository. | **Denied.** |
+| `permissions` | forbid `auto` | A file made executable (any `x` bit it did not have in the folder, or a new one that has one), or a file or folder made writable by anyone. A file the folder already ran keeps passing. | **Waits.** Cannot be remembered. |
+| `extended-attributes` | forbid `auto` | On macOS, a file whose extended attributes differ from the folder's file (a quarantine mark added or removed, a `user.*` attribute): a commit carries them into the folder. What macOS sets on its own on every write (`com.apple.provenance`) is left out. | **Waits.** Cannot be remembered. |
 | `links` | forbid `auto` | A symbolic link created, changed or deleted. | **Waits.** A link leads wherever it points. |
 | `mass-delete` | forbid `auto` | More than 200 deletions in one set of changes. A move is not a deletion. | **Waits.** |
 | `deletes-outside-git` | forbid `auto` | More than 20 deletions in a folder that is not a git repository. | **Waits.** Only the task's own undo would bring them back. |
@@ -91,6 +93,7 @@ These do not appear in the policy text; Kule adds them as it judges.
 | `no-rule-allows-asking` | denied | No `ask` permit matched, so it cannot even be put to you. Happens with a policy of your own that leaves out `ask-by-default`. |
 | `policy-error: …` | denied | Cedar could not evaluate a rule; it denies. |
 | `remembered` | passes | A file you told Kule not to ask about again ([`kule rules`](../cli/rules.md)). |
+| `repo:<id>` | as the rule says | A rule from the repository's own `.kule/policy.cedar`. No answer you remembered cancels it, whatever its `@id`. |
 | `remembered-<id>` | passes | A connection you told Kule not to ask about again. |
 | `profile-<agent>` | passes | A host in the agent's profile, or its model's API, open **only while that agent runs** (for example `profile-claude-code` for `api.anthropic.com`). |
 
@@ -110,6 +113,8 @@ Each effect is a `Kule::Effect` entity with these attributes:
 | `fast_forward` | For `git.ref`: the new value keeps the old one in its history. |
 | `commits` | For `git.ref`: how many commits were added. |
 | `host`, `port` | For `net.connect`. |
+| `gains` | For `fs.*`: what the entry gains in its permission bits that the folder's had not, `executable` and `world-writable` (`!resource.gains.isEmpty()`). |
+| `xattrs_changed` | For `fs.*`: the file's extended attributes differ from the folder's (macOS). |
 
 And the `context`:
 

@@ -5,7 +5,7 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::fsops::{self, same_bytes};
 use crate::git::{self, GitSummary};
 use crate::ignore;
@@ -68,7 +68,24 @@ pub struct EffectSet {
     /// them as it judges what is in a `.git`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub git_dirs: Vec<String>,
+    /// What changed files and folders gain in their permission bits that
+    /// the folder's had not: `executable` (a file anyone may run now) and
+    /// `world-writable` (anything on the computer may change it). Seen by
+    /// the policy, which asks about them by default.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub gains: BTreeMap<String, Vec<String>>,
+    /// Changed files whose extended attributes differ from the folder's
+    /// file (macOS, where a commit carries them along), by path: each
+    /// attribute that differs with a hash of its value, or `removed`. Part
+    /// of the digest, seen by the policy, which asks about them by default.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub xattrs: BTreeMap<String, BTreeMap<String, String>>,
 }
+
+/// What a file anyone may run gains, in [`EffectSet::gains`].
+pub const EXECUTABLE: &str = "executable";
+/// What anything on the computer may change gains, in [`EffectSet::gains`].
+pub const WORLD_WRITABLE: &str = "world-writable";
 
 /// A path the copy renamed.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -107,6 +124,21 @@ impl EffectSet {
         blake3::hash(&bytes).to_hex().to_string()
     }
 
+    /// Lets an approving commit take only what the person reviewed:
+    /// `reviewed` must be this set's [`EffectSet::digest`], as the review
+    /// showed it. A commit that approves nothing needs none.
+    pub fn check_reviewed(&self, approve: bool, reviewed: Option<&str>) -> Result<()> {
+        match reviewed {
+            Some(digest) if digest != self.digest() => Err(Error::Invalid(
+                "the changes are not the ones you reviewed any more; review them again".into(),
+            )),
+            None if approve => Err(Error::Invalid(
+                "approving takes the digest of the changes you reviewed, as `kule status` prints it; review them, then approve".into(),
+            )),
+            _ => Ok(()),
+        }
+    }
+
     /// What a commit takes: everything, or everything but the ignored paths.
     /// Git's lock files never go: one in the copy is a crashed process's.
     /// Nor what git writes beside its work, reflogs, `ORIG_HEAD` and
@@ -139,6 +171,18 @@ impl EffectSet {
             .filter(|(path, _)| taken(path))
             .map(|(path, hash)| (path.clone(), hash.clone()))
             .collect();
+        let gains = self
+            .gains
+            .iter()
+            .filter(|(path, _)| taken(path))
+            .map(|(path, gained)| (path.clone(), gained.clone()))
+            .collect();
+        let xattrs = self
+            .xattrs
+            .iter()
+            .filter(|(path, _)| taken(path))
+            .map(|(path, differ)| (path.clone(), differ.clone()))
+            .collect();
         EffectSet {
             git: self.git.clone(),
             moves,
@@ -146,6 +190,8 @@ impl EffectSet {
             effects,
             contents,
             git_dirs: self.git_dirs.clone(),
+            gains,
+            xattrs,
         }
     }
 
@@ -158,6 +204,69 @@ impl EffectSet {
             .iter()
             .map(|e| Ok((e.path.clone(), fsops::content_hash(root, &e.path)?)))
             .collect::<Result<_>>()?;
+        Ok(())
+    }
+
+    /// Reads what each changed file or folder gains in its permission bits
+    /// over `before` (the folder's bits for a path, `None` for a new one),
+    /// from [`EffectSet::contents`], into [`EffectSet::gains`].
+    pub(crate) fn read_gains(&mut self, before: impl Fn(&str) -> Option<u32>) {
+        self.gains = BTreeMap::new();
+        for e in &self.effects {
+            let Some(hash) = self.contents.get(&e.path) else {
+                continue;
+            };
+            let now = match (e.kind, fsops::hash_mode(hash)) {
+                (Kind::File, Some(mode)) => mode,
+                (Kind::Dir, _) => {
+                    match hash.strip_prefix("dir:").map(|m| u32::from_str_radix(m, 8)) {
+                        Some(Ok(mode)) => mode,
+                        _ => continue,
+                    }
+                }
+                _ => continue,
+            };
+            let was = before(&e.path).unwrap_or(0);
+            let mut gained = Vec::new();
+            if e.kind == Kind::File && now & 0o111 != 0 && was & 0o111 == 0 {
+                gained.push(EXECUTABLE.to_owned());
+            }
+            if now & 0o002 != 0 && was & 0o002 == 0 {
+                gained.push(WORLD_WRITABLE.to_owned());
+            }
+            if !gained.is_empty() {
+                self.gains.insert(e.path.clone(), gained);
+            }
+        }
+    }
+
+    /// Reads which changed files under `copy` have extended attributes
+    /// other than the file at the same path under `work`, into
+    /// [`EffectSet::xattrs`].
+    pub(crate) fn read_xattrs(&mut self, copy: &Path, work: &Path) -> Result<()> {
+        self.xattrs = BTreeMap::new();
+        for e in &self.effects {
+            if e.change == Change::Deleted || e.kind != Kind::File {
+                continue;
+            }
+            let now = fsops::xattrs(copy, &e.path)?;
+            let was = if e.change == Change::Created {
+                BTreeMap::new()
+            } else {
+                fsops::xattrs(work, &e.path)?
+            };
+            let mut differ: BTreeMap<String, String> = now
+                .iter()
+                .filter(|(name, value)| was.get(*name) != Some(*value))
+                .map(|(name, value)| (name.clone(), value.clone()))
+                .collect();
+            for name in was.keys().filter(|name| !now.contains_key(*name)) {
+                differ.insert(name.clone(), "removed".to_owned());
+            }
+            if !differ.is_empty() {
+                self.xattrs.insert(e.path.clone(), differ);
+            }
+        }
         Ok(())
     }
 
@@ -214,6 +323,8 @@ pub(crate) fn compute(copy: &Path, work: &Path, baseline: &Baseline) -> Result<E
         repository: baseline.git.is_some(),
         contents: BTreeMap::new(),
         git_dirs: git_dirs(&now),
+        gains: BTreeMap::new(),
+        xattrs: BTreeMap::new(),
     })
 }
 

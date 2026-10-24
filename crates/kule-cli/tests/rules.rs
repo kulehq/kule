@@ -23,6 +23,13 @@ fn text(out: &Output) -> String {
     )
 }
 
+/// The digest `kule status` gives for task `id`'s changes.
+fn digest(home: &Path, dir: &Path, id: &str) -> String {
+    let out = kule(home, dir, &["status", id, "--json"]);
+    let status: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    status["digest"].as_str().unwrap().to_owned()
+}
+
 #[test]
 fn an_approval_remembered_is_not_asked_again() {
     let (home, ws) = (TempDir::new().unwrap(), TempDir::new().unwrap());
@@ -42,7 +49,19 @@ fn an_approval_remembered_is_not_asked_again() {
 
     fs::write(copy.join("Cargo.toml"), "[package]\nv = 1\n").unwrap();
     assert!(!kule(home, ws, &["commit", &id]).status.success());
-    let out = kule(home, ws, &["commit", &id, "--approve", "--remember"]);
+    let digest = digest(home, ws, &id);
+    let out = kule(
+        home,
+        ws,
+        &[
+            "commit",
+            &id,
+            "--approve",
+            "--remember",
+            "--reviewed",
+            &digest,
+        ],
+    );
     assert!(
         text(&out).contains(
             "not asked again on this folder: changes to Cargo.toml (manifests-and-lockfiles)"

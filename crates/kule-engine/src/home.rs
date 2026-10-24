@@ -19,6 +19,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -156,6 +157,18 @@ pub struct HomeChange {
     /// it leads before applying it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target: Option<String>,
+    /// What the layer holds at the path, hashed (its bytes and permission
+    /// bits, a link's target, `missing` for a deletion): what an apply
+    /// takes is what was reviewed.
+    #[serde(default)]
+    pub hash: String,
+}
+
+/// A hash of `changes` as a review lists them: an apply takes them only
+/// while they are still these.
+pub fn home_digest(changes: &[HomeChange]) -> String {
+    let bytes = serde_json::to_vec(changes).unwrap_or_default();
+    blake3::hash(&bytes).to_hex().to_string()
 }
 
 /// What [`Task::apply_home`] did.
@@ -590,8 +603,26 @@ impl Task {
         Ok(dir)
     }
 
-    /// What the task's commands changed in the home layer, by path.
+    /// What the task's commands changed in the home layer, by path, each
+    /// with what it holds hashed (see [`home_digest`]).
     pub fn home_changes(&self) -> Result<Vec<HomeChange>> {
+        self.home_changes_hashed(true)
+    }
+
+    /// How many changes [`Task::home_changes`] lists, without reading what
+    /// they hold: for a list that only counts them.
+    pub fn home_change_count(&self) -> Result<usize> {
+        Ok(self.home_changes_hashed(false)?.len())
+    }
+
+    fn home_changes_hashed(&self, hashed: bool) -> Result<Vec<HomeChange>> {
+        let hash = |dir: &Path, rel: &str| -> Result<String> {
+            if hashed {
+                fsops::content_hash(dir, rel)
+            } else {
+                Ok(String::new())
+            }
+        };
         let Some(layer) = self.load_layer()? else {
             return Ok(Vec::new());
         };
@@ -630,6 +661,7 @@ impl Task {
                 Some(was) if was.copy.unchanged(&now) => {}
                 Some(_) => changes.push(HomeChange {
                     startup: startup(&rel),
+                    hash: hash(&dir, &rel)?,
                     path: rel,
                     change: Change::Modified,
                     kind: now.kind,
@@ -637,6 +669,7 @@ impl Task {
                 }),
                 None => changes.push(HomeChange {
                     startup: startup(&rel),
+                    hash: hash(&dir, &rel)?,
                     path: rel,
                     change: Change::Created,
                     kind: now.kind,
@@ -652,6 +685,7 @@ impl Task {
                     kind: was.copy.kind,
                     startup: startup(rel),
                     target: None,
+                    hash: "missing".to_owned(),
                 });
             }
         }
@@ -662,7 +696,7 @@ impl Task {
     /// Takes the changes at `paths` from the layer to the real home. Every
     /// one of them is refused when any real path is no longer what it was
     /// when the layer was made; what is replaced or removed is kept first.
-    pub fn apply_home(&self, paths: &[String]) -> Result<HomeApplied> {
+    pub fn apply_home(&self, paths: &[String], reviewed: &str) -> Result<HomeApplied> {
         let Some(mut layer) = self.load_layer()? else {
             return Ok(HomeApplied::default());
         };
@@ -670,13 +704,32 @@ impl Task {
         // Nothing left running in the task's sandbox changes the layer
         // while it is applied.
         self.quiet_sandbox("apply its home changes")?;
-        let wanted: Vec<HomeChange> = self
-            .home_changes()?
+        let changes = self.home_changes()?;
+        if home_digest(&changes) != reviewed {
+            return Err(Error::Invalid(
+                "the home changes are not the ones you reviewed any more; review them again".into(),
+            ));
+        }
+        let wanted: Vec<HomeChange> = changes
             .into_iter()
             .filter(|c| paths.contains(&c.path))
             .collect();
         if wanted.is_empty() {
             return Ok(HomeApplied::default());
+        }
+        // As a commit: nothing comes to run as its owner or group where
+        // what it replaces did not.
+        for c in &wanted {
+            let gains = fsops::hash_mode(&c.hash).unwrap_or(0) & fsops::RUNS_AS_OWNER;
+            let had = Stamp::of(&layer.real.join(&c.path))?
+                .filter(|s| s.kind == Kind::File)
+                .map_or(0, |s| s.mode);
+            if gains & !had != 0 {
+                return Err(Error::Invalid(format!(
+                    "~/{} would run as its owner or group (setuid or setgid), which Kule never brings into your home; nothing was applied",
+                    c.path
+                )));
+            }
         }
         let dir = self.home_layer();
         let mut moved = Vec::new();
@@ -742,21 +795,26 @@ impl Task {
             let keeps =
                 c.change != Change::Created && held.as_ref().is_some_and(|s| s.kind != Kind::Dir);
             if keeps {
-                keep(&to, &kept.join(&c.path))?;
+                keep(&layer.real, &c.path, &kept.join(&c.path))?;
                 kept_any = true;
             }
             let before = layer.entries.get(&c.path).cloned();
+            // Written through the folders on the way, opened without
+            // following a link: what is applied lands where the review
+            // showed it, whatever is put on the way meanwhile.
+            let (home_dir, name) = in_home(&layer.real, &c.path)?;
+            let there = fsops::entry_at(&home_dir, name).at(&to)?;
             match c.change {
-                Change::Deleted => match Stamp::of(&to)?.map(|s| s.kind) {
-                    Some(Kind::Dir) => fs::remove_dir(&to).at(&to)?,
-                    Some(_) => fs::remove_file(&to).at(&to)?,
+                Change::Deleted => match there {
+                    Some(Kind::Dir) => fsops::rmdir_at(&home_dir, name).at(&to)?,
+                    Some(_) => fsops::remove_at(&home_dir, name).at(&to)?,
                     None => {}
                 },
                 _ => match c.kind {
                     Kind::Dir => {
-                        if Stamp::of(&to)?.is_none_or(|s| s.kind != Kind::Dir) {
-                            fsops::remove(&to)?;
-                            fs::create_dir(&to).at(&to)?;
+                        if there != Some(Kind::Dir) {
+                            fsops::remove_at(&home_dir, name).at(&to)?;
+                            fsops::mkdir_at(&home_dir, name).at(&to)?;
                         }
                     }
                     // Read from the layer without following a link at any
@@ -767,8 +825,10 @@ impl Task {
                         else {
                             return Err(changed(&c.path));
                         };
-                        fsops::remove(&to)?;
-                        std::os::unix::fs::symlink(target, &to).at(&to)?;
+                        if there == Some(Kind::Dir) {
+                            fsops::remove_tree_at(&home_dir, name).at(&to)?;
+                        }
+                        fsops::link_at(&home_dir, name, &target).at(&to)?;
                     }
                     Kind::File => {
                         let fsops::Beneath::File(mut file) =
@@ -780,7 +840,7 @@ impl Task {
                         let mut bytes = Vec::new();
                         std::io::Read::read_to_end(&mut file, &mut bytes).at(&from)?;
                         let bytes = self.unmasked(&layer.real, &c.path, bytes)?;
-                        put(&to, &bytes, mode)?;
+                        fsops::put_at(&home_dir, name, &bytes, mode.mode(), &to)?;
                     }
                 },
             }
@@ -1019,45 +1079,34 @@ fn through_link(link: &str) -> Error {
     ))
 }
 
-/// Saves the file or link at `from` as `to`.
-fn keep(from: &Path, to: &Path) -> Result<()> {
+/// The folder in the real home `real` that holds `rel`, opened through
+/// every folder on the way without following a link, and `rel`'s name in
+/// it. A link on the way is refused as [`through_link`] says.
+fn in_home<'a>(real: &Path, rel: &'a str) -> Result<(fs::File, &'a str)> {
+    fsops::open_parent(real, rel).map_err(|e| match link_on_the_way(real, rel) {
+        Some(link) => through_link(&link),
+        None => e,
+    })
+}
+
+/// Saves the file or link at `rel` in the real home `real` as `to`, read
+/// without following a link on the way.
+fn keep(real: &Path, rel: &str, to: &Path) -> Result<()> {
     if let Some(parent) = to.parent() {
         fs::create_dir_all(parent).at(parent)?;
     }
-    if fs::symlink_metadata(from)
-        .at(from)?
-        .file_type()
-        .is_symlink()
-    {
-        let target = fs::read_link(from).at(from)?;
-        std::os::unix::fs::symlink(target, to).at(to)?;
-    } else {
-        fs::copy(from, to).at(to)?;
+    let from = real.join(rel);
+    match fsops::beneath(real, rel).at(&from)? {
+        fsops::Beneath::Link(target) => std::os::unix::fs::symlink(target, to).at(to)?,
+        fsops::Beneath::File(mut file) => {
+            let mode = file.metadata().at(&from)?.permissions();
+            let mut out = fs::File::create(to).at(to)?;
+            std::io::copy(&mut file, &mut out).at(to)?;
+            out.set_permissions(mode).at(to)?;
+        }
+        _ => return Err(changed(rel)),
     }
     Ok(())
-}
-
-/// Puts `bytes` at `to` in one step, with `mode`; the content is never
-/// readable with wider permissions than that on the way.
-fn put(to: &Path, bytes: &[u8], mode: fs::Permissions) -> Result<()> {
-    use std::io::Write;
-    use std::os::unix::fs::OpenOptionsExt;
-    let tmp = to.with_file_name(format!(
-        ".{}.kule-{}",
-        to.file_name().and_then(|n| n.to_str()).unwrap_or("new"),
-        std::process::id()
-    ));
-    let _ = fs::remove_file(&tmp);
-    let mut file = fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(&tmp)
-        .at(&tmp)?;
-    file.write_all(bytes).at(&tmp)?;
-    drop(file);
-    fs::set_permissions(&tmp, mode).at(&tmp)?;
-    fs::rename(&tmp, to).at(to)
 }
 
 impl Task {
@@ -1146,6 +1195,12 @@ impl Task {
             .filter(|p| p.held.is_none())
             .map(|p| p.path.as_str())
             .collect();
+        // As an apply: nothing is put back through a link on the way.
+        for p in &applied.paths {
+            if let Some(link) = link_on_the_way(&layer.real, &p.path) {
+                return Err(through_link(&link));
+            }
+        }
         let mut moved = Vec::new();
         for p in &applied.paths {
             let to = layer.real.join(&p.path);
@@ -1176,30 +1231,41 @@ impl Task {
         // The apply's order backwards: what is in a directory goes before it.
         for p in applied.paths.iter().rev() {
             let to = layer.real.join(&p.path);
+            // Through the folders on the way, as the apply wrote.
+            let (home_dir, name) = in_home(&layer.real, &p.path)?;
+            let there = fsops::entry_at(&home_dir, name).at(&to)?;
+            let clear = |there: Option<Kind>| match there {
+                Some(Kind::Dir) => fsops::remove_tree_at(&home_dir, name).at(&to),
+                Some(_) => fsops::remove_at(&home_dir, name).at(&to),
+                None => Ok(()),
+            };
             match p.held {
                 _ if p.kept => {
+                    // What the apply kept is Kule's own, in the task.
                     let from = kept.join(&p.path);
-                    fsops::remove(&to)?;
-                    if fs::symlink_metadata(&from)
-                        .at(&from)?
-                        .file_type()
-                        .is_symlink()
-                    {
+                    let meta = fs::symlink_metadata(&from).at(&from)?;
+                    if meta.file_type().is_symlink() {
                         let target = fs::read_link(&from).at(&from)?;
-                        std::os::unix::fs::symlink(target, &to).at(&to)?;
+                        if there == Some(Kind::Dir) {
+                            clear(there)?;
+                        }
+                        fsops::link_at(&home_dir, name, &target).at(&to)?;
                     } else {
                         let bytes = fs::read(&from).at(&from)?;
-                        put(&to, &bytes, fs::metadata(&from).at(&from)?.permissions())?;
+                        if there == Some(Kind::Dir) {
+                            clear(there)?;
+                        }
+                        fsops::put_at(&home_dir, name, &bytes, meta.permissions().mode(), &to)?;
                     }
                 }
                 Some(Kind::Dir) => {
-                    if Stamp::of(&to)?.is_none() {
-                        fs::create_dir(&to).at(&to)?;
+                    if there.is_none() {
+                        fsops::mkdir_at(&home_dir, name).at(&to)?;
                     }
                 }
                 Some(_) => {}
-                None if p.kind == Kind::Dir => fs::remove_dir(&to).at(&to)?,
-                None => fsops::remove(&to)?,
+                None if p.kind == Kind::Dir => fsops::rmdir_at(&home_dir, name).at(&to)?,
+                None => clear(there)?,
             }
             match (&p.before, Stamp::of(&to)?) {
                 (Some(before), Some(work)) => {

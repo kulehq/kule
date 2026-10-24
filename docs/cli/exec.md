@@ -84,7 +84,11 @@ hidden and why.
 
 `--reveal`, `--allow-write`, `--open-network` and `--no-sandbox` open holes
 that Kule closes on purpose. Use them for a command you trust, and as
-narrowly as you can: `--reveal` one folder rather than its parent.
+narrowly as you can: `--reveal` one folder rather than its parent. Each
+says what it opens on stderr before the command runs (`kule: the command
+may write PATH, outside the task's copy`, `kule: the command may read PATH,
+which the sandbox hides`, `kule: the command gets NAME from your
+environment`).
 
 :::
 

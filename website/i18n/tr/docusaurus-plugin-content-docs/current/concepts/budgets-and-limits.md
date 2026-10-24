@@ -140,7 +140,12 @@ Nasıl sayıldıklarına dair notlar:
   paylarıdır.
 - **Disk** yalnızca görevin eklediğini sayar ve bir tarama elverdiği kadar
   sık (en fazla saniyede bir) ölçülür. Büyük bir klasör kendi sınırını
-  tüketmez; görevin başladığı paket önbellekleri de tüketmez.
+  tüketmez; görevin başladığı paket önbellekleri de tüketmez. Bu
+  önbellekler, disk sınırı altındaki ilk çalıştırma başlarken bir kez
+  ölçülür ("Measuring the task's package caches for its disk limit");
+  önbellekleriniz büyükse bu biraz sürebilir. O andan sonra görevin onlara
+  eklediği sayılır. Disk sınırı yoksa hiçbir şey onları taramaz ve bir
+  çalıştırmanın gösterdiği disk rakamı onları dışarıda bırakır.
 - **Hiçbir şey yapmamak**; ajandan mesaj, araç çağrısı ya da çıktı
   gelmemesi, işlemci kullanılmaması ve yeni süreç açılmaması demektir. Uzun
   ve sessiz bir derleme hiçbir şey yapmamak değildir. Sizi bekleyen bir soru

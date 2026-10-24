@@ -169,7 +169,8 @@ took: 41s
 | düz metin | Ajanın cevabı, yazdığı gibi. |
 | `✓ <tool> → step N: <files>` | Başarılı bir araç çağrısı, dönüştüğü adım ve değiştirdiği dosyalar (ilk beşi; geri kalanı `kule steps`'te). `✗` başarısız olduğu anlamına gelir. |
 | `plan:` | Ajan paylaşırsa planı. |
-| `· <note>` | Kule'den ya da ajandan bir not; örneğin ona verilen bir izin. |
+| `· <note>` | Kule'den ya da ajandan bir not. |
+| `· Kule allowed "<call>" (the agent's option: "<label>")` | Ajan izin istedi ve Kule ne yaptı; bu, seçtiği seçeneğin türünden gelir, ajanın kendi etiketi yalnızca arkasından tırnak içinde gelir. Seçenek reddediyorsa `Kule did not allow …` (bir terminalde yalnızca bunlar `✗` ile görünür). |
 | `N file changes: +a ~m -d` | Kopyada olup çalışma klasöründe olmayanlar: oluşturulan, değiştirilen, silinen. Her dosyanın içinde değişen fonksiyonlar, bölümler ya da anahtarlar. Bkz. [kule status](status.md). |
 | `git:` | Depoya ne olduğu: dal hareketleri, yeni nesneler, config ya da hook değişiklikleri. Bkz. [Git](../concepts/git.md). |
 | `net:` | Çalıştırmanın yaptığı her bağlantı ve ona ne olduğu: geçtiyse `tunneled`; Kule onu kestiyse ya da içindeki bir isteği reddettiyse `cut`; kendi hatasıyla bittiyse (host gitti, bağlantı sıfırlandı) `failed`; politika geçirmediyse `refused, …`. `cut` ve `failed` için nedeni `network.jsonl` söyler. |

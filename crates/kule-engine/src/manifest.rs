@@ -172,8 +172,27 @@ pub struct Baseline {
 /// files while Kule looks (git maintenance, IDE indexers), so an entry that
 /// disappears between being listed and being read is left out, not an error.
 pub fn scan(root: &Path) -> Result<Tree> {
+    scan_at_most(root, SCAN_ENTRIES)
+}
+
+/// The most entries one scan reads: a folder past it is refused, saying
+/// so, rather than read without end.
+pub const SCAN_ENTRIES: usize = 1_000_000;
+
+fn scan_at_most(root: &Path, most: usize) -> Result<Tree> {
     let mut tree = Tree::new();
-    for entry in WalkDir::new(root).min_depth(1).follow_links(false) {
+    for (seen, entry) in WalkDir::new(root)
+        .min_depth(1)
+        .follow_links(false)
+        .into_iter()
+        .enumerate()
+    {
+        if seen >= most {
+            return Err(Error::Invalid(format!(
+                "{} holds more than {most} files and folders, more than Kule reads; a task works on a smaller folder",
+                root.display()
+            )));
+        }
         let entry = match entry {
             Ok(entry) => entry,
             Err(e) if vanished(&e) => continue,
@@ -221,4 +240,21 @@ pub fn utf8(path: &Path) -> Result<String> {
     path.to_str()
         .map(str::to_owned)
         .ok_or_else(|| Error::NonUtf8Path(path.to_path_buf()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A folder past the most a scan reads is refused, saying so.
+    #[test]
+    fn a_scan_stops_at_its_most_entries() {
+        let dir = tempfile::TempDir::new().unwrap();
+        for i in 0..5 {
+            std::fs::write(dir.path().join(format!("f{i}")), "").unwrap();
+        }
+        assert_eq!(scan_at_most(dir.path(), 5).unwrap().len(), 5);
+        let e = scan_at_most(dir.path(), 4).unwrap_err().to_string();
+        assert!(e.contains("more than 4 files and folders"), "{e}");
+    }
 }

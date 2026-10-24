@@ -1,0 +1,41 @@
+{
+  "_": "Characters that show nothing yet change what text means or how it reads. The window (highlight.js), Kule's checks of what an extension shows (kule-ext) and the app's notifications from extensions read the same set; both test suites read this list.",
+  "unseen": [
+    "U+0000",
+    "U+0004",
+    "U+0008",
+    "U+000B",
+    "U+000C",
+    "U+000E",
+    "U+0016",
+    "U+001F",
+    "U+007F",
+    "U+008F",
+    "U+009F",
+    "U+00AD",
+    "U+061C",
+    "U+200B",
+    "U+200D",
+    "U+200F",
+    "U+2028",
+    "U+202B",
+    "U+202E",
+    "U+2060",
+    "U+2064",
+    "U+2069",
+    "U+FEFF",
+    "U+E0000",
+    "U+E003F",
+    "U+E007F"
+  ],
+  "seen": [
+    "U+0041",
+    "U+00E9",
+    "U+0130",
+    "U+4E2D",
+    "U+1F600",
+    "U+200A",
+    "U+2030",
+    "U+FEFE"
+  ]
+}

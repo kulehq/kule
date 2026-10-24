@@ -2878,6 +2878,12 @@ function renderQuestions() {
     // Seen for the first time: it opens, and its edge pulses twice.
     if (!questionsSeen.has(q.id)) arrive(`question:${q.id}`, QUESTION_ARRIVES_MS);
     questionsSeen.add(q.id);
+    if (!questionShownAt.has(q.id)) questionShownAt.set(q.id, performance.now());
+    // An approval only once the card has been there a moment.
+    const approving = (remember) => (e) => {
+      if (!answerableYet(questionShownAt.get(q.id), performance.now())) return;
+      inFlight(e.currentTarget, () => answer(q.id, true, remember));
+    };
     return arriving(
         h(
           "div",
@@ -2886,6 +2892,7 @@ function renderQuestions() {
             "div",
             { class: "question-text" },
             h("p", { class: "question-title" }, `The agent wants to connect to ${q.host}:${q.port}`),
+            h("p", { class: "question-inside" }, insideLine(q.inside)),
             h(
               "p",
               { class: "muted" },
@@ -2899,7 +2906,7 @@ function renderQuestions() {
             { class: "question-actions" },
             h(
               "button",
-              { class: "button ask", type: "button", "data-key": `approve:${q.id}`, "aria-label": `Approve ${q.host}:${q.port}`, onclick: (e) => inFlight(e.currentTarget, () => answer(q.id, true)) },
+              { class: "button ask", type: "button", "data-key": `approve:${q.id}`, "aria-label": `Approve ${q.host}:${q.port}`, onclick: approving(false) },
               "Approve"
             ),
             h(
@@ -2909,7 +2916,7 @@ function renderQuestions() {
                 type: "button",
                 "data-key": `remember:${q.id}`,
                 title: `Let ${q.host}:${q.port} through on this folder from now on, without asking`,
-                onclick: (e) => inFlight(e.currentTarget, () => answer(q.id, true, true)),
+                onclick: approving(true),
               },
               "Approve and remember"
             ),
@@ -2943,6 +2950,8 @@ function renderQuestions() {
 
 /** The questions shown at least once, and the task they were shown for. */
 const questionsSeen = new Set();
+/** When each question's card was first shown (see answerableYet). */
+const questionShownAt = new Map();
 let questionsFor;
 /** It opens, then its edge pulses twice. */
 const QUESTION_ARRIVES_MS = 2400;
@@ -2957,7 +2966,7 @@ async function answer(id, approve, remember) {
 }
 
 async function onQuestions(waiting) {
-  tellExtensions("questions", waiting, "questions.read");
+  tellExtensions("questions", questionsForExtensions(waiting), "questions.read");
   const before = new Set(state.questions.map((q) => q.id));
   state.questions = waiting;
   for (const q of waiting) {
@@ -3030,6 +3039,17 @@ function streamItem(item) {
     }
     case "note":
       return h("div", { class: "event" }, h("span", { class: "event-mark" }, "·"), h("span", {}, item.text));
+    case "answered": {
+      // Approved and through: done; refused, by the person or by Kule, or
+      // approved and then cut: said as what it is.
+      const fine = item.answer === "approved" && !item.after;
+      return h(
+        "div",
+        { class: `event ${fine ? "done" : "failed"}`, role: item.after ? "alert" : null },
+        h("span", { class: "event-mark" }, fine ? "✓" : "✗"),
+        h("span", {}, answeredLine(item.host, item.port, item.answer, item.after))
+      );
+    }
     case "finished":
       return h(
         "div",
@@ -3160,7 +3180,7 @@ function absorb(id, event) {
       break;
     }
     case "permission":
-      items.push({ kind: "note", text: `Permission “${event.title}”: ${event.chosen}${event.granted === false ? " (not granted)" : ""}` });
+      items.push({ kind: "note", text: permissionLine(event.title, event.chosen, event.granted !== false) });
       break;
     case "plan":
       items.push({ kind: "note", text: `Plan: ${event.entries.join(" / ")}` });
@@ -3190,6 +3210,14 @@ function fold(task, event) {
     absorb(task, event.event);
   } else if (event.type === "preparing" || event.type === "ended") {
     streamOf(task).push({ kind: "note", text: event.text });
+  } else if (event.type === "answered") {
+    streamOf(task).push({ kind: "answered", host: event.host, port: event.port, answer: event.answer, after: null });
+  } else if (event.type === "after_approval") {
+    // Beside the approval that let it in, while the run is live.
+    const items = streamOf(task);
+    const approved = items.findLast((i) => i.kind === "answered" && i.answer === "approved" && i.host === event.host && i.port === event.port && !i.after);
+    if (approved) approved.after = event.why;
+    else items.push({ kind: "answered", host: event.host, port: event.port, answer: "approved", after: event.why });
   } else if (event.type === "resources") {
     liveMeasure.set(task, event.measured);
   } else if (event.type === "finished") {
@@ -3224,6 +3252,14 @@ async function onRun({ task, seq, event }) {
   }
   // What Kule ended to do what the person asked, said where they asked it.
   if (event.type === "ended") toast(event.text);
+  // A card that leaves without the person's answer, or a connection they
+  // approved that Kule then cut: told wherever the person looks.
+  if ((event.type === "answered" && refusedByKule(event.answer)) || event.type === "after_approval") {
+    const t = state.tasks.find((x) => x.id === task);
+    const line =
+      event.type === "answered" ? answeredLine(event.host, event.port, event.answer, null) : answeredLine(event.host, event.port, "approved", event.why);
+    toast(`${t ? taskName(t) : task}: ${line}`, "error");
+  }
   // A limit stopped a run out of sight: said where it is seen.
   if (event.type === "finished" && event.error?.startsWith("stopped: ") && task !== state.current && !event.error.includes("you stopped")) {
     const t = state.tasks.find((x) => x.id === task);
@@ -3642,7 +3678,7 @@ async function loadReview(id) {
     ...meetsGroup(task),
     ...extensionNotesGroup(id),
     ...ignoredGroup(id, ignored, include, held),
-    ...homeGroup(id, review.home || [], busy, review.home_applied)
+    ...homeGroup(id, review.home || [], busy, review.home_applied, review.home_digest)
   );
   tabify($("effects"));
   extensionsSeeReview(id, review.digest);
@@ -3683,7 +3719,7 @@ function homeDiff(id, path) {
  * task's home layer. Never part of a commit: each is applied to the real
  * home, or thrown away, on its own.
  */
-function homeGroup(id, changes, busy, applied) {
+function homeGroup(id, changes, busy, applied, digest) {
   const act = async (verb, args) => {
     const done = await call(verb, { task: id, ...args });
     if (verb === "apply_home" && done.kept) toast(`Applied; what it replaced is kept in ${done.kept}`);
@@ -3718,7 +3754,7 @@ function homeGroup(id, changes, busy, applied) {
       "ul",
       { class: "files" },
       changes.flatMap((c) => {
-        const apply = armed("Apply", "Click again to write it in ~", busy, () => act("apply_home", { paths: [c.path] }).catch(fail));
+        const apply = armed("Apply", "Click again to write it in ~", busy, () => act("apply_home", { paths: [c.path], reviewed: digest }).catch(fail));
         apply.dataset.key = `home-apply:${c.path}`;
         const file = c.kind === "file";
         // A file that runs as shells start is open from the first look.
@@ -4854,32 +4890,6 @@ async function goBack(id, step) {
   } catch (err) {
     fail(err);
   }
-}
-
-function summarizeConnections(log) {
-  const seen = new Map();
-  for (const c of log) {
-    const secrets = (c.secrets || []).join(", ");
-    const key = `${c.host}:${c.port} ${c.verdict} ${c.outcome} ${c.answer || ""} ${secrets}`;
-    const entry = seen.get(key) || { c, n: 0 };
-    entry.n += 1;
-    seen.set(key, entry);
-  }
-  return [...seen.values()].map(({ c, n }) => {
-    const asked = {
-      approved: `approved by you · ${c.outcome}`,
-      denied: "denied by you",
-      timed_out: "refused, nobody answered in time",
-    };
-    const what =
-      c.verdict === "allow"
-        ? c.outcome
-        : c.verdict === "ask"
-          ? asked[c.answer] || "refused, waits for approval"
-          : "refused, denied";
-    const secrets = (c.secrets || []).length ? ` · with ${c.secrets.join(", ")}` : "";
-    return `${c.host}:${c.port}${n > 1 ? ` ×${n}` : ""} · ${what}${secrets}`;
-  });
 }
 
 async function undo(id) {
@@ -7112,6 +7122,14 @@ async function answerFirst(approve, remember) {
   const q = firstQuestion();
   if (!q) {
     toast("No agent is waiting for an answer");
+    return;
+  }
+  // As the card's own button: a key already on its way approves nothing
+  // that just appeared. Its card may not be on screen: then it counts
+  // from now.
+  if (!questionShownAt.has(q.id)) questionShownAt.set(q.id, performance.now());
+  if (approve && !answerableYet(questionShownAt.get(q.id), performance.now())) {
+    toast(`${q.host}:${q.port} just asked; look at it, then approve`);
     return;
   }
   await answer(q.id, approve, remember);

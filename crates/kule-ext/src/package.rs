@@ -259,15 +259,16 @@ pub enum Source {
 }
 
 impl Source {
-    /// A folder under development. Its digest covers the manifest only, so
-    /// code changes need no new approval but new permissions do.
+    /// A folder under development. Its digest covers every file it
+    /// carries, as a package of it would: a change to its code holds it
+    /// for approval again, as a new permission does.
     pub fn folder(dir: &Path) -> Result<Source> {
         let bytes = read_in(dir, MANIFEST)?;
         let manifest = Manifest::parse(&bytes)?;
         for file in manifest.files() {
             read_in(dir, file)?;
         }
-        let digest = format!("dev-{}", blake3::hash(&bytes).to_hex());
+        let digest = format!("dev-{}", folder_digest(dir)?);
         Ok(Source::Folder {
             dir: dir.to_path_buf(),
             manifest,
@@ -393,6 +394,37 @@ pub fn pack(dir: &Path) -> Result<Vec<u8>> {
     // What was packed must open; better to learn it now than at install.
     Package::open(bytes.clone())?;
     Ok(bytes)
+}
+
+/// A hash of every file [`pack`] would carry from `dir`, by name and
+/// content, within the same limits.
+fn folder_digest(dir: &Path) -> Result<String> {
+    let mut files = Vec::new();
+    collect(dir, "", &mut files)?;
+    if files.len() > MAX_ENTRIES {
+        return Err(invalid(format!(
+            "the folder holds over {MAX_ENTRIES} files"
+        )));
+    }
+    let mut hasher = blake3::Hasher::new();
+    let mut total = 0u64;
+    for name in &files {
+        let bytes = read_in(dir, name)?;
+        total += bytes.len() as u64;
+        if total > MAX_TOTAL {
+            return Err(invalid(format!(
+                "the folder holds over {} MiB",
+                MAX_TOTAL / 1024 / 1024
+            )));
+        }
+        // Each length first: no two folders hash alike by moving bytes
+        // from one file into the name of the next.
+        hasher.update(&(name.len() as u64).to_le_bytes());
+        hasher.update(name.as_bytes());
+        hasher.update(&(bytes.len() as u64).to_le_bytes());
+        hasher.update(&bytes);
+    }
+    Ok(hasher.finalize().to_hex().to_string())
 }
 
 fn collect(dir: &Path, prefix: &str, files: &mut Vec<String>) -> Result<()> {

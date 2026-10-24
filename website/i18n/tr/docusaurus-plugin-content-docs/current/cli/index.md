@@ -42,7 +42,7 @@ Bunlar her komut ve alt komutta çalışır.
 
 | Seçenek | Değer | Varsayılan | Anlamı |
 | --- | --- | --- | --- |
-| `--home` | yol | `~/.kule` | Kule'nin görevleri, ayarları, gizli değerleri ve politikayı tuttuğu yer. `KULE_HOME` ortam değişkeniyle de verilebilir; ikisi birden verilirse seçenek kazanır. |
+| `--home` | yol | `~/.kule` | Kule'nin görevleri, ayarları, gizli değerleri ve politikayı tuttuğu yer. `KULE_HOME` ortam değişkeniyle de verilebilir; ikisi birden verilirse seçenek kazanır. Sizin bir klasörünüz olmalıdır, link değil: Kule yoksa onu `0700` olarak oluşturur, başkalarına açık olanı kapatır (ve bunu söyler), başka her şeyi reddeder. |
 | `-h`, `--help` | | | Komutun yardımını yazdırır. |
 | `-V`, `--version` | | | Kule'nin sürümünü yazdırır (yalnızca en üst düzeyde). |
 

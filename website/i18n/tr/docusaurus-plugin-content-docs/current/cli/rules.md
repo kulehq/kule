@@ -39,10 +39,13 @@ Bazı şeyler asla hatırlanmaz:
 
 - politikanın **reddettikleri** (örneğin yeni bir git hook'u);
 - bir dosyanın adından başka bir nedenle bekleyenler: toplu silme, geçmişi
-  yeniden yazma, bir bağlantı (link), git config. Yalnızca
+  yeniden yazma, bir bağlantı (link), git config, çalıştırılabilir yapılan
+  bir dosya, değişen genişletilmiş öznitelikler. Yalnızca
   `manifests-and-lockfiles`, `project-files` ve `automation` kuralları kalıcı
   olarak yanıtlanabilir;
-- bir deponun kendi kurallarını tuttuğu `.kule/` altındaki her şey.
+- bir deponun kendi kurallarını tuttuğu `.kule/` altındaki her şey;
+- deponun kendi bir kuralı (`repo:<id>`), `@id`'si ne olursa olsun:
+  hatırlanan bir yanıt, deponun sorduğunu asla iptal etmez.
 
 careful politikada her dosya değişikliği ayrıca hatırlanamayan `careful`
 kuralını da bekler; bu yüzden orada hatırlanan bir dosya geçmez.

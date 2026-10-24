@@ -65,3 +65,93 @@ test("the Linux note is the engine's own words", () => {
   const engine = fs.readFileSync(path.join(__dirname, "..", "..", "..", "kule-engine", "src", "sandbox.rs"), "utf8");
   assert.ok(engine.includes(`pub const UNREPORTED: &str = "${told.UNREPORTED}";`));
 });
+
+// --- Connections and their questions ------------------------------------------
+
+const connection = (fields) => ({ host: "api.example", port: 443, verdict: "allow", rules: [], outcome: "tunneled", secrets: [], ...fields });
+
+test("an approval card says whether Kule looks inside, and what it does there", () => {
+  assert.match(told.insideLine(null), /^Approving lets it through as a tunnel: Kule sees the host and port, not what goes over it/);
+  assert.match(told.insideLine(null), /Kule cuts it and says so here/);
+  const filled = told.insideLine({ fills: ["STRIPE_KEY"], read_only: false });
+  assert.match(filled, /^Kule looks inside this connection: it fills STRIPE_KEY into its requests\./);
+  assert.match(told.insideLine({ fills: [], read_only: true }), /lets commands read from it, never send to it/);
+});
+
+test("Kule's own refusals are never told as the person's", () => {
+  for (const answer of ["timed_out", "withdrawn", "too_many"]) {
+    const line = told.answeredLine("api.example", 443, answer, null);
+    assert.match(line, /^Kule refused api\.example:443/, line);
+    assert.ok(told.refusedByKule(answer));
+    const what = told.connectionWhat(connection({ verdict: "ask", outcome: "refused", answer }));
+    assert.match(what, /^refused by Kule: /, what);
+    assert.doesNotMatch(what, /by you/);
+  }
+  assert.ok(!told.refusedByKule("denied") && !told.refusedByKule("approved"));
+  assert.equal(told.answeredLine("api.example", 443, "denied", null), "You denied api.example:443");
+});
+
+test("a connection approved and then cut says so, with why, beside the approval", () => {
+  assert.equal(
+    told.answeredLine("api.example", 443, "approved", "cut by Kule: its TLS hello asks for other.example"),
+    "You approved api.example:443; then cut by Kule: its TLS hello asks for other.example"
+  );
+  const cut = connection({ verdict: "ask", outcome: "cut", answer: "approved", cut: "its TLS hello asks for other.example" });
+  assert.equal(told.connectionWhat(cut), "approved by you; then cut by Kule: its TLS hello asks for other.example");
+  const refused = connection({ verdict: "ask", outcome: "refused", answer: "approved", refused: "10.0.0.1 is an address on this computer or its network" });
+  assert.match(told.connectionWhat(refused), /^approved by you; then refused by Kule: 10\.0\.0\.1 is an address/);
+  assert.equal(told.connectionWhat(connection({ verdict: "ask", answer: "approved" })), "approved by you · tunneled");
+  assert.equal(told.connectionWhat(connection({ outcome: "failed", failed: "the host went away" })), "failed on its own: the host went away");
+});
+
+test("the Timeline keeps connections with a different why apart, the same ones counted", () => {
+  const lines = told.summarizeConnections([
+    connection({ outcome: "cut", cut: "one" }),
+    connection({ outcome: "cut", cut: "one" }),
+    connection({ outcome: "cut", cut: "two" }),
+    connection({ secrets: ["API_KEY"] }),
+  ]);
+  assert.deepEqual(lines, [
+    "api.example:443 ×2 · cut by Kule: one",
+    "api.example:443 · cut by Kule: two",
+    "api.example:443 · tunneled · with API_KEY",
+  ]);
+});
+
+test("extensions learn a question's kind, never the secrets Kule would fill", () => {
+  const [q] = told.questionsForExtensions([{ id: 1, host: "api.example", port: 443, inside: { fills: ["STRIPE_KEY"], read_only: false } }]);
+  assert.deepEqual(q.inside, { read_only: false, fills_secrets: true });
+  assert.doesNotMatch(JSON.stringify(q), /STRIPE_KEY/);
+  assert.equal(told.questionsForExtensions([{ id: 2, inside: null }])[0].inside, null);
+});
+
+test("a permission note says what Kule did, the agent's label only quoted after", () => {
+  // An agent may label a refusal "Allow": the kind decides, not the label.
+  assert.equal(told.permissionLine("Run rm -rf", "Allow", false), "Kule did not allow “Run rm -rf” (the agent's option: “Allow”)");
+  assert.equal(told.permissionLine("Edit a.txt", "Yes", true), "Kule allowed “Edit a.txt” (the agent's option: “Yes”)");
+});
+
+test("an extension learns which task is chosen only with tasks.read", () => {
+  assert.equal(told.frameContext({ panel: "notes" }, "t1", new Set(["events.read"])).task, null);
+  assert.deepEqual(told.frameContext({ panel: "notes" }, "t1", new Set(["tasks.read"])), { panel: "notes", task: "t1" });
+  assert.equal(told.frameContext({}, undefined, new Set(["tasks.read"])).task, null);
+});
+
+test("the window's unseen characters are the set Kule's checks of extensions use", () => {
+  const fixture = JSON.parse(fs.readFileSync(path.join(__dirname, "unseen.json"), "utf8"));
+  const source = fs.readFileSync(path.join(__dirname, "..", "highlight.js"), "utf8");
+  const literal = source.match(/const UNSEEN = \/(.+)\/gu;/);
+  assert.ok(literal, "UNSEEN is where it was");
+  const unseen = new RegExp(literal[1], "u");
+  const char = (u) => String.fromCodePoint(parseInt(u.slice(2), 16));
+  for (const u of fixture.unseen) assert.ok(unseen.test(char(u)), u);
+  for (const u of fixture.seen) assert.ok(!unseen.test(char(u)), u);
+});
+
+test("a question takes an approval only once its card has been there a moment", () => {
+  assert.ok(!told.answerableYet(1000, 1000));
+  assert.ok(!told.answerableYet(1000, 1000 + told.QUESTION_GUARD_MS - 1));
+  assert.ok(told.answerableYet(1000, 1000 + told.QUESTION_GUARD_MS));
+  assert.ok(!told.answerableYet(undefined, 5000));
+  assert.ok(told.QUESTION_GUARD_MS >= 500);
+});

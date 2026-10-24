@@ -1261,8 +1261,13 @@ select:focus-visible {
   font-weight: 650;
 }
 
-.question-text .muted {
+.question-text .muted,
+.question-inside {
   font-size: calc(13px * var(--text-scale));
+}
+
+.question-inside {
+  margin: 4px 0;
 }
 
 .countdown {

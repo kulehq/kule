@@ -130,6 +130,11 @@ enum HomeCmd {
         paths: Vec<String>,
         #[arg(long, conflicts_with = "paths")]
         all: bool,
+        /// The digest `kule home` printed for the changes you reviewed;
+        /// they are applied only while they are still those. Without it,
+        /// on a terminal, Kule names what it would apply and asks.
+        #[arg(long, value_name = "DIGEST")]
+        reviewed: Option<String>,
     },
     /// Throw changes away; the next run starts from your home as it is.
     Discard {
@@ -432,6 +437,11 @@ enum Cmd {
         /// approved now (manifests, CI and project files).
         #[arg(long, requires = "approve")]
         remember: bool,
+        /// With --approve: the digest `kule status` printed for the changes
+        /// you reviewed; only those are committed. Without it, on a
+        /// terminal, Kule lists what it would approve and asks.
+        #[arg(long, requires = "approve", value_name = "DIGEST")]
+        reviewed: Option<String>,
     },
     /// Show or set the limits on agent runs: for EVERY task (the default),
     /// for EACH task in a group (--group ID), or for ONE task (--task ID).
@@ -557,6 +567,9 @@ fn run() -> Result<ExitCode> {
             .map(|h| PathBuf::from(h).join(".kule"))
             .ok_or_else(|| anyhow!("HOME is not set; pass --home or KULE_HOME"))?,
     };
+    if let Some(note) = kule_daemon::check_home(&home).map_err(|e| anyhow!(e))? {
+        eprintln!("kule: {note}");
+    }
     match cli.command {
         Cmd::New { workspace } => {
             let task = Task::create(&home, &workspace)?;
@@ -735,6 +748,9 @@ fn run() -> Result<ExitCode> {
                 child.args(&command[1..]).current_dir(task.copy());
                 child
             } else {
+                if task.measures_caches()? {
+                    eprintln!("kule: {}", kule_engine::MEASURING_CACHES);
+                }
                 let mut sandbox = Sandbox::for_task(&task)?;
                 if let Some(person) = std::env::var_os("HOME") {
                     let person = Path::new(&person);
@@ -747,17 +763,30 @@ fn run() -> Result<ExitCode> {
                         eprintln!("kule: {note}");
                     }
                 }
+                // What opens the sandbox wider is said, as --no-sandbox is.
                 for path in &allow_write {
                     sandbox.allow_write(path)?;
+                    eprintln!(
+                        "kule: the command may write {}, outside the task's copy",
+                        paint::plain_line(&path.display().to_string())
+                    );
                 }
                 for path in &hide {
                     sandbox.hide(path)?;
                 }
                 for path in &reveal {
                     sandbox.reveal(path)?;
+                    eprintln!(
+                        "kule: the command may read {}, which the sandbox hides",
+                        paint::plain_line(&path.display().to_string())
+                    );
                 }
                 for name in &pass_env {
                     sandbox.pass_env(name);
+                    eprintln!(
+                        "kule: the command gets {} from your environment",
+                        paint::plain_line(name)
+                    );
                 }
                 let network = if no_network {
                     Network::Deny
@@ -864,6 +893,9 @@ fn run() -> Result<ExitCode> {
             let person = kule_engine::CacheSources::from_env().map(|s| s.home);
             let proxy =
                 Proxy::start_with_keys(&task, policy, &profile.agent_keys(person.as_deref()))?;
+            if task.measures_caches()? {
+                eprintln!("kule: {}", kule_engine::MEASURING_CACHES);
+            }
             let kule_acp::Launch {
                 command,
                 sandbox,
@@ -1106,8 +1138,16 @@ fn run() -> Result<ExitCode> {
             let task = Task::open(&home, &task)?;
             let set = task.effects()?;
             // On what a plain commit would take: ignored paths stay behind.
-            let committed = set.to_commit(false);
+            // Read as a commit reads it (what each file holds and gains),
+            // so the ruling is the one a commit gets.
+            let committed = if set.to_commit(false).is_empty() {
+                set.to_commit(false)
+            } else {
+                task.pending(false)?
+            };
             let ruling = load_policy(&home, &task)?.judge(&committed);
+            // What `kule commit --approve --reviewed` takes to approve these.
+            let digest = (!committed.is_empty()).then(|| committed.digest());
             if json {
                 let outline = task.outline(&committed).unwrap_or_default();
                 let both = serde_json::json!({
@@ -1118,6 +1158,7 @@ fn run() -> Result<ExitCode> {
                     "budget": task.budget()?,
                     "home": task.home_changes()?,
                     "behind": task.behind()?,
+                    "digest": digest,
                 });
                 println!("{}", serde_json::to_string_pretty(&both)?);
             } else {
@@ -1131,6 +1172,18 @@ fn run() -> Result<ExitCode> {
                 print_home(&task)?;
                 if !committed.is_empty() {
                     print_ruling(&ruling);
+                }
+                if let Some(digest) = &digest {
+                    println!(
+                        "{} {digest} {}",
+                        paint::dim("digest:"),
+                        paint::dim(&format!(
+                            "(to approve these: kule commit {} --approve --reviewed {digest})",
+                            task.id()
+                        ))
+                    );
+                }
+                if !committed.is_empty() {
                     print_meetings(&home, &task)?;
                 }
                 if task.workspace_exists() {
@@ -1144,9 +1197,30 @@ fn run() -> Result<ExitCode> {
             approve,
             include_ignored,
             remember,
+            reviewed,
         } => {
             let task = Task::open(&home, &task)?;
             let policy = load_policy(&home, &task)?;
+            // Approving takes what the person reviewed: the digest `kule
+            // status` printed, or a yes to what is listed here and now.
+            let reviewed = match reviewed {
+                Some(digest) => Some(digest),
+                None if approve => {
+                    let pending = task.pending(include_ignored)?;
+                    if pending.is_empty() {
+                        None
+                    } else {
+                        print_set(&task, &pending);
+                        print_ruling(&policy.judge(&pending));
+                        if !asked("Approve and commit these changes?")? {
+                            eprintln!("kule: not committed");
+                            return Ok(ExitCode::from(3));
+                        }
+                        Some(pending.digest())
+                    }
+                }
+                None => None,
+            };
             // What to remember is read before the commit takes the changes.
             let keep: Vec<kule_engine::Allowance> = if remember {
                 policy
@@ -1172,7 +1246,11 @@ fn run() -> Result<ExitCode> {
             } else {
                 Vec::new()
             };
-            let outcome = task.commit_with(include_ignored, policy.gate(approve));
+            let gate = policy.gate(approve);
+            let outcome = task.commit_with(include_ignored, |set: &kule_engine::EffectSet| {
+                set.check_reviewed(approve, reviewed.as_deref())?;
+                gate(set)
+            });
             tell_ended(&task);
             match outcome {
                 Ok(Some(cp)) => {
@@ -1442,10 +1520,16 @@ async fn print_events(
                 granted,
             } => {
                 if !tty {
-                    line(format!("· permission \"{title}\": {chosen}"), &mut last);
+                    line(
+                        format!("· {}", permission_note(&title, &chosen, granted)),
+                        &mut last,
+                    );
                 } else if !granted {
                     line(
-                        format!("  {} {title}: {chosen}", paint::red("✗ permission")),
+                        format!(
+                            "  {}",
+                            paint::red(&format!("✗ {}", permission_note(&title, &chosen, granted)))
+                        ),
                         &mut last,
                     );
                 }
@@ -1523,13 +1607,33 @@ fn print_spent(task: &Task) -> Result<()> {
     Ok(())
 }
 
-/// The connections a command made, grouped by host, port and outcome.
+/// What Kule answered an agent asking for permission: what Kule did, from
+/// the option's kind, and the agent's own words for it only quoted after.
+fn permission_note(title: &str, chosen: &str, granted: bool) -> String {
+    let did = if granted {
+        "Kule allowed"
+    } else {
+        "Kule did not allow"
+    };
+    format!("{did} \"{title}\" (the agent's option: \"{chosen}\")")
+}
+
+/// The connections a command made, grouped by host, port and outcome, and
+/// for one that did not go through as asked, why.
 fn print_connections(log: &[Connection]) {
+    for line in connection_lines(log) {
+        println!("{line}");
+    }
+}
+
+/// [`print_connections`]' lines.
+fn connection_lines(log: &[Connection]) -> Vec<String> {
+    let mut lines = Vec::new();
     let mut seen: Vec<(&Connection, usize)> = Vec::new();
     for c in log {
         match seen.iter_mut().find(|(s, _)| {
-            (&s.host, s.port, s.verdict, &s.outcome, &s.secrets)
-                == (&c.host, c.port, c.verdict, &c.outcome, &c.secrets)
+            (&s.host, s.port, s.verdict, &s.outcome, &s.secrets, s.told())
+                == (&c.host, c.port, c.verdict, &c.outcome, &c.secrets, c.told())
         }) {
             Some((_, n)) => *n += 1,
             None => seen.push((c, 1)),
@@ -1545,7 +1649,11 @@ fn print_connections(log: &[Connection]) {
         // is refused at once.
         let what = match c.verdict {
             Verdict::Allow if c.outcome == "tunneled" => paint::green(&c.outcome),
-            Verdict::Allow => paint::yellow(&c.outcome),
+            // Why comes from what went over it (a name the client chose,
+            // say): one line, nothing a terminal would act on.
+            Verdict::Allow => paint::yellow(&paint::plain_line(
+                &c.told().unwrap_or_else(|| c.outcome.clone()),
+            )),
             Verdict::Ask => {
                 paint::red("refused, would wait for approval; the command line asks no one")
             }
@@ -1556,14 +1664,15 @@ fn print_connections(log: &[Connection]) {
         } else {
             format!(" · with {}", paint::cyan(&c.secrets.join(", ")))
         };
-        println!(
+        lines.push(format!(
             "{} {}:{}{times} · {what}{secrets} {}",
             paint::dim("net:"),
             c.host,
             c.port,
             paint::dim(&format!("({})", c.rules.join(", ")))
-        );
+        ));
     }
+    lines
 }
 
 /// What the sandbox refused, each hint once after the refusals it explains.
@@ -1714,6 +1823,15 @@ fn print_home(task: &Task) -> Result<()> {
             paint::plain_line(&c.path)
         );
     }
+    let digest = kule_engine::home_digest(&changes);
+    println!(
+        "{} {digest} {}",
+        paint::dim("home digest:"),
+        paint::dim(&format!(
+            "(to apply them: kule home {} apply PATH --reviewed {digest})",
+            task.id()
+        ))
+    );
     Ok(())
 }
 
@@ -1776,8 +1894,32 @@ fn home_cmd(home: &Path, task: &str, action: HomeCmd) -> Result<()> {
             }
             print_home(&task)?;
         }
-        HomeCmd::Apply { paths, all } => {
-            let applied = task.apply_home(&pick(paths, all)?);
+        HomeCmd::Apply {
+            paths,
+            all,
+            reviewed,
+        } => {
+            let paths = pick(paths, all)?;
+            // Applied only as reviewed: the digest `kule home` printed, or
+            // a yes to what is named here and now.
+            let reviewed = match reviewed {
+                Some(digest) => digest,
+                None => {
+                    let changes = task.home_changes()?;
+                    for path in paths
+                        .iter()
+                        .filter(|p| changes.iter().any(|c| &c.path == *p))
+                    {
+                        println!("  ~/{}", paint::plain_line(path));
+                    }
+                    if !asked("Apply these to your home?")? {
+                        eprintln!("kule: nothing applied");
+                        return Ok(());
+                    }
+                    kule_engine::home_digest(&changes)
+                }
+            };
+            let applied = task.apply_home(&paths, &reviewed);
             tell_ended(&task);
             let applied = applied?;
             if applied.paths.is_empty() {
@@ -2550,6 +2692,22 @@ fn through_daemon<T: serde::de::DeserializeOwned>(
     direct().map_err(|e| anyhow!(e))
 }
 
+/// The person's yes on a terminal, to what is shown above; with no
+/// terminal, nobody is there to give it.
+fn asked(question: &str) -> Result<bool> {
+    use std::io::{BufRead, IsTerminal, Write};
+    if !std::io::stdin().is_terminal() {
+        return Err(anyhow!(
+            "no terminal to ask on; review with `kule status` and pass the digest it prints with --reviewed"
+        ));
+    }
+    print!("{question} [y/N] ");
+    std::io::stdout().flush()?;
+    let mut answer = String::new();
+    std::io::stdin().lock().read_line(&mut answer)?;
+    Ok(matches!(answer.trim().to_lowercase().as_str(), "y" | "yes"))
+}
+
 /// The person's yes on a terminal; elsewhere --yes must give it.
 fn confirmed(question: &str, yes: bool) -> Result<bool> {
     use std::io::{BufRead, IsTerminal, Write};
@@ -2576,6 +2734,12 @@ fn print_listed(listed: &kule_ext::Listed) {
             &listed.new_permissions,
             &listed.new_hosts,
         );
+        if !listed.together.is_empty() {
+            println!(
+                "warning:     together with {}, it can read your work and send data",
+                listed.together.join(", ")
+            );
+        }
     }
     if let Some(why) = &listed.held {
         println!("held:        {why}");
@@ -3023,5 +3187,58 @@ fn describe_ref(change: &RefChange) -> String {
             }
             line
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn connection(outcome: &str) -> Connection {
+        Connection {
+            time_unix: 0,
+            host: "api.example".into(),
+            port: 443,
+            verdict: Verdict::Allow,
+            rules: vec!["agent-api".into()],
+            outcome: outcome.into(),
+            answer: None,
+            secrets: Vec::new(),
+            cut: None,
+            failed: None,
+            refused: None,
+        }
+    }
+
+    /// An agent may label a refusal "Allow": the kind decides what is said.
+    #[test]
+    fn a_permission_note_says_what_kule_did_before_the_agent_s_label() {
+        assert_eq!(
+            permission_note("Run rm -rf", "Allow", false),
+            "Kule did not allow \"Run rm -rf\" (the agent's option: \"Allow\")"
+        );
+        assert!(permission_note("Edit", "No", true).starts_with("Kule allowed \"Edit\""));
+    }
+
+    /// A connection that did not go through as asked says why, and each
+    /// why stays its own line; what the client chose cannot make a line of
+    /// its own.
+    #[test]
+    fn a_cut_connection_is_printed_with_why() {
+        let mut cut = connection("cut");
+        cut.cut = Some("its TLS hello asks for other.example\nnet: fake".into());
+        let mut other = connection("cut");
+        other.cut = Some("it hid the name it asks for".into());
+        let lines = connection_lines(&[cut, other, connection("tunneled")]);
+        assert_eq!(lines.len(), 3, "{lines:?}");
+        assert!(
+            lines[0].contains("cut by Kule: its TLS hello asks for other.example\\u{a}net: fake"),
+            "{lines:?}"
+        );
+        assert!(
+            lines[1].contains("cut by Kule: it hid the name"),
+            "{lines:?}"
+        );
+        assert!(lines[2].contains("tunneled"), "{lines:?}");
     }
 }

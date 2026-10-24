@@ -167,6 +167,8 @@ policy: passes on its own
 | `in your home, caught for review` | Ev dizininize yapılan yazmalar; bkz. [kule home](home.md). |
 | `policy: <verdict>` | Genel karar: `passes on its own` (kendiliğinden geçer), `waits for approval` (onay bekler) ya da `denied` (reddedilir). |
 | `  <subject> · <verdict> (<rule>)` | Doğrudan geçmeyen her değişiklik ve arkasındaki kural. Bkz. [Yerleşik politika kuralları](../reference/policy-rules.md). |
+| `digest: <hex> (to approve these: …)` | Bu değişikliklerin hash'i. `kule commit TASK --approve --reviewed <hex>` onları yalnızca hâlâ bunlar oldukları sürece commit eder. |
+| `home digest: <hex>` | Ev dizininizdeki yazmalar için aynısı; bkz. [kule home](home.md). |
 | `task <id> changes them too:` | Aynı klasördeki başka bir görev aynı dosyaları değiştiriyor; altındaki satırlar dosyayı ve fonksiyonu, bölümü ya da anahtarı adlandırır. |
 | `the workspace changed since the task's copy …` | `kule sync`'in kopyaya alacakları. `(the task changed it too)`, iki tarafın da değiştirdiği dosyaları işaretler. |
 | `workspace <path> is gone (moved or deleted); commit and undo are refused` | Gerçek klasör artık yerinde değil. |
@@ -187,6 +189,7 @@ En fazla 40 dosya listelenir; geri kalanlar sayılır (`… N more (kule status 
 | `budget` | Görevin kendi bütçesi ya da `null`. |
 | `home` | Ev dizininize yapılan ve incelemeyi bekleyen yazmalar. |
 | `behind` | `changed`: son sync'ten beri çalışma klasörünün değiştirdiği yollar; `both`: görevin de değiştirdikleri; `repository`: commit'lerin, dalların ya da index'in değişip değişmediği. |
+| `digest` | Düz bir commit'in alacağı değişikliklerin hash'i, `kule commit --approve --reviewed` için; değişiklik yoksa `null`. |
 
 ```json
 {
@@ -208,7 +211,8 @@ En fazla 40 dosya listelenir; geri kalanlar sayılır (`… N more (kule status 
   "spent": { "runs": 0, "tokens": 0, "cost": [], "unpriced_runs": 0 },
   "budget": null,
   "home": [],
-  "behind": { "changed": ["src/main.rs"], "both": ["src/main.rs"], "repository": false }
+  "behind": { "changed": ["src/main.rs"], "both": ["src/main.rs"], "repository": false },
+  "digest": "9f2c…e41a"
 }
 ```
 

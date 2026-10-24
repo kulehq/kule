@@ -40,17 +40,21 @@ kule ext approve me.hello    # çalışmasına izin ver
 ```
 
 Paneli komut paletinden (`Show Hello`) açın ya da sekmesini istediğiniz
-yere sürükleyin. Siz yazarken kod değişiklikleri olduğu gibi çalışır;
-`kule-extension.json`'daki bir değişiklik ise yeniden onay bekler.
+yere sürükleyin. Digest'i, klasördeki ve onun bir paketinin taşıyacağı her
+dosyayı kapsar; bu yüzden koddaki ya da `kule-extension.json`'daki her
+değişiklik, çalışmadan önce yeniden onay bekler (`kule ext approve` ya da
+kartındaki **Approve the change**).
 
 `kule ext approve`, neyi onaylayacağını gösterir ve önce sorar; bir betik
 `--yes` verir. Uygulama açıkken `kule ext` değişikliklerini daemon üzerinden
 yapar; böylece uygulama bunları hemen duyar.
 
-Klasör, yalnızca sizin yazabildiğiniz bir yerde olmalıdır. Kodu onaysız
-çalıştığı için Kule, bir ajanın yeniden yazabileceği klasörleri reddeder:
-`/tmp`, `/var/tmp`, `/dev/shm`, Kule'nin ev dizini ya da bir ajanın kendi
-dizinleri altındakiler.
+Klasör, yalnızca sizin yazabildiğiniz bir yerde olmalıdır. Kule, bir ajanın
+yeniden yazabileceği klasörleri reddeder: `/tmp`, `/var/tmp`, `/dev/shm`,
+Kule'nin ev dizini, bir ajanın kendi dizinleri ya da bir görevin üzerinde
+çalıştığı bir klasör (ajanın işi bir commit ile oraya ulaşır) altındakiler.
+Sonradan böyle bir klasör üzerinde açılan bir görev, eklentiyi o andan
+itibaren bekletir ve kartı nedenini söyler.
 
 Paylaşmak için:
 
@@ -166,7 +170,11 @@ Hiçbir izin şunlara ulaşamaz:
 - daemon'un token'ı.
 
 Onay ekranı, bir eklenti hem kişinin işini okuyup hem de dışarı veri
-gönderebildiğinde uyarır.
+gönderebildiğinde uyarır. Çalışan başka bir eklentiyle birlikte bunu
+yapabildiğinde de uyarır: biri okur, öbürü gönderir ("Together with
+acme.sender, it can read your work and send data"). Onu onaylamak çifti
+onaylar; kimsenin onaylamadığı bir çift (örneğin her biri öbürü kapalıyken
+onaylanmışsa), biri öbürünün yanında onaylanana kadar ikisini de bekletir.
 
 ## SDK {#the-sdk}
 
@@ -211,9 +219,9 @@ await kule.net.fetch("https://hooks.slack.com/…", { method: "POST", headers, b
 | --- | --- | --- |
 | `run` | `{ task, seq, event }`: bir ajanın olayları | `events.read` |
 | `task` | `{ task, change }`: `created`, `committed`, `rolled_back`, `undone`, `removed`, `went_back`, `synced` | `events.read` |
-| `questions` | Şu an bekleyen sorular | `questions.read` |
+| `questions` | Şu an bekleyen sorular. Her biri bağlantının türünü söyler (`inside`: tünel için `null`, ya da `{ read_only, fills_secrets }`), Kule'nin dolduracağı gizli değerlerin adlarını asla söylemez | `questions.read` |
 | `review` | `{ task, digest }`: yeni değişikliklerle bir inceleme çizildi | `review.read` |
-| `task-selected` | `{ task }`: kişi başka bir görev seçti | — |
+| `task-selected` | `{ task }`: kişi başka bir görev seçti | `tasks.read` |
 | `theme` | `{ scheme, colors }`. SDK `--kule-<part>` CSS değişkenlerini zaten ayarlamıştır (`--kule-bg`, `--kule-text`, `--kule-accent`, …) | — |
 | `config` | `{ key, value }`: kişi bir ayarı değiştirdi | — |
 
@@ -236,11 +244,13 @@ Olaylar yalnızca masaüstü uygulaması açıkken gelir.
   yüklenir. Bir paneli başka bir bölgeye taşımak sayfasını yeniden yükler.
 - **Her yükleme tazedir:** sayfa yeni bir bağlantı alır ve `kule.ready`
   yeniden çözülür (resolve). Kalıcı olması gerekenleri değişkenlerde değil
-  `kule.storage`'da tutun. `kule.context.task`, sayfa yüklendiğinde seçili
-  olan görevdir; sonrakiler için `task-selected`'i dinleyin.
-- **Siz yazarken:** `kule ext dev` ile kurulan bir klasör canlı okunur.
-  Settings → Extensions'taki kartında **Reload** vardır; bu, çerçevelerini
-  kodun şimdiki haliyle yeniden başlatır.
+  `kule.storage`'da tutun. `tasks.read` ile `kule.context.task`, sayfa
+  yüklendiğinde seçili olan görevdir (onsuz `null`); sonrakiler için
+  `task-selected`'i dinleyin.
+- **Siz yazarken:** `kule ext dev` ile kurulan bir klasör canlı okunur ve
+  her değişiklik yeniden onay bekler. Onaylandıktan sonra Settings →
+  Extensions'taki kartında **Reload** vardır; bu, çerçevelerini kodun
+  şimdiki haliyle yeniden başlatır.
 
 ## Hata ayıklama {#debugging}
 

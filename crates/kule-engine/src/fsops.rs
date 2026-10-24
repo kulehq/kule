@@ -1,6 +1,6 @@
 //! Filesystem moves shared by task creation, commit, rollback and undo.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
 use std::io::{self, Read};
 use std::os::unix::fs::{PermissionsExt, symlink};
@@ -495,9 +495,12 @@ fn parent_beneath<'a>(root: &File, dst: &Path, rel: &'a str) -> Result<(File, &'
         let fd = unsafe { libc::openat(dir.as_raw_fd(), cname.as_ptr(), flags) };
         if fd == -1 {
             let e = io::Error::last_os_error();
-            if e.raw_os_error() == Some(libc::ELOOP) {
+            // Linux says ELOOP for a link, macOS ENOTDIR as for a file.
+            if matches!(e.raw_os_error(), Some(libc::ELOOP | libc::ENOTDIR))
+                && entry_at(&dir, part).ok().flatten() == Some(Kind::Symlink)
+            {
                 return Err(Error::Invalid(format!(
-                    "{} is a link, which a commit does not write through",
+                    "{} is a link, which Kule does not write through",
                     at.display()
                 )));
             }
@@ -534,8 +537,50 @@ fn temp_name() -> String {
     format!(".kule-tmp-{}-{n}", std::process::id())
 }
 
+/// The folder that holds `rel` under the folder `root`, opened through
+/// every folder on the way without following a link, and `rel`'s last name
+/// in it: what a write through descriptors starts from.
+pub(crate) fn open_parent<'a>(root: &Path, rel: &'a str) -> Result<(File, &'a str)> {
+    let top = File::open(root).at(root)?;
+    parent_beneath(&top, root, rel)
+}
+
+/// Removes the empty folder `name` in `dir`; one already gone is not an
+/// error.
+pub(crate) fn rmdir_at(dir: &File, name: &str) -> io::Result<()> {
+    use std::os::fd::AsRawFd;
+    let cname = plain_name(name)?;
+    // SAFETY: a directory descriptor we own and a NUL-terminated name.
+    if unsafe { libc::unlinkat(dir.as_raw_fd(), cname.as_ptr(), libc::AT_REMOVEDIR) } == -1 {
+        let e = io::Error::last_os_error();
+        if e.raw_os_error() != Some(libc::ENOENT) {
+            return Err(e);
+        }
+    }
+    Ok(())
+}
+
+/// Makes `name` in `dir` a link to `target`: made aside and renamed over
+/// what is there (a file or a link), in one step.
+pub(crate) fn link_at(dir: &File, name: &str, target: &Path) -> io::Result<()> {
+    use std::os::fd::AsRawFd;
+    use std::os::unix::ffi::OsStrExt;
+    let to = std::ffi::CString::new(target.as_os_str().as_bytes())?;
+    let tmp = temp_name();
+    let ctmp = plain_name(&tmp)?;
+    // SAFETY: NUL-terminated strings and a directory descriptor we own.
+    if unsafe { libc::symlinkat(to.as_ptr(), dir.as_raw_fd(), ctmp.as_ptr()) } == -1 {
+        return Err(io::Error::last_os_error());
+    }
+    let placed = rename_at(dir, &tmp, name);
+    if placed.is_err() {
+        let _ = unlink_at(dir, &ctmp);
+    }
+    placed
+}
+
 /// Makes the directory `name` in `dir`.
-fn mkdir_at(dir: &File, name: &str) -> io::Result<()> {
+pub(crate) fn mkdir_at(dir: &File, name: &str) -> io::Result<()> {
     use std::os::fd::AsRawFd;
     let cname = plain_name(name)?;
     // SAFETY: a directory descriptor we own and a NUL-terminated name.
@@ -787,13 +832,27 @@ pub(crate) fn beneath(root: &Path, rel: &str) -> io::Result<Beneath> {
 /// permission bits, a link's target, a directory's permission bits, read as
 /// [`beneath`] finds it.
 pub(crate) fn content_hash(root: &Path, rel: &str) -> Result<String> {
+    content_hash_at_most(root, rel, HASH_MOST)
+}
+
+/// The largest file Kule hashes for a review: one past it is refused,
+/// saying so, rather than read without end.
+pub const HASH_MOST: u64 = 8 << 30;
+
+fn content_hash_at_most(root: &Path, rel: &str, most: u64) -> Result<String> {
     use std::os::unix::ffi::OsStrExt;
     let at = root.join(rel);
     Ok(match beneath(root, rel).at(&at)? {
-        Beneath::File(mut file) => {
+        Beneath::File(file) => {
             let mode = file.metadata().at(&at)?.permissions().mode();
             let mut hasher = blake3::Hasher::new();
-            io::copy(&mut file, &mut hasher).at(&at)?;
+            let read = io::copy(&mut file.take(most + 1), &mut hasher).at(&at)?;
+            if read > most {
+                return Err(Error::Invalid(format!(
+                    "{rel} is larger than {}, more than Kule reads for a review",
+                    size_shown(most)
+                )));
+            }
             file_hash(hasher.finalize(), mode)
         }
         Beneath::Link(target) => format!(
@@ -803,6 +862,15 @@ pub(crate) fn content_hash(root: &Path, rel: &str) -> Result<String> {
         Beneath::Dir(mode) => format!("dir:{mode:o}"),
         Beneath::Missing => "missing".to_owned(),
     })
+}
+
+/// `bytes` as a person reads a size.
+fn size_shown(bytes: u64) -> String {
+    match bytes {
+        b if b >= 1 << 30 => format!("{} GiB", b >> 30),
+        b if b >= 1 << 20 => format!("{} MiB", b >> 20),
+        b => format!("{b} bytes"),
+    }
 }
 
 /// [`content_hash`] of a file whose bytes hash to `hash`, with `mode`.
@@ -820,6 +888,91 @@ pub(crate) fn hash_mode(hash: &str) -> Option<u32> {
 /// Permission bits that make a file run as its owner or group: a commit
 /// never brings them into the folder where it had none.
 pub(crate) const RUNS_AS_OWNER: u32 = 0o6000;
+
+/// Extended attributes macOS sets on its own on what a sandboxed process
+/// writes, saying where it came from, never what it holds: left out of
+/// what a review compares, or every file the agent writes would be asked
+/// about.
+#[cfg(target_os = "macos")]
+const SET_BY_THE_SYSTEM: &[&str] = &["com.apple.provenance"];
+
+/// The most of a file's extended attributes read for a review, together.
+#[cfg(target_os = "macos")]
+const XATTRS_MAX: usize = 64 << 20;
+
+/// The extended attributes of the file `rel` under `root`, as [`beneath`]
+/// finds it: each name with a hash of its value, but those the system sets
+/// on its own. Empty for anything but a file, and off macOS, where a commit
+/// carries none into the folder.
+pub(crate) fn xattrs(root: &Path, rel: &str) -> Result<BTreeMap<String, String>> {
+    let at = root.join(rel);
+    let Beneath::File(file) = beneath(root, rel).at(&at)? else {
+        return Ok(BTreeMap::new());
+    };
+    file_xattrs(&file).at(&at)
+}
+
+#[cfg(target_os = "macos")]
+fn file_xattrs(file: &File) -> io::Result<BTreeMap<String, String>> {
+    use std::os::fd::AsRawFd;
+    let fd = file.as_raw_fd();
+    // SAFETY: the descriptor is open; a null buffer asks for the size.
+    let size = unsafe { libc::flistxattr(fd, std::ptr::null_mut(), 0, 0) };
+    if size < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let mut names = vec![0u8; size as usize];
+    // SAFETY: the descriptor is open and `names` valid for its length.
+    let n = unsafe { libc::flistxattr(fd, names.as_mut_ptr().cast(), names.len(), 0) };
+    if n < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    names.truncate(n as usize);
+    let mut out = BTreeMap::new();
+    let mut read = 0usize;
+    for name in names.split(|b| *b == 0).filter(|n| !n.is_empty()) {
+        let shown = String::from_utf8_lossy(name).into_owned();
+        if SET_BY_THE_SYSTEM.contains(&shown.as_str()) {
+            continue;
+        }
+        let cname = std::ffi::CString::new(name)?;
+        // SAFETY: as above, with a NUL-terminated name.
+        let len = unsafe { libc::fgetxattr(fd, cname.as_ptr(), std::ptr::null_mut(), 0, 0, 0) };
+        if len < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        read = read.saturating_add(len as usize);
+        if read > XATTRS_MAX {
+            return Err(io::Error::other(format!(
+                "its extended attributes take more than {} MiB, more than Kule reads for a review",
+                XATTRS_MAX >> 20
+            )));
+        }
+        let mut value = vec![0u8; len as usize];
+        // SAFETY: as above, `value` valid for its length.
+        let got = unsafe {
+            libc::fgetxattr(
+                fd,
+                cname.as_ptr(),
+                value.as_mut_ptr().cast(),
+                value.len(),
+                0,
+                0,
+            )
+        };
+        if got < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        value.truncate(got as usize);
+        out.insert(shown, blake3::hash(&value).to_hex().to_string());
+    }
+    Ok(out)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn file_xattrs(_file: &File) -> io::Result<BTreeMap<String, String>> {
+    Ok(BTreeMap::new())
+}
 
 fn finish(path: &Path, stamp: &Stamp) -> Result<()> {
     let mtime = FileTime::from_unix_time(stamp.mtime.0, stamp.mtime.1 as u32);
@@ -1387,6 +1540,56 @@ impl Flock {
 
 #[cfg(test)]
 mod tests {
+
+    /// A write through descriptors never follows a link on the way: the
+    /// folder that holds the path is opened one folder at a time.
+    #[test]
+    fn a_link_on_the_way_is_not_opened_through() {
+        let (root, elsewhere) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+        std::fs::create_dir(root.path().join("real")).unwrap();
+        std::os::unix::fs::symlink(elsewhere.path(), root.path().join("linked")).unwrap();
+        let (dir, name) = open_parent(root.path(), "real/a").unwrap();
+        assert_eq!(name, "a");
+        put_at(&dir, name, b"x", 0o644, &root.path().join("real/a")).unwrap();
+        assert!(root.path().join("real/a").exists());
+        let e = open_parent(root.path(), "linked/a")
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("is a link"), "{e}");
+        let (dir, _) = open_parent(root.path(), "x").unwrap();
+        link_at(&dir, "l", Path::new("real")).unwrap();
+        assert_eq!(
+            std::fs::read_link(root.path().join("l")).unwrap(),
+            Path::new("real")
+        );
+        rmdir_at(&dir, "real").unwrap_err();
+        std::fs::remove_file(root.path().join("real/a")).unwrap();
+        rmdir_at(&dir, "real").unwrap();
+        assert!(!root.path().join("real").exists());
+        assert!(
+            std::fs::read_dir(elsewhere.path())
+                .unwrap()
+                .next()
+                .is_none()
+        );
+    }
+
+    /// A file past the most Kule hashes for a review is refused, saying so.
+    #[test]
+    fn a_file_past_the_most_hashed_is_refused() {
+        let dir = tempfile::TempDir::new().unwrap();
+        std::fs::write(dir.path().join("big"), vec![1u8; 2048]).unwrap();
+        assert!(
+            content_hash_at_most(dir.path(), "big", 2048)
+                .unwrap()
+                .starts_with("file:")
+        );
+        let e = content_hash_at_most(dir.path(), "big", 2047)
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("big is larger than 2047 bytes"), "{e}");
+    }
+
     use tempfile::TempDir;
 
     use super::*;

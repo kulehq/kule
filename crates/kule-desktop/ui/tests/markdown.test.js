@@ -106,12 +106,22 @@ function* walk(nodes) {
   }
 }
 
-/** Fails when `fn` takes longer than the window may wait for it. */
+/**
+ * Fails when `fn` takes longer than the window may wait for it. The best of
+ * a few runs counts, after one to warm up: a busy machine slows one run by
+ * some milliseconds, while time that grows faster than the length takes
+ * seconds on every run.
+ */
 const BUDGET_MS = 100;
+const RUNS = 3;
 function quick(name, fn) {
-  const start = performance.now();
   fn();
-  const took = performance.now() - start;
+  let took = Infinity;
+  for (let run = 0; run < RUNS && took >= BUDGET_MS; run++) {
+    const start = performance.now();
+    fn();
+    took = Math.min(took, performance.now() - start);
+  }
   assert.ok(took < BUDGET_MS, `${name} took ${took.toFixed(0)} ms (budget ${BUDGET_MS} ms)`);
 }
 

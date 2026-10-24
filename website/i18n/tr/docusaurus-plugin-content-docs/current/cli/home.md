@@ -40,9 +40,12 @@ yazdığı şey **inceleme için yakalanır**. Bkz.
 
 - Ev dizinindeki bir değişiklik hiçbir zaman bir `kule commit`'in parçası
   olmaz. Onun hakkındaki kararı burada verirsiniz.
-- `apply`, önce dosyanızın katman oluşturulduğu andaki hâlinde durup
-  durmadığını denetler ve yerine geçtiği şeyi görevin `home-kept/`
-  klasöründe saklar.
+- `apply` değişiklikleri gözden geçirdiğiniz hâliyle alır: `kule home`'un
+  yazdırdığı digest ile (`--reviewed`) ya da bir terminalde adlandırdığı
+  şeylere verdiğiniz evet ile. Önce dosyanızın katman oluşturulduğu andaki
+  hâlinde durup durmadığını denetler ve yerine geçtiği şeyi görevin
+  `home-kept/` klasöründe saklar. Dosyanızın sahip olmadığı yerde hiçbir şey
+  sahibi ya da grubu olarak (setuid, setgid) çalışacak hâle gelmez.
 - Kabukların ve araçların açılırken okuyup çalıştırdığı dosyalar (`.zshrc`,
   `.profile`, `.gitconfig`, `~/.config/fish`, `~/.config/autostart`,
   systemd kullanıcı birimleri, …) *runs every time a shell or tool starts*
@@ -84,6 +87,7 @@ in your home, caught for review (3; `kule home 1046fb30 apply PATH` takes one th
   + ~/.config/demo/
   + ~/.config/demo/conf
   ~ ~/.zshrc  (runs every time a shell or tool starts)
+home digest: 3b7a…90d2 (to apply them: kule home 1046fb30 apply PATH --reviewed 3b7a…90d2)
 ```
 
 `+` yeni, `~` değişmiş, `-` silinmiş demektir. Sondaki `/` bir klasörü
@@ -129,12 +133,13 @@ kule home <TASK> apply [OPTIONS] [PATHS]...
 | --- | --- |
 | `PATHS...` | Uygulanacak yollar, listelendiği gibi. |
 | `--all` | Bu görev için yakalanan her değişiklik. |
+| `--reviewed DIGEST` | `kule home`'un gözden geçirdiğiniz değişiklikler için yazdırdığı digest. Yalnızca hâlâ onlar oldukları sürece uygulanırlar. Verilmezse Kule bir terminalde uygulayacaklarını adlandırır ve sorar; terminal yoksa reddeder. |
 
 ```console
-$ kule home 1046fb30 apply '~/.config/demo' '~/.config/demo/conf'
+$ kule home 1046fb30 apply '~/.config/demo' '~/.config/demo/conf' --reviewed 3b7a…90d2
 applied ~/.config/demo
 applied ~/.config/demo/conf
-$ kule home 1046fb30 apply '~/.gitconfig'
+$ kule home 1046fb30 apply '~/.gitconfig' --reviewed 3b7a…90d2
 applied ~/.gitconfig
 what they replaced is kept in ~/.kule/tasks/1046fb30/home-kept/00000001792506123456
 ```
@@ -144,7 +149,9 @@ kaldırdıysa görünür. Her uygulama orada, ne zaman yapıldığına göre
 adlandırılmış kendi klasörünü alır.
 
 Katman oluşturulduğundan beri dosyanız değiştiyse uygulama reddedilir;
-böylece sizin hiçbir şeyiniz görmeden üzerine yazılmaz.
+böylece sizin hiçbir şeyiniz görmeden üzerine yazılmaz. Görevin
+değişiklikleri artık gözden geçirdikleriniz değilse (komutları yeniden
+yazdıysa) uygulama yine reddedilir: yeniden gözden geçirin.
 
 Görevin sandbox'ında hâlâ çalışan şey önce sonlandırılır ve Kule stderr'de
 onun adını verir:
@@ -193,6 +200,9 @@ the changes wait for review again
 | `kule: name a path inside your home, as listed, like ~/.zshrc (not ../x)` | Yol ev dizininizin dışına çıkıyor ya da ev dizininin kendisini gösteriyor. |
 | `kule: ~/.bashrc has no change waiting` | Görevin orada bekleyen bir yazması yok; bekleyenleri `kule home TASK` listeler. |
 | `nothing to apply at those paths` | Bu yollarda bekleyen bir değişiklik yok; `kule home TASK` ile bakın. |
+| `kule: the home changes are not the ones you reviewed any more; review them again` | `kule home` digest'i yazdırdığından beri değiştiler. Yeniden bakın, sonra yenisiyle uygulayın. |
+| `kule: no terminal to ask on; review with `kule status` and pass the digest it prints with --reviewed` | `kule home`'un yazdırdığı digest'i `--reviewed` ile verin. |
+| `kule: ~/<path> would run as its owner or group (setuid or setgid), …` | Kule bunu ev dizininize asla getirmez. Değişikliği atın. |
 | `kule: nothing applied from this task's home to undo` | Geri alınacak bir uygulama yok. |
 | `kule: a terminal is open on this task's copy (in Kule's app, or kule shell); close it first, then apply its home changes` | Görevin terminalini kapatın (uygulamadaki sekmeyi ya da `kule shell`'den `exit` ile çıkın), sonra uygulayın. |
 | `kule: a terminal is open on this task's copy (in Kule's app, or kule shell); close it first, then undo its home changes` | `undo` için de aynısı. |

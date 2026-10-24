@@ -56,6 +56,8 @@ Varsayılan budur. Geçerliyken `kule policy` ile yazdırın.
 | `other-vcs` | forbid `auto` | Herhangi bir derinlikte, başka bir sürüm kontrol sisteminin deposu: `.hg`, `.sl`, `.jj`, `_darcs`, `.pijul`, `.bzr`, `.svn`, `.fossil-settings` içindeki her şey ve `.fslckout` ya da `_FOSSIL_`. Config'i ve hook'ları bir sonraki komutunda çalışır ve Kule hiçbirini bir depo olarak okumaz. Bunlardan biri değişmiş bir kopyada Kule'nin terminali ve editörü açılmaz. | **Onay bekler.** Hatırlanamaz. |
 | `nested-repository` | forbid `auto` | Çalışma klasörünün içine yerleşmiş bir deponun `.git` klasöründeki dosyalar. | **Onay bekler.** |
 | `nested-git-hooks` | forbid all | İç içe bir depoda oluşturulan ya da değiştirilen bir hook. | **Reddedilir.** |
+| `permissions` | forbid `auto` | Çalıştırılabilir yapılan bir dosya (klasördekinde olmayan herhangi bir `x` biti, ya da biti olan yeni bir dosya), ya da herkesin yazabileceği hâle getirilen bir dosya veya klasör. Klasörün zaten çalıştırdığı bir dosya geçmeye devam eder. | **Onay bekler.** Hatırlanamaz. |
+| `extended-attributes` | forbid `auto` | macOS'ta, genişletilmiş öznitelikleri klasördeki dosyanınkinden farklı olan bir dosya (eklenen ya da kaldırılan bir karantina işareti, bir `user.*` özniteliği): commit onları klasöre taşır. macOS'un her yazmada kendiliğinden koyduğu şey (`com.apple.provenance`) dışarıda bırakılır. | **Onay bekler.** Hatırlanamaz. |
 | `links` | forbid `auto` | Oluşturulan, değiştirilen ya da silinen bir sembolik bağlantı. | **Onay bekler.** Bir bağlantı, gösterdiği her yere götürür. |
 | `mass-delete` | forbid `auto` | Tek bir değişiklik kümesinde 200'den fazla silme. Bir taşıma silme sayılmaz. | **Onay bekler.** |
 | `deletes-outside-git` | forbid `auto` | Git deposu olmayan bir klasörde 20'den fazla silme. | **Onay bekler.** Onları yalnızca görevin kendi undo'su geri getirebilir. |
@@ -96,6 +98,7 @@ ekler.
 | `no-rule-allows-asking` | reddedilir | Hiçbir `ask` permit eşleşmedi; bu yüzden size sorulamaz bile. `ask-by-default`'u dışarıda bırakan kendi politikanızla olur. |
 | `policy-error: …` | reddedilir | Cedar bir kuralı değerlendiremedi; reddeder. |
 | `remembered` | kendiliğinden geçer | Kule'ye bir daha sormamasını söylediğiniz bir dosya ([`kule rules`](../cli/rules.md)). |
+| `repo:<id>` | kuralın dediği gibi | Deponun kendi `.kule/policy.cedar` dosyasından bir kural. `@id`'si ne olursa olsun, hatırladığınız hiçbir yanıt onu iptal etmez. |
 | `remembered-<id>` | kendiliğinden geçer | Kule'ye bir daha sormamasını söylediğiniz bir bağlantı. |
 | `profile-<agent>` | kendiliğinden geçer | Ajanın profilindeki bir host ya da modelinin API'si; **yalnızca o ajan çalışırken** açıktır (örneğin `api.anthropic.com` için `profile-claude-code`). |
 
@@ -115,6 +118,8 @@ Her etki, şu özniteliklere sahip bir `Kule::Effect` varlığıdır:
 | `fast_forward` | `git.ref` için: yeni değer eskisini geçmişinde tutuyor mu. |
 | `commits` | `git.ref` için: kaç commit eklendiği. |
 | `host`, `port` | `net.connect` için. |
+| `gains` | `fs.*` için: girdinin izin bitlerinde klasördekinde olmayan, kazandığı şey, `executable` ve `world-writable` (`!resource.gains.isEmpty()`). |
+| `xattrs_changed` | `fs.*` için: dosyanın genişletilmiş öznitelikleri klasördekinden farklı (macOS). |
 
 Ve `context`:
 

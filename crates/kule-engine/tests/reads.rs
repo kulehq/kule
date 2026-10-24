@@ -9,6 +9,19 @@ use std::process::Output;
 use kule_engine::{CacheSources, Sandbox, Task};
 use tempfile::TempDir;
 
+/// [`Task::apply_home`] by a person who reviewed the home changes as they
+/// are now.
+trait Reviewed {
+    fn apply_reviewed(&self, paths: &[String]) -> kule_engine::Result<kule_engine::HomeApplied>;
+}
+
+impl Reviewed for Task {
+    fn apply_reviewed(&self, paths: &[String]) -> kule_engine::Result<kule_engine::HomeApplied> {
+        let digest = kule_engine::home_digest(&self.home_changes()?);
+        self.apply_home(paths, &digest)
+    }
+}
+
 fn sh(sandbox: &Sandbox, script: &str) -> Output {
     sandbox
         .command("sh", &["-c".to_owned(), script.to_owned()])
@@ -336,7 +349,7 @@ fn the_home_layer_holds_only_settings_the_sandbox_shows() {
     );
     assert!(
         s.task
-            .apply_home(&[".config/some-new-tool/token".into()])
+            .apply_reviewed(&[".config/some-new-tool/token".into()])
             .is_err()
     );
     assert_eq!(

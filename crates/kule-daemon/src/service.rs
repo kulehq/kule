@@ -12,9 +12,9 @@ use std::time::{Duration, Instant};
 use futures::StreamExt;
 use kule_engine::entities;
 use kule_engine::{
-    Approvals, Checkpoint, Connection, Denial, Effect, EffectSet, Error, FileOutline, Kind, Policy,
-    Preview, Proxy, Question, Ruling, Step, Task, Touched, Verdict, changed_entities, connections,
-    denials, meet,
+    Answer, Approvals, Checkpoint, Connection, Denial, Effect, EffectSet, Error, FileOutline, Kind,
+    Policy, Preview, Proxy, Question, Ruling, Step, Task, Touched, Verdict, changed_entities,
+    connections, denials, meet,
 };
 use serde::{Deserialize, Serialize};
 
@@ -302,6 +302,10 @@ pub struct Review {
     /// task's home layer; never part of a commit.
     #[serde(default)]
     pub home: Vec<kule_engine::HomeChange>,
+    /// The digest of `home`; an apply that names it is refused if anything
+    /// there changed since.
+    #[serde(default)]
+    pub home_digest: String,
     /// The last apply of home changes, which an undo takes back.
     #[serde(default)]
     pub home_applied: Option<kule_engine::HomeApplied>,
@@ -377,6 +381,22 @@ pub enum RunEvent {
     /// a rollback, ...): said where they asked it, and kept with the runs.
     Ended {
         text: String,
+    },
+    /// A question of the run stopped waiting, or Kule refused a connection
+    /// without putting it to anyone: what became of it.
+    Answered {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        question: Option<u64>,
+        host: String,
+        port: u16,
+        answer: Answer,
+    },
+    /// A connection the person approved did not go through as approved:
+    /// Kule cut it or refused it for where it led, or it failed on its own.
+    AfterApproval {
+        host: String,
+        port: u16,
+        why: String,
     },
     /// The run is over; `error` says why it failed.
     Finished {
@@ -458,11 +478,22 @@ fn weight(event: &RunEvent) -> usize {
         RunEvent::Finished { error, denials, .. } => {
             error.as_ref().map_or(0, String::len) + denials.len() * EACH
         }
+        RunEvent::Answered { host, .. } => host.len(),
+        RunEvent::AfterApproval { host, why, .. } => host.len() + why.len(),
         RunEvent::Resources { .. } => 0,
     }
 }
 
 type Subscribers = Arc<Mutex<Vec<Sender<Notice>>>>;
+
+/// Each task's run events as they are kept, and the subscribers who hear
+/// them: shared with what tells of a run from outside it (its questions).
+struct Live {
+    /// The latest events of each task's runs, oldest first.
+    streams: Mutex<HashMap<String, Stream>>,
+    next_seq: std::sync::atomic::AtomicU64,
+    subscribers: Subscribers,
+}
 
 /// A task's kept run events, and how many older ones were let go to keep
 /// within [`KEPT_EVENTS`] and [`KEPT_BYTES`].
@@ -488,9 +519,8 @@ pub struct Service {
     /// Questions agents are waiting on, from every task.
     approvals: Approvals,
     subscribers: Subscribers,
-    /// The latest events of each task's runs, oldest first.
-    streams: Mutex<HashMap<String, Stream>>,
-    next_seq: std::sync::atomic::AtomicU64,
+    /// The latest events of each task's runs, and where they go.
+    live: Arc<Live>,
     /// Each task's last scan, for the task list.
     scans: Mutex<HashMap<String, Cached>>,
     /// Each task's changed files as last outlined, by path.
@@ -612,14 +642,43 @@ impl Service {
         let subscribers = Subscribers::default();
         let heard = Arc::clone(&subscribers);
         approvals.on_change(move |waiting| notify(&heard, Notice::Questions { waiting }));
+        let live = Arc::new(Live {
+            streams: Mutex::new(HashMap::new()),
+            next_seq: std::sync::atomic::AtomicU64::new(1),
+            subscribers: Arc::clone(&subscribers),
+        });
+        // Kept with the run's events, so a window that opens later sees
+        // them too.
+        let told = Arc::clone(&live);
+        approvals.on_settled(move |settled| {
+            told.emit(
+                &settled.task,
+                RunEvent::Answered {
+                    question: settled.question,
+                    host: settled.host.clone(),
+                    port: settled.port,
+                    answer: settled.answer,
+                },
+            );
+        });
+        let told = Arc::clone(&live);
+        approvals.on_after_approval(move |after| {
+            told.emit(
+                &after.task,
+                RunEvent::AfterApproval {
+                    host: after.host.clone(),
+                    port: after.port,
+                    why: after.why.clone(),
+                },
+            );
+        });
         Service {
             home,
             running: Mutex::new(HashSet::new()),
             controls: Mutex::new(HashMap::new()),
             approvals,
             subscribers,
-            streams: Mutex::new(HashMap::new()),
-            next_seq: std::sync::atomic::AtomicU64::new(1),
+            live,
             scans: Mutex::new(HashMap::new()),
             outlined: Mutex::new(HashMap::new()),
             shielded: Mutex::new(Default::default()),
@@ -640,6 +699,7 @@ impl Service {
     /// how many older ones are no longer kept, when any were let go.
     pub fn stream(&self, id: &str) -> Vec<Sequenced> {
         let streams = self
+            .live
             .streams
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -673,88 +733,7 @@ impl Service {
     }
 
     fn emit(&self, task: &str, event: RunEvent) {
-        // Under the lock: the order of `seq` is the order subscribers hear.
-        let mut streams = self
-            .streams
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let seq = self
-            .next_seq
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let stream = streams.entry(task.to_owned()).or_default();
-        let kept = &mut stream.events;
-        // An answer arrives in many small chunks; kept as one, the prompt
-        // stays in reach of a window that opens later. A piece of another
-        // message starts one of its own.
-        let merged = match (kept.back_mut(), &event) {
-            (
-                Some(Sequenced {
-                    seq: last,
-                    event:
-                        RunEvent::Agent {
-                            event:
-                                kule_acp::Event::Message {
-                                    text: kept_text,
-                                    id: kept_id,
-                                },
-                        },
-                }),
-                RunEvent::Agent {
-                    event: kule_acp::Event::Message { text, id },
-                },
-            ) if kept_id == id && kept_text.len() + text.len() <= KEPT_MESSAGE => {
-                kept_text.push_str(text);
-                *last = seq;
-                true
-            }
-            _ => false,
-        };
-        // A tool call's output comes whole each time: the newer one takes
-        // the older one's place, at the end, so the order stays the order
-        // of `seq`.
-        if let RunEvent::Agent {
-            event: kule_acp::Event::ToolOutput { id, .. },
-        } = &event
-        {
-            let same = |s: &Sequenced| {
-                matches!(&s.event, RunEvent::Agent {
-                    event: kule_acp::Event::ToolOutput { id: kept_id, .. },
-                } if kept_id == id)
-            };
-            if let Some(at) = kept.iter().rposition(same) {
-                kept.remove(at);
-            }
-        }
-        if matches!(event, RunEvent::Resources { .. })
-            && let Some(at) = kept
-                .iter()
-                .rposition(|s| matches!(s.event, RunEvent::Resources { .. }))
-        {
-            kept.remove(at);
-        }
-        if !merged {
-            if kept.len() == KEPT_EVENTS {
-                kept.pop_front();
-                stream.dropped += 1;
-            }
-            kept.push_back(Sequenced {
-                seq,
-                event: event.clone(),
-            });
-        }
-        let mut size: usize = kept.iter().map(|s| weight(&s.event)).sum();
-        while size > KEPT_BYTES && kept.len() > 1 {
-            size -= kept.pop_front().map_or(0, |s| weight(&s.event));
-            stream.dropped += 1;
-        }
-        notify(
-            &self.subscribers,
-            Notice::Run {
-                task: task.to_owned(),
-                seq,
-                event,
-            },
-        );
+        self.live.emit(task, event);
     }
 
     /// Where the service's proxies put their questions.
@@ -1281,21 +1260,29 @@ impl Service {
         // A help to the review, not part of it: a file Kule cannot read
         // now is listed without one.
         let outline = task.outline(&pending).unwrap_or_default();
+        let home = task.home_changes().map_err(text)?;
         Ok(Review {
             effects,
             ruling,
             digest: pending.digest(),
             outline,
-            home: task.home_changes().map_err(text)?,
+            home_digest: kule_engine::home_digest(&home),
+            home,
             home_applied: task.home_last_applied().map_err(text)?,
         })
     }
 
-    /// Takes the home changes at `paths` to the person's home.
-    pub fn apply_home(&self, id: &str, paths: &[String]) -> Result<kule_engine::HomeApplied> {
+    /// Takes the home changes at `paths` to the person's home, while the
+    /// home changes are still the ones whose digest is `reviewed`.
+    pub fn apply_home(
+        &self,
+        id: &str,
+        paths: &[String],
+        reviewed: &str,
+    ) -> Result<kule_engine::HomeApplied> {
         self.not_at_work(id)?;
         let task = self.open(id)?;
-        let applied = task.apply_home(paths);
+        let applied = task.apply_home(paths, reviewed);
         self.tell_ended(&task);
         let applied = applied.map_err(text)?;
         notify(&self.subscribers, Notice::Tasks);
@@ -1400,11 +1387,7 @@ impl Service {
         let policy = self.policy(&task)?;
         let gate = policy.gate(approve);
         let check = |set: &EffectSet| {
-            if reviewed.is_some_and(|digest| digest != set.digest()) {
-                return Err(Error::Invalid(
-                    "the changes are not the ones you reviewed any more; review them again".into(),
-                ));
-            }
+            set.check_reviewed(approve, reviewed)?;
             gate(set)
         };
         let outcome = task.commit_with(include_ignored, check);
@@ -1572,7 +1555,8 @@ impl Service {
     /// Deletes the task and its copy; the workspace is not touched.
     pub fn remove(&self, id: &str) -> Result<()> {
         self.idle(id)?.remove().map_err(text)?;
-        self.streams
+        self.live
+            .streams
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove(id);
@@ -1892,6 +1876,14 @@ impl Service {
                 },
             );
         }
+        if task.measures_caches().map_err(text)? {
+            self.emit(
+                task.id(),
+                RunEvent::Preparing {
+                    text: kule_engine::MEASURING_CACHES.to_owned(),
+                },
+            );
+        }
         let launch = profile.launch(task, &proxy).map_err(text)?;
         self.tell_withheld(task)?;
         let (tx, mut rx) = futures::channel::mpsc::unbounded::<kule_acp::Event>();
@@ -2028,7 +2020,7 @@ impl Service {
             overlaps: self.overlaps(id, &scan),
             spent: task.spent().map_err(text)?,
             budget: task.budget().map_err(text)?,
-            home_changes: task.home_changes().map_or(0, |c| c.len()),
+            home_changes: task.home_change_count().unwrap_or(0),
             label: task.label().map_err(text)?,
             color: task.color().map_err(text)?,
             group: task.group().map_err(text)?,
@@ -2201,6 +2193,93 @@ fn unix_now() -> u64 {
 }
 
 /// Sends `notice` to every subscriber, forgetting the ones that left.
+impl Live {
+    fn emit(&self, task: &str, event: RunEvent) {
+        // Under the lock: the order of `seq` is the order subscribers hear.
+        let mut streams = self
+            .streams
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let seq = self
+            .next_seq
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let stream = streams.entry(task.to_owned()).or_default();
+        let kept = &mut stream.events;
+        // An answer arrives in many small chunks; kept as one, the prompt
+        // stays in reach of a window that opens later. A piece of another
+        // message starts one of its own.
+        let merged = match (kept.back_mut(), &event) {
+            (
+                Some(Sequenced {
+                    seq: last,
+                    event:
+                        RunEvent::Agent {
+                            event:
+                                kule_acp::Event::Message {
+                                    text: kept_text,
+                                    id: kept_id,
+                                },
+                        },
+                }),
+                RunEvent::Agent {
+                    event: kule_acp::Event::Message { text, id },
+                },
+            ) if kept_id == id && kept_text.len() + text.len() <= KEPT_MESSAGE => {
+                kept_text.push_str(text);
+                *last = seq;
+                true
+            }
+            _ => false,
+        };
+        // A tool call's output comes whole each time: the newer one takes
+        // the older one's place, at the end, so the order stays the order
+        // of `seq`.
+        if let RunEvent::Agent {
+            event: kule_acp::Event::ToolOutput { id, .. },
+        } = &event
+        {
+            let same = |s: &Sequenced| {
+                matches!(&s.event, RunEvent::Agent {
+                    event: kule_acp::Event::ToolOutput { id: kept_id, .. },
+                } if kept_id == id)
+            };
+            if let Some(at) = kept.iter().rposition(same) {
+                kept.remove(at);
+            }
+        }
+        if matches!(event, RunEvent::Resources { .. })
+            && let Some(at) = kept
+                .iter()
+                .rposition(|s| matches!(s.event, RunEvent::Resources { .. }))
+        {
+            kept.remove(at);
+        }
+        if !merged {
+            if kept.len() == KEPT_EVENTS {
+                kept.pop_front();
+                stream.dropped += 1;
+            }
+            kept.push_back(Sequenced {
+                seq,
+                event: event.clone(),
+            });
+        }
+        let mut size: usize = kept.iter().map(|s| weight(&s.event)).sum();
+        while size > KEPT_BYTES && kept.len() > 1 {
+            size -= kept.pop_front().map_or(0, |s| weight(&s.event));
+            stream.dropped += 1;
+        }
+        notify(
+            &self.subscribers,
+            Notice::Run {
+                task: task.to_owned(),
+                seq,
+                event,
+            },
+        );
+    }
+}
+
 fn notify(subscribers: &Subscribers, notice: Notice) {
     subscribers
         .lock()
@@ -2266,6 +2345,11 @@ mod tests {
             let view = self.app.create(self.ws.path()).unwrap();
             let copy = Task::open(&self.app.home, &view.id).unwrap().copy();
             (view.id, copy)
+        }
+
+        /// The digest of task `id`'s changes as a review shows them now.
+        fn digest(&self, id: &str) -> String {
+            self.app.review(id, false).unwrap().digest
         }
 
         /// Ages every scan past [`FRESH`] so the list makes them again.
@@ -2472,7 +2556,9 @@ mod tests {
         }
         fs::write(copy.join("b.txt"), "b\n").unwrap();
         assert!(matches!(
-            s.app.commit(&id, true, false, None).unwrap(),
+            s.app
+                .commit(&id, true, false, Some(&s.digest(&id)))
+                .unwrap(),
             Commit::Applied { .. }
         ));
         let told: Vec<String> = s
@@ -2500,7 +2586,9 @@ mod tests {
         let (id, copy) = s.task();
         fs::write(copy.join("b.txt"), "b\n").unwrap();
         assert!(matches!(
-            s.app.commit(&id, true, false, None).unwrap(),
+            s.app
+                .commit(&id, true, false, Some(&s.digest(&id)))
+                .unwrap(),
             Commit::Applied { .. }
         ));
         fs::write(copy.join("c.txt"), "c\n").unwrap();
@@ -2792,7 +2880,9 @@ mod tests {
         assert_eq!(review.effects.effects.len(), 1);
 
         assert!(matches!(
-            s.app.commit(&id, true, false, None).unwrap(),
+            s.app
+                .commit(&id, true, false, Some(&s.digest(&id)))
+                .unwrap(),
             Commit::Applied { checkpoint: 2, .. }
         ));
         assert!(s.ws.path().join("Cargo.toml").exists());
@@ -2809,7 +2899,11 @@ mod tests {
         .unwrap();
         let (id, copy) = s.task();
         fs::write(copy.join("secret.txt"), "x\n").unwrap();
-        match s.app.commit(&id, true, false, None).unwrap() {
+        match s
+            .app
+            .commit(&id, true, false, Some(&s.digest(&id)))
+            .unwrap()
+        {
             Commit::Held { ruling } => assert_eq!(ruling.verdict, Verdict::Deny),
             other => panic!("expected the change to be denied, got {other:?}"),
         }
@@ -2871,7 +2965,9 @@ mod tests {
 
         assert!(s.app.tasks().unwrap()[0].running);
         for refused in [
-            s.app.commit(&id, true, false, None).map(|_| ()),
+            s.app
+                .commit(&id, true, false, Some(&s.digest(&id)))
+                .map(|_| ()),
             s.app.rollback(&id).map(|_| ()),
             s.app.undo(&id).map(|_| ()),
             s.app.sync(&id).map(|_| ()),
@@ -3012,7 +3108,9 @@ mod tests {
             waits("go back to a step")
         );
         assert_eq!(
-            s.app.commit(&id, true, false, None).unwrap_err(),
+            s.app
+                .commit(&id, true, false, Some(&s.digest(&id)))
+                .unwrap_err(),
             waits("commit")
         );
         assert_eq!(s.app.sync(&id).unwrap_err(), waits("sync"));
@@ -3052,7 +3150,14 @@ mod tests {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .insert(id.clone());
-        let e = s.app.apply_home(&id, &[".zshrc".into()]).unwrap_err();
+        let e = s
+            .app
+            .apply_home(
+                &id,
+                &[".zshrc".into()],
+                &s.app.review(&id, false).unwrap().home_digest,
+            )
+            .unwrap_err();
         assert!(e.contains("at work"), "{e}");
         s.app
             .running
@@ -3060,7 +3165,14 @@ mod tests {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove(&id);
 
-        let applied = s.app.apply_home(&id, &[".zshrc".into()]).unwrap();
+        let applied = s
+            .app
+            .apply_home(
+                &id,
+                &[".zshrc".into()],
+                &s.app.review(&id, false).unwrap().home_digest,
+            )
+            .unwrap();
         assert_eq!(applied.paths, [".zshrc"]);
         assert_eq!(
             fs::read_to_string(person.path().join(".zshrc")).unwrap(),
@@ -3914,7 +4026,13 @@ mod tests {
 
         let done = s
             .app
-            .commit_remembering(&id, true, false, None, &["Cargo.toml".into()])
+            .commit_remembering(
+                &id,
+                true,
+                false,
+                Some(&s.digest(&id)),
+                &["Cargo.toml".into()],
+            )
             .unwrap();
         assert!(matches!(done, Commit::Applied { .. }));
         let rules = s.app.rules().unwrap();
@@ -4076,6 +4194,104 @@ mod tests {
             300
         );
         assert!(s.app.set_approval_timeout(&id, 0).is_err());
+        // What became of the question is kept with the task's run events,
+        // for a window that opens later too.
+        assert!(
+            s.app.stream(&id).iter().any(|kept| matches!(
+                &kept.event,
+                RunEvent::Answered { question: Some(q), answer: Answer::Approved, port, .. }
+                    if *q == waiting[0].id && *port == up
+            )),
+            "{:?}",
+            s.app.stream(&id)
+        );
+    }
+
+    /// A question Kule refused unanswered, and a connection the person
+    /// approved that Kule then cut, reach the task's run events with why.
+    #[test]
+    fn what_kule_refused_or_cut_after_a_question_reaches_the_task_s_events() {
+        use std::io::{Read, Write};
+        use std::net::{TcpListener, TcpStream};
+
+        let s = Setup::new();
+        let (id, _) = s.task();
+        let upstream = TcpListener::bind("127.0.0.1:0").unwrap();
+        let up = upstream.local_addr().unwrap().port();
+        std::thread::spawn(move || for _ in upstream.incoming() {});
+        let task = Task::open(&s.app.home, &id).unwrap();
+        let ask = |timeout| {
+            Proxy::start_asking(&task, Policy::builtin(), &s.app.approvals, timeout, &[]).unwrap()
+        };
+        let connect = |port: u16, first: &'static [u8]| {
+            std::thread::spawn(move || {
+                let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+                write!(stream, "CONNECT 127.0.0.1:{up} HTTP/1.1\r\n\r\n").unwrap();
+                stream.write_all(first).unwrap();
+                let mut reply = String::new();
+                let _ = stream.read_to_string(&mut reply);
+                reply
+            })
+        };
+        let event = |found: &dyn Fn(&RunEvent) -> bool| {
+            for _ in 0..500 {
+                if s.app.stream(&id).iter().any(|k| found(&k.event)) {
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            panic!("not told: {:?}", s.app.stream(&id));
+        };
+
+        // Nobody answers.
+        let proxy = ask(Duration::from_millis(200));
+        let reply = connect(proxy.port(), b"").join().unwrap();
+        assert!(reply.contains("403"), "{reply}");
+        event(&|e| {
+            matches!(
+                e,
+                RunEvent::Answered {
+                    answer: Answer::TimedOut,
+                    ..
+                }
+            )
+        });
+        drop(proxy);
+
+        // Approved, then its TLS hello asks for another host.
+        let proxy = ask(Duration::from_secs(60));
+        let client = connect(proxy.port(), b"\x16\x03\x01\x00\x05\x01\x00\x00\x01\x00");
+        let mut waiting = Vec::new();
+        for _ in 0..500 {
+            waiting = s.app.questions();
+            if !waiting.is_empty() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        s.app.answer(waiting[0].id, true).unwrap();
+        let _ = client.join();
+        event(
+            &|e| matches!(e, RunEvent::AfterApproval { why, port, .. } if why.starts_with("cut by Kule") && *port == up),
+        );
+        drop(proxy);
+    }
+
+    /// Approving takes the digest of what was reviewed: never whatever is
+    /// there by then.
+    #[test]
+    fn an_approving_commit_without_a_review_is_refused() {
+        let s = Setup::new();
+        let (id, copy) = s.task();
+        fs::write(copy.join("Cargo.toml"), "[package]\n").unwrap();
+        let e = s.app.commit(&id, true, false, None).unwrap_err();
+        assert!(e.contains("kule status"), "{e}");
+        assert!(!s.ws.path().join("Cargo.toml").exists());
+        let digest = s.digest(&id);
+        assert!(matches!(
+            s.app.commit(&id, true, false, Some(&digest)).unwrap(),
+            Commit::Applied { .. }
+        ));
     }
 
     /// Something still running in the copy can change it between the

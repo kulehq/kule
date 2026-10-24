@@ -788,7 +788,11 @@ impl Sandbox {
             }
             sandbox.beside_links = crate::beside::place_links(task, &workspace, &opened)?;
             sandbox.use_task_caches(&sources)?;
-            task.note_caches_made(&sandbox.tmp.join("caches"))?;
+            // Only a disk limit needs them measured, and a walk through a
+            // person's package caches takes long.
+            if limits.disk_mb.is_some() {
+                task.note_caches_made(&sandbox.tmp.join("caches"))?;
+            }
         }
         Ok(sandbox)
     }

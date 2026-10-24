@@ -227,6 +227,13 @@ gives*. Bu geçerli olduğu sürece başlık çubuğunda **Weaker isolation**
 yazar. Bkz. [`kule isolation`](../cli/isolation.md) ve
 [Platformlar](../platforms.md).
 
+Kendi namespace'leri olmadan (bu durumda, ya da ağı açık çalıştırılan bir
+komutta), bir komutun seccomp filtresi onun ötesine uzanan çağrıları adıyla
+reddeder: `ptrace`, `process_vm_writev`, `keyctl`, `userfaultfd`,
+`perf_event_open` ve `setns`, host'un sysctl ayarları ne derse desin `EPERM`
+ile başarısız olur. Bu durumda sandbox içinde bir debugger ya da `strace`
+çalışmaz.
+
 ## İlgili
 
 - [`kule exec`](../cli/exec.md), [`kule reveal`](../cli/reveal.md), [`kule isolation`](../cli/isolation.md)

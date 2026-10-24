@@ -419,8 +419,17 @@ fn remove_secret(kule: K<'_>, name: String, workspace: Option<PathBuf>) -> Resul
 }
 
 #[tauri::command(async)]
-fn apply_home(kule: K<'_>, task: String, paths: Vec<String>) -> Result<serde_json::Value> {
-    kule.call(Call::ApplyHome { task, paths })
+fn apply_home(
+    kule: K<'_>,
+    task: String,
+    paths: Vec<String>,
+    reviewed: String,
+) -> Result<serde_json::Value> {
+    kule.call(Call::ApplyHome {
+        task,
+        paths,
+        reviewed,
+    })
 }
 
 #[tauri::command(async)]
@@ -945,8 +954,23 @@ fn relay(app: AppHandle, home: &Path) {
             }
             let _ = kule.client.subscribe(|notice| match notice {
                 Notice::Run { task, seq, event } => {
-                    if let RunEvent::Finished { error, .. } = &event {
-                        tell(&app, vec![alerts.finished(&task, error.as_deref())]);
+                    match &event {
+                        RunEvent::Finished { error, .. } => {
+                            tell(&app, vec![alerts.finished(&task, error.as_deref())]);
+                        }
+                        RunEvent::Answered {
+                            host, port, answer, ..
+                        } => tell(
+                            &app,
+                            alerts
+                                .answered(&task, host, *port, *answer)
+                                .into_iter()
+                                .collect(),
+                        ),
+                        RunEvent::AfterApproval { host, port, why } => {
+                            tell(&app, vec![alerts.after_approval(&task, host, *port, why)]);
+                        }
+                        _ => {}
                     }
                     let _ = app.emit("run", RunMessage { task, seq, event });
                 }
@@ -987,6 +1011,14 @@ fn main() {
             std::process::exit(2);
         }
     };
+    match kule_daemon::check_home(&home) {
+        Ok(Some(note)) => eprintln!("kule-desktop: {note}"),
+        Ok(None) => {}
+        Err(e) => {
+            eprintln!("kule-desktop: {e}");
+            std::process::exit(2);
+        }
+    }
     if std::env::args().nth(1).as_deref() == Some("daemon") {
         eprintln!("kule-desktop: daemon for {}", home.display());
         if let Err(e) = kule_daemon::run(&home, Duration::from_secs(600)) {

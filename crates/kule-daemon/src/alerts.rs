@@ -4,7 +4,7 @@
 
 use std::collections::HashSet;
 
-use kule_engine::{BudgetScope, Money, Question};
+use kule_engine::{Answer, BudgetScope, Money, Question};
 
 use crate::service::{SharedBudget, TaskView};
 
@@ -45,6 +45,34 @@ impl Alerts {
                 body: format!("Its agent wants to reach {}:{}.", q.host, q.port),
             })
             .collect()
+    }
+
+    /// A connection of task `task`'s run that Kule refused without the
+    /// person answering it: nobody did in time, the run ended first, or too
+    /// many were waiting. `None` for the person's own answer.
+    pub fn answered(&self, task: &str, host: &str, port: u16, answer: Answer) -> Option<Alert> {
+        let why = match answer {
+            Answer::Approved | Answer::Denied => return None,
+            Answer::TimedOut => "nobody answered in time",
+            Answer::Withdrawn => "the run ended before anyone answered",
+            Answer::TooMany => "too many of its questions were waiting already",
+        };
+        Some(Alert {
+            title: format!("Task {task}: Kule refused a connection"),
+            body: format!("{}:{port}, as {why}.", plain(host)),
+        })
+    }
+
+    /// A connection the person approved that did not go through as
+    /// approved.
+    pub fn after_approval(&self, task: &str, host: &str, port: u16, why: &str) -> Alert {
+        Alert {
+            title: format!("Task {task}: a connection you approved ended"),
+            body: format!("{}:{port}: {}", plain(host), plain(why))
+                .chars()
+                .take(200)
+                .collect(),
+        }
     }
 
     /// A run that is over.
@@ -331,9 +359,34 @@ mod tests {
             rules: vec![],
             asked_unix: 0,
             deadline_unix: 0,
+            inside: None,
         };
         assert_eq!(alerts.questions(std::slice::from_ref(&q)).len(), 1);
         assert!(alerts.questions(&[q]).is_empty());
+    }
+
+    /// What Kule refused without the person's answer is told, saying why;
+    /// the person's own answers are not news to them.
+    #[test]
+    fn a_connection_kule_refused_unanswered_is_told_with_why() {
+        let alerts = Alerts::new();
+        let told = |answer| alerts.answered("a", "example.com", 443, answer);
+        assert_eq!(told(Answer::Approved), None);
+        assert_eq!(told(Answer::Denied), None);
+        for (answer, why) in [
+            (Answer::TimedOut, "nobody answered in time"),
+            (Answer::Withdrawn, "the run ended before anyone answered"),
+            (Answer::TooMany, "too many of its questions were waiting"),
+        ] {
+            let alert = told(answer).unwrap();
+            assert!(alert.title.contains("Kule refused"), "{alert:?}");
+            assert!(
+                alert.body.contains("example.com:443") && alert.body.contains(why),
+                "{alert:?}"
+            );
+        }
+        let cut = alerts.after_approval("a", "example.com", 443, "cut by Kule: another host");
+        assert!(cut.body.contains("cut by Kule: another host"), "{cut:?}");
     }
 
     #[test]

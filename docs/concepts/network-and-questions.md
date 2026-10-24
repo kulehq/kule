@@ -29,14 +29,19 @@ command:
 ```text
 net: registry.npmjs.org:443 · tunneled (package-registries)
 net: example.com:443 · refused, would wait for approval; the command line asks no one (no-rule-lets-it-pass)
+net: cdn.example:443 · cut by Kule: its TLS hello asks for other.example, and this tunnel is to cdn.example (agent-api)
 ```
+
+A connection that did not go through as asked says why on its line: cut by
+Kule, refused by Kule for the address it led to, failed on its own, or did
+not resolve.
 
 Each connection's outcome says what became of it:
 
 | Outcome | What became of it |
 | --- | --- |
 | `tunneled` | It went through. Where Kule looks inside it, every request in it went through too. |
-| `refused` | The policy did not let it through, or nobody approved it. |
+| `refused` | The policy did not let it through, nobody approved it, or Kule refused it for the address its name led to (the log's `refused` field says which). |
 | `cut` | Kule let it through, then ended it, and says why in the log's `cut` field: see [HTTPS and secrets](#https-and-secrets). |
 | `failed` | It ended in an error of its own, not Kule's doing: the host went away, the connection was reset. The log's `failed` field says why. This holds for plain HTTP and for connections Kule looks inside alike. |
 | `unresolved`, `private`, `unreachable` | Its name did not resolve, every address it led to is private or this computer's, or the host did not take the connection. |
@@ -57,6 +62,24 @@ under **Needs you**. The card says the host and port, the rule that made it
 wait, and a countdown. While the window is not in front, a system
 notification tells you.
 
+The card also says what approving lets through:
+
+- **Tunneled, not looked into.** The usual case. Kule sees the host and
+  port, not what goes over the connection, and checks that its TLS hello
+  asks for this host. Approving comes before the hello, so the card can
+  only state the rule: if the hello asks for another host or hides its
+  name, Kule cuts the connection after your approval.
+- **Looked into.** The host is one Kule fills a secret for (the card names
+  the secrets, as in "fills STRIPE_KEY into its requests") or a package
+  registry it holds to reads. An approval never adds a host to the ones
+  Kule looks into.
+
+Once answered, the card becomes a line in the run, where it was asked:
+"You approved api.example:443". If Kule then cuts the connection, or refuses
+it because its name led to an address on this computer or its network, the
+same line says so, with why, while the run is live, and a notification
+tells you: "You approved api.example:443; then cut by Kule: …".
+
 | Answer | Shortcut | Effect |
 | --- | --- | --- |
 | **Approve** | Mod+Shift+Y | This connection goes through. |
@@ -66,6 +89,13 @@ notification tells you.
 **Unanswered**, the connection is refused when the task's wait runs out:
 15 minutes by default, settable from 1 minute to 8 hours (the **waits**
 picker under the prompt). It cannot be turned off.
+
+Kule refuses a question without your answer in three cases, and says so
+as its own refusal, never as yours: nobody answered in time; the run ended
+before anyone answered; or 16 of the run's questions were waiting already,
+so the next one is refused without asking (told once per host and port).
+Each shows as a line in the run ("Kule refused api.example:443: nobody
+answered in time"), a notification, and in the Timeline.
 
 **From the command line**, nobody is there to ask, so `kule exec` and
 `kule run` refuse such connections at once (`would wait for approval; the

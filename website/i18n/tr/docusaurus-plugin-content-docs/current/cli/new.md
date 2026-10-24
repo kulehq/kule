@@ -110,6 +110,8 @@ builds from /Users/me/code/shared, which its tasks cannot read: kule reveal add 
 | `kule: <path>: No such file or directory (os error 2)` | Klasör yok. Yolu kontrol edin. |
 | `kule: <path> is not a directory` | Dosya değil, bir klasör verin. |
 | `kule: Kule's home <home> is inside the workspace, so the copy would contain itself` | Kule'nin ev klasörünü içeren bir klasörün (örneğin ev dizininizin tamamının) kopyasını istediniz. İçindeki bir klasörü seçin ya da Kule'nin ev klasörünü `--home` ile başka yere taşıyın. |
+| `kule: Kule's home <~/.kule> is inside the workspace, though this task's home is another` | Klasör, `--home` ya da `KULE_HOME` başka yeri gösterse bile, Kule'nin varsayılan yerindeki ev klasörünü içeriyor: görevleri ve gizli değerleri kopyaya girerdi. İçindeki bir klasörü seçin. |
+| `kule: <folder> holds more than 1000000 files and folders, more than Kule reads; …` | Daha küçük bir klasör seçin. 8 GiB'den büyük bir dosya da, Kule onu bir gözden geçirme için hash'lerken aynı şekilde reddedilir. |
 
 ## Uygulamada
 

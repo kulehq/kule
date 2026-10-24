@@ -19,6 +19,14 @@ mod approvals;
 mod beside;
 #[cfg(target_os = "linux")]
 mod bind_filter;
+
+/// Whether the filter that holds a command's servers to loopback, and
+/// refuses the calls that reach past it, can be used here, where a command
+/// has no network of its own (Linux).
+#[cfg(target_os = "linux")]
+pub fn bind_filter_available() -> bool {
+    bind_filter::available()
+}
 mod caches;
 mod checkpoint;
 mod clienthello;
@@ -62,7 +70,8 @@ mod tls;
 mod usage;
 
 pub use approvals::{
-    Answer, Approvals, DEFAULT_TIMEOUT, MAX_TIMEOUT, MAX_WAITING, MIN_TIMEOUT, Question,
+    AfterApproval, Answer, Approvals, DEFAULT_TIMEOUT, Inside, MAX_TIMEOUT, MAX_WAITING,
+    MIN_TIMEOUT, Question, Settled,
 };
 pub use beside::{
     BESIDE_FILE, Beside, add_beside, beside_unopened, besides, remove_beside, suggest_beside,
@@ -79,7 +88,7 @@ pub use groups::{
     set_group_policy, update_group,
 };
 pub use history::{Entry as HistoryEntry, Event as HistoryEvent};
-pub use home::{HomeApplied, HomeChange};
+pub use home::{HomeApplied, HomeChange, home_digest};
 pub use isolation::{Isolation, isolation, isolation_gaps, set_isolation};
 pub use kule_entities as entities;
 pub use labels::{MAX_LABEL, ORDER_FILE, TaskColor, arranged, set_task_order, task_order};
@@ -110,7 +119,7 @@ pub use secrets::{
 };
 pub use steps::{Step, StepChange};
 pub use sync::{Behind, Synced};
-pub use task::{AgentAtWork, OpenTerminal, OpenedOutside, Task, TaskInfo};
+pub use task::{AgentAtWork, MEASURING_CACHES, OpenTerminal, OpenedOutside, Task, TaskInfo};
 pub use textdiff::{DiffSkip, Hunk, Line, LineKind, TextDiff};
 pub use usage::{
     BudgetLeft, BudgetScope, GroupSpent, Money, Reserved, RunUsage, Spent, daily_budget,

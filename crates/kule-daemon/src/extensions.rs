@@ -16,19 +16,25 @@ use crate::themes::{self, ThemeFile};
 pub fn install(home: &Path, path: &Path) -> Result<Listed> {
     let package = Package::read_file(path).map_err(|e| e.to_string())?;
     contributions_ok(home, &Source::Packed(package.clone()))?;
-    Store::new(home)
-        .install(&package)
-        .map_err(|e| e.to_string())
+    store(home)?.install(&package).map_err(|e| e.to_string())
+}
+
+/// The extensions in Kule's `home`, holding any folder under development
+/// that now sits where an agent can write (see [`agent_dirs`]): a task
+/// made on a folder after it was installed holds it too.
+fn store(home: &Path) -> Result<Store> {
+    let person = std::env::var_os("HOME").map(std::path::PathBuf::from);
+    Ok(Store::new(home).refusing(agent_dirs(home, person.as_deref())?))
 }
 
 /// Installs a folder under development. It waits for approval, and again
-/// whenever its manifest changes. Its code runs unapproved, so it may not
-/// sit where an agent can write (see [`agent_dirs`]).
+/// whenever any file of it changes. It may not sit where an agent can write
+/// (see [`agent_dirs`]).
 pub fn install_folder(home: &Path, dir: &Path) -> Result<Listed> {
     let person = std::env::var_os("HOME").map(std::path::PathBuf::from);
     let refused = agent_dirs(home, person.as_deref())?;
     contributions_ok(home, &Source::folder(dir).map_err(|e| e.to_string())?)?;
-    Store::new(home)
+    store(home)?
         .install_folder(dir, &refused)
         .map_err(|e| e.to_string())
 }
@@ -91,17 +97,17 @@ fn contributions_ok(home: &Path, source: &Source) -> Result<()> {
 
 /// The MCP servers extensions that may run offer, approved or not.
 pub fn mcp_servers(home: &Path) -> Result<Vec<OfferedMcp>> {
-    Store::new(home).mcp_servers().map_err(|e| e.to_string())
+    store(home)?.mcp_servers().map_err(|e| e.to_string())
 }
 
 pub fn approve_mcp(home: &Path, extension: &str, name: &str, digest: &str) -> Result<()> {
-    Store::new(home)
+    store(home)?
         .approve_mcp(extension, name, digest)
         .map_err(|e| e.to_string())
 }
 
 pub fn revoke_mcp(home: &Path, extension: &str, name: &str) -> Result<()> {
-    Store::new(home)
+    store(home)?
         .revoke_mcp(extension, name)
         .map_err(|e| e.to_string())
 }
@@ -110,7 +116,7 @@ pub fn revoke_mcp(home: &Path, extension: &str, name: &str) -> Result<()> {
 /// packages are installed once under `person` (the person's home), when
 /// given. An error when what was approved cannot be read.
 pub fn mcp_for_runs(home: &Path, person: Option<&Path>) -> Result<Vec<kule_acp::McpCommand>> {
-    Ok(Store::new(home)
+    Ok(store(home)?
         .mcp_servers()
         .map_err(|e| e.to_string())?
         .into_iter()
@@ -128,44 +134,42 @@ pub fn mcp_for_runs(home: &Path, person: Option<&Path>) -> Result<Vec<kule_acp::
 }
 
 pub fn list(home: &Path) -> Result<Vec<Listed>> {
-    Store::new(home).list().map_err(|e| e.to_string())
+    store(home)?.list().map_err(|e| e.to_string())
 }
 
 pub fn approve(home: &Path, id: &str, digest: &str) -> Result<Listed> {
-    Store::new(home)
-        .approve(id, digest)
-        .map_err(|e| e.to_string())
+    store(home)?.approve(id, digest).map_err(|e| e.to_string())
 }
 
 pub fn set_enabled(home: &Path, id: &str, enabled: bool) -> Result<Listed> {
-    Store::new(home)
+    store(home)?
         .set_enabled(id, enabled)
         .map_err(|e| e.to_string())
 }
 
 pub fn remove(home: &Path, id: &str) -> Result<()> {
-    Store::new(home).remove(id).map_err(|e| e.to_string())?;
+    store(home)?.remove(id).map_err(|e| e.to_string())?;
     // Its agents went with it; their approvals go too, so a later
     // extension of the same id starts unapproved.
     kule_acp::Agents::forget_extension(home, id).map_err(|e| e.to_string())
 }
 
 pub fn storage(home: &Path, id: &str) -> Result<Value> {
-    Store::new(home).storage(id).map_err(|e| e.to_string())
+    store(home)?.storage(id).map_err(|e| e.to_string())
 }
 
 pub fn set_storage(home: &Path, id: &str, value: &Value) -> Result<()> {
-    Store::new(home)
+    store(home)?
         .set_storage(id, value)
         .map_err(|e| e.to_string())
 }
 
 pub fn config(home: &Path, id: &str) -> Result<BTreeMap<String, Value>> {
-    Store::new(home).config(id).map_err(|e| e.to_string())
+    store(home)?.config(id).map_err(|e| e.to_string())
 }
 
 pub fn set_config(home: &Path, id: &str, key: &str, value: &Value) -> Result<()> {
-    Store::new(home)
+    store(home)?
         .set_config(id, key, value)
         .map_err(|e| e.to_string())
 }
@@ -181,7 +185,7 @@ pub struct ExtensionTheme {
 /// The themes of every extension that may run. One that cannot be read
 /// is left out rather than failing the rest.
 pub fn themes(home: &Path) -> Result<Vec<ExtensionTheme>> {
-    let store = Store::new(home);
+    let store = store(home)?;
     let mut out = Vec::new();
     for listed in list(home)?.into_iter().filter(Listed::runs) {
         let Ok(source) = store.runnable(&listed.id) else {
@@ -212,11 +216,19 @@ mod tests {
     use std::fs;
     use tempfile::TempDir;
 
+    /// The build's own folder: not under /tmp, where a folder under
+    /// development is refused. It need not exist yet when the build goes
+    /// to another `CARGO_TARGET_DIR`.
+    fn target() -> &'static str {
+        let target = concat!(env!("CARGO_MANIFEST_DIR"), "/../../target");
+        fs::create_dir_all(target).unwrap();
+        target
+    }
+
     #[test]
     fn runs_are_given_only_the_mcp_servers_the_person_approved() {
         let home = TempDir::new().unwrap();
-        // Not under /tmp, where a folder under development is refused.
-        let src = TempDir::new_in(concat!(env!("CARGO_MANIFEST_DIR"), "/../../target")).unwrap();
+        let src = TempDir::new_in(target()).unwrap();
         fs::write(
             src.path().join("kule-extension.json"),
             r#"{ "kule_extension": 1, "id": "acme.tools", "name": "Tools", "version": "1.0.0",
@@ -264,7 +276,7 @@ mod tests {
     #[test]
     fn an_extension_in_a_tasks_folder_is_refused() {
         let home = TempDir::new().unwrap();
-        let ws = TempDir::new_in(concat!(env!("CARGO_MANIFEST_DIR"), "/../../target")).unwrap();
+        let ws = TempDir::new_in(target()).unwrap();
         let src = ws.path().join("tools");
         fs::create_dir(&src).unwrap();
         fs::write(
@@ -275,5 +287,30 @@ mod tests {
         kule_engine::Task::create(home.path(), ws.path()).unwrap();
         let refused = install_folder(home.path(), &src).unwrap_err();
         assert!(refused.contains("agents can write"), "{refused}");
+    }
+
+    /// One installed before a task was made on the folder around it is
+    /// held from then on, and says why.
+    #[test]
+    fn an_extension_a_task_s_folder_takes_in_later_is_held() {
+        let home = TempDir::new().unwrap();
+        let ws = TempDir::new_in(target()).unwrap();
+        let src = ws.path().join("tools");
+        fs::create_dir(&src).unwrap();
+        fs::write(
+            src.join("kule-extension.json"),
+            r#"{ "kule_extension": 1, "id": "acme.tools", "name": "Tools", "version": "1.0.0", "publisher": "acme" }"#,
+        )
+        .unwrap();
+        let listed = install_folder(home.path(), &src).unwrap();
+        approve(home.path(), "acme.tools", &listed.digest).unwrap();
+        assert!(list(home.path()).unwrap()[0].runs());
+        kule_engine::Task::create(home.path(), ws.path()).unwrap();
+        let held = list(home.path())
+            .unwrap()
+            .remove(0)
+            .held
+            .unwrap_or_default();
+        assert!(held.contains("agents can write"), "{held}");
     }
 }

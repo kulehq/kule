@@ -215,6 +215,13 @@ In the app: *Settings → Policy*, *Run agents with what this computer
 gives*. The title bar then says **Weaker isolation** while it holds. See
 [`kule isolation`](../cli/isolation.md) and [Platforms](../platforms.md).
 
+Without namespaces of its own (that, or a command run with the network
+open), a command's seccomp filter refuses by name the calls that reach past
+it: `ptrace`, `process_vm_writev`, `keyctl`, `userfaultfd`,
+`perf_event_open` and `setns` fail with `EPERM`, whatever the host's
+sysctls allow. A debugger or `strace` does not work inside the sandbox
+then.
+
 ## Related
 
 - [`kule exec`](../cli/exec.md), [`kule reveal`](../cli/reveal.md), [`kule isolation`](../cli/isolation.md)
