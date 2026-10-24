@@ -191,7 +191,7 @@ which is easier to log.
 | `kule: an agent is at work in task <id> …` | One agent per task. Wait, or make another task. |
 | `kule: a terminal is open on this task's copy (in Kule's app, or kule shell); close it first, then start work` | A terminal on the task (the app's, or `kule shell`) is open. Close it first. |
 | `kule: Kule opened task <id>'s copy in <app> outside the sandbox; …` | Close that terminal app or editor, then run [kule closed](closed.md) `TASK`. |
-| `kule: <error> (see <home>/tasks/<id>/agent.log)` | The agent failed. It comes after what the run did. The agent's own messages are in `agent.log`: its last 8 MB. When the log was turned over during the run, the line ends `, and agent.log.1 beside it for what came before`: the 8 MB before them. |
+| `kule: <error> (see <home>/tasks/<id>/agent.log)` | The agent failed. It comes after what the run did. The agent's own messages are in `agent.log`: its last 8 MB. When the log was turned over during the run, the line ends `, and agent.log.1 beside it for what came before`: the 8 MB before them. A log that was turned over starts with a `--- Kule turned this log over here …` line, which also says when an older `agent.log.1` was let go. |
 | `kule: stopped: <why>` | A limit or the agent's own messages stopped the run, as the rest of the line says; it names no log. |
 | `kule: stopped: the agent sent a message larger than 16 MiB` | The agent said more in one message than Kule takes. Run it again with a narrower prompt. |
 | `kule: stopped: the agent left more than 1024 tool calls open` | The agent started tool calls without ending them. |

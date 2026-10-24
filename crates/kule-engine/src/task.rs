@@ -555,11 +555,15 @@ impl Task {
     }
 
     /// Where a failed run's agent said why: its log, and the one before it
-    /// when the log was turned over during the run (see `agent.log.1`).
-    pub fn agent_log_hint(&self) -> String {
+    /// when the log was turned over during the run, which started at
+    /// `since` (`agent.log.1` was last written then, not by an earlier run).
+    pub fn agent_log_hint(&self, since: std::time::SystemTime) -> String {
         let log = self.agent_log();
         let older = log.with_extension("log.1");
-        if older.exists() {
+        let turned = fs::symlink_metadata(&older)
+            .and_then(|m| m.modified())
+            .is_ok_and(|written| written >= since);
+        if turned {
             format!(
                 "see {}, and {} beside it for what came before",
                 log.display(),

@@ -1107,19 +1107,27 @@ fn tasks_made_at_once_in_different_homes_have_different_ids() {
 }
 
 /// A failed run points to where its agent said why: the log, and the one
-/// before it once the log was turned over.
+/// before it once the log was turned over during that run, never one an
+/// earlier run left.
 #[test]
 fn a_run_error_points_to_the_older_log_too() {
     let (home, folder) = (TempDir::new().unwrap(), TempDir::new().unwrap());
     let task = Task::create(home.path(), folder.path()).unwrap();
     let log = task.agent_log();
-    assert_eq!(task.agent_log_hint(), format!("see {}", log.display()));
+    let started = std::time::SystemTime::now();
+    assert_eq!(
+        task.agent_log_hint(started),
+        format!("see {}", log.display())
+    );
     std::fs::write(log.with_extension("log.1"), "older\n").unwrap();
     assert_eq!(
-        task.agent_log_hint(),
+        task.agent_log_hint(started),
         format!(
             "see {}, and agent.log.1 beside it for what came before",
             log.display()
         )
     );
+    // Written before the run started: another run's.
+    let later = std::time::SystemTime::now() + std::time::Duration::from_secs(2);
+    assert_eq!(task.agent_log_hint(later), format!("see {}", log.display()));
 }
