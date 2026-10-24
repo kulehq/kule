@@ -212,11 +212,19 @@ mod tests {
     use std::fs;
     use tempfile::TempDir;
 
+    /// The build's own folder: not under /tmp, where a folder under
+    /// development is refused. It need not exist yet when the build goes
+    /// to another `CARGO_TARGET_DIR`.
+    fn target() -> &'static str {
+        let target = concat!(env!("CARGO_MANIFEST_DIR"), "/../../target");
+        fs::create_dir_all(target).unwrap();
+        target
+    }
+
     #[test]
     fn runs_are_given_only_the_mcp_servers_the_person_approved() {
         let home = TempDir::new().unwrap();
-        // Not under /tmp, where a folder under development is refused.
-        let src = TempDir::new_in(concat!(env!("CARGO_MANIFEST_DIR"), "/../../target")).unwrap();
+        let src = TempDir::new_in(target()).unwrap();
         fs::write(
             src.path().join("kule-extension.json"),
             r#"{ "kule_extension": 1, "id": "acme.tools", "name": "Tools", "version": "1.0.0",
@@ -264,7 +272,7 @@ mod tests {
     #[test]
     fn an_extension_in_a_tasks_folder_is_refused() {
         let home = TempDir::new().unwrap();
-        let ws = TempDir::new_in(concat!(env!("CARGO_MANIFEST_DIR"), "/../../target")).unwrap();
+        let ws = TempDir::new_in(target()).unwrap();
         let src = ws.path().join("tools");
         fs::create_dir(&src).unwrap();
         fs::write(

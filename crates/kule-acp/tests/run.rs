@@ -436,11 +436,21 @@ fn output_reported_in_pieces_adds_up_as_it_comes() {
             })
             .collect()
     };
-    // The first piece goes at once; the ones close behind it wait for the
-    // call to end, and none is lost.
+    // The first piece goes at once; the ones close behind it wait, and
+    // none is lost. Each message is all the output so far. How many
+    // messages it takes rests on the clock: a loaded machine can space
+    // pieces wider than the wait.
+    let few = outputs("stream one two three");
+    assert_eq!(few.first().map(String::as_str), Some("one\n"), "{few:?}");
     assert_eq!(
-        outputs("stream one two three"),
-        ["one\n", "one\ntwo\nthree\n"]
+        few.last().map(String::as_str),
+        Some("one\ntwo\nthree\n"),
+        "{few:?}"
+    );
+    assert!(
+        few.windows(2)
+            .all(|w| w[1].starts_with(&w[0]) && w[1] != w[0]),
+        "{few:?}"
     );
     // A thousand pieces in a burst are not a thousand messages.
     let words: Vec<String> = (0..1000).map(|n| n.to_string()).collect();
