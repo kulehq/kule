@@ -1,6 +1,15 @@
 # Changes
 
-## Unreleased
+## 0.2.0-preview.12
+
+What passes on its own under the balanced policy is now an allow-list:
+files of a kind known not to run by themselves, or of a kind your project
+already holds. Everything else, scripts and hidden files among them,
+waits for you, shown put together by why on the one review screen, and a
+kind can be answered for good, except what runs code when a tool opens
+the folder. Choosing Kule's careful policy is kept as a choice, so it
+always means this version's rules. Releases are built and published on
+pinned images, and are immutable once published.
 
 ### Changed
 
@@ -30,6 +39,16 @@
   it. Files that wait only for their kind are one group per kind, answered
   at once. Rule names a repository's own policy gives are shown with their
   control characters escaped.
+
+### Development
+
+- Release builds, the gate and publishing run on pinned runner images
+  (`macos-26`, `ubuntu-22.04` for the Linux packages, `ubuntu-24.04`), and
+  the npm publish on an exact Node version, so a change of image shows as a
+  change here first. A release run by hand publishes nothing, whatever ref
+  it runs on. Published releases are immutable, and no one, admins
+  included, publishes a release or the docs site past the environments'
+  rules.
 
 ## 0.2.0-preview.11
 
