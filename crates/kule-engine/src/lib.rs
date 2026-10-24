@@ -124,7 +124,8 @@ pub use secrets::{
 pub use steps::{Step, StepChange};
 pub use sync::{Behind, Synced};
 pub use task::{
-    AgentAtWork, MEASURING_CACHES, OpenTerminal, OpenedOutside, Task, TaskInfo, Unreadable,
+    AgentAtWork, AgentLogMark, MEASURING_CACHES, OpenTerminal, OpenedOutside, Task, TaskInfo,
+    Unreadable,
 };
 pub use textdiff::{DiffSkip, Hunk, Line, LineKind, TextDiff};
 pub use usage::{

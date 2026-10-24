@@ -934,7 +934,7 @@ fn run() -> Result<ExitCode> {
             };
             let started = Instant::now();
             // The agent's log, as it was before this run, is told apart by it.
-            let started_at = std::time::SystemTime::now();
+            let log_before = task.agent_log_mark();
             let usage = RunUsage {
                 agent: profile.name.clone(),
                 started_unix: std::time::SystemTime::now()
@@ -1088,7 +1088,7 @@ fn run() -> Result<ExitCode> {
             match outcome {
                 // A stop says why as it is; the agent's log has nothing to add.
                 Err(e) if e.to_string().starts_with("stopped: ") => bail!("{e}"),
-                Err(e) => bail!("{e} ({})", task.agent_log_hint(started_at)),
+                Err(e) => bail!("{e} ({})", task.agent_log_hint(&log_before)),
                 Ok(_) if !failed.is_empty() => {
                     bail!("the run ended, but Kule could not do all of the above")
                 }

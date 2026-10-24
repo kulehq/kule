@@ -1896,7 +1896,7 @@ impl Service {
         started: Instant,
     ) -> Result<RunEnd> {
         // The agent's log, as it was before this run, is told apart by it.
-        let started_at = std::time::SystemTime::now() - started.elapsed();
+        let log_before = task.agent_log_mark();
         let mut usage = kule_engine::RunUsage {
             agent: profile.name.clone(),
             started_unix: unix_now(),
@@ -2023,7 +2023,7 @@ impl Service {
             Ok(_) => None,
             // A stop says why as it is; the agent's log has nothing to add.
             Err(e) if e.to_string().starts_with("stopped: ") => Some(e.to_string()),
-            Err(e) => Some(format!("{e} ({})", task.agent_log_hint(started_at))),
+            Err(e) => Some(format!("{e} ({})", task.agent_log_hint(&log_before))),
         };
         let error = match (error, failed.is_empty()) {
             (error, true) => error,

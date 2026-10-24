@@ -141,6 +141,12 @@ impl Clone for Told {
     }
 }
 
+/// The log before the agent's as a run found it: the file itself, not a
+/// time, since a filesystem keeps its times coarser than the system's
+/// clock (a file written just after a run starts can look older).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentLogMark(Option<(u64, u64, i64, i64)>);
+
 /// A task under Kule's home whose record cannot be read: its folder's
 /// name, and why (see [`Task::list_told`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -600,15 +606,26 @@ impl Task {
         self.dir.join("agent.log")
     }
 
+    /// What the log before the agent's (`agent.log.1`) is as a run starts,
+    /// for [`Task::agent_log_hint`] as it ends.
+    pub fn agent_log_mark(&self) -> AgentLogMark {
+        use std::os::unix::fs::MetadataExt;
+        let older = self.agent_log().with_extension("log.1");
+        AgentLogMark(
+            fs::symlink_metadata(older)
+                .ok()
+                .map(|m| (m.dev(), m.ino(), m.mtime(), m.mtime_nsec())),
+        )
+    }
+
     /// Where a failed run's agent said why: its log, and the one before it
-    /// when the log was turned over during the run, which started at
-    /// `since` (`agent.log.1` was last written then, not by an earlier run).
-    pub fn agent_log_hint(&self, since: std::time::SystemTime) -> String {
+    /// when the log was turned over during the run, which found it as
+    /// `before` (otherwise `agent.log.1` is an earlier run's).
+    pub fn agent_log_hint(&self, before: &AgentLogMark) -> String {
         let log = self.agent_log();
         let older = log.with_extension("log.1");
-        let turned = fs::symlink_metadata(&older)
-            .and_then(|m| m.modified())
-            .is_ok_and(|written| written >= since);
+        let now = self.agent_log_mark();
+        let turned = now.0.is_some() && now != *before;
         if turned {
             format!(
                 "see {}, and {} beside it for what came before",

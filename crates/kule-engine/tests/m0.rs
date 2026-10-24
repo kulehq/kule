@@ -1114,22 +1114,29 @@ fn a_run_error_points_to_the_older_log_too() {
     let (home, folder) = (TempDir::new().unwrap(), TempDir::new().unwrap());
     let task = Task::create(home.path(), folder.path()).unwrap();
     let log = task.agent_log();
-    let started = std::time::SystemTime::now();
+    let before = task.agent_log_mark();
     assert_eq!(
-        task.agent_log_hint(started),
+        task.agent_log_hint(&before),
         format!("see {}", log.display())
     );
-    std::fs::write(log.with_extension("log.1"), "older\n").unwrap();
-    assert_eq!(
-        task.agent_log_hint(started),
-        format!(
-            "see {}, and agent.log.1 beside it for what came before",
-            log.display()
-        )
+    // Turned over during the run, at once: whatever the clocks say.
+    std::fs::write(&log, "this run\n").unwrap();
+    std::fs::rename(&log, log.with_extension("log.1")).unwrap();
+    let turned = format!(
+        "see {}, and agent.log.1 beside it for what came before",
+        log.display()
     );
-    // Written before the run started: another run's.
-    let later = std::time::SystemTime::now() + std::time::Duration::from_secs(2);
-    assert_eq!(task.agent_log_hint(later), format!("see {}", log.display()));
+    assert_eq!(task.agent_log_hint(&before), turned);
+    // There before the run started: another run's.
+    let later = task.agent_log_mark();
+    assert_eq!(
+        task.agent_log_hint(&later),
+        format!("see {}", log.display())
+    );
+    // Turned over again during the next run, over the one before.
+    std::fs::write(&log, "next run\n").unwrap();
+    std::fs::rename(&log, log.with_extension("log.1")).unwrap();
+    assert_eq!(task.agent_log_hint(&later), turned);
 }
 
 /// A task whose record cannot be read is named apart, with why, for a list
