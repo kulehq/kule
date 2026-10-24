@@ -621,6 +621,48 @@ pub struct Denial {
     pub hint: Option<String>,
 }
 
+impl Denial {
+    /// The same refusals once each, with how many times, in the order
+    /// first seen. A terminal device by number (`/dev/ttys003`,
+    /// `/dev/pts/7`) counts as the set it is one of, as the app's Timeline
+    /// shows it: a shell probes every terminal around it, and that is one
+    /// line, not a page.
+    pub fn grouped(denials: &[Denial]) -> Vec<(Denial, usize)> {
+        let mut groups: Vec<(Denial, usize)> = Vec::new();
+        let mut at: std::collections::HashMap<_, usize> = std::collections::HashMap::new();
+        for d in denials {
+            let path = device_set(&d.path);
+            let key = (
+                d.process.clone(),
+                d.operation.clone(),
+                path.clone(),
+                d.saved.clone(),
+            );
+            match at.get(&key) {
+                Some(&i) => groups[i].1 += 1,
+                None => {
+                    at.insert(key, groups.len());
+                    groups.push((Denial { path, ..d.clone() }, 1));
+                }
+            }
+        }
+        groups
+    }
+}
+
+/// `path` as the set of terminal devices it is one of, or as it is.
+fn device_set(path: &str) -> String {
+    for set in ["/dev/ttys", "/dev/pts/"] {
+        if let Some(n) = path.strip_prefix(set)
+            && !n.is_empty()
+            && n.bytes().all(|b| b.is_ascii_digit())
+        {
+            return format!("{set}*");
+        }
+    }
+    path.to_owned()
+}
+
 /// What a person can do about a refusal that keeps a tool from working.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn hint(operation: &str, path: &str) -> Option<String> {
@@ -3068,6 +3110,42 @@ mod linux_tests {
 #[cfg(test)]
 mod ended_tests {
     use super::*;
+
+    /// A shell's probes of the terminals around it are one group, counted;
+    /// any other path, and a name that only starts like a terminal's,
+    /// stays as it is.
+    #[test]
+    fn terminal_probes_are_one_group() {
+        let refused = |process: &str, path: &str| Denial {
+            process: process.into(),
+            operation: "file-read-metadata".into(),
+            path: path.into(),
+            saved: None,
+            hint: None,
+        };
+        let grouped = Denial::grouped(&[
+            refused("zsh", "/dev/ttys000"),
+            refused("cat", "/etc/secret"),
+            refused("zsh", "/dev/ttys5"),
+            refused("zsh", "/dev/pts/3"),
+            refused("zsh", "/dev/pts/12"),
+            refused("zsh", "/dev/ttysx"),
+            refused("cat", "/etc/secret"),
+        ]);
+        let listed: Vec<(&str, &str, usize)> = grouped
+            .iter()
+            .map(|(d, n)| (d.process.as_str(), d.path.as_str(), *n))
+            .collect();
+        assert_eq!(
+            listed,
+            [
+                ("zsh", "/dev/ttys*", 2),
+                ("cat", "/etc/secret", 2),
+                ("zsh", "/dev/pts/*", 2),
+                ("zsh", "/dev/ttysx", 1),
+            ]
+        );
+    }
 
     /// What Kule ended is told by name, each once with how many, and a long
     /// list says how many more it left out.

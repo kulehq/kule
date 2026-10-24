@@ -25,9 +25,12 @@
   one an earlier run left.
 - A run whose agent reported no cost, in a task with a budget, says in the
   app that the budget does not count it, as `kule run` already did.
-- In the Timeline and Live, a shell's probes of the terminals around it
-  are one row (`/dev/ttys*`) whichever terminals it tried, and *… and N
-  more refusals* counts the refusals left out, not the rows.
+- A shell's probes of the terminals around it are one line (`/dev/ttys*`,
+  `/dev/pts/*`, counted) whichever terminals it tried: in the Timeline, in
+  Live, where a terminal's shell ends, and after `kule exec`, `kule run` and
+  `kule shell`, which also list the same refusal once with how many times.
+  In the Timeline, *… and N more refusals* counts the refusals left out,
+  not the rows.
 - One task whose record cannot be read no longer fails the whole task list:
   `kule list` names it on stderr and lists the rest, and the app lists it
   as one that cannot be read. Budgets still count every task, and refuse

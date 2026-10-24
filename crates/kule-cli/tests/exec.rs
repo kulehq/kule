@@ -201,3 +201,37 @@ fn a_task_whose_record_cannot_be_read_does_not_hide_the_others() {
     assert!(said.contains(&id), "{said}");
     assert!(err.contains("kule: task garbled cannot be read"), "{err}");
 }
+
+/// A command's probes of terminals other than its own are one line after
+/// it, counted, as a shell's are where it ends.
+#[test]
+fn terminal_probes_are_one_line_after_a_command() {
+    if !cfg!(target_os = "macos") {
+        // Linux does not tell Kule what the sandbox refused.
+        return;
+    }
+    let (home, ws) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+    let kule = |args: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_kule"))
+            .args(args)
+            .env("KULE_HOME", home.path())
+            .output()
+            .unwrap()
+    };
+    let out = kule(&["new", ws.path().to_str().unwrap()]);
+    let id = String::from_utf8_lossy(&out.stdout)
+        .split_whitespace()
+        .nth(1)
+        .unwrap()
+        .to_owned();
+    let script = "ls /dev/ttys5 /dev/ttys6 /dev/ttys7 2>/dev/null; true";
+    let out = kule(&["exec", &id, "--", "sh", "-c", script]);
+    let (said, err) = (
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+    assert!(out.status.success(), "{err}");
+    let probes: Vec<&str> = said.lines().filter(|l| l.contains("/dev/ttys")).collect();
+    assert_eq!(probes.len(), 1, "{said}");
+    assert!(probes[0].contains("/dev/ttys* (ls) ×"), "{said}");
+}

@@ -1772,17 +1772,23 @@ fn print_after(
     set
 }
 
+/// What the sandbox refused, the same refusal once with how many times
+/// (the terminals a shell probes as one), then the hints.
 fn print_denials(denials: &[Denial]) {
-    let mut hints: Vec<&str> = Vec::new();
-    for d in denials {
+    let mut hints: Vec<String> = Vec::new();
+    for (d, count) in Denial::grouped(denials) {
+        let times = match count {
+            1 => String::new(),
+            _ => format!(" ×{count}"),
+        };
         println!(
-            "sandbox: refused {} {} ({})",
+            "sandbox: refused {} {} ({}){times}",
             paint::plain_line(&d.operation),
             paint::plain_line(&d.path),
             paint::plain_line(&d.process)
         );
-        if let Some(hint) = &d.hint
-            && !hints.contains(&hint.as_str())
+        if let Some(hint) = d.hint
+            && !hints.contains(&hint)
         {
             hints.push(hint);
         }

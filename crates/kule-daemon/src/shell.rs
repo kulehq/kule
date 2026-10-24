@@ -58,33 +58,28 @@ impl ShellEnd {
     }
 
     /// [`ShellEnd::notes`] after what the sandbox refused, a line each,
-    /// the same refusal once with how many times, then the hints: for a
+    /// the same refusal once with how many times (the terminals a shell
+    /// probes as one, see [`Denial::grouped`]), then the hints: for a
     /// terminal that shows them where the shell was.
     pub fn lines(&self, failed: bool) -> Vec<String> {
-        let mut refused: Vec<(String, usize)> = Vec::new();
-        let mut hints: Vec<&str> = Vec::new();
-        for d in &self.denials {
+        let refused = Denial::grouped(&self.denials);
+        let mut hints: Vec<String> = Vec::new();
+        let mut lines: Vec<String> = Vec::new();
+        for (d, count) in refused {
             let line = format!(
                 "sandbox: refused {} {} ({})",
                 d.operation, d.path, d.process
             );
-            match refused.iter_mut().find(|(l, _)| *l == line) {
-                Some((_, count)) => *count += 1,
-                None => refused.push((line, 1)),
-            }
-            if let Some(hint) = &d.hint
-                && !hints.contains(&hint.as_str())
+            lines.push(match count {
+                1 => line,
+                _ => format!("{line} ×{count}"),
+            });
+            if let Some(hint) = d.hint
+                && !hints.contains(&hint)
             {
                 hints.push(hint);
             }
         }
-        let mut lines: Vec<String> = refused
-            .into_iter()
-            .map(|(line, count)| match count {
-                1 => line,
-                _ => format!("{line} ×{count}"),
-            })
-            .collect();
         lines.extend(hints.into_iter().map(|h| format!("  {h}")));
         lines.extend(self.notes(failed));
         lines
@@ -218,7 +213,7 @@ mod tests {
         }
     }
 
-    /// A shell that probed the terminals around it is told in one line each,
+    /// A shell that probed the terminals around it is told in one line,
     /// counted, before what Kule ended with it.
     #[test]
     fn a_shell_s_end_is_told_a_line_each_the_same_once() {
@@ -227,6 +222,7 @@ mod tests {
                 refused("zsh", "/dev/ttys004"),
                 refused("zsh", "/dev/ttys004"),
                 refused("cat", "/etc/secret"),
+                refused("zsh", "/dev/ttys5"),
             ],
             ended: vec!["sleep".into(), "sleep".into()],
             ..ShellEnd::default()
@@ -234,7 +230,7 @@ mod tests {
         assert_eq!(
             end.lines(false),
             [
-                "sandbox: refused file-read-data /dev/ttys004 (zsh) ×2",
+                "sandbox: refused file-read-data /dev/ttys* (zsh) ×3",
                 "sandbox: refused file-read-data /etc/secret (cat)",
                 "Kule ended sleep ×2, which the shell left running in its sandbox",
             ]
