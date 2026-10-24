@@ -1869,6 +1869,13 @@ impl Task {
     /// off, and an editor in it would lose what it had not saved. Refused
     /// while an agent is at work.
     pub fn terminal_opened(&self) -> Result<OpenTerminal> {
+        self.terminal_opened_within(TERMINAL_WAIT)
+    }
+
+    /// [`Task::terminal_opened`], waiting up to `wait` for what Kule writes
+    /// in the copy under the task's lock: another terminal's masking of the
+    /// copy's secrets as it opens, say, which two opened at once meet.
+    pub fn terminal_opened_within(&self, wait: Duration) -> Result<OpenTerminal> {
         let dir = self.dir.join("terminals");
         fs::create_dir_all(&dir).at(&dir)?;
         let nanos = SystemTime::now()
@@ -1890,17 +1897,33 @@ impl Task {
             )));
         }
         // Kule may be writing in the copy (a commit, a rollback), having
-        // looked for terminals before this one was marked.
-        if self.dir.join("lock").exists() {
-            return Err(Error::Invalid(
+        // looked for terminals before this one was marked: once it is done,
+        // the terminal opens on what it wrote.
+        let deadline = std::time::Instant::now() + wait;
+        let writing = || {
+            Error::Invalid(
                 "Kule is writing in this task's copy (a commit, sync or rollback); \
                  open the terminal once that is done"
                     .into(),
-            ));
+            )
+        };
+        loop {
+            let left = std::time::Instant::now() < deadline;
+            if self.dir.join("lock").exists() {
+                if !left {
+                    return Err(writing());
+                }
+                std::thread::sleep(Duration::from_millis(50));
+                continue;
+            }
+            // As before an agent's work: what the terminal runs reads the
+            // copy.
+            match self.protect_secrets() {
+                Err(Error::Busy(_)) if left => std::thread::sleep(Duration::from_millis(50)),
+                Err(Error::Busy(_)) => return Err(writing()),
+                other => return other.map(|()| open),
+            }
         }
-        // As before an agent's work: what the terminal runs reads the copy.
-        self.protect_secrets()?;
-        Ok(open)
     }
 
     /// The processes holding a terminal open on the task's copy (see
@@ -2038,6 +2061,10 @@ impl Task {
         lock_at(&self.dir, &self.info.id)
     }
 }
+
+/// How long a terminal opening waits for what Kule writes in the copy
+/// under the task's lock before it is refused.
+const TERMINAL_WAIT: Duration = Duration::from_secs(10);
 
 /// The file in a task's folder under which its caches are made, out of the
 /// sandbox's reach.

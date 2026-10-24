@@ -10,6 +10,9 @@
   making them as the task is made or forked; one that comes before they are
   ready waits and says so, in the terminal, in Live, or on the command
   line, as does the CLI's first command when it makes them itself.
+- Two terminals opened at once on a task (the app's own and one you open)
+  both open: one waits a moment while the other masks the copy's secrets,
+  instead of being refused as if a commit were under way.
 - `kule exec`, `kule run` and `kule shell` tell all of what came after a
   command, a run or a shell even when one part cannot be shown (a folder in
   the copy that cannot be read back, say): that part is a `kule: … cannot

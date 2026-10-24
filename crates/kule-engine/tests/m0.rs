@@ -1005,7 +1005,11 @@ fn an_open_terminal_holds_off_work_commit_and_sync() {
     // either: it would start after the commit looked for terminals.
     let lock = marks.parent().unwrap().join("lock");
     fs::write(&lock, "1\n").unwrap();
-    let e = s.task.terminal_opened().map(|_| ()).unwrap_err();
+    let e = s
+        .task
+        .terminal_opened_within(std::time::Duration::from_millis(300))
+        .map(|_| ())
+        .unwrap_err();
     assert!(
         e.to_string()
             .contains("Kule is writing in this task's copy"),
@@ -1014,6 +1018,23 @@ fn an_open_terminal_holds_off_work_commit_and_sync() {
     assert!(s.task.terminals_open().is_empty());
     fs::remove_file(&lock).unwrap();
     assert!(s.task.terminal_opened().is_ok());
+    // Writing that ends while one opens holds it back only until then: two
+    // opened at once both open.
+    fs::write(&lock, "1\n").unwrap();
+    let freed = {
+        let lock = lock.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            fs::remove_file(lock).unwrap();
+        })
+    };
+    let (a, b) = std::thread::scope(|scope| {
+        let a = scope.spawn(|| s.task.terminal_opened().map(|_| ()));
+        let b = scope.spawn(|| s.task.terminal_opened().map(|_| ()));
+        (a.join().unwrap(), b.join().unwrap())
+    });
+    freed.join().unwrap();
+    assert!(a.is_ok() && b.is_ok(), "{a:?} {b:?}");
 }
 
 /// Rolling back, undoing and going back to a step write in the copy, as a
