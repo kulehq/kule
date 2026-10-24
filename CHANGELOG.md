@@ -1,6 +1,14 @@
 # Changes
 
-## Unreleased
+## 0.2.0-preview.13
+
+Kule tells you, where you work, more of what it cut, ended or refused, and
+says it once: in the terminal and Live, after `kule exec`, `run` and
+`shell`, and for a task whose record cannot be read, which no longer fails
+the whole list and can be deleted. A task's first command, terminal or run
+no longer waits silently for its package caches: the app makes them as the
+task is made, and a terminal shows what it waits for. A connection cut for
+Encrypted Client Hello says what turns it off in each tool, as measured.
 
 ### Fixes
 
