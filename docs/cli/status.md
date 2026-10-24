@@ -163,6 +163,8 @@ policy: passes on its own
 | `in your home, caught for review` | Writes in your home folder; see [kule home](home.md). |
 | `policy: <verdict>` | The overall ruling: `passes on its own`, `waits for approval`, or `denied`. |
 | `  <subject> · <verdict> (<rule>)` | Each change that does not simply pass, with the rule behind it. See [Built-in policy rules](../reference/policy-rules.md). |
+| `digest: <hex> (to approve these: …)` | What these changes hash to. `kule commit TASK --approve --reviewed <hex>` commits them only while they are still these. |
+| `home digest: <hex>` | The same for the writes in your home; see [kule home](home.md). |
 | `task <id> changes them too:` | Another task on the same folder changes the same files; the lines under it name the file and the function, section or key. |
 | `the workspace changed since the task's copy …` | What `kule sync` would bring in. `(the task changed it too)` marks files both changed. |
 | `workspace <path> is gone (moved or deleted); commit and undo are refused` | The real folder is no longer there. |
@@ -183,6 +185,7 @@ At most 40 files are listed; the rest are counted (`… N more (kule status --js
 | `budget` | The task's own budget, or `null`. |
 | `home` | Writes in your home waiting for review. |
 | `behind` | `changed`: paths the workspace changed since the last sync; `both`: those the task changed too; `repository`: whether commits, branches or the index changed. |
+| `digest` | What the changes a plain commit would take hash to, for `kule commit --approve --reviewed`; `null` with none. |
 
 ```json
 {
@@ -204,7 +207,8 @@ At most 40 files are listed; the rest are counted (`… N more (kule status --js
   "spent": { "runs": 0, "tokens": 0, "cost": [], "unpriced_runs": 0 },
   "budget": null,
   "home": [],
-  "behind": { "changed": ["src/main.rs"], "both": ["src/main.rs"], "repository": false }
+  "behind": { "changed": ["src/main.rs"], "both": ["src/main.rs"], "repository": false },
+  "digest": "9f2c…e41a"
 }
 ```
 

@@ -16,6 +16,11 @@
 //   fast_forward  for git.ref: the new value keeps the old one in its history
 //   commits       for git.ref: commits added
 //   host, port    for net.connect: where a command wants to connect
+//   gains         for fs.*: what the entry gains in its permission bits that
+//                 the folder's had not, "executable" and "world-writable"
+//   xattrs_changed
+//                 for fs.*: a file whose extended attributes differ from
+//                 the folder's (macOS, where a commit carries them)
 // Context: deletes (paths deleted in the transaction; a move is not one),
 //   files (paths changed), repository (the workspace is a git repository).
 //
@@ -112,6 +117,18 @@ when { resource.kind like "fs.*" && resource.parts.contains(".git") };
 @id("nested-git-hooks")
 forbid (principal, action, resource)
 when { resource.kind like "fs.*" && resource.parts.contains(".git") && resource.parts.contains("hooks") && resource.change != "deleted" };
+
+// A file anyone may run now, or anything anything on the computer may
+// change: a person sees it, whatever its name.
+@id("permissions")
+forbid (principal, action == Kule::Action::"auto", resource)
+when { resource.kind like "fs.*" && !resource.gains.isEmpty() };
+
+// Extended attributes say what Gatekeeper checks (a quarantine mark) and
+// carry data no diff shows: a person sees the ones a file changed.
+@id("extended-attributes")
+forbid (principal, action == Kule::Action::"auto", resource)
+when { resource.kind like "fs.*" && resource.xattrs_changed };
 
 // A link leads wherever it points, and is judged by a person.
 @id("links")

@@ -549,7 +549,11 @@ pub fn dispatch(service: &Arc<Service>, call: Call) -> Result<Value, String> {
         Call::TaskBudgets { task } => json(service.task_budgets(&task)?),
         Call::DailyBudget => json(service.daily_budget()?),
         Call::SetDailyBudget { budget } => json(service.set_daily_budget(budget)?),
-        Call::ApplyHome { task, paths } => json(service.apply_home(&task, &paths)?),
+        Call::ApplyHome {
+            task,
+            paths,
+            reviewed,
+        } => json(service.apply_home(&task, &paths, &reviewed)?),
         Call::DiscardHome { task, paths } => json(service.discard_home(&task, &paths)?),
         Call::HomeDiff { task, path } => json(service.home_diff(&task, &path)?),
         Call::UndoHome { task } => json(service.undo_home(&task)?),

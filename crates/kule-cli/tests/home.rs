@@ -85,10 +85,31 @@ fn a_home_path_is_found_however_it_is_typed_and_only_inside_the_home() {
         "a refused path still threw the change away"
     );
 
-    ok(
+    // Without a terminal, only with the digest `kule home` printed.
+    let said = refused(
         home.path(),
         person.path(),
         &["home", &id, "apply", expanded.to_str().unwrap()],
+    );
+    assert!(said.contains("--reviewed"), "{said}");
+    let listed = ok(home.path(), person.path(), &["home", &id]);
+    let digest = listed
+        .lines()
+        .find_map(|l| l.strip_prefix("home digest: "))
+        .and_then(|l| l.split_whitespace().next())
+        .unwrap_or_else(|| panic!("{listed}"))
+        .to_owned();
+    ok(
+        home.path(),
+        person.path(),
+        &[
+            "home",
+            &id,
+            "apply",
+            expanded.to_str().unwrap(),
+            "--reviewed",
+            &digest,
+        ],
     );
     assert!(fs::read_to_string(&expanded).unwrap().contains("alias ll="));
 }

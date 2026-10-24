@@ -156,6 +156,18 @@ pub struct HomeChange {
     /// it leads before applying it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target: Option<String>,
+    /// What the layer holds at the path, hashed (its bytes and permission
+    /// bits, a link's target, `missing` for a deletion): what an apply
+    /// takes is what was reviewed.
+    #[serde(default)]
+    pub hash: String,
+}
+
+/// A hash of `changes` as a review lists them: an apply takes them only
+/// while they are still these.
+pub fn home_digest(changes: &[HomeChange]) -> String {
+    let bytes = serde_json::to_vec(changes).unwrap_or_default();
+    blake3::hash(&bytes).to_hex().to_string()
 }
 
 /// What [`Task::apply_home`] did.
@@ -590,8 +602,26 @@ impl Task {
         Ok(dir)
     }
 
-    /// What the task's commands changed in the home layer, by path.
+    /// What the task's commands changed in the home layer, by path, each
+    /// with what it holds hashed (see [`home_digest`]).
     pub fn home_changes(&self) -> Result<Vec<HomeChange>> {
+        self.home_changes_hashed(true)
+    }
+
+    /// How many changes [`Task::home_changes`] lists, without reading what
+    /// they hold: for a list that only counts them.
+    pub fn home_change_count(&self) -> Result<usize> {
+        Ok(self.home_changes_hashed(false)?.len())
+    }
+
+    fn home_changes_hashed(&self, hashed: bool) -> Result<Vec<HomeChange>> {
+        let hash = |dir: &Path, rel: &str| -> Result<String> {
+            if hashed {
+                fsops::content_hash(dir, rel)
+            } else {
+                Ok(String::new())
+            }
+        };
         let Some(layer) = self.load_layer()? else {
             return Ok(Vec::new());
         };
@@ -630,6 +660,7 @@ impl Task {
                 Some(was) if was.copy.unchanged(&now) => {}
                 Some(_) => changes.push(HomeChange {
                     startup: startup(&rel),
+                    hash: hash(&dir, &rel)?,
                     path: rel,
                     change: Change::Modified,
                     kind: now.kind,
@@ -637,6 +668,7 @@ impl Task {
                 }),
                 None => changes.push(HomeChange {
                     startup: startup(&rel),
+                    hash: hash(&dir, &rel)?,
                     path: rel,
                     change: Change::Created,
                     kind: now.kind,
@@ -652,6 +684,7 @@ impl Task {
                     kind: was.copy.kind,
                     startup: startup(rel),
                     target: None,
+                    hash: "missing".to_owned(),
                 });
             }
         }
@@ -662,7 +695,7 @@ impl Task {
     /// Takes the changes at `paths` from the layer to the real home. Every
     /// one of them is refused when any real path is no longer what it was
     /// when the layer was made; what is replaced or removed is kept first.
-    pub fn apply_home(&self, paths: &[String]) -> Result<HomeApplied> {
+    pub fn apply_home(&self, paths: &[String], reviewed: &str) -> Result<HomeApplied> {
         let Some(mut layer) = self.load_layer()? else {
             return Ok(HomeApplied::default());
         };
@@ -670,13 +703,32 @@ impl Task {
         // Nothing left running in the task's sandbox changes the layer
         // while it is applied.
         self.quiet_sandbox("apply its home changes")?;
-        let wanted: Vec<HomeChange> = self
-            .home_changes()?
+        let changes = self.home_changes()?;
+        if home_digest(&changes) != reviewed {
+            return Err(Error::Invalid(
+                "the home changes are not the ones you reviewed any more; review them again".into(),
+            ));
+        }
+        let wanted: Vec<HomeChange> = changes
             .into_iter()
             .filter(|c| paths.contains(&c.path))
             .collect();
         if wanted.is_empty() {
             return Ok(HomeApplied::default());
+        }
+        // As a commit: nothing comes to run as its owner or group where
+        // what it replaces did not.
+        for c in &wanted {
+            let gains = fsops::hash_mode(&c.hash).unwrap_or(0) & fsops::RUNS_AS_OWNER;
+            let had = Stamp::of(&layer.real.join(&c.path))?
+                .filter(|s| s.kind == Kind::File)
+                .map_or(0, |s| s.mode);
+            if gains & !had != 0 {
+                return Err(Error::Invalid(format!(
+                    "~/{} would run as its owner or group (setuid or setgid), which Kule never brings into your home; nothing was applied",
+                    c.path
+                )));
+            }
         }
         let dir = self.home_layer();
         let mut moved = Vec::new();

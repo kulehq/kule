@@ -25,13 +25,21 @@ gösterdiği değişiklikleri alır ve çalışma klasörüne uygular.
 
 - **kendiliğinden geçen** değişiklikler commit edilir;
 - **onay bekleyen** değişiklikler (yerleşik *balanced* politikasında
-  manifest'ler, lock dosyaları, CI dosyaları, git config, toplu silmeler, …)
-  yalnızca `--approve` ile commit edilir;
+  manifest'ler, lock dosyaları, CI dosyaları, git config, toplu silmeler,
+  çalıştırılabilir yapılan bir dosya, …) yalnızca `--approve` ile ve yalnızca
+  gözden geçirdiğiniz hâliyle commit edilir;
 - **reddedilen** değişiklikler (örneğin yeni bir git hook'u) `--approve` ile
   bile asla commit edilmez.
 
 Bir şey geri tutulursa **hiçbir şey** commit edilmez: Kule kararı yazdırır ve
 `3` çıkış koduyla çıkar. Bir commit ya hep ya hiçtir.
+
+**Onay, gözden geçirdiğinizi alır.** `--approve` değişiklikleri yalnızca
+baktığınız değişiklikler oldukları sürece commit eder.
+[kule status](status.md)'un yazdırdığı digest'i verin (`--reviewed DIGEST`):
+o zamandan beri bir şey değiştiyse commit reddedilir ve yeniden gözden
+geçirirsiniz. `--reviewed` olmadan, bir terminalde Kule onaylayacağı şeyleri
+listeler ve sorar; soracak bir terminal yoksa (bir betik, bir pipe) reddeder.
 
 **Bir kontrol noktası saklanır.** Kule yazmadan önce, commit'in yerine
 koyacağı şeyleri görevin kendi kontrol noktası deposuna kaydeder; böylece
@@ -71,6 +79,7 @@ terminal (uygulamanınki ya da [kule shell](shell.md)) açıkken
 | --- | --- | --- | --- |
 | `--approve` | | | Politikanın bir insana sorduğu değişiklikleri de commit eder. Reddedilen değişiklikler yine asla geçmez. |
 | `--remember` | | | `--approve` ile birlikte: bu klasörde, şimdi onaylanan dosyalar (manifest'ler, CI ve proje dosyaları) hakkında bir daha sormaz. Bkz. [kule rules](rules.md). |
+| `--reviewed` | digest | | `--approve` ile birlikte: `kule status`'un gözden geçirdiğiniz değişiklikler için yazdırdığı digest. Yalnızca onlar commit edilir. Verilmezse Kule bir terminalde sorar, başka yerde reddeder. |
 | `--include-ignored` | | | Çalışma klasörünün `.gitignore`'unun dışarıda bıraktığı yolları da alır. |
 | `--home` | yol | `~/.kule` | Kule'nin ev klasörü (ya da `KULE_HOME`). Bkz. [genel seçenekler](index.md). |
 
@@ -92,14 +101,20 @@ policy: waits for approval
 kule: not committed; rerun with --approve to approve the changes above
 $ echo $?
 3
-$ kule commit 3efe1ca8 --approve
+$ kule status 3efe1ca8
+…
+digest: 9f2c…e41a (to approve these: kule commit 3efe1ca8 --approve --reviewed 9f2c…e41a)
+$ kule commit 3efe1ca8 --approve --reviewed 9f2c…e41a
 committed 3 changes · checkpoint 1
 ```
+
+Bir terminalde tek başına `kule commit 3efe1ca8 --approve` değişiklikleri
+listeler ve `Approve and commit these changes? [y/N]` diye sorar.
 
 **Onaylayın ve bu klasörde bu dosyalar hakkında bir daha sorulmasın:**
 
 ```sh
-kule commit 3efe1ca8 --approve --remember
+kule commit 3efe1ca8 --approve --remember --reviewed 9f2c…e41a
 ```
 
 ```text
@@ -110,7 +125,7 @@ not asked again on this folder: changes to Cargo.toml (manifests-and-lockfiles)
 **Reddedilen bir değişiklik:**
 
 ```text
-$ kule commit 3422f830 --approve
+$ kule commit 3422f830 --approve --reviewed 51d0…7c3b
 policy: denied
   git hook pre-commit · denied (git-hooks)
 kule: not committed; the policy denies the changes above

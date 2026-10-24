@@ -302,6 +302,10 @@ pub struct Review {
     /// task's home layer; never part of a commit.
     #[serde(default)]
     pub home: Vec<kule_engine::HomeChange>,
+    /// The digest of `home`; an apply that names it is refused if anything
+    /// there changed since.
+    #[serde(default)]
+    pub home_digest: String,
     /// The last apply of home changes, which an undo takes back.
     #[serde(default)]
     pub home_applied: Option<kule_engine::HomeApplied>,
@@ -1256,21 +1260,29 @@ impl Service {
         // A help to the review, not part of it: a file Kule cannot read
         // now is listed without one.
         let outline = task.outline(&pending).unwrap_or_default();
+        let home = task.home_changes().map_err(text)?;
         Ok(Review {
             effects,
             ruling,
             digest: pending.digest(),
             outline,
-            home: task.home_changes().map_err(text)?,
+            home_digest: kule_engine::home_digest(&home),
+            home,
             home_applied: task.home_last_applied().map_err(text)?,
         })
     }
 
-    /// Takes the home changes at `paths` to the person's home.
-    pub fn apply_home(&self, id: &str, paths: &[String]) -> Result<kule_engine::HomeApplied> {
+    /// Takes the home changes at `paths` to the person's home, while the
+    /// home changes are still the ones whose digest is `reviewed`.
+    pub fn apply_home(
+        &self,
+        id: &str,
+        paths: &[String],
+        reviewed: &str,
+    ) -> Result<kule_engine::HomeApplied> {
         self.not_at_work(id)?;
         let task = self.open(id)?;
-        let applied = task.apply_home(paths);
+        let applied = task.apply_home(paths, reviewed);
         self.tell_ended(&task);
         let applied = applied.map_err(text)?;
         notify(&self.subscribers, Notice::Tasks);
@@ -1375,11 +1387,7 @@ impl Service {
         let policy = self.policy(&task)?;
         let gate = policy.gate(approve);
         let check = |set: &EffectSet| {
-            if reviewed.is_some_and(|digest| digest != set.digest()) {
-                return Err(Error::Invalid(
-                    "the changes are not the ones you reviewed any more; review them again".into(),
-                ));
-            }
+            set.check_reviewed(approve, reviewed)?;
             gate(set)
         };
         let outcome = task.commit_with(include_ignored, check);
@@ -2012,7 +2020,7 @@ impl Service {
             overlaps: self.overlaps(id, &scan),
             spent: task.spent().map_err(text)?,
             budget: task.budget().map_err(text)?,
-            home_changes: task.home_changes().map_or(0, |c| c.len()),
+            home_changes: task.home_change_count().unwrap_or(0),
             label: task.label().map_err(text)?,
             color: task.color().map_err(text)?,
             group: task.group().map_err(text)?,
@@ -2339,6 +2347,11 @@ mod tests {
             (view.id, copy)
         }
 
+        /// The digest of task `id`'s changes as a review shows them now.
+        fn digest(&self, id: &str) -> String {
+            self.app.review(id, false).unwrap().digest
+        }
+
         /// Ages every scan past [`FRESH`] so the list makes them again.
         fn age_scans(&self) {
             for cached in self
@@ -2543,7 +2556,9 @@ mod tests {
         }
         fs::write(copy.join("b.txt"), "b\n").unwrap();
         assert!(matches!(
-            s.app.commit(&id, true, false, None).unwrap(),
+            s.app
+                .commit(&id, true, false, Some(&s.digest(&id)))
+                .unwrap(),
             Commit::Applied { .. }
         ));
         let told: Vec<String> = s
@@ -2571,7 +2586,9 @@ mod tests {
         let (id, copy) = s.task();
         fs::write(copy.join("b.txt"), "b\n").unwrap();
         assert!(matches!(
-            s.app.commit(&id, true, false, None).unwrap(),
+            s.app
+                .commit(&id, true, false, Some(&s.digest(&id)))
+                .unwrap(),
             Commit::Applied { .. }
         ));
         fs::write(copy.join("c.txt"), "c\n").unwrap();
@@ -2863,7 +2880,9 @@ mod tests {
         assert_eq!(review.effects.effects.len(), 1);
 
         assert!(matches!(
-            s.app.commit(&id, true, false, None).unwrap(),
+            s.app
+                .commit(&id, true, false, Some(&s.digest(&id)))
+                .unwrap(),
             Commit::Applied { checkpoint: 2, .. }
         ));
         assert!(s.ws.path().join("Cargo.toml").exists());
@@ -2880,7 +2899,11 @@ mod tests {
         .unwrap();
         let (id, copy) = s.task();
         fs::write(copy.join("secret.txt"), "x\n").unwrap();
-        match s.app.commit(&id, true, false, None).unwrap() {
+        match s
+            .app
+            .commit(&id, true, false, Some(&s.digest(&id)))
+            .unwrap()
+        {
             Commit::Held { ruling } => assert_eq!(ruling.verdict, Verdict::Deny),
             other => panic!("expected the change to be denied, got {other:?}"),
         }
@@ -2942,7 +2965,9 @@ mod tests {
 
         assert!(s.app.tasks().unwrap()[0].running);
         for refused in [
-            s.app.commit(&id, true, false, None).map(|_| ()),
+            s.app
+                .commit(&id, true, false, Some(&s.digest(&id)))
+                .map(|_| ()),
             s.app.rollback(&id).map(|_| ()),
             s.app.undo(&id).map(|_| ()),
             s.app.sync(&id).map(|_| ()),
@@ -3083,7 +3108,9 @@ mod tests {
             waits("go back to a step")
         );
         assert_eq!(
-            s.app.commit(&id, true, false, None).unwrap_err(),
+            s.app
+                .commit(&id, true, false, Some(&s.digest(&id)))
+                .unwrap_err(),
             waits("commit")
         );
         assert_eq!(s.app.sync(&id).unwrap_err(), waits("sync"));
@@ -3123,7 +3150,14 @@ mod tests {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .insert(id.clone());
-        let e = s.app.apply_home(&id, &[".zshrc".into()]).unwrap_err();
+        let e = s
+            .app
+            .apply_home(
+                &id,
+                &[".zshrc".into()],
+                &s.app.review(&id, false).unwrap().home_digest,
+            )
+            .unwrap_err();
         assert!(e.contains("at work"), "{e}");
         s.app
             .running
@@ -3131,7 +3165,14 @@ mod tests {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove(&id);
 
-        let applied = s.app.apply_home(&id, &[".zshrc".into()]).unwrap();
+        let applied = s
+            .app
+            .apply_home(
+                &id,
+                &[".zshrc".into()],
+                &s.app.review(&id, false).unwrap().home_digest,
+            )
+            .unwrap();
         assert_eq!(applied.paths, [".zshrc"]);
         assert_eq!(
             fs::read_to_string(person.path().join(".zshrc")).unwrap(),
@@ -3985,7 +4026,13 @@ mod tests {
 
         let done = s
             .app
-            .commit_remembering(&id, true, false, None, &["Cargo.toml".into()])
+            .commit_remembering(
+                &id,
+                true,
+                false,
+                Some(&s.digest(&id)),
+                &["Cargo.toml".into()],
+            )
             .unwrap();
         assert!(matches!(done, Commit::Applied { .. }));
         let rules = s.app.rules().unwrap();
@@ -4228,6 +4275,23 @@ mod tests {
             &|e| matches!(e, RunEvent::AfterApproval { why, port, .. } if why.starts_with("cut by Kule") && *port == up),
         );
         drop(proxy);
+    }
+
+    /// Approving takes the digest of what was reviewed: never whatever is
+    /// there by then.
+    #[test]
+    fn an_approving_commit_without_a_review_is_refused() {
+        let s = Setup::new();
+        let (id, copy) = s.task();
+        fs::write(copy.join("Cargo.toml"), "[package]\n").unwrap();
+        let e = s.app.commit(&id, true, false, None).unwrap_err();
+        assert!(e.contains("kule status"), "{e}");
+        assert!(!s.ws.path().join("Cargo.toml").exists());
+        let digest = s.digest(&id);
+        assert!(matches!(
+            s.app.commit(&id, true, false, Some(&digest)).unwrap(),
+            Commit::Applied { .. }
+        ));
     }
 
     /// Something still running in the copy can change it between the

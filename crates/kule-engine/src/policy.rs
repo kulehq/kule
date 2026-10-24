@@ -137,6 +137,9 @@ impl Ruling {
     }
 }
 
+/// The start of the ids a repository's own rules are added under.
+const REPO_RULE: &str = "kule-repository-rule-";
+
 pub struct Policy {
     set: PolicySet,
     /// Files a person said not to be asked about again, with the rule that
@@ -245,12 +248,12 @@ impl Policy {
         Ok(self)
     }
 
-    /// `base` with `repo`'s rules added; `repo` may hold only `forbid` rules.
+    /// `base` with `repo`'s rules added; `repo` may hold only `forbid` rules,
+    /// told as `repo:<@id>`.
     pub fn from_texts(base: &str, repo: Option<&str>) -> Result<Policy> {
         let invalid =
             |what: &str, e: &dyn std::fmt::Display| Error::Invalid(format!("{what}: {e}"));
-        PolicySet::from_str(base).map_err(|e| invalid("policy", &e))?;
-        let mut text = base.to_owned();
+        let mut set = PolicySet::from_str(base).map_err(|e| invalid("policy", &e))?;
         if let Some(repo) = repo {
             let repo_set = PolicySet::from_str(repo).map_err(|e| invalid(REPO_POLICY, &e))?;
             if repo_set.templates().next().is_some()
@@ -262,10 +265,14 @@ impl Policy {
                     "{REPO_POLICY} may only contain forbid rules: a repository can tighten the policy, never loosen it"
                 )));
             }
-            text.push('\n');
-            text.push_str(repo);
+            // Under ids of their own: a repository's rule is told as the
+            // repository's (`repo:` before its `@id`), and never shares a
+            // name with a rule a person may answer for good.
+            for (i, policy) in repo_set.policies().enumerate() {
+                let policy = policy.new_id(PolicyId::new(format!("{REPO_RULE}{i}")));
+                set.add(policy).map_err(|e| invalid(REPO_POLICY, &e))?;
+            }
         }
-        let set = PolicySet::from_str(&text).map_err(|e| invalid("policy", &e))?;
         Ok(Policy {
             set,
             files: Vec::new(),
@@ -340,6 +347,8 @@ impl Policy {
                 Change::Deleted => "fs.delete",
             };
             let mut subject = Subject::file(kind, &effect.path, effect.change, effect.kind);
+            subject.gains = set.gains.get(&effect.path).cloned().unwrap_or_default();
+            subject.xattrs_changed = set.xattrs.contains_key(&effect.path);
             subject.in_git_dir = set.git_dirs.iter().any(|d| {
                 effect
                     .path
@@ -525,9 +534,15 @@ impl Policy {
             .diagnostics()
             .reason()
             .map(|id| {
-                self.set
+                let name = self
+                    .set
                     .annotation(id, "id")
-                    .map_or_else(|| id.to_string(), str::to_owned)
+                    .map_or_else(|| id.to_string(), str::to_owned);
+                if id.to_string().starts_with(REPO_RULE) {
+                    format!("repo:{name}")
+                } else {
+                    name
+                }
             })
             .collect();
         rules.sort();
@@ -570,6 +585,10 @@ struct Subject {
     commits: i64,
     host: String,
     port: i64,
+    /// See [`EffectSet::gains`].
+    gains: Vec<String>,
+    /// See [`EffectSet::xattrs`].
+    xattrs_changed: bool,
 }
 
 impl Subject {
@@ -676,6 +695,18 @@ impl Subject {
                 RestrictedExpression::new_string(self.host.clone()),
             ),
             ("port".into(), RestrictedExpression::new_long(self.port)),
+            (
+                "gains".into(),
+                RestrictedExpression::new_set(
+                    self.gains
+                        .iter()
+                        .map(|g| RestrictedExpression::new_string(g.clone())),
+                ),
+            ),
+            (
+                "xattrs_changed".into(),
+                RestrictedExpression::new_bool(self.xattrs_changed),
+            ),
         ])
     }
 }

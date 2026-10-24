@@ -166,3 +166,33 @@ fn before_it_is_kept_an_allowance_tells_what_it_would_have_let_through() {
         0
     );
 }
+
+/// A repository's own rule is told as the repository's, and no answer a
+/// person remembered cancels it, even one named as a rule Kule's policy has.
+#[test]
+fn a_remembered_answer_never_cancels_a_repository_s_rule() {
+    let (home, ws) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+    fs::write(ws.path().join("Cargo.toml"), "[package]\n").unwrap();
+    fs::create_dir(ws.path().join(".kule")).unwrap();
+    fs::write(
+        ws.path().join(".kule/policy.cedar"),
+        r#"@id("manifests-and-lockfiles") forbid (principal, action == Kule::Action::"auto", resource) when { resource.path == "Cargo.toml" };"#,
+    )
+    .unwrap();
+    let task = Task::create(home.path(), ws.path()).unwrap();
+    fs::write(task.copy().join("Cargo.toml"), "[package]\nname = \"a\"\n").unwrap();
+    remember(home.path(), manifest("Cargo.toml"), Some(ws.path())).unwrap();
+    let ruling = policy(home.path(), ws.path()).judge(&task.effects().unwrap());
+    let cargo = ruling
+        .judgements
+        .iter()
+        .find(|j| j.subject == "Cargo.toml")
+        .unwrap();
+    assert_eq!(cargo.verdict, Verdict::Ask, "{cargo:?}");
+    assert!(
+        cargo
+            .rules
+            .contains(&"repo:manifests-and-lockfiles".to_owned()),
+        "{cargo:?}"
+    );
+}

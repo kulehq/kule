@@ -419,8 +419,17 @@ fn remove_secret(kule: K<'_>, name: String, workspace: Option<PathBuf>) -> Resul
 }
 
 #[tauri::command(async)]
-fn apply_home(kule: K<'_>, task: String, paths: Vec<String>) -> Result<serde_json::Value> {
-    kule.call(Call::ApplyHome { task, paths })
+fn apply_home(
+    kule: K<'_>,
+    task: String,
+    paths: Vec<String>,
+    reviewed: String,
+) -> Result<serde_json::Value> {
+    kule.call(Call::ApplyHome {
+        task,
+        paths,
+        reviewed,
+    })
 }
 
 #[tauri::command(async)]

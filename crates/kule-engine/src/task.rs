@@ -682,6 +682,8 @@ impl Task {
             set.effects.sort_by(|a, b| a.path.cmp(&b.path));
         }
         set.read_contents(&self.copy())?;
+        set.read_gains(|path| baseline.entries.get(path).map(|e| e.work.mode));
+        set.read_xattrs(&self.copy(), self.workspace())?;
         Ok((set, derived))
     }
 

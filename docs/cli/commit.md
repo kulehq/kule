@@ -25,13 +25,21 @@ changes [kule status](status.md) shows and applies them to the workspace.
 
 - changes that **pass on their own** are committed;
 - changes that **wait for approval** (manifests, lockfiles, CI files, git
-  config, mass deletes, … under the built-in *balanced* policy) are committed
-  only with `--approve`;
+  config, mass deletes, a file made executable, … under the built-in
+  *balanced* policy) are committed only with `--approve`, and only as you
+  reviewed them;
 - changes that are **denied** (a new git hook, for example) are never
   committed, even with `--approve`.
 
 If anything is held back, **nothing** is committed: Kule prints the ruling and
 exits with code `3`. A commit is all or nothing.
+
+**Approving takes what you reviewed.** `--approve` commits the changes only
+while they are the ones you looked at. Pass the digest
+[kule status](status.md) prints (`--reviewed DIGEST`): if anything changed
+since, the commit is refused and you review again. Without `--reviewed`, on
+a terminal, Kule lists what it would approve and asks; with no terminal to
+ask on (a script, a pipe), it refuses.
 
 **A checkpoint is kept.** Before writing, Kule saves what the commit replaces
 in the task's own checkpoint store, so [kule undo](undo.md) can put the
@@ -69,6 +77,7 @@ in the task, and while a terminal is open on it (the app's, or
 | --- | --- | --- | --- |
 | `--approve` | | | Also commit the changes the policy puts to a person. Denied changes still never pass. |
 | `--remember` | | | With `--approve`: do not ask again, on this folder, about the files approved now (manifests, CI and project files). See [kule rules](rules.md). |
+| `--reviewed` | digest | | With `--approve`: the digest `kule status` printed for the changes you reviewed. Only those are committed. Without it, Kule asks on a terminal and refuses elsewhere. |
 | `--include-ignored` | | | Also take the paths the workspace's `.gitignore` excludes. |
 | `--home` | path | `~/.kule` | Kule's home (also `KULE_HOME`). See [global options](index.md). |
 
@@ -90,14 +99,20 @@ policy: waits for approval
 kule: not committed; rerun with --approve to approve the changes above
 $ echo $?
 3
-$ kule commit 3efe1ca8 --approve
+$ kule status 3efe1ca8
+…
+digest: 9f2c…e41a (to approve these: kule commit 3efe1ca8 --approve --reviewed 9f2c…e41a)
+$ kule commit 3efe1ca8 --approve --reviewed 9f2c…e41a
 committed 3 changes · checkpoint 1
 ```
+
+On a terminal, `kule commit 3efe1ca8 --approve` alone lists the changes and
+asks `Approve and commit these changes? [y/N]`.
 
 **Approve, and do not ask about these files on this folder again:**
 
 ```sh
-kule commit 3efe1ca8 --approve --remember
+kule commit 3efe1ca8 --approve --remember --reviewed 9f2c…e41a
 ```
 
 ```text
@@ -108,7 +123,7 @@ not asked again on this folder: changes to Cargo.toml (manifests-and-lockfiles)
 **A denied change:**
 
 ```text
-$ kule commit 3422f830 --approve
+$ kule commit 3422f830 --approve --reviewed 51d0…7c3b
 policy: denied
   git hook pre-commit · denied (git-hooks)
 kule: not committed; the policy denies the changes above

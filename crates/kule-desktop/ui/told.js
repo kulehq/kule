@@ -176,6 +176,12 @@ function questionsForExtensions(waiting) {
   }));
 }
 
+/** What Kule answered an agent asking for permission: what Kule did, from
+ * the option's kind, and the agent's own words for it only quoted after. */
+function permissionLine(title, chosen, granted) {
+  return `${granted ? "Kule allowed" : "Kule did not allow"} “${title}” (the agent's option: “${chosen}”)`;
+}
+
 if (typeof module !== "undefined") {
   module.exports = {
     UNREPORTED,
@@ -193,5 +199,6 @@ if (typeof module !== "undefined") {
     connectionWhat,
     summarizeConnections,
     questionsForExtensions,
+    permissionLine,
   };
 }

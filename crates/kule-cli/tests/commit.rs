@@ -112,3 +112,65 @@ fn rolling_back_tells_what_it_ended() {
         "{said}"
     );
 }
+
+/// Approving takes what the person reviewed: the digest `kule status`
+/// printed. Without it, and no terminal to ask on, nothing is approved; a
+/// digest of other changes is refused; the one of these commits them.
+#[test]
+fn approving_takes_the_digest_of_what_was_reviewed() {
+    let (home, ws) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+    fs::write(ws.path().join("Cargo.toml"), "[package]\n").unwrap();
+    let out = kule(home.path(), &["new", ws.path().to_str().unwrap()]);
+    let id = text(&out).split_whitespace().nth(1).unwrap().to_owned();
+    let copy = std::path::PathBuf::from(
+        text(&out)
+            .split(" · copy at ")
+            .nth(1)
+            .unwrap()
+            .lines()
+            .next()
+            .unwrap(),
+    );
+    fs::write(copy.join("Cargo.toml"), "[package]\nv = 1\n").unwrap();
+
+    let out = kule(home.path(), &["commit", &id, "--approve"]);
+    assert!(!out.status.success());
+    assert!(text(&out).contains("--reviewed"), "{}", text(&out));
+    assert_eq!(
+        fs::read_to_string(ws.path().join("Cargo.toml")).unwrap(),
+        "[package]\n"
+    );
+
+    let status = text(&kule(home.path(), &["status", &id]));
+    let digest = status
+        .lines()
+        .find_map(|l| l.strip_prefix("digest: "))
+        .and_then(|l| l.split_whitespace().next())
+        .unwrap_or_else(|| panic!("{status}"))
+        .to_owned();
+    // Changed after the review: not what was reviewed.
+    fs::write(copy.join("Cargo.toml"), "[package]\nv = 2\n").unwrap();
+    let out = kule(
+        home.path(),
+        &["commit", &id, "--approve", "--reviewed", &digest],
+    );
+    assert!(!out.status.success());
+    assert!(text(&out).contains("review them again"), "{}", text(&out));
+
+    let status = text(&kule(home.path(), &["status", &id]));
+    let digest = status
+        .lines()
+        .find_map(|l| l.strip_prefix("digest: "))
+        .and_then(|l| l.split_whitespace().next())
+        .unwrap()
+        .to_owned();
+    let out = kule(
+        home.path(),
+        &["commit", &id, "--approve", "--reviewed", &digest],
+    );
+    assert!(out.status.success(), "{}", text(&out));
+    assert_eq!(
+        fs::read_to_string(ws.path().join("Cargo.toml")).unwrap(),
+        "[package]\nv = 2\n"
+    );
+}

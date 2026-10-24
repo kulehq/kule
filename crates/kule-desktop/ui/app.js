@@ -3172,7 +3172,7 @@ function absorb(id, event) {
       break;
     }
     case "permission":
-      items.push({ kind: "note", text: `Permission “${event.title}”: ${event.chosen}${event.granted === false ? " (not granted)" : ""}` });
+      items.push({ kind: "note", text: permissionLine(event.title, event.chosen, event.granted !== false) });
       break;
     case "plan":
       items.push({ kind: "note", text: `Plan: ${event.entries.join(" / ")}` });
@@ -3670,7 +3670,7 @@ async function loadReview(id) {
     ...meetsGroup(task),
     ...extensionNotesGroup(id),
     ...ignoredGroup(id, ignored, include, held),
-    ...homeGroup(id, review.home || [], busy, review.home_applied)
+    ...homeGroup(id, review.home || [], busy, review.home_applied, review.home_digest)
   );
   tabify($("effects"));
   extensionsSeeReview(id, review.digest);
@@ -3711,7 +3711,7 @@ function homeDiff(id, path) {
  * task's home layer. Never part of a commit: each is applied to the real
  * home, or thrown away, on its own.
  */
-function homeGroup(id, changes, busy, applied) {
+function homeGroup(id, changes, busy, applied, digest) {
   const act = async (verb, args) => {
     const done = await call(verb, { task: id, ...args });
     if (verb === "apply_home" && done.kept) toast(`Applied; what it replaced is kept in ${done.kept}`);
@@ -3746,7 +3746,7 @@ function homeGroup(id, changes, busy, applied) {
       "ul",
       { class: "files" },
       changes.flatMap((c) => {
-        const apply = armed("Apply", "Click again to write it in ~", busy, () => act("apply_home", { paths: [c.path] }).catch(fail));
+        const apply = armed("Apply", "Click again to write it in ~", busy, () => act("apply_home", { paths: [c.path], reviewed: digest }).catch(fail));
         apply.dataset.key = `home-apply:${c.path}`;
         const file = c.kind === "file";
         // A file that runs as shells start is open from the first look.

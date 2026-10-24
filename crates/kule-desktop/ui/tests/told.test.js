@@ -124,3 +124,9 @@ test("extensions learn a question's kind, never the secrets Kule would fill", ()
   assert.doesNotMatch(JSON.stringify(q), /STRIPE_KEY/);
   assert.equal(told.questionsForExtensions([{ id: 2, inside: null }])[0].inside, null);
 });
+
+test("a permission note says what Kule did, the agent's label only quoted after", () => {
+  // An agent may label a refusal "Allow": the kind decides, not the label.
+  assert.equal(told.permissionLine("Run rm -rf", "Allow", false), "Kule did not allow “Run rm -rf” (the agent's option: “Allow”)");
+  assert.equal(told.permissionLine("Edit a.txt", "Yes", true), "Kule allowed “Edit a.txt” (the agent's option: “Yes”)");
+});

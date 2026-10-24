@@ -162,7 +162,8 @@ took: 41s
 | plain text | The agent's answer, as it writes it. |
 | `✓ <tool> → step N: <files>` | A tool call that went well, the step it became and the files it changed (the first five; `kule steps` has the rest). `✗` means it failed. |
 | `plan:` | The agent's plan, when it shares one. |
-| `· <note>` | A note from Kule or the agent, such as a permission it was given. |
+| `· <note>` | A note from Kule or the agent. |
+| `· Kule allowed "<call>" (the agent's option: "<label>")` | The agent asked for permission and what Kule did, from the kind of option it chose; the agent's own label is only quoted after. `Kule did not allow …` when the option refuses (on a terminal, only those show, marked `✗`). |
 | `N file changes: +a ~m -d` | What the copy now holds that the workspace does not: created, modified, deleted. Inside each file, the functions, sections or keys that changed. See [kule status](status.md). |
 | `git:` | What happened to the repository: branch moves, new objects, config or hook changes. See [Git](../concepts/git.md). |
 | `net:` | Each connection the run made and what became of it: `tunneled` when it went through; `cut` when Kule ended it or refused a request in it; `failed` when it ended in an error of its own (the host went away, a reset); `refused, …` when the policy did not let it through. `network.jsonl` says why for `cut` and `failed`. |

@@ -1,6 +1,6 @@
 //! Filesystem moves shared by task creation, commit, rollback and undo.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
 use std::io::{self, Read};
 use std::os::unix::fs::{PermissionsExt, symlink};
@@ -820,6 +820,89 @@ pub(crate) fn hash_mode(hash: &str) -> Option<u32> {
 /// Permission bits that make a file run as its owner or group: a commit
 /// never brings them into the folder where it had none.
 pub(crate) const RUNS_AS_OWNER: u32 = 0o6000;
+
+/// Extended attributes macOS sets on its own on what a sandboxed process
+/// writes, saying where it came from, never what it holds: left out of
+/// what a review compares, or every file the agent writes would be asked
+/// about.
+const SET_BY_THE_SYSTEM: &[&str] = &["com.apple.provenance"];
+
+/// The most of a file's extended attributes read for a review, together.
+const XATTRS_MAX: usize = 64 << 20;
+
+/// The extended attributes of the file `rel` under `root`, as [`beneath`]
+/// finds it: each name with a hash of its value, but those the system sets
+/// on its own. Empty for anything but a file, and off macOS, where a commit
+/// carries none into the folder.
+pub(crate) fn xattrs(root: &Path, rel: &str) -> Result<BTreeMap<String, String>> {
+    let at = root.join(rel);
+    let Beneath::File(file) = beneath(root, rel).at(&at)? else {
+        return Ok(BTreeMap::new());
+    };
+    file_xattrs(&file).at(&at)
+}
+
+#[cfg(target_os = "macos")]
+fn file_xattrs(file: &File) -> io::Result<BTreeMap<String, String>> {
+    use std::os::fd::AsRawFd;
+    let fd = file.as_raw_fd();
+    // SAFETY: the descriptor is open; a null buffer asks for the size.
+    let size = unsafe { libc::flistxattr(fd, std::ptr::null_mut(), 0, 0) };
+    if size < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let mut names = vec![0u8; size as usize];
+    // SAFETY: the descriptor is open and `names` valid for its length.
+    let n = unsafe { libc::flistxattr(fd, names.as_mut_ptr().cast(), names.len(), 0) };
+    if n < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    names.truncate(n as usize);
+    let mut out = BTreeMap::new();
+    let mut read = 0usize;
+    for name in names.split(|b| *b == 0).filter(|n| !n.is_empty()) {
+        let shown = String::from_utf8_lossy(name).into_owned();
+        if SET_BY_THE_SYSTEM.contains(&shown.as_str()) {
+            continue;
+        }
+        let cname = std::ffi::CString::new(name)?;
+        // SAFETY: as above, with a NUL-terminated name.
+        let len = unsafe { libc::fgetxattr(fd, cname.as_ptr(), std::ptr::null_mut(), 0, 0, 0) };
+        if len < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        read = read.saturating_add(len as usize);
+        if read > XATTRS_MAX {
+            return Err(io::Error::other(format!(
+                "its extended attributes take more than {} MiB, more than Kule reads for a review",
+                XATTRS_MAX >> 20
+            )));
+        }
+        let mut value = vec![0u8; len as usize];
+        // SAFETY: as above, `value` valid for its length.
+        let got = unsafe {
+            libc::fgetxattr(
+                fd,
+                cname.as_ptr(),
+                value.as_mut_ptr().cast(),
+                value.len(),
+                0,
+                0,
+            )
+        };
+        if got < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        value.truncate(got as usize);
+        out.insert(shown, blake3::hash(&value).to_hex().to_string());
+    }
+    Ok(out)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn file_xattrs(_file: &File) -> io::Result<BTreeMap<String, String>> {
+    Ok(BTreeMap::new())
+}
 
 fn finish(path: &Path, stamp: &Stamp) -> Result<()> {
     let mtime = FileTime::from_unix_time(stamp.mtime.0, stamp.mtime.1 as u32);

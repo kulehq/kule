@@ -80,7 +80,7 @@ pub use groups::{
     set_group_policy, update_group,
 };
 pub use history::{Entry as HistoryEntry, Event as HistoryEvent};
-pub use home::{HomeApplied, HomeChange};
+pub use home::{HomeApplied, HomeChange, home_digest};
 pub use isolation::{Isolation, isolation, isolation_gaps, set_isolation};
 pub use kule_entities as entities;
 pub use labels::{MAX_LABEL, ORDER_FILE, TaskColor, arranged, set_task_order, task_order};

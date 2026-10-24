@@ -9,6 +9,19 @@ use kule_engine::{
 };
 use tempfile::TempDir;
 
+/// [`Task::apply_home`] by a person who reviewed the home changes as they
+/// are now.
+trait Reviewed {
+    fn apply_reviewed(&self, paths: &[String]) -> kule_engine::Result<kule_engine::HomeApplied>;
+}
+
+impl Reviewed for Task {
+    fn apply_reviewed(&self, paths: &[String]) -> kule_engine::Result<kule_engine::HomeApplied> {
+        let digest = kule_engine::home_digest(&self.home_changes()?);
+        self.apply_home(paths, &digest)
+    }
+}
+
 struct Setup {
     home: TempDir,
     _ws: TempDir,
@@ -102,7 +115,19 @@ fn change(path: &str, change: Change, kind: Kind) -> HomeChange {
         kind,
         startup: path == ".zshrc",
         target: None,
+        hash: String::new(),
     }
+}
+
+/// `changes` as [`change`] makes them: what they hold left out.
+fn unhashed(changes: Vec<HomeChange>) -> Vec<HomeChange> {
+    changes
+        .into_iter()
+        .map(|c| HomeChange {
+            hash: String::new(),
+            ..c
+        })
+        .collect()
 }
 
 const SCRIPT: &str = r#"
@@ -129,7 +154,7 @@ fn writes_in_the_home_are_caught_and_the_real_one_untouched() {
     assert_eq!(s.real("Documents/notes.txt"), "notes\n");
     assert!(!s.person.path().join(".newrc").exists());
     assert_eq!(
-        s.task.home_changes().unwrap(),
+        unhashed(s.task.home_changes().unwrap()),
         [
             change(".config/git/settings.toml", Change::Modified, Kind::File),
             change(".config/new", Change::Created, Kind::Dir),
@@ -146,7 +171,7 @@ fn applied_changes_reach_the_real_home_and_what_they_replaced_is_kept() {
     s.run(SCRIPT);
     let applied = s
         .task
-        .apply_home(&[".zshrc".into(), ".newrc".into()])
+        .apply_reviewed(&[".zshrc".into(), ".newrc".into()])
         .unwrap();
     assert_eq!(applied.paths, [".newrc", ".zshrc"]);
     assert_eq!(s.real(".zshrc"), "export A=1\nexport B=2\n");
@@ -162,10 +187,54 @@ fn applied_changes_reach_the_real_home_and_what_they_replaced_is_kept() {
     fs::write(s.person.path().join(".config/git/settings.toml"), "x = 9\n").unwrap();
     let e = s
         .task
-        .apply_home(&[".config/git/settings.toml".into()])
+        .apply_reviewed(&[".config/git/settings.toml".into()])
         .unwrap_err();
     assert!(e.to_string().contains("~/.config/git/settings.toml"), "{e}");
     assert_eq!(s.real(".config/git/settings.toml"), "x = 9\n");
+}
+
+/// An apply takes the home changes the person reviewed, and only those: a
+/// change written after the review refuses it, and nothing reaches the
+/// home.
+#[test]
+fn an_apply_takes_only_the_home_changes_reviewed() {
+    let s = Setup::new();
+    s.run(SCRIPT);
+    let reviewed = kule_engine::home_digest(&s.task.home_changes().unwrap());
+    s.run("echo 'export C=3' >> \"$HOME/.zshrc\"");
+    let e = s
+        .task
+        .apply_home(&[".zshrc".into()], &reviewed)
+        .unwrap_err();
+    assert!(e.to_string().contains("review them again"), "{e}");
+    assert_eq!(s.real(".zshrc"), "export A=1\n");
+    // Reviewed again, it goes.
+    let again = kule_engine::home_digest(&s.task.home_changes().unwrap());
+    s.task.apply_home(&[".zshrc".into()], &again).unwrap();
+    assert_eq!(s.real(".zshrc"), "export A=1\nexport B=2\nexport C=3\n");
+}
+
+/// As a commit: nothing comes to run as its owner or group in the home
+/// where what it replaces did not, and nothing at all is applied then.
+#[test]
+fn an_apply_never_brings_setuid_into_the_home() {
+    use std::os::unix::fs::PermissionsExt;
+    let s = Setup::new();
+    s.run("echo tool > \"$HOME/.newrc\"; echo 'export B=2' >> \"$HOME/.zshrc\"");
+    // The sandbox refuses the bit itself; set as anything outside it could.
+    let layer = s.task.home_layer().join(".newrc");
+    fs::set_permissions(&layer, fs::Permissions::from_mode(0o4755)).unwrap();
+    let changes = s.task.home_changes().unwrap();
+    let e = s
+        .task
+        .apply_home(
+            &[".zshrc".into(), ".newrc".into()],
+            &kule_engine::home_digest(&changes),
+        )
+        .unwrap_err();
+    assert!(e.to_string().contains("setuid"), "{e}");
+    assert_eq!(s.real(".zshrc"), "export A=1\n");
+    assert!(!s.person.path().join(".newrc").exists());
 }
 
 // Filesystems keep time in ticks (milliseconds on Linux ext4, two seconds on
@@ -210,7 +279,7 @@ fn a_same_size_save_while_the_layer_is_made_is_not_overwritten() {
         let layer = s.task.home_layer();
         let cloned = fs::read_to_string(layer.join(".a")).unwrap();
         fs::write(layer.join(".a"), "agent\n").unwrap();
-        match s.task.apply_home(&[".a".to_owned()]) {
+        match s.task.apply_reviewed(&[".a".to_owned()]) {
             Err(e) => {
                 assert!(e.to_string().contains("~/.a"), "{e}");
                 assert_eq!(s.real(".a"), "2\n");
@@ -292,7 +361,7 @@ fn a_directory_the_person_cannot_read_is_linked_and_the_rest_caught() {
     fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
     assert!(out.contains("done"), "{out}");
     assert_eq!(
-        s.task.home_changes().unwrap(),
+        unhashed(s.task.home_changes().unwrap()),
         [change(
             ".config/git/settings.toml",
             Change::Modified,
@@ -351,13 +420,13 @@ fn an_apply_is_undone_and_its_changes_wait_again() {
     s.run(SCRIPT);
     let before = s.task.home_changes().unwrap();
     s.task
-        .apply_home(&[
+        .apply_reviewed(&[
             ".zshrc".into(),
             ".config/new".into(),
             ".config/new/n.toml".into(),
         ])
         .unwrap();
-    s.task.apply_home(&[".newrc".into()]).unwrap();
+    s.task.apply_reviewed(&[".newrc".into()]).unwrap();
     assert_eq!(
         s.task.home_last_applied().unwrap().unwrap().paths,
         [".newrc"]
@@ -380,7 +449,7 @@ fn an_apply_is_undone_and_its_changes_wait_again() {
     assert!(s.task.undo_home().is_err());
 
     // And they apply again.
-    s.task.apply_home(&[".zshrc".into()]).unwrap();
+    s.task.apply_reviewed(&[".zshrc".into()]).unwrap();
     assert_eq!(s.real(".zshrc"), "export A=1\nexport B=2\n");
 }
 
@@ -389,7 +458,7 @@ fn an_undo_never_takes_what_the_person_changed_since() {
     let s = Setup::new();
     s.run(SCRIPT);
     s.task
-        .apply_home(&[
+        .apply_reviewed(&[
             ".zshrc".into(),
             ".config/new".into(),
             ".config/new/n.toml".into(),
@@ -404,7 +473,7 @@ fn an_undo_never_takes_what_the_person_changed_since() {
     // A directory the apply made, with the person's file in it now.
     let s = Setup::new();
     s.run(SCRIPT);
-    s.task.apply_home(&[".config/new".into()]).unwrap();
+    s.task.apply_reviewed(&[".config/new".into()]).unwrap();
     fs::write(s.person.path().join(".config/new/theirs"), "x").unwrap();
     let e = s.task.undo_home().unwrap_err();
     assert!(e.to_string().contains("~/.config/new"), "{e}");
@@ -422,7 +491,7 @@ fn a_replaced_link_comes_back_a_link() {
         "rm \"$HOME/.config/git/settings.toml\" && echo own > \"$HOME/.config/git/settings.toml\"",
     );
     s.task
-        .apply_home(&[".config/git/settings.toml".into()])
+        .apply_reviewed(&[".config/git/settings.toml".into()])
         .unwrap();
     assert!(!p.join(".config/git/settings.toml").is_symlink());
     s.task.undo_home().unwrap();
@@ -513,7 +582,7 @@ fn a_process_left_in_the_home_layer_ends_before_it_is_applied() {
     // SAFETY: signal 0 only asks whether the process is there.
     let alive = |pid: i32| unsafe { libc::kill(pid, 0) } == 0;
     assert!(alive(pid));
-    s.task.apply_home(&[]).unwrap();
+    s.task.apply_reviewed(&[]).unwrap();
     let started = std::time::Instant::now();
     while alive(pid) && started.elapsed() < std::time::Duration::from_secs(3) {
         std::thread::sleep(std::time::Duration::from_millis(50));
@@ -565,7 +634,7 @@ fn nothing_is_applied_through_a_link_in_the_real_home() {
 
     let refused = s
         .task
-        .apply_home(&[".config/git/new.toml".to_owned()])
+        .apply_reviewed(&[".config/git/new.toml".to_owned()])
         .unwrap_err();
     assert!(refused.to_string().contains("is a link"), "{refused}");
     assert!(!elsewhere.path().join("new.toml").exists());
@@ -613,7 +682,7 @@ fn a_token_in_a_shell_startup_file_is_masked_in_the_layer() {
     // so what looks secret is hidden on both sides.
     assert!(!shown.contains(token), "{shown}");
     assert!(shown.contains("export GITHUB_TOKEN=‹hidden "), "{shown}");
-    s.task.apply_home(&[".zshrc".to_owned()]).unwrap();
+    s.task.apply_reviewed(&[".zshrc".to_owned()]).unwrap();
     assert_eq!(
         fs::read_to_string(p.join(".zshrc")).unwrap(),
         format!("{zshrc}alias ll='ls -l'\n")
@@ -740,7 +809,7 @@ fn a_kept_secret_inside_a_startup_line_is_masked_and_applied_back() {
         !diff.contains("shop-Kept-4821") && !diff.contains("other-Folder-9"),
         "{diff}"
     );
-    s.task.apply_home(&[".zshrc".to_owned()]).unwrap();
+    s.task.apply_reviewed(&[".zshrc".to_owned()]).unwrap();
     assert_eq!(s.real(".zshrc"), format!("{zshrc}export B=2\n"));
 }
 
@@ -784,7 +853,7 @@ fn a_search_path_in_a_startup_file_is_kept_as_it_is() {
         !diff.contains(secret_dir) && !diff.contains(token),
         "{diff}"
     );
-    s.task.apply_home(&[".zshrc".to_owned()]).unwrap();
+    s.task.apply_reviewed(&[".zshrc".to_owned()]).unwrap();
     assert_eq!(s.real(".zshrc"), format!("{zshrc}export B=2\n"));
 }
 
@@ -795,16 +864,16 @@ fn home_changes_wait_while_a_terminal_is_open() {
     let s = Setup::new();
     s.run(SCRIPT);
     let open = s.task.terminal_opened().unwrap();
-    let e = s.task.apply_home(&[".newrc".into()]).unwrap_err();
+    let e = s.task.apply_reviewed(&[".newrc".into()]).unwrap_err();
     assert!(e.to_string().contains("terminal is open"), "{e}");
     assert_eq!(s.real(".newrc"), "");
     drop(open);
     let at_work = s.task.agent_at_work().unwrap();
-    let e = s.task.apply_home(&[".newrc".into()]).unwrap_err();
+    let e = s.task.apply_reviewed(&[".newrc".into()]).unwrap_err();
     assert!(e.to_string().contains("agent is at work"), "{e}");
     assert_eq!(s.real(".newrc"), "");
     drop(at_work);
-    s.task.apply_home(&[".newrc".into()]).unwrap();
+    s.task.apply_reviewed(&[".newrc".into()]).unwrap();
     assert_eq!(s.real(".newrc"), "hi\n");
 
     // Nor is it undone while an agent is at work, whose commands write in

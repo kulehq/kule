@@ -384,10 +384,12 @@ pub enum Call {
     RemoveBeside {
         id: u64,
     },
-    /// Takes the task's home changes at `paths` to the person's home.
+    /// Takes the task's home changes at `paths` to the person's home, while
+    /// they are still the ones the review digested as `reviewed`.
     ApplyHome {
         task: String,
         paths: Vec<String>,
+        reviewed: String,
     },
     DiscardHome {
         task: String,

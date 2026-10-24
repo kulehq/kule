@@ -22,6 +22,24 @@
   `timed_out`, `withdrawn` or `too_many`.
 - A connection refused for the address its name led to names that address
   to you; the command is told only that such addresses are out of reach.
+- Approving a commit takes the changes you reviewed: the app names them,
+  and `kule commit --approve` takes `--reviewed DIGEST` (the digest
+  `kule status` prints) or, on a terminal, lists them and asks. Without
+  either, nothing is approved.
+- Applying home changes takes them as reviewed too (`kule home` prints a
+  home digest; `kule home apply --reviewed`, or a yes on a terminal), and
+  never brings a setuid or setgid file into your home where yours was not.
+- A file made executable, or a file or folder made writable by anyone,
+  waits for you under the balanced policy (`permissions`). On macOS, a file
+  whose extended attributes differ from the folder's (a quarantine mark
+  added or removed, say) is part of what you review and waits too
+  (`extended-attributes`); what macOS sets on its own on every write is left
+  out. Policies can read both (`gains`, `xattrs_changed`).
+- A repository's own rules are named `repo:<id>`, and no answer you
+  remembered cancels one, whatever its `@id`.
+- A permission note says what Kule did, from the kind of option it chose
+  ("Kule allowed", "Kule did not allow"), with the agent's label only
+  quoted after.
 
 - A task's first run no longer waits while Kule walks the package caches it
   starts with. Only a disk limit needs them measured: the first run under

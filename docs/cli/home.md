@@ -38,8 +38,12 @@ link to your own. What a command writes in the layer is **caught for
 review**. See [Home layer](../concepts/home-layer.md).
 
 - A home change is never part of a `kule commit`. You decide on it here.
-- `apply` first checks that your file is still as it was when the layer was
-  made, and keeps what it replaces in the task's `home-kept/` folder.
+- `apply` takes the changes as you reviewed them: the digest `kule home`
+  prints (`--reviewed`), or a yes on a terminal to what it names. It
+  first checks that your file is still as it was when the layer was made,
+  and keeps what it replaces in the task's `home-kept/` folder. Nothing
+  comes to run as its owner or group (setuid, setgid) where your file did
+  not.
 - Files that shells and tools read and run as they start (`.zshrc`,
   `.profile`, `.gitconfig`, `~/.config/fish`, `~/.config/autostart`, systemd
   user units, …) are marked *runs every time a shell or tool starts*. Look at
@@ -80,6 +84,7 @@ in your home, caught for review (3; `kule home 1046fb30 apply PATH` takes one th
   + ~/.config/demo/
   + ~/.config/demo/conf
   ~ ~/.zshrc  (runs every time a shell or tool starts)
+home digest: 3b7a…90d2 (to apply them: kule home 1046fb30 apply PATH --reviewed 3b7a…90d2)
 ```
 
 `+` is new, `~` changed, `-` deleted. A trailing `/` is a folder, and `->`
@@ -123,12 +128,13 @@ kule home <TASK> apply [OPTIONS] [PATHS]...
 | --- | --- |
 | `PATHS...` | The paths to apply, as listed. |
 | `--all` | Every change caught for this task. |
+| `--reviewed DIGEST` | The digest `kule home` printed for the changes you reviewed. They are applied only while they are still those. Without it, on a terminal, Kule names what it would apply and asks; with no terminal, it refuses. |
 
 ```console
-$ kule home 1046fb30 apply '~/.config/demo' '~/.config/demo/conf'
+$ kule home 1046fb30 apply '~/.config/demo' '~/.config/demo/conf' --reviewed 3b7a…90d2
 applied ~/.config/demo
 applied ~/.config/demo/conf
-$ kule home 1046fb30 apply '~/.gitconfig'
+$ kule home 1046fb30 apply '~/.gitconfig' --reviewed 3b7a…90d2
 applied ~/.gitconfig
 what they replaced is kept in ~/.kule/tasks/1046fb30/home-kept/00000001792506123456
 ```
@@ -137,7 +143,9 @@ The last line shows only when the apply replaced or removed something of
 yours. Each apply gets its own folder there, named by when it happened.
 
 When your file changed since the layer was made, the apply is refused, so
-nothing of yours is overwritten unseen.
+nothing of yours is overwritten unseen. When the task's changes are not the
+ones you reviewed any more (its commands wrote again), it is refused too:
+review them again.
 
 What still runs in the task's sandbox is ended first, and Kule names it on
 stderr: `kule: Kule ended <name>, still running in the task's sandbox, to apply its home changes`
@@ -185,6 +193,9 @@ the changes wait for review again
 | `kule: name a path inside your home, as listed, like ~/.zshrc (not ../x)` | The path leaves your home, or names the home itself. |
 | `kule: ~/.bashrc has no change waiting` | Nothing the task wrote is waiting there; `kule home TASK` lists what is. |
 | `nothing to apply at those paths` | The paths have no waiting change; check `kule home TASK`. |
+| `kule: the home changes are not the ones you reviewed any more; review them again` | They changed since `kule home` printed the digest. Look again, then apply with the new one. |
+| `kule: no terminal to ask on; review with `kule status` and pass the digest it prints with --reviewed` | Pass `--reviewed` with the digest `kule home` printed. |
+| `kule: ~/<path> would run as its owner or group (setuid or setgid), …` | Kule never brings that into your home. Discard the change. |
 | `kule: nothing applied from this task's home to undo` | There is no apply to take back. |
 | `kule: a terminal is open on this task's copy (in Kule's app, or kule shell); close it first, then apply its home changes` | Close the task's terminal (the app's tab, or `exit` in `kule shell`), then apply. |
 | `kule: a terminal is open on this task's copy (in Kule's app, or kule shell); close it first, then undo its home changes` | The same for `undo`. |
