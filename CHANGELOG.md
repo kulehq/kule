@@ -25,6 +25,9 @@
   one an earlier run left.
 - A run whose agent reported no cost, in a task with a budget, says in the
   app that the budget does not count it, as `kule run` already did.
+- In the Timeline and Live, a shell's probes of the terminals around it
+  are one row (`/dev/ttys*`) whichever terminals it tried, and *… and N
+  more refusals* counts the refusals left out, not the rows.
 
 ## 0.2.0-preview.12
 

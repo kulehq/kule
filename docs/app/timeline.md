@@ -16,7 +16,7 @@ this task, and in what order".
 | **Commits** | Newest first, each with what it applied. The newest has **Undo**. Every commit and undo is also an entry in the task's signed history (`kule history TASK`). |
 | **Steps** | The uncommitted tool calls, each with the files it changed. A commit starts the steps over. |
 | **Connections** | The network connections the task's commands made, and whether each was let through, asked about or refused. |
-| **Refusals** | What the sandbox refused the commands, under *Refused by the sandbox · N refusals*, the total. The same refusal is one row, with how many times (`×3`); the newest 50 rows show, and *… and N more refusals, older* says how many are left out. macOS reports them; on Linux the command sees the error but Kule cannot list it. |
+| **Refusals** | What the sandbox refused the commands, under *Refused by the sandbox · N refusals*, the total. The same refusal is one row, with how many times (`×3`), and a shell's probes of the terminals around it are one row whichever terminals it tried (`/dev/ttys*`); the newest 50 rows show, and *… and N more refusals, older* says how many refusals the rows left out hold. macOS reports them; on Linux the command sees the error but Kule cannot list it. |
 
 ## Undo a commit
 

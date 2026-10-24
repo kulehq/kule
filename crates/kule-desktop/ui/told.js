@@ -14,27 +14,36 @@ const UNREPORTED = "Linux does not tell Kule what the sandbox refused; each refu
  * (`kule_engine::INCOMPLETE`). */
 const INCOMPLETE = "The system log did not show all of what the sandbox refused; some refusals may be missing from what is listed";
 
+/** A terminal device by number (`/dev/ttys003`, `/dev/pts/7`) as the set it
+ * is one of: a shell probes every one around it. Any other path as it is. */
+function deviceSet(path) {
+  return path.replace(/^\/dev\/ttys\d+$/, "/dev/ttys*").replace(/^\/dev\/pts\/\d+$/, "/dev/pts/*");
+}
+
 /**
  * The sandbox's refusals with the same one (process, operation, path, and
  * where what was there was moved) once, counted, in the order each was
  * last seen: the newest last. A shell that probes the terminals around it
- * is one line, not a page.
+ * is one line, not a page, whichever terminals it tried.
  */
 function groupDenials(denials) {
   const groups = new Map();
   for (const d of denials) {
-    const key = JSON.stringify([d.process, d.operation, d.path, d.saved || null]);
+    const path = deviceSet(d.path);
+    const key = JSON.stringify([d.process, d.operation, path, d.saved || null]);
     const had = groups.get(key);
     groups.delete(key);
-    groups.set(key, { ...d, count: (had ? had.count : 0) + 1 });
+    groups.set(key, { ...d, path, count: (had ? had.count : 0) + 1 });
   }
   return [...groups.values()];
 }
 
-/** The newest `most` of `items`, and how many older ones are left out. */
+/** The newest `most` of `items`, and how many older ones are left out:
+ * refusals, a group counting as many as it holds. */
 function newest(items, most) {
   const shown = items.slice(-most);
-  return { shown, more: items.length - shown.length };
+  const left = items.slice(0, items.length - shown.length);
+  return { shown, more: left.reduce((n, item) => n + (item.count || 1), 0) };
 }
 
 /** A refusal (or a group of the same) as one line. */
