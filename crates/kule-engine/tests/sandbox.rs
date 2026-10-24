@@ -1426,8 +1426,10 @@ fn sandbox_python_isolated(sandbox: &Sandbox, script: &str) -> Output {
         .unwrap()
 }
 
-/// macOS reports each refusal to the system log, tagged per sandbox; Linux
-/// has no unprivileged way to read Landlock's refusals and says so.
+/// macOS reports each refusal to the system log, tagged per sandbox, and
+/// Kule reads them only once the log has caught up, so one read right after
+/// the command holds them all; Linux has no unprivileged way to read
+/// Landlock's refusals and says so.
 #[test]
 fn refusals_are_reported_where_the_platform_allows() {
     let s = Setup::new();
@@ -1455,16 +1457,7 @@ fn refusals_are_reported_where_the_platform_allows() {
         d.operation.starts_with(op) && Path::new(&d.path) == path
     };
     let token = secrets.join("token");
-    let mut denials = Vec::new();
-    for _ in 0..20 {
-        denials = sandbox.denials(window).unwrap().unwrap();
-        if denials.iter().any(|d| wanted(d, "file-write", &evil))
-            && denials.iter().any(|d| wanted(d, "file-read", &token))
-        {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(250));
-    }
+    let denials = sandbox.denials(window).unwrap().unwrap();
     assert!(
         denials.iter().any(|d| wanted(d, "file-write", &evil)),
         "{denials:?}"

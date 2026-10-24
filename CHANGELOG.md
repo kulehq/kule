@@ -1,6 +1,16 @@
 # Changes
 
-## Unreleased
+## 0.2.0-preview.11
+
+A hardening preview. An approval card says what approving lets through,
+and what became of the connection is told where you work. A commit and a
+home apply take exactly the changes you reviewed, and a file made
+executable or writable by anyone waits for you. Extensions are approved
+together, and a folder under development as every file it carries. The
+command line talks only to a daemon of your own user, and home changes
+are written through folders opened without following a link. A task's
+first run no longer waits on its package caches, and on macOS the last
+refusals of a run are no longer lost on a busy machine.
 
 ### Changed
 
@@ -77,6 +87,10 @@
   one measures them once and says so ("Measuring the task's package caches
   for its disk limit"). Without a disk limit nothing walks them, and the
   disk figure a run shows leaves them out.
+- On macOS, what the sandbox refused is read once the system log shows all
+  of it, so a busy machine no longer drops the last refusals from what a
+  run, a terminal or `kule exec` tells. A log that has not caught up after
+  ten seconds is told as refusals that could not be read, never as none.
 
 ## 0.2.0-preview.10
 
