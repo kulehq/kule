@@ -36,14 +36,19 @@ enum RulesCmd {
     List,
     /// Ask again about what rule ID let through.
     Forget { id: u64 },
-    /// Let a connection (HOST:PORT) or the changes to a file (PATH, with
-    /// --rule) through without asking. Shows what it would have let
-    /// through so far; --yes keeps it.
+    /// Let a connection (HOST:PORT), the changes to a file (PATH, with
+    /// --rule) or files of one kind (--kind) through without asking. Shows
+    /// what it would have let through so far; --yes keeps it.
     Allow {
-        what: String,
+        #[arg(required_unless_present = "kind")]
+        what: Option<String>,
         /// For a file: the rule that asks about it.
         #[arg(long, default_value = "manifests-and-lockfiles")]
         rule: String,
+        /// Files of this kind, the project's from now on: an extension
+        /// without its dot (vue), or a name without one (makefile).
+        #[arg(long, conflicts_with_all = ["what", "rule"])]
+        kind: Option<String>,
         /// The folder it holds for (default: the current one).
         #[arg(long, conflicts_with = "everywhere")]
         folder: Option<PathBuf>,
@@ -1248,22 +1253,8 @@ fn run() -> Result<ExitCode> {
                 policy
                     .judge(&task.pending(include_ignored)?)
                     .judgements
-                    .into_iter()
-                    .filter(|j| {
-                        j.verdict == Verdict::Ask
-                            && j.rules
-                                .iter()
-                                .all(|r| kule_engine::REMEMBERABLE.contains(&r.as_str()))
-                    })
-                    .flat_map(|j| {
-                        let path = j.subject;
-                        j.rules
-                            .into_iter()
-                            .map(move |rule| kule_engine::Allowance::File {
-                                path: path.clone(),
-                                rule,
-                            })
-                    })
+                    .iter()
+                    .flat_map(kule_engine::allowances)
                     .collect()
             } else {
                 Vec::new()
@@ -2110,6 +2101,9 @@ fn describe_allowance(allowance: &kule_engine::Allowance) -> String {
     match allowance {
         kule_engine::Allowance::Connect { host, port } => format!("connections to {host}:{port}"),
         kule_engine::Allowance::File { path, rule } => format!("changes to {path} ({rule})"),
+        kule_engine::Allowance::Kind { kind } => {
+            format!("files of kind {kind} ({})", kule_engine::UNFAMILIAR_KINDS)
+        }
     }
 }
 
@@ -2230,9 +2224,14 @@ fn rules_cmd(home: &Path, action: RulesCmd) -> Result<()> {
                     .as_ref()
                     .map_or("every folder".to_owned(), |w| w.display().to_string());
                 println!(
-                    "{:>3}  {}  · {place}",
+                    "{:>3}  {}  · {place}{}",
                     r.id,
-                    describe_allowance(&r.allowance)
+                    describe_allowance(&r.allowance),
+                    if r.applies() {
+                        ""
+                    } else {
+                        " · no longer applies: what runs code on its own is always asked"
+                    }
                 );
             }
         }
@@ -2246,18 +2245,23 @@ fn rules_cmd(home: &Path, action: RulesCmd) -> Result<()> {
         RulesCmd::Allow {
             what,
             rule,
+            kind,
             folder,
             everywhere,
             yes,
         } => {
-            let allowance = match what.rsplit_once(':') {
-                Some((host, port)) if port.parse::<u16>().is_ok() && !host.contains('/') => {
-                    kule_engine::Allowance::Connect {
-                        host: host.to_owned(),
-                        port: port.parse()?,
+            let allowance = match (kind, what) {
+                (Some(kind), _) => kule_engine::Allowance::Kind { kind },
+                (None, Some(what)) => match what.rsplit_once(':') {
+                    Some((host, port)) if port.parse::<u16>().is_ok() && !host.contains('/') => {
+                        kule_engine::Allowance::Connect {
+                            host: host.to_owned(),
+                            port: port.parse()?,
+                        }
                     }
-                }
-                _ => kule_engine::Allowance::File { path: what, rule },
+                    _ => kule_engine::Allowance::File { path: what, rule },
+                },
+                (None, None) => bail!("say what to let through: HOST:PORT, PATH or --kind KIND"),
             };
             let folder = if everywhere {
                 None

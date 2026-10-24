@@ -234,6 +234,9 @@ pub struct Policy {
     /// Files a person said not to be asked about again, with the rule that
     /// asked: (rule, path).
     files: Vec<(String, String)>,
+    /// Kinds of file a person said not to be asked about again for their
+    /// kind ([`crate::remembered::UNFAMILIAR_KINDS`]).
+    kinds: Vec<String>,
 }
 
 impl Policy {
@@ -325,7 +328,10 @@ impl Policy {
                     .map_err(|e| invalid(&e))?;
                     self.set.add(policy).map_err(|e| invalid(&e))?;
                 }
+                // Kept by an earlier version for what is now always asked.
+                Allowance::File { .. } if !kept.applies() => {}
                 Allowance::File { path, rule } => self.files.push((rule.clone(), path.clone())),
+                Allowance::Kind { kind } => self.kinds.push(kind.clone()),
             }
         }
         Ok(self)
@@ -359,6 +365,7 @@ impl Policy {
         Ok(Policy {
             set,
             files: Vec::new(),
+            kinds: Vec::new(),
         })
     }
 
@@ -447,6 +454,8 @@ impl Policy {
                     self.files
                         .iter()
                         .any(|(r, path)| r == rule && *path == effect.path)
+                        || (rule == crate::remembered::UNFAMILIAR_KINDS
+                            && self.kinds.contains(&subject.file_kind))
                 });
             if remembered {
                 judgement.verdict = Verdict::Allow;

@@ -285,6 +285,16 @@ struct Cached {
 /// and a fresh one follows as a notice.
 const FRESH: Duration = Duration::from_secs(2);
 
+/// One remembered approval, as the window lists it.
+#[derive(Debug, Clone, Serialize)]
+pub struct RuleView {
+    #[serde(flatten)]
+    pub rule: kule_engine::Remembered,
+    /// Whether it still lets anything through (see
+    /// [`kule_engine::Remembered::applies`]).
+    pub applies: bool,
+}
+
 /// The task's uncommitted work, ignored paths marked, and what the policy
 /// says about the part a commit would take.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -781,8 +791,15 @@ impl Service {
     }
 
     /// The approvals a person told Kule to remember.
-    pub fn rules(&self) -> Result<Vec<kule_engine::Remembered>> {
-        kule_engine::remembered::load(&self.home).map_err(text)
+    pub fn rules(&self) -> Result<Vec<RuleView>> {
+        Ok(kule_engine::remembered::load(&self.home)
+            .map_err(text)?
+            .into_iter()
+            .map(|rule| RuleView {
+                applies: rule.applies(),
+                rule,
+            })
+            .collect())
     }
 
     pub fn forget_rule(&self, id: u64) -> Result<bool> {
@@ -1355,19 +1372,8 @@ impl Service {
             let task = self.open(id)?;
             let pending = task.pending(include_ignored).map_err(text)?;
             for judgement in self.policy(&task)?.judge(&pending).judgements {
-                let rememberable = judgement.verdict == Verdict::Ask
-                    && remember.contains(&judgement.subject)
-                    && judgement
-                        .rules
-                        .iter()
-                        .all(|r| kule_engine::REMEMBERABLE.contains(&r.as_str()));
-                if rememberable {
-                    for rule in judgement.rules {
-                        keep.push(kule_engine::Allowance::File {
-                            path: judgement.subject.clone(),
-                            rule,
-                        });
-                    }
+                if remember.contains(&judgement.subject) {
+                    keep.extend(kule_engine::allowances(&judgement));
                 }
             }
         }
@@ -4049,8 +4055,33 @@ mod tests {
         change(2);
         assert_eq!(verdict("Cargo.toml"), Verdict::Allow);
         assert_eq!(verdict("package.json"), Verdict::Ask);
-        assert!(s.app.forget_rule(rules[0].id).unwrap());
+        assert!(rules[0].applies);
+        assert!(s.app.forget_rule(rules[0].rule.id).unwrap());
         assert_eq!(verdict("Cargo.toml"), Verdict::Ask);
+    }
+
+    /// The window lists an answer an earlier version kept for what runs
+    /// code on its own as one that no longer applies.
+    #[test]
+    fn an_answer_that_no_longer_applies_is_listed_so() {
+        let s = Setup::new();
+        fs::write(
+            s._home.path().join(kule_engine::REMEMBERED_FILE),
+            serde_json::json!({
+                "next": 2,
+                "remembered": [
+                    { "id": 1, "kind": "file", "path": ".envrc", "rule": "automation", "added_unix": 1 },
+                    { "id": 2, "kind": "files_of_kind", "file_kind": "weird", "added_unix": 1 },
+                ]
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let listed = serde_json::to_value(s.app.rules().unwrap()).unwrap();
+        assert_eq!(listed[0]["applies"], false);
+        assert_eq!(listed[0]["rule"], "automation");
+        assert_eq!(listed[1]["applies"], true);
+        assert_eq!(listed[1]["file_kind"], "weird");
     }
 
     #[test]

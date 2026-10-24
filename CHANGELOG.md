@@ -17,6 +17,12 @@
   (`dot-paths`). The kinds your project has are read from the folder's own
   repository, never the task's copy. Deletions and folders pass as before.
   Policies can read `file_kind`, `kind_tracked` and `dotted`.
+- A kind of file can be answered for good, as the project's from then on:
+  `kule rules allow --kind vue`, or "Don't ask again in this folder" on a
+  file held for its kind. A hidden file is answered by its path. What runs
+  code on its own (CI, editor and agent settings: `automation`) is asked
+  every time; an answer an earlier version kept for it is listed as no
+  longer applying, in `kule rules` and in the app, and can be forgotten.
 
 ## 0.2.0-preview.11
 

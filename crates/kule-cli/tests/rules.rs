@@ -129,3 +129,83 @@ fn an_allowance_shows_what_it_would_let_through_before_it_is_kept() {
     );
     assert!(!out.status.success());
 }
+
+/// `kule rules allow --kind` makes a kind the project's: shown with what it
+/// would have let through, kept with --yes, and files of it pass from then
+/// on. What runs code on its own cannot be answered for good, and an answer
+/// an earlier version kept for it is listed as no longer applying.
+#[test]
+fn a_kind_answered_for_good_passes_from_then_on() {
+    let (home, ws) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+    let (home, ws) = (home.path(), ws.path());
+    fs::write(ws.join("main.rs"), "fn main() {}\n").unwrap();
+    let out = kule(home, ws, &["new", ws.to_str().unwrap()]);
+    let id = text(&out).split_whitespace().nth(1).unwrap().to_owned();
+    let copy = std::path::PathBuf::from(
+        text(&out)
+            .split(" · copy at ")
+            .nth(1)
+            .unwrap()
+            .lines()
+            .next()
+            .unwrap(),
+    );
+    fs::write(copy.join("a.weird"), "x\n").unwrap();
+    let status = text(&kule(home, ws, &["status", &id]));
+    assert!(status.contains("a.weird"), "{status}");
+    assert!(status.contains("unfamiliar-kinds"), "{status}");
+
+    let out = kule(home, ws, &["rules", "allow", "--kind", "weird"]);
+    let said = text(&out);
+    assert!(
+        said.contains("files of kind weird (unfamiliar-kinds)"),
+        "{said}"
+    );
+    assert!(
+        said.contains("0 connections, 1 changes, in 1 tasks"),
+        "{said}"
+    );
+    assert!(said.contains("not kept"), "{said}");
+    let out = kule(home, ws, &["rules", "allow", "--kind", "weird", "--yes"]);
+    assert!(out.status.success(), "{}", text(&out));
+    assert!(kule(home, ws, &["commit", &id]).status.success());
+    assert!(ws.join("a.weird").exists());
+
+    for refused in [
+        vec!["rules", "allow", "--kind", "tar.gz", "--yes"],
+        vec!["rules", "allow", ".envrc", "--rule", "automation", "--yes"],
+    ] {
+        let out = kule(home, ws, &refused);
+        assert!(!out.status.success(), "{refused:?}: {}", text(&out));
+    }
+    let said = text(&kule(
+        home,
+        ws,
+        &["rules", "allow", ".envrc", "--rule", "automation", "--yes"],
+    ));
+    assert!(
+        said.contains("what runs code on its own is always asked"),
+        "{said}"
+    );
+
+    // An answer an earlier version kept for what now always asks.
+    let path = home.join("remembered.json");
+    let mut kept: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    kept["remembered"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!({
+            "id": 9, "kind": "file", "path": ".envrc", "rule": "automation", "added_unix": 1
+        }));
+    fs::write(&path, kept.to_string()).unwrap();
+    let listed = text(&kule(home, ws, &["rules"]));
+    assert!(
+        listed.contains("changes to .envrc (automation)  · every folder · no longer applies"),
+        "{listed}"
+    );
+    assert!(
+        listed.contains("files of kind weird (unfamiliar-kinds)"),
+        "{listed}"
+    );
+}

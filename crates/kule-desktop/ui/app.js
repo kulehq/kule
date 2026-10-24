@@ -3983,10 +3983,15 @@ function armed(label, armedLabel, disabled, action) {
 // --- Remembered approvals --------------------------------------------------
 
 /** Rules that ask about a file by name: their question can be answered for good. */
-const REMEMBERABLE = ["manifests-and-lockfiles", "project-files", "automation"];
+// The engine's REMEMBERABLE: what runs code on its own is always asked.
+const REMEMBERABLE = ["manifests-and-lockfiles", "project-files", "unfamiliar-kinds", "dot-paths"];
 
 const rememberable = (j) =>
-  j.verdict === "ask" && j.rules.length > 0 && j.rules.every((r) => REMEMBERABLE.includes(r)) && !j.subject.startsWith(".kule/");
+  j.verdict === "ask" &&
+  j.rules.length > 0 &&
+  j.rules.every((r) => REMEMBERABLE.includes(r)) &&
+  !j.subject.startsWith(".kule/") &&
+  !j.subject.startsWith("git ");
 
 /** "Don't ask again here" for one held file, with what it would have let through. */
 function rememberBox(id, task, j) {
@@ -4032,7 +4037,12 @@ async function renderRules() {
   } catch (err) {
     fail(err);
   }
-  const describe = (r) => (r.kind === "connect" ? `Connections to ${r.host}:${r.port}` : `Changes to ${r.path} (${r.rule})`);
+  const describe = (r) =>
+    r.kind === "connect"
+      ? `Connections to ${r.host}:${r.port}`
+      : r.kind === "files_of_kind"
+        ? `Files of kind ${r.file_kind}`
+        : `Changes to ${r.path} (${r.rule})`;
   const beside = await besideSection();
   if (state.view !== "rules") return;
   replace(
@@ -4063,6 +4073,7 @@ async function renderRules() {
               { class: "agent-card" },
               h("div", {}, h("strong", {}, describe(r))),
               h("div", { class: "muted" }, r.workspace ? `In ${r.workspace}` : "In every folder", ` · since ${when(r.added_unix)}`),
+              r.applies ? null : h("div", { class: "regroup-warn" }, "No longer applies: what runs code on its own is always asked."),
               forget
             );
           })
