@@ -552,6 +552,9 @@ pub struct Service {
     /// Ports a run's servers listen on every address, which Kule keeps off
     /// the network (macOS, see `kule_engine::shield`).
     shielded: Mutex<std::collections::BTreeSet<u16>>,
+    /// The person's caches a new task's are made from in the background
+    /// (see [`Service::prepare_caches_later`]); none, and nothing is.
+    cache_sources: Mutex<Option<kule_engine::CacheSources>>,
 }
 
 impl Service {
@@ -706,7 +709,39 @@ impl Service {
             scans: Mutex::new(HashMap::new()),
             outlined: Mutex::new(HashMap::new()),
             shielded: Mutex::new(Default::default()),
+            cache_sources: Mutex::new(kule_engine::CacheSources::from_env()),
         }
+    }
+
+    /// Where new tasks' caches are made from in the background; `None`
+    /// makes none there, and each task's first command makes its own.
+    pub fn set_cache_sources(&self, sources: Option<kule_engine::CacheSources>) {
+        *self
+            .cache_sources
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = sources;
+    }
+
+    /// Makes task `id`'s package caches in the background, so its first
+    /// command need not wait for them (see `Task::prepare_caches`): one
+    /// that comes first waits and is told. What fails here is tried again,
+    /// and told, by that command.
+    fn prepare_caches_later(&self, id: &str) {
+        let Some(sources) = self
+            .cache_sources
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+        else {
+            return;
+        };
+        let (home, id) = (self.home.clone(), id.to_owned());
+        std::thread::spawn(move || {
+            if let Err(e) = Task::open(&home, &id).and_then(|t| t.prepare_caches(&sources, |_| {}))
+            {
+                eprintln!("kule: preparing task {id}'s package caches: {e}");
+            }
+        });
     }
 
     /// Notices from now on, until the receiver is dropped.
@@ -1270,6 +1305,7 @@ impl Service {
     pub fn create(&self, workspace: &Path) -> Result<TaskView> {
         let task = Task::create(&self.home, workspace).map_err(text)?;
         self.changed(task.id(), TaskChange::Created);
+        self.prepare_caches_later(task.id());
         self.view(task.id())
     }
 
@@ -1505,6 +1541,7 @@ impl Service {
         let label: String = label.chars().take(kule_engine::MAX_LABEL).collect();
         fork.set_label(Some(&label)).map_err(text)?;
         self.changed(fork.id(), TaskChange::Created);
+        self.prepare_caches_later(fork.id());
         self.view(fork.id())
     }
 
@@ -1920,6 +1957,19 @@ impl Service {
                     ),
                 },
             );
+        }
+        // The task's caches, made before its sandbox is, once what can fail
+        // at once has not: told while the run waits for them.
+        if let Some(sources) = kule_engine::CacheSources::from_env() {
+            task.prepare_caches(&sources, |text| {
+                self.emit(
+                    task.id(),
+                    RunEvent::Preparing {
+                        text: text.to_owned(),
+                    },
+                );
+            })
+            .map_err(text)?;
         }
         if task.measures_caches().map_err(text)? {
             self.emit(
@@ -2393,6 +2443,9 @@ mod tests {
             let (home, ws) = (TempDir::new().unwrap(), TempDir::new().unwrap());
             fs::write(ws.path().join("a.txt"), "a\n").unwrap();
             let app = Arc::new(Service::new(home.path().to_owned()));
+            // Each test's tasks make their caches from the person's only
+            // when a command needs them, as before; one test sees to these.
+            app.set_cache_sources(None);
             Setup {
                 _home: home,
                 ws,
@@ -3869,6 +3922,14 @@ mod tests {
         };
         let error = finished.expect("the run failed");
         assert!(error.contains("cannot be read"), "{error}");
+        // What failed at once did not first make the task's caches, which
+        // takes seconds where the person's are large.
+        let caches = Task::open(&s.app.home, &id)
+            .unwrap()
+            .tmp()
+            .unwrap()
+            .join("caches/npm");
+        assert!(!caches.exists());
         assert!(!s.app.view(&id).unwrap().running);
         assert!(s.app.stop_run(&id).is_err() || !s.app.busy());
     }
@@ -4485,6 +4546,77 @@ mod tests {
             .map(|t| (t.id, t.unreadable.is_some()))
             .collect();
         assert_eq!(listed, [(good, false), ("broken".to_owned(), true)]);
+    }
+
+    /// A new task's package caches, and a fork's, are made in the
+    /// background as it is made, before any command needs them.
+    #[test]
+    fn a_new_tasks_caches_are_made_before_its_first_command() {
+        let s = Setup::new();
+        let person = TempDir::new().unwrap();
+        let root = fs::canonicalize(person.path()).unwrap();
+        fs::create_dir_all(root.join(".npm/_cacache")).unwrap();
+        fs::write(root.join(".npm/_cacache/index"), "kept\n").unwrap();
+        s.app.set_cache_sources(Some(kule_engine::CacheSources {
+            home: root.clone(),
+            cargo_home: root.join(".cargo"),
+        }));
+        let made = |id: &str| {
+            let npm = Task::open(&s.app.home, id)
+                .unwrap()
+                .tmp()
+                .unwrap()
+                .join("caches/npm");
+            let deadline = Instant::now() + Duration::from_secs(30);
+            while !npm.is_dir() {
+                assert!(
+                    Instant::now() < deadline,
+                    "task {id}'s caches were never made"
+                );
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            if cfg!(target_os = "macos") {
+                assert_eq!(
+                    fs::read_to_string(npm.join("_cacache/index")).unwrap(),
+                    "kept\n"
+                );
+            }
+        };
+        let (id, _) = s.task();
+        made(&id);
+        let fork = s.app.fork(&id, None).unwrap();
+        made(&fork.id);
+    }
+
+    /// A run that comes while its task's caches are still being made
+    /// waits for them, and its Live says so.
+    #[test]
+    fn a_run_waiting_for_its_caches_says_so() {
+        let s = Setup::new();
+        let (id, _) = s.task();
+        own_agent(&s, "silent", "exit 3");
+        let lock = s.app.home.join("tasks").join(&id).join("caches.lock");
+        let held = fs::File::create(&lock).unwrap();
+        // As Kule's own does: flock, which goes with the file.
+        // SAFETY: `held` is an open descriptor for the call.
+        assert_eq!(
+            unsafe { libc::flock(std::os::fd::AsRawFd::as_raw_fd(&held), libc::LOCK_EX) },
+            0
+        );
+        s.app.start_run(&id, "silent", "hi", Vec::new()).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            let told = s.app.stream(&id).into_iter().any(|e| {
+                matches!(&e.event, RunEvent::Preparing { text } if text == kule_engine::CACHES_STILL_PREPARING)
+            });
+            if told {
+                break;
+            }
+            assert!(Instant::now() < deadline, "the wait was never told");
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        drop(held);
+        finished_notes(&s, &id);
     }
 
     /// A task whose record itself cannot be read is listed too, by its

@@ -71,7 +71,12 @@ Her şey `~/.kule/tasks/<id>/` altındadır:
 
 macOS'ta görevin npm ve cargo önbellekleri sizinkilerin klonu olarak
 başlar; böylece bir görevin ilk kurulumu yeniden indirmez. Linux'ta boş
-başlarlar.
+başlarlar. Büyük önbelleklerin klonu birkaç saniye sürdüğü için uygulama,
+bir görev oluşturulur ya da fork edilir edilmez klonu arka planda yapar.
+Klon bitmeden gelen bir komut, terminal ya da çalıştırma onu bekler ve
+bunu söyler: *Kule is still preparing this task's package caches*. Komut
+satırında görevin ilk komutu önbellekleri kendisi hazırlar ve *preparing
+this task's package caches* der.
 
 Gerçekten yer kaplayanlar: ajanın değiştirdiği ya da oluşturduğu dosyalar
 (derleme çıktıları da), bir görevin indirdiği paketler ve adımlarla kontrol

@@ -267,3 +267,49 @@ fn terminal_probes_are_one_line_after_a_command() {
     assert_eq!(probes.len(), 1, "{said}");
     assert!(probes[0].contains("/dev/ttys* (ls) ×"), "{said}");
 }
+
+/// The first command in a task says it copies the person's package caches
+/// (macOS, where it clones them), once; the next says nothing of them.
+#[test]
+fn the_first_command_says_it_makes_the_caches() {
+    let (home, ws, person) = (
+        TempDir::new().unwrap(),
+        TempDir::new().unwrap(),
+        TempDir::new().unwrap(),
+    );
+    fs::create_dir_all(person.path().join(".npm/_cacache")).unwrap();
+    let kule = |args: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_kule"))
+            .args(args)
+            .env("KULE_HOME", home.path())
+            .env("HOME", person.path())
+            .env_remove("CARGO_HOME")
+            .output()
+            .unwrap()
+    };
+    let out = kule(&["new", ws.path().to_str().unwrap()]);
+    let id = String::from_utf8_lossy(&out.stdout)
+        .split_whitespace()
+        .nth(1)
+        .unwrap()
+        .to_owned();
+    let told = |out: &std::process::Output| {
+        String::from_utf8_lossy(&out.stderr)
+            .matches("preparing this task's package caches")
+            .count()
+    };
+    let first = kule(&["exec", &id, "--", "true"]);
+    assert!(
+        first.status.success(),
+        "{}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+    assert_eq!(told(&first), usize::from(cfg!(target_os = "macos")));
+    let next = kule(&["exec", &id, "--", "true"]);
+    assert!(
+        next.status.success(),
+        "{}",
+        String::from_utf8_lossy(&next.stderr)
+    );
+    assert_eq!(told(&next), 0);
+}

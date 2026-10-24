@@ -56,6 +56,24 @@ enum Event {
         code: Option<u32>,
         notes: Vec<String>,
     },
+    /// What Kule does before the shell starts and that takes a while, for
+    /// the tab the window opened as `key`: it knows no id yet.
+    Preparing {
+        key: u64,
+        text: String,
+    },
+}
+
+/// Makes task `task`'s package caches before its shell's sandbox does,
+/// telling the tab `key` while that takes a while. What fails here is
+/// tried again, and refused, as the sandbox is made.
+fn prepare(home: &Path, task: &str, key: u64, tell: &impl Fn(Event)) {
+    let _ = kule_daemon::shell::prepare_caches(home, task, |text| {
+        tell(Event::Preparing {
+            key,
+            text: text.to_owned(),
+        });
+    });
 }
 
 fn size(cols: u16, rows: u16) -> libc::winsize {
@@ -137,11 +155,14 @@ impl Terminals {
         task: &str,
         cols: u16,
         rows: u16,
+        key: u64,
     ) -> Result<(u64, Vec<String>), String> {
         let (program, args) = shell();
-        let id = self.start(home, task, &program, &args, cols, rows, move |event| {
+        let tell = move |event| {
             let _ = app.emit("terminal", event);
-        })?;
+        };
+        prepare(home, task, key, &tell);
+        let id = self.start(home, task, &program, &args, cols, rows, tell)?;
         // Handed back with the id rather than sent as output: what is sent
         // before the window knows the id is never shown.
         let notes = kule_daemon::shell::Task::open(home, task)
@@ -401,6 +422,7 @@ mod tests {
                 Ok(Event::Output { data, .. }) => {
                     seen.push_str(&String::from_utf8_lossy(&b64.decode(data).unwrap()))
                 }
+                Ok(Event::Preparing { .. }) => {}
                 Ok(Event::Exit { .. }) | Err(_) => break,
             }
         }
@@ -587,6 +609,45 @@ mod tests {
                 "{recorded:?}"
             );
         }
+    }
+
+    /// A tab whose task's caches are still being made says so, by its
+    /// key, before its shell starts.
+    #[test]
+    fn a_tab_says_it_waits_for_its_tasks_caches() {
+        let s = Setup::new();
+        let lock = s
+            .home
+            .path()
+            .join("tasks")
+            .join(&s.task)
+            .join("caches.lock");
+        let held = File::create(&lock).unwrap();
+        // As Kule's own does: flock, which goes with the file.
+        // SAFETY: `held` is an open descriptor for the call.
+        assert_eq!(
+            unsafe { libc::flock(std::os::fd::AsRawFd::as_raw_fd(&held), libc::LOCK_EX) },
+            0
+        );
+        let (tx, rx) = mpsc::channel();
+        let (home, task) = (s.home.path().to_owned(), s.task.clone());
+        let waiting = std::thread::spawn(move || {
+            prepare(&home, &task, 7, &move |e| {
+                let _ = tx.send(e);
+            });
+        });
+        match rx.recv_timeout(Duration::from_secs(10)).unwrap() {
+            Event::Preparing { key, text } => {
+                assert_eq!(key, 7);
+                assert!(
+                    text.contains("still preparing this task's package caches"),
+                    "{text}"
+                );
+            }
+            other => panic!("{other:?}"),
+        }
+        drop(held);
+        waiting.join().unwrap();
     }
 
     fn kule_engine_task(s: &Setup) -> kule_daemon::shell::Task {

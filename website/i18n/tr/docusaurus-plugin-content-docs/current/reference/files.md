@@ -85,6 +85,7 @@ karakterlik kimliktir.
 | Yol | Ne tutar |
 | --- | --- |
 | `task.json` | Görevin kimliği, çalışma klasörü (sizin klasörünüz), ne zaman oluşturulduğu ve kopyanın klasör adı. |
+| `caches.lock` | Görevin paket önbellekleri hazırlanırken tutulur; böylece iki Kule süreci onları aynı anda hazırlamaz. |
 | `settings.json` | Görevin adı ve rengi, grubu, bütçesi, kendi sınırları, soruların ne kadar beklediği ve kopyanın oluşturulduğunda kapladığı yer (disk sınırları oradan itibaren sayılır). |
 | `w/<folder name>/` | **Kopya**: ajanın çalıştığı yer. `kule path TASK` bunu yazar. Yanında, `kule reveal` ile açtığınız projelere giden bağlantılar vardır. |
 | `base/` | Klasörün son sync'teki hâli; üç yönlü birleştirmeler (three-way merge) için. |

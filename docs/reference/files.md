@@ -81,6 +81,7 @@ Each task lives in `tasks/<id>/`, where `<id>` is the 8-character id
 | Path | What it holds |
 | --- | --- |
 | `task.json` | The task's id, the workspace (your folder), when it was made, and the copy's folder name. |
+| `caches.lock` | Held while the task's package caches are made, so two Kule processes never make them at once. |
 | `settings.json` | The task's name and colour, its group, its budget, its own limits, how long questions wait, and what the copy took when it was made (disk limits count from there). |
 | `w/<folder name>/` | **The copy**: where the agent works. `kule path TASK` prints it. Beside it are links to projects you opened with `kule reveal`. |
 | `base/` | The folder as it was at the last sync, for three-way merges. |
