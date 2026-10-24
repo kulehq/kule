@@ -32,13 +32,23 @@ The first *yes* decides. Two *no*s deny.
 A whole set of changes gets the strictest verdict of its effects. In Cedar a
 `forbid` always wins over a `permit`, and an error while evaluating denies.
 
-The rule names in brackets are each rule's `@id`:
+What waits or is denied is shown put together by why. Each group starts
+with the reason in plain words, then the rule names in brackets (each
+rule's `@id`), then the verdict; the paths it holds are under it. Files that
+wait only for their kind are one group per kind:
 
 ```text
 policy: waits for approval
-  Cargo.toml · waits for approval (manifests-and-lockfiles)
+  decides what gets installed (manifests-and-lockfiles) · waits for approval
+    Cargo.toml
+  a kind of file this project has none of: sh (unfamiliar-kinds) · waits for approval
+    scripts/release.sh
+    scripts/setup.sh
 net: example.com:443 · refused, would wait for approval; the command line asks no one (no-rule-lets-it-pass)
 ```
+
+A rule with no reason of its own, such as one in a policy you wrote, is
+shown as `a rule of the policy`.
 
 ## Kule's balanced policy
 
@@ -47,10 +57,12 @@ This is the default. Print it with `kule policy` while it holds.
 | Rule | Kind | Matches | Effect |
 | --- | --- | --- | --- |
 | `ask-by-default` | permit `ask` | Everything. | Anything may be put to a person unless a `forbid` says otherwise. |
-| `files` | permit `auto` | Every file change (`fs.*`). | Ordinary file changes **pass**. |
+| `files` | permit `auto` | Every file change (`fs.*`). | File changes **pass** unless a rule below holds them. With the next two rules, only files of a known kind outside hidden paths pass. |
+| `unfamiliar-kinds` | forbid `auto` | A file (never a deletion or a folder) outside hidden paths, which `dot-paths` holds, whose kind is neither on the list below nor one the project already has. Its kind is its extension in lower case, or its whole name when it has none. Known kinds: source (`rs go py rb java kt kts scala swift m mm c h cc cpp cxx hpp hh cs fs fsx vb ts tsx js jsx mjs cjs vue svelte php pl pm lua r jl dart ex exs erl hrl hs elm clj cljs cljc ml mli nim zig sol sql graphql gql proto css scss sass less html htm xml svg`), docs (`md mdx markdown rst txt adoc org tex`), data (`json jsonc json5 yaml yml toml csv tsv`), pictures (`png jpg jpeg gif webp avif ico bmp pdf`), fonts (`woff woff2 ttf otf`), and the names `README`, `LICENSE`, `LICENCE`, `COPYING`, `NOTICE`, `AUTHORS`, `CONTRIBUTORS`, `CHANGELOG`. A kind the project already has is one your folder's git index holds outside hidden paths; Kule reads it from your folder, never from the task's copy. Outside git only the list counts. Scripts (`sh`, `ps1`, `bat`, …) are left out on purpose. | **Waits.** Can be remembered, by kind. |
+| `dot-paths` | forbid `auto` | A file (never a deletion or a folder) under a path where any part starts with a dot (`.env`, `.config/tool.json`, `src/.eslintrc`), whatever its kind, tracked or not. Tools look for their settings there. | **Waits.** Can be remembered, by path. |
 | `manifests-and-lockfiles` | forbid `auto` | Files that decide what gets installed or built, by name, in any folder, any case: `package.json`, `package-lock.json`, `npm-shrinkwrap.json`, `yarn.lock`, `pnpm-lock.yaml`, `bun.lock(b)`, `Cargo.toml`, `Cargo.lock`, `Directory.Packages.props`, `Directory.Build.props`/`.targets`, `nuget.config`, `packages.lock.json`, `global.json`, `go.mod`, `go.sum`, `pyproject.toml`, `setup.py`, `setup.cfg`, `poetry.lock`, `uv.lock`, `Pipfile`(`.lock`), `Gemfile`(`.lock`), Gradle build and settings files, `pom.xml`. | **Waits.** Can be remembered. |
 | `project-files` | forbid `auto` | `*.csproj`, `*.fsproj`, `requirements*.txt`. | **Waits.** Can be remembered. |
-| `automation` | forbid `auto` | What runs code or steers an agent without anyone running the project. Anything inside `.github`, `.circleci`, `.devcontainer`, `.vscode`, `.idea`, `.zed`, `.kule`, `.husky`, `.claude`, `.cursor`, `.gemini`, `.codex`, `.cargo`, `.mvn`, `.yarn`, `.buildkite`, `.gitea`, `.forgejo`, `.woodpecker`, `.windsurf`, `.continue`, `.roo`, `.clinerules`, or `gradle/wrapper/`; and files like `.gitlab-ci*`, `.envrc`, `.gitattributes`, `.gitmodules`, `.npmrc`, `.yarnrc(.yml)`, `.pnpmfile.cjs`, `build.rs`, `gradlew`, `mise.toml`, `.tool-versions`, `.pre-commit-config.yaml`, `lefthook.yml`, `.mcp.json`, `CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, `.cursorrules`, `rust-toolchain(.toml)`, `mvnw`, `bunfig.toml`, `dotnet-tools.json`, `azure-pipelines.yml`, `.travis.yml`, `Jenkinsfile`, `bitbucket-pipelines.yml`, `opencode.json`, `.aider.conf.yml`; the version pins a shell prompt reads on entering a folder (`.nvmrc`, `.node-version`, `.python-version`, `.ruby-version`, `.java-version`, `.go-version`, `.sdkmanrc`, `.terraform-version`, `mise.local.toml`, `.rtx.toml`, mise's `config.toml`, anything in `.mise`) and `*.code-workspace`. Kule's terminal and editor refuse a copy where one of these changed. | **Waits.** Can be remembered (except under `.kule/`). |
+| `automation` | forbid `auto` | What runs code or steers an agent without anyone running the project. Anything inside `.github`, `.circleci`, `.devcontainer`, `.vscode`, `.idea`, `.zed`, `.kule`, `.husky`, `.claude`, `.cursor`, `.gemini`, `.codex`, `.cargo`, `.mvn`, `.yarn`, `.buildkite`, `.gitea`, `.forgejo`, `.woodpecker`, `.windsurf`, `.continue`, `.roo`, `.clinerules`, or `gradle/wrapper/`; and files like `.gitlab-ci*`, `.envrc`, `.gitattributes`, `.gitmodules`, `.npmrc`, `.yarnrc(.yml)`, `.pnpmfile.cjs`, `build.rs`, `gradlew`, `mise.toml`, `.tool-versions`, `.pre-commit-config.yaml`, `lefthook.yml`, `.mcp.json`, `CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, `.cursorrules`, `rust-toolchain(.toml)`, `mvnw`, `bunfig.toml`, `dotnet-tools.json`, `azure-pipelines.yml`, `.travis.yml`, `Jenkinsfile`, `bitbucket-pipelines.yml`, `opencode.json`, `.aider.conf.yml`; the version pins a shell prompt reads on entering a folder (`.nvmrc`, `.node-version`, `.python-version`, `.ruby-version`, `.java-version`, `.go-version`, `.sdkmanrc`, `.terraform-version`, `mise.local.toml`, `.rtx.toml`, mise's `config.toml`, anything in `.mise`) and `*.code-workspace`. Kule's terminal and editor refuse a copy where one of these changed. | **Waits.** Cannot be remembered: what runs code on its own is asked every time. |
 | `other-vcs` | forbid `auto` | Another version control system's repository, at any depth: anything in `.hg`, `.sl`, `.jj`, `_darcs`, `.pijul`, `.bzr`, `.svn`, `.fossil-settings`, and `.fslckout` or `_FOSSIL_`. Its config and hooks run on its next command, and Kule reads none of it as a repository. Kule's terminal and editor refuse a copy where one changed. | **Waits.** Cannot be remembered. |
 | `nested-repository` | forbid `auto` | Files inside a `.git` folder of a repository nested in the workspace. | **Waits.** |
 | `nested-git-hooks` | forbid all | A hook created or changed in a nested repository. | **Denied.** |
@@ -73,8 +85,8 @@ TLS a push cannot be told apart from a fetch).
 
 ## Kule's careful policy
 
-`kule policy careful` writes the balanced policy with one more rule at the
-end:
+`kule policy careful` keeps that choice in `~/.kule/policy-choice`. Kule
+then judges by the balanced policy with one more rule at the end:
 
 | Rule | Kind | Matches | Effect |
 | --- | --- | --- | --- |
@@ -82,6 +94,12 @@ end:
 
 Under careful, a remembered file does not pass: `careful` asks about every
 file, and it cannot be answered for good.
+
+The choice is kept, never the text, so careful always means this version's
+rules. A `~/.kule/policy.cedar` that holds a balanced or careful text an
+earlier version wrote (0.2.0-preview.1 to 0.2.0-preview.11) counts as that
+choice, not as a policy of your own: it is judged by today's rules, and
+`kule policy balanced` or `careful` replaces it.
 
 ## Names Kule adds
 
@@ -92,7 +110,7 @@ These do not appear in the policy text; Kule adds them as it judges.
 | `no-rule-lets-it-pass` | waits | No `auto` permit matched. |
 | `no-rule-allows-asking` | denied | No `ask` permit matched, so it cannot even be put to you. Happens with a policy of your own that leaves out `ask-by-default`. |
 | `policy-error: …` | denied | Cedar could not evaluate a rule; it denies. |
-| `remembered` | passes | A file you told Kule not to ask about again ([`kule rules`](../cli/rules.md)). |
+| `remembered` | passes | A file, or a kind of file, you told Kule not to ask about again ([`kule rules`](../cli/rules.md)). |
 | `repo:<id>` | as the rule says | A rule from the repository's own `.kule/policy.cedar`. No answer you remembered cancels it, whatever its `@id`. |
 | `remembered-<id>` | passes | A connection you told Kule not to ask about again. |
 | `profile-<agent>` | passes | A host in the agent's profile, or its model's API, open **only while that agent runs** (for example `profile-claude-code` for `api.anthropic.com`). |
@@ -115,6 +133,9 @@ Each effect is a `Kule::Effect` entity with these attributes:
 | `host`, `port` | For `net.connect`. |
 | `gains` | For `fs.*`: what the entry gains in its permission bits that the folder's had not, `executable` and `world-writable` (`!resource.gains.isEmpty()`). |
 | `xattrs_changed` | For `fs.*`: the file's extended attributes differ from the folder's (macOS). |
+| `file_kind` | For `fs.*`: the name's extension in lower case (`vue`), or the whole name where it has none (`makefile`). |
+| `kind_tracked` | For `fs.*`: the folder's git index holds a file of this kind outside hidden paths. Read from your folder, never the task's copy. |
+| `dotted` | For `fs.*`: a part of the path starts with a dot, or the path lies in a repository's own files. |
 
 And the `context`:
 
@@ -126,8 +147,9 @@ And the `context`:
 
 ## Your own policy, for every task
 
-Save a policy as `policy.cedar` in Kule's home (`~/.kule/policy.cedar`). It
-**replaces** Kule's for every task (a group with a policy of its own keeps
+Save a policy as `policy.cedar` in Kule's home (`~/.kule/policy.cedar`).
+Kule writes nothing there itself: that file is only ever a policy of your
+own. It **replaces** Kule's for every task (a group with a policy of its own keeps
 its own). Since a `forbid` can never be overridden, replacing is the only way
 to loosen Kule's rules, so start from Kule's text and change only what you
 mean to:
@@ -185,8 +207,9 @@ $ kule status 1046fb30
   + db/migrations/001.sql
   + notes.md
 policy: denied
-  db/migrations · denied (no-migrations)
-  db/migrations/001.sql · denied (no-migrations)
+  the repository's own rule (repo:no-migrations) · denied
+    db/migrations
+    db/migrations/001.sql
 $ kule commit 1046fb30 --approve
 ...
 kule: not committed; the policy denies the changes above
@@ -198,7 +221,7 @@ is **denied**. Write `action == Kule::Action::"auto"` instead to make it
 
 - Kule reads the file from your **real folder**, never from a task's copy,
   so an agent cannot weaken it. Changes to it in a copy wait for you
-  (`automation`), and cannot be remembered.
+  (`automation`, `dot-paths`), and cannot be remembered.
 - A `permit` in it is refused: `.kule/policy.cedar may only contain forbid
   rules: a repository can tighten the policy, never loosen it`.
 - The repository's forbids hold under every policy: balanced, careful, yours,

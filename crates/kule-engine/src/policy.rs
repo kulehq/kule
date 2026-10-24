@@ -44,12 +44,49 @@ pub const REPO_POLICY: &str = ".kule/policy.cedar";
 /// holds while there is none.
 pub const USER_POLICY: &str = "policy.cedar";
 
+/// Where the choice of Kule's careful policy is kept, under Kule's home: a
+/// choice, never the text, so it always means this version's rules.
+const POLICY_CHOICE: &str = "policy-choice";
+
+/// The blake3 of every balanced and careful text earlier versions wrote to
+/// [`USER_POLICY`] or a person copied there, from 0.2.0-preview.1 to
+/// 0.2.0-preview.11: such a file is that choice, judged by today's rules,
+/// never a policy of the person's own. Choices are no longer kept as text,
+/// so the list does not grow.
+const EARLIER_TEXTS: [(&str, PolicyChoice); 6] = [
+    (
+        "09832ff8257708d5147645cd0ed832e35744f7db9c5274037261e7744db295ef",
+        PolicyChoice::Balanced,
+    ),
+    (
+        "54b7d8bcaf14f8315892266a2ab77c9f947da7933e41938fb3595a1d70c2e431",
+        PolicyChoice::Careful,
+    ),
+    (
+        "7364d81e982d84ee86f65ca4ca9f41d43123376e744d056b0220a4e26ee5f94f",
+        PolicyChoice::Balanced,
+    ),
+    (
+        "df0c87af894168f287f7e150185d595d2e06196cae14ba941dd8c538230b5907",
+        PolicyChoice::Careful,
+    ),
+    (
+        "b38b5e97d82ed1e7f76cb76c025b40248cc7df3ba4947003368fd435549fc2bb",
+        PolicyChoice::Balanced,
+    ),
+    (
+        "14757aef6b0547e99cfd4d89c0c4aab237a0b5ba766e0eb8b8563d070ee4bccd",
+        PolicyChoice::Careful,
+    ),
+];
+
 /// Which policy holds: one of Kule's two, or one the person wrote.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum PolicyChoice {
-    /// The built-in policy: changes to files pass, what decides what gets
-    /// installed, built or run waits.
+    /// The built-in policy: source, docs and data, and kinds of file the
+    /// project already tracks, pass; other kinds, hidden paths, and what
+    /// decides what gets installed, built or run wait.
     Balanced,
     /// [`CAREFUL_POLICY`].
     Careful,
@@ -57,16 +94,57 @@ pub enum PolicyChoice {
     Own,
 }
 
-/// Which policy holds under `home`.
+/// Which policy holds under `home`. A [`USER_POLICY`] holding one of Kule's
+/// texts, today's or an earlier version's, is that choice.
 pub fn policy_choice(home: &Path) -> Result<PolicyChoice> {
     let path = home.join(USER_POLICY);
-    if !path.is_file() {
-        return Ok(PolicyChoice::Balanced);
+    if path.is_file() {
+        let text = read(&path)?;
+        return Ok(kules_text(&text).unwrap_or(PolicyChoice::Own));
     }
-    Ok(match read(&path)?.as_str() {
-        DEFAULT_POLICY => PolicyChoice::Balanced,
-        CAREFUL_POLICY => PolicyChoice::Careful,
-        _ => PolicyChoice::Own,
+    let marker = home.join(POLICY_CHOICE);
+    Ok(match std::fs::read_to_string(&marker) {
+        Ok(choice) if choice.trim() == "careful" => PolicyChoice::Careful,
+        Ok(choice) => {
+            return Err(Error::Invalid(format!(
+                "{}: {:?} is not a policy Kule knows; choose balanced or careful again",
+                marker.display(),
+                choice.trim()
+            )));
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => PolicyChoice::Balanced,
+        Err(source) => {
+            return Err(Error::Io {
+                path: marker,
+                source,
+            });
+        }
+    })
+}
+
+/// Which of Kule's policies `text` is, today's or an earlier version's.
+fn kules_text(text: &str) -> Option<PolicyChoice> {
+    match text {
+        DEFAULT_POLICY => Some(PolicyChoice::Balanced),
+        CAREFUL_POLICY => Some(PolicyChoice::Careful),
+        _ => {
+            let hash = blake3::hash(text.as_bytes()).to_hex();
+            EARLIER_TEXTS
+                .iter()
+                .find(|(earlier, _)| *earlier == hash.as_str())
+                .map(|(_, choice)| *choice)
+        }
+    }
+}
+
+/// The text every task is judged by under `home` unless its group chose
+/// another: Kule's balanced or careful policy as this version has it, or
+/// the person's own.
+pub fn policy_text(home: &Path) -> Result<String> {
+    Ok(match policy_choice(home)? {
+        PolicyChoice::Balanced => DEFAULT_POLICY.to_owned(),
+        PolicyChoice::Careful => CAREFUL_POLICY.to_owned(),
+        PolicyChoice::Own => read(&home.join(USER_POLICY))?,
     })
 }
 
@@ -74,25 +152,38 @@ pub fn policy_choice(home: &Path) -> Result<PolicyChoice> {
 /// never replaced: they move it away first.
 pub fn choose_policy(home: &Path, choice: PolicyChoice) -> Result<()> {
     let path = home.join(USER_POLICY);
-    if policy_choice(home)? == PolicyChoice::Own {
+    // Only the person's own text is kept from being replaced: a choice
+    // Kule cannot read is put right by choosing again.
+    if path.is_file() && kules_text(&read(&path)?).is_none() {
         return Err(Error::Invalid(format!(
             "{} is a policy of your own; Kule does not replace it",
             path.display()
         )));
     }
+    let marker = home.join(POLICY_CHOICE);
+    let remove = |path: &Path| match std::fs::remove_file(path) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(Error::Io {
+            path: path.to_path_buf(),
+            source: e,
+        }),
+        _ => Ok(()),
+    };
     match choice {
-        PolicyChoice::Balanced => match std::fs::remove_file(&path) {
-            Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
-                Err(Error::Io { path, source: e })
-            }
-            _ => Ok(()),
-        },
+        PolicyChoice::Balanced => {
+            remove(&path)?;
+            remove(&marker)
+        }
         PolicyChoice::Careful => {
             std::fs::create_dir_all(home).map_err(|source| Error::Io {
                 path: home.to_path_buf(),
                 source,
             })?;
-            std::fs::write(&path, CAREFUL_POLICY).map_err(|source| Error::Io { path, source })
+            std::fs::write(&marker, "careful\n").map_err(|source| Error::Io {
+                path: marker.clone(),
+                source,
+            })?;
+            // An earlier version's text goes: the choice says it now.
+            remove(&path)
         }
         PolicyChoice::Own => Err(Error::Invalid(format!(
             "a policy of your own is written to {}",
@@ -135,6 +226,74 @@ impl Ruling {
             .iter()
             .filter(|j| j.verdict != Verdict::Allow)
     }
+
+    /// [`Ruling::holding`] put together by why: the same rules, and for
+    /// what waits only for its kind, the same kind. Groups come in the
+    /// order their first subject does.
+    pub fn held(&self) -> Vec<Held> {
+        let mut groups: Vec<Held> = Vec::new();
+        for judgement in self.holding() {
+            let kind = (judgement.rules == [crate::remembered::UNFAMILIAR_KINDS])
+                .then(|| file_kind(&judgement.subject));
+            match groups.iter_mut().find(|g| {
+                g.rules == judgement.rules && g.kind == kind && g.verdict == judgement.verdict
+            }) {
+                Some(group) => group.subjects.push(judgement.subject.clone()),
+                None => groups.push(Held {
+                    verdict: judgement.verdict,
+                    reasons: judgement.rules.iter().map(|r| reason(r)).collect(),
+                    rules: judgement.rules.clone(),
+                    kind,
+                    subjects: vec![judgement.subject.clone()],
+                }),
+            }
+        }
+        groups
+    }
+}
+
+/// Subjects that wait, or are denied, for the same reasons.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Held {
+    pub verdict: Verdict,
+    /// The `@id`s of the rules that hold them.
+    pub rules: Vec<String>,
+    /// Why, in a person's words: one for each of `rules` ([`reason`]).
+    pub reasons: Vec<String>,
+    /// What kind of file they all are ([`file_kind`]), when only their
+    /// kind holds them, and a person may answer the kind for good.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    pub subjects: Vec<String>,
+}
+
+/// Why rule `rule` holds what it holds, in a person's words.
+pub fn reason(rule: &str) -> String {
+    if rule.starts_with("repo:") {
+        return "the repository's own rule".to_owned();
+    }
+    if rule.starts_with("policy-error") {
+        return "the policy could not judge it".to_owned();
+    }
+    match rule {
+        "unfamiliar-kinds" => "a kind of file this project has none of",
+        "dot-paths" => "a hidden file or folder, where tools find their settings",
+        "automation" => "runs code when a tool or an agent opens the folder",
+        "other-vcs" => "another version control system's files, which run on its next command",
+        "nested-repository" => "a repository's own files, which git reads and runs",
+        "nested-git-hooks" | "git-hooks" => "a git hook, which runs on its own",
+        "manifests-and-lockfiles" => "decides what gets installed",
+        "project-files" => "decides what gets built",
+        "permissions" => "made executable, or writable by anyone",
+        "extended-attributes" => "carries attributes no diff shows",
+        "links" => "a link, which leads wherever it points",
+        "mass-delete" => "one of more than 200 deletions",
+        "deletes-outside-git" => "one of more than 20 deletions outside git",
+        "careful" => "the careful policy asks about every change",
+        "no-rule-lets-it-pass" => "no rule lets it pass on its own",
+        _ => "a rule of the policy",
+    }
+    .to_owned()
 }
 
 /// The start of the ids a repository's own rules are added under.
@@ -145,6 +304,9 @@ pub struct Policy {
     /// Files a person said not to be asked about again, with the rule that
     /// asked: (rule, path).
     files: Vec<(String, String)>,
+    /// Kinds of file a person said not to be asked about again for their
+    /// kind ([`crate::remembered::UNFAMILIAR_KINDS`]).
+    kinds: Vec<String>,
 }
 
 impl Policy {
@@ -153,14 +315,15 @@ impl Policy {
         Policy::from_texts(DEFAULT_POLICY, None).expect("the built-in policy parses")
     }
 
-    /// The user's policy (or the built-in one when `user` is absent) plus
-    /// the repository's `forbid` rules from `workspace`, when it has any.
-    pub fn load(user: Option<&Path>, workspace: &Path) -> Result<Policy> {
-        let base = match user.filter(|p| p.is_file()) {
-            Some(path) => read(path)?,
+    /// The policy for every task under `home` ([`policy_text`]; the
+    /// built-in one when `home` is absent) plus the repository's `forbid`
+    /// rules from `workspace`, when it has any, and what was remembered.
+    pub fn load(home: Option<&Path>, workspace: &Path) -> Result<Policy> {
+        let base = match home {
+            Some(home) => policy_text(home)?,
             None => DEFAULT_POLICY.to_owned(),
         };
-        Policy::assemble(&base, workspace, user.and_then(Path::parent))
+        Policy::assemble(&base, workspace, home)
     }
 
     /// The policy `task` is judged by: its group's, when the group chose
@@ -183,17 +346,10 @@ impl Policy {
     /// text judge alike.
     pub fn base_text(task: &crate::Task, group: Option<u64>) -> Result<String> {
         let home = task.home();
-        Ok(match crate::groups::base_policy(&home, group)? {
-            Some(text) => text,
-            None => {
-                let user = home.join(USER_POLICY);
-                if user.is_file() {
-                    read(&user)?
-                } else {
-                    DEFAULT_POLICY.to_owned()
-                }
-            }
-        })
+        match crate::groups::base_policy(&home, group)? {
+            Some(text) => Ok(text),
+            None => policy_text(&home),
+        }
     }
 
     /// `base`, the forbids of the repository at `workspace`, and what was
@@ -242,7 +398,10 @@ impl Policy {
                     .map_err(|e| invalid(&e))?;
                     self.set.add(policy).map_err(|e| invalid(&e))?;
                 }
+                // Kept by an earlier version for what is now always asked.
+                Allowance::File { .. } if !kept.applies() => {}
                 Allowance::File { path, rule } => self.files.push((rule.clone(), path.clone())),
+                Allowance::Kind { kind } => self.kinds.push(kind.clone()),
             }
         }
         Ok(self)
@@ -276,6 +435,7 @@ impl Policy {
         Ok(Policy {
             set,
             files: Vec::new(),
+            kinds: Vec::new(),
         })
     }
 
@@ -349,6 +509,7 @@ impl Policy {
             let mut subject = Subject::file(kind, &effect.path, effect.change, effect.kind);
             subject.gains = set.gains.get(&effect.path).cloned().unwrap_or_default();
             subject.xattrs_changed = set.xattrs.contains_key(&effect.path);
+            subject.kind_tracked = set.tracked_kinds.contains(&subject.file_kind);
             subject.in_git_dir = set.git_dirs.iter().any(|d| {
                 effect
                     .path
@@ -363,6 +524,8 @@ impl Policy {
                     self.files
                         .iter()
                         .any(|(r, path)| r == rule && *path == effect.path)
+                        || (rule == crate::remembered::UNFAMILIAR_KINDS
+                            && self.kinds.contains(&subject.file_kind))
                 });
             if remembered {
                 judgement.verdict = Verdict::Allow;
@@ -402,7 +565,7 @@ impl Policy {
                                 Change::Modified => "fs.modify",
                                 Change::Deleted => "fs.delete",
                             };
-                            let subject = match c.entry {
+                            let mut subject = match c.entry {
                                 CarriedEntry::File => {
                                     Subject::file(kind, &c.path, c.change, Kind::File)
                                 }
@@ -412,6 +575,7 @@ impl Policy {
                                 // What another repository holds: a person's.
                                 CarriedEntry::Submodule => Subject::git("git.other", &c.path),
                             };
+                            subject.kind_tracked = set.tracked_kinds.contains(&subject.file_kind);
                             judgements.push(self.judge_one(
                                 format!("git ref {}: {}", change.name, c.path),
                                 &subject,
@@ -589,6 +753,10 @@ struct Subject {
     gains: Vec<String>,
     /// See [`EffectSet::xattrs`].
     xattrs_changed: bool,
+    /// See [`file_kind`]; "" for git and network.
+    file_kind: String,
+    /// See [`EffectSet::tracked_kinds`].
+    kind_tracked: bool,
 }
 
 impl Subject {
@@ -602,6 +770,7 @@ impl Subject {
             },
             path: path.to_owned(),
             change: change_name(change),
+            file_kind: file_kind(path),
             ..Subject::default()
         }
     }
@@ -707,8 +876,40 @@ impl Subject {
                 "xattrs_changed".into(),
                 RestrictedExpression::new_bool(self.xattrs_changed),
             ),
+            (
+                "file_kind".into(),
+                RestrictedExpression::new_string(self.file_kind.clone()),
+            ),
+            (
+                "kind_tracked".into(),
+                RestrictedExpression::new_bool(self.kind_tracked),
+            ),
+            (
+                "dotted".into(),
+                RestrictedExpression::new_bool(
+                    !self.entry.is_empty() && (self.in_git_dir || dotted(&self.path)),
+                ),
+            ),
         ])
     }
+}
+
+/// What kind of file `path` is, as the policy's `file_kind` sees it: the
+/// extension of its name in lower case (`vue`), or the whole name where it
+/// has none (`makefile`, `.envrc`). Not folded: a name that only folds to
+/// one with an extension (`x．md`) has none, and is a kind of its own.
+pub fn file_kind(path: &str) -> String {
+    let name = path.rsplit('/').next().unwrap_or(path).to_lowercase();
+    match name.rfind('.') {
+        Some(i) if i > 0 => name[i + 1..].to_owned(),
+        _ => name,
+    }
+}
+
+/// Whether a component of `path`, folded, starts with a dot: a hidden
+/// file or folder, where tools look for their settings.
+pub fn dotted(path: &str) -> bool {
+    fold(path).split('/').any(|part| part.starts_with('.'))
 }
 
 /// `text` as a disk that ignores case and Unicode forms may read it, and

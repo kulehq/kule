@@ -36,7 +36,7 @@ a boundary between the agent and everything you care about:
 | --- | --- |
 | **Your folder** | The agent works in a copy. Its changes reach the folder only through a commit, which keeps a checkpoint so `undo` puts the folder back. |
 | **Your computer** | Every command runs in the OS sandbox (Seatbelt on macOS, Landlock and namespaces on Linux). It can write only to the copy; `~/.ssh`, `~/.aws`, your Documents and the projects beside the folder are hidden. |
-| **What reaches the folder** | A [Cedar](https://www.cedarpolicy.com) policy judges the *effects* of the work, not the command text: ordinary edits pass, manifests, lockfiles, CI files and mass deletes wait for you, git hooks are denied. |
+| **What reaches the folder** | A [Cedar](https://www.cedarpolicy.com) policy judges the *effects* of the work, not the command text: source, docs and data pass, and so do kinds of file the project already tracks; other kinds, hidden files, manifests, lockfiles, CI files and mass deletes wait for you; git hooks are denied. |
 | **Your network** | Every connection goes through the task's proxy. Package registries pass, the agent reaches its own API, anything else waits for your answer. Every connection is logged. |
 | **Your secrets** | The agent sees a placeholder. The proxy puts your API key into requests to the hosts you named, and nowhere else. |
 | **Your home** | A write to `~/.zshrc`, `~/.gitconfig` or `~/.config` lands in the task's home layer for you to review, not in your home. |

@@ -19,12 +19,13 @@ Politika, izin kuralları için küçük bir dil olan
 | **ask** (onay bekler) | Değişiklik onayınızı bekler; bağlantı yanıtınızı bekler. | `policy: waits for approval` |
 | **deny** (reddedilir) | Siz onaylasanız bile asla içeri girmez. | `policy: denied` |
 
-Kendiliğinden geçmeyen her değişiklik, onu durduran **kuralın** adını
-söyler:
+Kendiliğinden geçmeyenler nedenlerine göre bir araya toplanır: sade
+sözcüklerle bir neden, onu durduran **kural** ve altında yollar:
 
 ```text
 policy: waits for approval
-  package.json · waits for approval (manifests-and-lockfiles)
+  decides what gets installed (manifests-and-lockfiles) · waits for approval
+    package.json
 ```
 
 Karar veremeyen bir kural ya da hatalı bir politika reddeder.
@@ -38,7 +39,9 @@ Birini ilk açılış ekranında, *Settings → Policy* bölümünde ya da
 
 **Kendiliğinden geçenler:**
 
-- sıradan dosyalardaki düzenlemeler (kaynak kod, notlar, belgeler, veri);
+- kaynak kod, belge ve veri dosyalarındaki (kaynak kod, notlar, belgeler,
+  veri dosyaları, resimler ve fontlar) ve projenizin git'te zaten izlediği
+  dosya türlerindeki değişiklikler;
 - ileri taşınan (fast-forward) bir git dalı ya da yeni bir dal;
 - HTTPS üzerinden paket kayıt depolarına (npm, Yarn, crates.io, NuGet,
   PyPI, RubyGems, Maven Central) bağlantılar ve her ajanın, o ajan
@@ -46,6 +49,10 @@ Birini ilk açılış ekranında, *Settings → Policy* bölümünde ya da
 
 **Sizi bekleyenler (ask):**
 
+- diğer dosya türleri, betikler (`.sh`, `.ps1`, `.bat`, …) de dahil; siz
+  türü bir kez kalıcı olarak yanıtlayana ya da proje onu izleyene kadar;
+- görevin gizli bir dosyaya ya da klasöre (noktayla başlayan bir yol
+  parçası) yazdığı her şey, türü ne olursa olsun;
 - manifest ve kilit dosyaları: `package.json`, `package-lock.json`,
   `yarn.lock`, `Cargo.toml`, `Cargo.lock`, `go.mod`, `pyproject.toml`,
   `requirements*.txt`, `*.csproj`, `pom.xml`, `build.gradle` ve
@@ -112,8 +119,9 @@ Bir şey sizi beklediğinde:
 - `kule commit TASK --approve` ya da uygulamadaki **Approve and commit**
   onu içeri alır. Reddedilen değişiklikler dışarıda kalır.
 - `--remember` (ya da *Don't ask again in this folder*), şimdi onaylanan
-  dosyalar (manifestler, CI ve proje dosyaları) için bu klasörde bir daha
-  sormaz.
+  dosyalar için bu klasörde bir daha sormaz: manifestler, proje dosyaları
+  ve gizli dosyalar yollarıyla, projede hiç olmayan dosya türleri
+  türleriyle hatırlanır.
 - Bir bağlantı sorusundaki **Approve and remember**, o host'u ve portu bu
   klasörde geçirir.
 
@@ -128,9 +136,11 @@ kule rules forget ID                        # yeniden sorar
 ```
 
 Hatırlanan bir bağlantı bir Cedar `permit` kuralına dönüşür; hatırlanan bir
-dosya ise onu soran kurala dar bir istisnaya. **Asla hatırlanmayanlar:**
-reddedilenler, dosya adı dışındaki nedenlerle sorulanlar (toplu silme,
-geçmişin yeniden yazılması) ve `.kule/` altındaki her şey.
+dosya ya da tür ise onu soran kurala dar bir istisnaya. **Asla
+hatırlanmayanlar:** reddedilenler, dosyanın adı, yeri ya da türü dışındaki
+nedenlerle sorulanlar (toplu silme, geçmişin yeniden yazılması),
+kendiliğinden kod çalıştıranlar (CI, editör ve ajan ayarları; her seferinde
+sorulur) ve `.kule/` altındaki her şey.
 
 ## İlgili sayfalar
 

@@ -1,6 +1,6 @@
 //! Effect sets: what the copy holds that the baseline does not.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
@@ -80,6 +80,12 @@ pub struct EffectSet {
     /// of the digest, seen by the policy, which asks about them by default.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub xattrs: BTreeMap<String, BTreeMap<String, String>>,
+    /// The kinds of the set's files ([`crate::policy::file_kind`]) the
+    /// workspace's git index already holds, outside hidden paths: read from
+    /// the folder, never the copy. Part of the digest, seen by the policy,
+    /// which lets a kind the project already has pass on its own.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub tracked_kinds: BTreeSet<String>,
 }
 
 /// What a file anyone may run gains, in [`EffectSet::gains`].
@@ -192,6 +198,7 @@ impl EffectSet {
             git_dirs: self.git_dirs.clone(),
             gains,
             xattrs,
+            tracked_kinds: self.tracked_kinds.clone(),
         }
     }
 
@@ -316,6 +323,19 @@ pub(crate) fn compute(copy: &Path, work: &Path, baseline: &Baseline) -> Result<E
     ignore::mark(work, &mut effects)?;
     let git = git::summarize(copy, work, baseline.git.as_ref(), &effects)?;
     let moves = moves(&effects, baseline, &now);
+    let carried = git.iter().flat_map(|g| &g.refs).flat_map(|r| {
+        r.paths
+            .iter()
+            .flatten()
+            .chain(r.carried.iter().map(|c| &c.path))
+    });
+    let tracked_kinds = git::tracked_kinds(
+        work,
+        effects
+            .iter()
+            .map(|e| e.path.as_str())
+            .chain(carried.map(String::as_str)),
+    )?;
     Ok(EffectSet {
         effects,
         git,
@@ -325,6 +345,7 @@ pub(crate) fn compute(copy: &Path, work: &Path, baseline: &Baseline) -> Result<E
         git_dirs: git_dirs(&now),
         gains: BTreeMap::new(),
         xattrs: BTreeMap::new(),
+        tracked_kinds,
     })
 }
 

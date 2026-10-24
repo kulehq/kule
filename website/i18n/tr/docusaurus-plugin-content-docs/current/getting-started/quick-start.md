@@ -101,8 +101,8 @@ kule status $T
 policy: passes on its own
 ```
 
-Son satır **politikanın kararıdır**. Sıradan dosya düzenlemeleri
-kendiliğinden geçer. Bkz. [`kule status`](../cli/status.md) (`--json`
+Son satır **politikanın kararıdır**. Kaynak kod, belge ve veri dosyaları
+kendiliğinden geçer; diğer dosya türleri ve gizli dosyalar sizi bekler. Bkz. [`kule status`](../cli/status.md) (`--json`
 seçeneği de vardır).
 
 ## 5. Commit edin
@@ -162,7 +162,8 @@ kule status $T
   + package.json
       + key name
 policy: waits for approval
-  package.json · waits for approval (manifests-and-lockfiles)
+  decides what gets installed (manifests-and-lockfiles) · waits for approval
+    package.json
 ```
 
 `manifests-and-lockfiles`, soruyu soran kuralın adıdır. Düz bir commit
@@ -174,7 +175,8 @@ kule commit $T
 
 ```text
 policy: waits for approval
-  package.json · waits for approval (manifests-and-lockfiles)
+  decides what gets installed (manifests-and-lockfiles) · waits for approval
+    package.json
 kule: not committed; rerun with --approve to approve the changes above
 ```
 

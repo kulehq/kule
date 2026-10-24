@@ -21,6 +21,12 @@
 //   xattrs_changed
 //                 for fs.*: a file whose extended attributes differ from
 //                 the folder's (macOS, where a commit carries them)
+//   file_kind     for fs.*: the name's extension in lower case ("vue"), or
+//                 the whole name where it has none ("makefile")
+//   kind_tracked  for fs.*: the workspace's git index (the folder's, never
+//                 the copy's) holds a file of this kind outside hidden paths
+//   dotted        for fs.*: a component of the path starts with a dot, or
+//                 the path lies in a repository's own files
 // Context: deletes (paths deleted in the transaction; a move is not one),
 //   files (paths changed), repository (the workspace is a git repository).
 //
@@ -36,6 +42,40 @@ permit (principal, action == Kule::Action::"ask", resource);
 @id("files")
 permit (principal, action == Kule::Action::"auto", resource)
 when { resource.kind like "fs.*" };
+
+// ...when they are of a kind known not to run on its own (source, docs,
+// data, pictures and fonts) or one the project already tracks in git.
+// Every other kind waits: what passes is what is known, never what is not
+// yet known to run. Scripts (sh, ps1, bat, ...) are left out on purpose.
+// A hidden path waits by the next rule, whatever its kind.
+@id("unfamiliar-kinds")
+forbid (principal, action == Kule::Action::"auto", resource)
+when {
+  resource.kind like "fs.*" && resource.entry == "file" && resource.change != "deleted" &&
+  !resource.dotted && !resource.kind_tracked &&
+  !["rs", "go", "py", "rb", "java", "kt", "kts", "scala", "swift", "m", "mm",
+    "c", "h", "cc", "cpp", "cxx", "hpp", "hh", "cs", "fs", "fsx", "vb",
+    "ts", "tsx", "js", "jsx", "mjs", "cjs", "vue", "svelte", "php", "pl", "pm",
+    "lua", "r", "jl", "dart", "ex", "exs", "erl", "hrl", "hs", "elm",
+    "clj", "cljs", "cljc", "ml", "mli", "nim", "zig", "sol", "sql",
+    "graphql", "gql", "proto", "css", "scss", "sass", "less", "html", "htm",
+    "xml", "svg",
+    "md", "mdx", "markdown", "rst", "txt", "adoc", "org", "tex",
+    "json", "jsonc", "json5", "yaml", "yml", "toml", "csv", "tsv",
+    "png", "jpg", "jpeg", "gif", "webp", "avif", "ico", "bmp", "pdf",
+    "woff", "woff2", "ttf", "otf",
+    "readme", "license", "licence", "copying", "notice", "authors",
+    "contributors", "changelog"].contains(resource.file_kind)
+};
+
+// A hidden file or folder is where tools look for their settings: a person
+// sees what the task writes there, whatever its kind.
+@id("dot-paths")
+forbid (principal, action == Kule::Action::"auto", resource)
+when {
+  resource.kind like "fs.*" && resource.entry == "file" && resource.change != "deleted" &&
+  resource.dotted
+};
 
 // ...except the ones that decide what gets installed, built or run.
 @id("manifests-and-lockfiles")

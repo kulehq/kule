@@ -120,7 +120,7 @@ pub fn trial(
     })?;
     let _ = std::fs::write(folder.join("README.md"), "Kule is trying an agent here.\n");
     // The person's policy, as for any task; the empty folder adds no forbids.
-    let policy = Policy::load(Some(&kule_home.join("policy.cedar")), &folder);
+    let policy = Policy::load(Some(kule_home), &folder);
     let outcome =
         policy.and_then(|policy| try_in(kule_home, &folder, agents, draft, policy, person));
     let _ = std::fs::remove_dir_all(&folder);

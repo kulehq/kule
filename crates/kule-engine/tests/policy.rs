@@ -85,6 +85,14 @@ fn rules(names: &[&str]) -> Vec<String> {
     names.iter().map(|n| n.to_string()).collect()
 }
 
+/// Whether `subject` waits for a person, `rule` among the rules that hold
+/// it: the rules naming what runs code hold a file together with those
+/// saying it is of a kind or place nothing passes from on its own.
+fn waits_by(ruling: &Ruling, subject: &str, rule: &str) -> bool {
+    let (verdict, by) = on(ruling, subject);
+    verdict == Verdict::Ask && by.iter().any(|r| r == rule)
+}
+
 const PROJECT: &[(&str, &str)] = &[
     ("src/main.rs", "fn main() {}\n"),
     ("Cargo.toml", "[package]\nname = \"app\"\n"),
@@ -106,6 +114,152 @@ fn source_edits_pass_on_their_own() {
     );
 }
 
+/// What passes on its own is what is known not to run by itself: source,
+/// docs and data, however cased. Every other kind of file waits, scripts
+/// among them; a deletion or a folder brings no code and passes.
+#[test]
+fn only_known_kinds_of_file_pass_on_their_own() {
+    let s = Setup::new(
+        &[("old.weird", "x\n"), ("src/main.rs", "fn main() {}\n")],
+        false,
+    );
+    let copy = s.copy();
+    for path in [
+        "notes.md",
+        "src/app.ts",
+        "img/LOGO.PNG",
+        "LICENSE",
+        "data/rows.csv",
+        "tool.sh",
+        "page.weird",
+        "Makefile",
+        "x\u{ff0e}md",
+        "trailing.",
+    ] {
+        write(&copy.join(path), "x\n");
+    }
+    fs::create_dir_all(copy.join("src/empty")).unwrap();
+    fs::remove_file(copy.join("old.weird")).unwrap();
+
+    let ruling = s.judged();
+    for path in [
+        "notes.md",
+        "src/app.ts",
+        "img/LOGO.PNG",
+        "LICENSE",
+        "data/rows.csv",
+        "src/empty",
+        "old.weird",
+    ] {
+        assert_eq!(on(&ruling, path).0, Verdict::Allow, "{path}");
+    }
+    for path in [
+        "tool.sh",
+        "page.weird",
+        "Makefile",
+        "x\u{ff0e}md",
+        "trailing.",
+    ] {
+        assert_eq!(
+            on(&ruling, path),
+            (Verdict::Ask, rules(&["unfamiliar-kinds"])),
+            "{path}"
+        );
+    }
+}
+
+/// A kind the folder's git repository already holds is the project's own,
+/// and passes on its own; outside git only the known kinds do.
+#[test]
+fn a_kind_the_project_tracks_passes_on_its_own() {
+    let files = [
+        ("ui/a.weird", "x\n"),
+        ("Makefile", "all:\n"),
+        ("src/main.rs", "fn main() {}\n"),
+    ];
+    for repo in [true, false] {
+        let s = Setup::new(&files, repo);
+        write(&s.copy().join("ui/b.weird"), "y\n");
+        write(&s.copy().join("sub/Makefile"), "all:\n");
+        write(&s.copy().join("tool.sh"), "echo\n");
+        let ruling = s.judged();
+        for path in ["ui/b.weird", "sub/Makefile"] {
+            let expected = if repo {
+                (Verdict::Allow, rules(&["files"]))
+            } else {
+                (Verdict::Ask, rules(&["unfamiliar-kinds"]))
+            };
+            assert_eq!(
+                on(&ruling, path),
+                expected,
+                "{path} in a repository: {repo}"
+            );
+        }
+        assert_eq!(on(&ruling, "tool.sh").0, Verdict::Ask);
+    }
+}
+
+/// The kinds a project has are read from the folder's index, never the
+/// copy's: a task that adds a kind to its own index, or commits it, still
+/// waits for a person.
+#[test]
+fn a_kind_the_task_adds_to_its_own_index_is_not_the_projects() {
+    let s = Setup::new(PROJECT, true);
+    let copy = s.copy();
+    write(&copy.join("a.weird"), "x\n");
+    git(&copy, &["add", "a.weird"]);
+    assert_eq!(
+        on(&s.judged(), "a.weird"),
+        (Verdict::Ask, rules(&["unfamiliar-kinds"]))
+    );
+    write(&copy.join("b.weird"), "y\n");
+    git(&copy, &["add", "b.weird"]);
+    git(&copy, &["commit", "-qm", "weird"]);
+    let ruling = s.judged();
+    assert_eq!(
+        on(&ruling, "git ref refs/heads/main: b.weird"),
+        (Verdict::Ask, rules(&["unfamiliar-kinds"]))
+    );
+    assert_eq!(
+        on(&ruling, "b.weird"),
+        (Verdict::Ask, rules(&["unfamiliar-kinds"]))
+    );
+}
+
+/// A hidden file or folder is where tools find their settings: what the
+/// task writes there waits, of any kind, tracked or not. A tracked hidden
+/// file makes no kind the project's.
+#[test]
+fn a_hidden_path_waits_whatever_its_kind() {
+    let files = [
+        (".gitignore", "target\n"),
+        (".husky/pre-commit", "npm test\n"),
+        ("src/main.rs", "fn main() {}\n"),
+    ];
+    let s = Setup::new(&files, true);
+    let copy = s.copy();
+    write(&copy.join(".gitignore"), "target\nnode_modules\n");
+    write(&copy.join(".notes/todo.md"), "- x\n");
+    write(&copy.join("docs/.draft.md"), "x\n");
+    write(&copy.join("scripts/pre-commit"), "rm -rf /\n");
+    let ruling = s.judged();
+    for path in [".gitignore", ".notes/todo.md", "docs/.draft.md"] {
+        assert!(waits_by(&ruling, path, "dot-paths"), "{path}");
+    }
+    // Held for its place alone, whatever its kind: one reason, one answer.
+    for path in ["docs/.draft.md", ".gitignore"] {
+        assert_eq!(
+            on(&ruling, path),
+            (Verdict::Ask, rules(&["dot-paths"])),
+            "{path}"
+        );
+    }
+    assert_eq!(
+        on(&ruling, "scripts/pre-commit"),
+        (Verdict::Ask, rules(&["unfamiliar-kinds"]))
+    );
+}
+
 #[test]
 fn manifests_and_project_files_wait_for_a_person() {
     let s = Setup::new(PROJECT, false);
@@ -124,7 +278,7 @@ fn manifests_and_project_files_wait_for_a_person() {
     );
     assert_eq!(
         on(&ruling, "tools/App.csproj"),
-        (Verdict::Ask, rules(&["project-files"]))
+        (Verdict::Ask, rules(&["project-files", "unfamiliar-kinds"]))
     );
     assert_eq!(on(&ruling, "src/main.rs").0, Verdict::Allow);
     let holding: Vec<&str> = ruling.holding().map(|j| j.subject.as_str()).collect();
@@ -146,11 +300,7 @@ fn ci_editor_and_kule_files_wait_for_a_person() {
         ".kule/policy.cedar",
         ".envrc",
     ] {
-        assert_eq!(
-            on(&ruling, path),
-            (Verdict::Ask, rules(&["automation"])),
-            "{path}"
-        );
+        assert!(waits_by(&ruling, path, "automation"), "{path}");
     }
 }
 
@@ -186,11 +336,7 @@ fn another_version_control_systems_repository_waits_for_a_person() {
         .map(|(p, _)| *p)
         .chain(["vendor/lib/.HG/hgrc", "_FOSSIL_"])
     {
-        assert_eq!(
-            on(&ruling, path),
-            (Verdict::Ask, rules(&["other-vcs"])),
-            "{path}"
-        );
+        assert!(waits_by(&ruling, path, "other-vcs"), "{path}");
     }
 }
 
@@ -290,9 +436,12 @@ fn a_bare_repository_in_the_folder_is_judged_as_a_git_folder() {
         on(&ruling, "vendor/mirror/hooks/post-checkout").0,
         Verdict::Deny
     );
-    // Files that only look alike are plain work.
+    // Files that only look alike wait only for their kind.
     write(&copy.join("docs/HEAD"), "x\n");
-    assert_eq!(on(&s.judged(), "docs/HEAD").0, Verdict::Allow);
+    assert_eq!(
+        on(&s.judged(), "docs/HEAD"),
+        (Verdict::Ask, rules(&["unfamiliar-kinds"]))
+    );
 }
 
 /// `n` files under `data/`, in a git repository or a plain folder.
@@ -459,11 +608,7 @@ fn files_in_new_commits_are_judged_like_files() {
         "git ref refs/heads/main: .github/workflows/x.yml",
         "git ref refs/heads/side: .github/workflows/x.yml",
     ] {
-        assert_eq!(
-            on(&ruling, subject),
-            (Verdict::Ask, rules(&["automation"])),
-            "{subject}"
-        );
+        assert!(waits_by(&ruling, subject, "automation"), "{subject}");
     }
     assert_eq!(
         on(&ruling, "git ref refs/heads/main: src/main.rs").0,
@@ -652,7 +797,7 @@ fn a_user_policy_replaces_the_default() {
         r#"@id("trust-everything") permit (principal, action, resource);"#,
     );
 
-    let ruling = Policy::load(Some(&user), s.task.workspace())
+    let ruling = Policy::load(Some(user_dir.path()), s.task.workspace())
         .unwrap()
         .judge(&s.task.effects().unwrap());
     assert_eq!(
@@ -714,7 +859,7 @@ fn a_person_chooses_between_kules_policies_but_keeps_their_own() {
     let home = TempDir::new().unwrap();
     let user = home.path().join(USER_POLICY);
     let readme = |home: &Path| {
-        let policy = Policy::load(Some(&home.join(USER_POLICY)), s.task.workspace()).unwrap();
+        let policy = Policy::load(Some(home), s.task.workspace()).unwrap();
         on(&policy.judge(&s.task.effects().unwrap()), "README.md")
     };
     assert_eq!(policy_choice(home.path()).unwrap(), PolicyChoice::Balanced);
@@ -723,6 +868,8 @@ fn a_person_chooses_between_kules_policies_but_keeps_their_own() {
     choose_policy(home.path(), PolicyChoice::Careful).unwrap();
     assert_eq!(policy_choice(home.path()).unwrap(), PolicyChoice::Careful);
     assert_eq!(readme(home.path()), (Verdict::Ask, rules(&["careful"])));
+    // A choice, not a copy of the text.
+    assert!(!user.exists());
 
     choose_policy(home.path(), PolicyChoice::Balanced).unwrap();
     assert!(!user.exists());
@@ -741,6 +888,54 @@ fn a_person_chooses_between_kules_policies_but_keeps_their_own() {
         assert!(choose_policy(home.path(), choice).is_err());
     }
     assert_eq!(fs::read_to_string(&user).unwrap(), own);
+}
+
+/// The careful policy an earlier version wrote out whole is still the
+/// careful choice, judged by this version's rules, and never a policy of
+/// the person's own that Kule may not replace.
+#[test]
+fn an_earlier_versions_careful_policy_stays_the_careful_choice() {
+    use kule_engine::{
+        CAREFUL_POLICY, PolicyChoice, USER_POLICY, choose_policy, policy_choice, policy_text,
+    };
+    let home = TempDir::new().unwrap();
+    let user = home.path().join(USER_POLICY);
+    let earlier = include_str!("fixtures/careful-0.2.0-preview.10.cedar");
+    assert_ne!(earlier, CAREFUL_POLICY);
+    write(&user, earlier);
+    assert_eq!(policy_choice(home.path()).unwrap(), PolicyChoice::Careful);
+    assert_eq!(policy_text(home.path()).unwrap(), CAREFUL_POLICY);
+
+    // A word changed is the person's own.
+    write(&user, &earlier.replace("careful", "carefull"));
+    assert_eq!(policy_choice(home.path()).unwrap(), PolicyChoice::Own);
+    write(&user, earlier);
+
+    choose_policy(home.path(), PolicyChoice::Balanced).unwrap();
+    assert!(!user.exists());
+    assert_eq!(policy_choice(home.path()).unwrap(), PolicyChoice::Balanced);
+
+    write(&user, earlier);
+    choose_policy(home.path(), PolicyChoice::Careful).unwrap();
+    assert!(!user.exists());
+    assert_eq!(policy_text(home.path()).unwrap(), CAREFUL_POLICY);
+}
+
+/// A choice Kule cannot read is refused, never taken for the balanced one.
+#[test]
+fn a_policy_choice_kule_cannot_read_is_refused() {
+    use kule_engine::{Policy, policy_choice};
+    let s = Setup::new(PROJECT, false);
+    let home = TempDir::new().unwrap();
+    write(&home.path().join("policy-choice"), "lenient\n");
+    assert!(policy_choice(home.path()).is_err());
+    assert!(Policy::load(Some(home.path()), s.task.workspace()).is_err());
+    // Choosing again, as the refusal says, puts it right.
+    kule_engine::choose_policy(home.path(), kule_engine::PolicyChoice::Careful).unwrap();
+    assert_eq!(
+        policy_choice(home.path()).unwrap(),
+        kule_engine::PolicyChoice::Careful
+    );
 }
 
 #[test]
@@ -843,13 +1038,13 @@ fn a_file_made_executable_or_world_writable_waits_for_a_person() {
 
     let ruling = pending_judged(&s);
     for path in ["run.sh", "notes.txt", "new.sh"] {
-        assert_eq!(
-            on(&ruling, path),
-            (Verdict::Ask, rules(&["permissions"])),
-            "{path}"
-        );
+        assert!(waits_by(&ruling, path, "permissions"), "{path}");
     }
-    assert_eq!(on(&ruling, "tool.sh").0, Verdict::Allow);
+    // A script waits for its kind, not for what it already was.
+    assert_eq!(
+        on(&ruling, "tool.sh"),
+        (Verdict::Ask, rules(&["unfamiliar-kinds"]))
+    );
     assert_eq!(on(&ruling, "plain.txt").0, Verdict::Allow);
     let set = s.task.pending(false).unwrap();
     assert_eq!(set.gains["notes.txt"], ["world-writable"]);
@@ -911,4 +1106,68 @@ fn a_file_s_extended_attributes_are_reviewed() {
         "0081;00000001;Kule;",
     );
     assert_ne!(s.task.pending(false).unwrap().digest(), before);
+}
+
+/// What holds a commit is put together by why: one group per set of rules,
+/// each saying why in a person's words, and what waits only for its kind
+/// in one group per kind, which a person may answer at once.
+#[test]
+fn what_waits_is_put_together_by_why() {
+    let s = Setup::new(PROJECT, false);
+    let copy = s.copy();
+    for path in [
+        "ui/a.weird",
+        ".github/workflows/ci.yml",
+        "tool.sh",
+        "ui/b.weird",
+        ".vscode/settings.json",
+        "src/lib.rs",
+    ] {
+        write(&copy.join(path), "x\n");
+    }
+    let held = s.judged().held();
+    let groups: Vec<(Vec<String>, Option<&str>, Vec<&str>)> = held
+        .iter()
+        .map(|g| {
+            (
+                g.rules.clone(),
+                g.kind.as_deref(),
+                g.subjects.iter().map(String::as_str).collect(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        groups,
+        [
+            // The folders on the way, held for their place alone.
+            (
+                rules(&["automation"]),
+                None,
+                vec![".github", ".github/workflows", ".vscode"]
+            ),
+            (
+                rules(&["automation", "dot-paths"]),
+                None,
+                vec![".github/workflows/ci.yml", ".vscode/settings.json"]
+            ),
+            (rules(&["unfamiliar-kinds"]), Some("sh"), vec!["tool.sh"]),
+            (
+                rules(&["unfamiliar-kinds"]),
+                Some("weird"),
+                vec!["ui/a.weird", "ui/b.weird"]
+            ),
+        ]
+    );
+    assert_eq!(
+        held[1].reasons,
+        [
+            "runs code when a tool or an agent opens the folder",
+            "a hidden file or folder, where tools find their settings"
+        ]
+    );
+    assert_eq!(held[3].reasons, ["a kind of file this project has none of"]);
+    assert_eq!(
+        kule_engine::reason("repo:docs"),
+        "the repository's own rule"
+    );
 }

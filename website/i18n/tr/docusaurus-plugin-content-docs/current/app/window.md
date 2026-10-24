@@ -29,11 +29,12 @@ bir ilk çalıştırma ekranıyla açılır. Üç adımı vardır:
    Kule olmadan nasıl yapıyorsanız öyle oturum açın: Kule'nin
    çalıştırmaları bu oturumu kullanır. Bkz. [Ajanlar](../using-agents.md).
 2. **How careful (ne kadar dikkatli).** Tüm görevler için politikayı seçin:
-   - **Balanced (dengeli)**: sıradan dosyalardaki değişiklikler
-     kendiliğinden geçer. Neyin kurulacağına, derleneceğine ya da
-     çalıştırılacağına karar veren dosyalar (manifest'ler, lockfile'lar, CI
-     dosyaları, editör ayarları), git geçmişini yeniden yazan işlemler ve
-     toplu silmeler sizi bekler.
+   - **Balanced (dengeli)**: kaynak kod, belge ve veri dosyaları
+     kendiliğinden geçer; projenizin git'te zaten izlediği dosya türleri de
+     öyle. Diğer türler (betikler de dahil), gizli dosya ve klasörler,
+     neyin kurulacağına, derleneceğine ya da çalıştırılacağına karar veren
+     dosyalar (manifest'ler, lockfile'lar, CI, editör ayarları), git
+     geçmişini yeniden yazan işlemler ve toplu silmeler sizi bekler.
    - **Careful (dikkatli)**: bir dosyadaki ya da git'teki her değişiklik
      sizi bekler. Sorulmadan yalnızca paket kayıt sunucularına (registry) ve
      çalıştığı sürece her ajanın kendi API'sine erişilir.

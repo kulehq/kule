@@ -83,7 +83,8 @@ $ kule status 3efe1ca8
       ~ function main
       + function wave
 policy: waits for approval
-  Cargo.toml · waits for approval (manifests-and-lockfiles)
+  decides what gets installed (manifests-and-lockfiles) · waits for approval
+    Cargo.toml
 ```
 
 **Moves, told apart from deletions:**
@@ -105,7 +106,8 @@ policy: passes on its own
 $ kule status 3422f830
 git: hook pre-commit changed (it runs on the next matching git command)
 policy: denied
-  git hook pre-commit · denied (git-hooks)
+  a git hook, which runs on its own (git-hooks) · denied
+    git hook pre-commit
 ```
 
 **The folder changed meanwhile:**
@@ -162,7 +164,8 @@ policy: passes on its own
 | `git: <path> is staged unlike the file (…)` | The index holds content for this file that differs from the file itself, so the next `git commit` would record something nobody reviewed. It waits for you. |
 | `in your home, caught for review` | Writes in your home folder; see [kule home](home.md). |
 | `policy: <verdict>` | The overall ruling: `passes on its own`, `waits for approval`, or `denied`. |
-| `  <subject> · <verdict> (<rule>)` | Each change that does not simply pass, with the rule behind it. See [Built-in policy rules](../reference/policy-rules.md). |
+| `  <reason> (<rules>) · <verdict>` | What does not simply pass, put together by why: the reason in plain words, the rules behind it, and the verdict. Files that wait only for their kind are one group per kind (`a kind of file this project has none of: weird`). See [Policy rules](../reference/policy-rules.md). |
+| `    <subject>` | A change in the group above: a path, or a git change such as `git hook pre-commit`. |
 | `digest: <hex> (to approve these: …)` | What these changes hash to. `kule commit TASK --approve --reviewed <hex>` commits them only while they are still these. |
 | `home digest: <hex>` | The same for the writes in your home; see [kule home](home.md). |
 | `task <id> changes them too:` | Another task on the same folder changes the same files; the lines under it name the file and the function, section or key. |

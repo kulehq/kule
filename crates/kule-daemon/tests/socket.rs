@@ -281,7 +281,7 @@ fn subscribers_hear_questions_come_and_go() {
         }
     );
     assert_eq!(rules[0].workspace.as_deref(), Some(task.workspace()));
-    let policy = Policy::load(Some(&home.path().join("policy.cedar")), task.workspace()).unwrap();
+    let policy = Policy::load(Some(home.path()), task.workspace()).unwrap();
     assert_eq!(
         policy.judge_connection("example.invalid", 8443).verdict,
         kule_engine::Verdict::Allow

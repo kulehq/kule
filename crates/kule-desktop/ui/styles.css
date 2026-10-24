@@ -1381,6 +1381,16 @@ select:focus-visible {
   font-size: calc(13px * var(--text-scale));
 }
 
+.held-group + .held-group {
+  margin-top: 6px;
+}
+
+.held-paths {
+  margin: 2px 0 0;
+  padding: 0 0 0 16px;
+  list-style: none;
+}
+
 .rules {
   color: var(--muted);
   font: calc(12px * var(--code-scale)) var(--mono);

@@ -50,10 +50,11 @@ Kule size üçüncü bir yol sunar:
 - **Ağ trafiği bir proxy'den geçer.** Paket depoları ve ajanın kendi model
   API'si geçer. Geri kalan her şey sizin yanıtınızı bekler ve her bağlantı
   kaydedilir.
-- **Neyin değiştiğini bir politika değerlendirir.** Sıradan dosya
-  düzenlemeleri kendiliğinden geçer. Neyin kurulacağını, derleneceğini ya da
-  çalışacağını belirleyen değişiklikler (`package.json`, lock dosyaları, CI
-  dosyaları, git hook'ları…) sizin onayınızı bekler.
+- **Neyin değiştiğini bir politika değerlendirir.** Kaynak kod, belge ve
+  veri dosyaları kendiliğinden geçer; projenizin zaten izlediği dosya
+  türleri de öyle. Diğer türler, gizli dosyalar ve neyin kurulacağını,
+  derleneceğini ya da çalışacağını belirleyen değişiklikler (`package.json`,
+  lock dosyaları, CI dosyaları, git hook'ları…) sizin onayınızı bekler.
 - **Siz commit etmeden klasörünüze hiçbir şey ulaşmaz.** Her commit bir
   kontrol noktası saklar; böylece `undo` klasörü eski hâline getirir.
 - **Gizli değerler gizli kalır.** Ajan yalnızca yer tutucuları görür;

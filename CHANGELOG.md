@@ -1,5 +1,36 @@
 # Changes
 
+## Unreleased
+
+### Changed
+
+- Choosing Kule's careful policy is kept as a choice
+  (`~/.kule/policy-choice`), not a copy of its text, so it always means this
+  version's rules. A careful policy an earlier version wrote out whole is
+  that choice too: it is judged by today's rules and can be changed again,
+  where it read as a policy of your own before.
+- Under the balanced policy, a file passes on its own only when it is of a
+  kind known not to run by itself (source, docs, data, pictures and fonts)
+  or of a kind your folder's git repository already holds. Every other kind
+  waits for you (`unfamiliar-kinds`), scripts such as `.sh` among them, and
+  so does whatever the task writes in a hidden file or folder, of any kind,
+  for that reason alone (`dot-paths`). The kinds your project has are read from the folder's own
+  repository, never the task's copy. Deletions and folders pass as before.
+  Policies can read `file_kind`, `kind_tracked` and `dotted`.
+- A kind of file can be answered for good, as the project's from then on:
+  `kule rules allow --kind vue`, or "Don't ask again in this folder" on a
+  file held for its kind. A hidden file is answered by its path. What runs
+  code on its own (CI, editor and agent settings: `automation`) is asked
+  every time; an answer an earlier version kept for it is listed as no
+  longer applying, in `kule rules` and in the app, and can be forgotten.
+- What holds a commit is shown put together by why, in `kule status`,
+  `kule commit` and the app's review: one heading per reason in plain words
+  ("a kind of file this project has none of: weird", "runs code when a tool
+  or an agent opens the folder"), the rules after it, and the paths under
+  it. Files that wait only for their kind are one group per kind, answered
+  at once. Rule names a repository's own policy gives are shown with their
+  control characters escaped.
+
 ## 0.2.0-preview.11
 
 A hardening preview. An approval card says what approving lets through,

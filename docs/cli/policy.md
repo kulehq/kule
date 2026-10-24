@@ -32,13 +32,16 @@ Kule has two policies of its own:
 
 | Policy | What passes on its own | What waits |
 | --- | --- | --- |
-| `balanced` (the default) | Ordinary file changes, fast-forward branch moves and new branches, package registries over HTTPS. | Manifests and lockfiles, CI and editor settings, what runs code or steers an agent, links, nested repositories, git config, history rewrites, mass deletes. Git hooks are denied. |
+| `balanced` (the default) | Changes to source, docs and data, and to kinds of file the project already tracks in git; fast-forward branch moves and new branches; package registries over HTTPS. | Other kinds of file (scripts among them), hidden files and folders, manifests and lockfiles, CI and editor settings, what runs code or steers an agent, links, nested repositories, git config, history rewrites, mass deletes. Git hooks are denied. |
 | `careful` | Only the connections `balanced` lets through (package registries, and each agent's own hosts while it runs). | Every change to a file or to git. |
 
 `kule policy` without a choice prints the rules that hold for every task.
-`kule policy balanced` and `kule policy careful` put one of them in place. A
-task in a [group](group.md) with a policy of its own is judged by the group's
-instead.
+`kule policy balanced` and `kule policy careful` put one of them in place.
+Kule keeps the choice of careful in `~/.kule/policy-choice`, never a copy of
+its text, so it always means this version's rules. A `~/.kule/policy.cedar`
+that holds the balanced or careful text an earlier version wrote counts as
+that choice. A task in a [group](group.md) with a policy of its own is
+judged by the group's instead.
 
 ### Your own policy
 
@@ -100,11 +103,13 @@ $ kule status 1046fb30
 1 file changes: +0 ~1 -0
   ~ Cargo.toml
 policy: waits for approval
-  Cargo.toml · waits for approval (manifests-and-lockfiles)
+  decides what gets installed (manifests-and-lockfiles) · waits for approval
+    Cargo.toml
 ```
 
-The word in brackets is the rule's `@id`; [Policy rules](../reference/policy-rules.md)
-explains each.
+What waits is put together by why: the reason in plain words, the rule's
+`@id` in brackets, the verdict, and the paths under it.
+[Policy rules](../reference/policy-rules.md) explains each rule.
 
 ## Output
 

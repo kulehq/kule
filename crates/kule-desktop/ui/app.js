@@ -1607,7 +1607,7 @@ const POLICIES = [
   {
     choice: "balanced",
     name: "Balanced",
-    text: "Changes to files pass on their own. What decides what gets installed, built or run (manifests, lockfiles, CI, editor settings), git history rewrites and mass deletes wait for you.",
+    text: "Source, docs and data pass on their own, and so do kinds of file your project already tracks in git. Other kinds (scripts among them), hidden files and folders, what decides what gets installed, built or run (manifests, lockfiles, CI, editor settings), git history rewrites and mass deletes wait for you.",
   },
   {
     choice: "careful",
@@ -3615,7 +3615,8 @@ async function loadReview(id) {
   const empty = taken.length === 0 && !review.effects.git;
 
   const ruling = $("ruling");
-  const holding = review.ruling.judgements.filter((j) => j.verdict !== "allow");
+  // What holds the commit, put together by why (the engine's Ruling::held).
+  const heldGroups = review.held || [];
   ruling.className = `ruling ${empty ? "" : review.ruling.verdict}`;
   if (empty) {
     replace(ruling,
@@ -3631,19 +3632,40 @@ async function loadReview(id) {
   } else {
     replace(ruling,
       h("p", { class: "ruling-title" }, VERDICT[review.ruling.verdict].title),
-      holding.length
+      heldGroups.length
         ? h(
             "ul",
             { class: "holding" },
-            holding.map((j) =>
-              h(
+            heldGroups.map((g) => {
+              const answerable = rememberable({ verdict: g.verdict, rules: g.rules, subject: g.subjects[0] });
+              return h(
                 "li",
-                {},
-                `${j.subject} · ${VERDICT[j.verdict].chip} `,
-                h("span", { class: "rules" }, `(${j.rules.join(", ")})`),
-                rememberable(j) ? rememberBox(id, task, j) : null
-              )
-            )
+                { class: "held-group" },
+                h(
+                  "div",
+                  { class: "held-why" },
+                  `${g.reasons.join("; ")}${g.kind ? `: ${g.kind}` : ""} · ${VERDICT[g.verdict].chip} `,
+                  h("span", { class: "rules" }, `(${g.rules.join(", ")})`),
+                  g.kind && answerable
+                    ? rememberBox(id, task, g.subjects, { kind: "files_of_kind", file_kind: g.kind }, `Don't ask again about files of kind ${g.kind} in this folder`)
+                    : null
+                ),
+                h(
+                  "ul",
+                  { class: "held-paths" },
+                  g.subjects.map((subject) =>
+                    h(
+                      "li",
+                      {},
+                      subject,
+                      !g.kind && answerable && rememberable({ verdict: g.verdict, rules: g.rules, subject })
+                        ? rememberBox(id, task, [subject], { kind: "file", path: subject, rule: g.rules[0] }, "Don't ask again in this folder")
+                        : null
+                    )
+                  )
+                )
+              );
+            })
           )
         : h("p", { class: "muted" }, `${plural(taken.length, "file")} changed; the policy lets all of it through.`)
     );
@@ -3983,38 +4005,50 @@ function armed(label, armedLabel, disabled, action) {
 // --- Remembered approvals --------------------------------------------------
 
 /** Rules that ask about a file by name: their question can be answered for good. */
-const REMEMBERABLE = ["manifests-and-lockfiles", "project-files", "automation"];
+// The engine's REMEMBERABLE: what runs code on its own is always asked.
+const REMEMBERABLE = ["manifests-and-lockfiles", "project-files", "unfamiliar-kinds", "dot-paths"];
 
 const rememberable = (j) =>
-  j.verdict === "ask" && j.rules.length > 0 && j.rules.every((r) => REMEMBERABLE.includes(r)) && !j.subject.startsWith(".kule/");
+  j.verdict === "ask" &&
+  j.rules.length > 0 &&
+  j.rules.every((r) => REMEMBERABLE.includes(r)) &&
+  !j.subject.startsWith(".kule/") &&
+  !j.subject.startsWith("git ");
 
-/** "Don't ask again here" for one held file, with what it would have let through. */
-function rememberBox(id, task, j) {
+/** "Don't ask again here" for held `subjects` (one file, or every file of
+ * a kind), with what `allowance` would have let through. The daemon keeps
+ * for each what the engine's `allowances` says: its kind or its path. */
+function rememberBox(id, task, subjects, allowance, label) {
   const picks = state.remember.get(id) || new Set();
   const note = h("span", { class: "remember-note" });
+  // What it would have let through, said while it is ticked: also when the
+  // review is drawn again with it still ticked.
+  const tellImpact = async () => {
+    if (!task) return;
+    try {
+      const impact = await call("rule_impact", { allowance, workspace: task.workspace });
+      if (box.checked) note.textContent = ` · would have passed ${plural(impact.changes, "earlier change")} on its own`;
+    } catch (err) {
+      fail(err);
+    }
+  };
   const box = h("input", {
     type: "checkbox",
-    checked: picks.has(j.subject),
-    "data-key": `remember:${j.subject}`,
+    checked: subjects.every((s) => picks.has(s)),
+    "data-key": allowance.kind === "files_of_kind" ? `remember-kind:${allowance.file_kind}` : `remember:${subjects[0]}`,
     onchange: async (e) => {
       const set = state.remember.get(id) || new Set();
-      if (e.currentTarget.checked) set.add(j.subject);
-      else set.delete(j.subject);
+      for (const subject of subjects) {
+        if (e.currentTarget.checked) set.add(subject);
+        else set.delete(subject);
+      }
       state.remember.set(id, set);
       note.textContent = "";
-      if (!e.currentTarget.checked || !task) return;
-      try {
-        const impact = await call("rule_impact", {
-          allowance: { kind: "file", path: j.subject, rule: j.rules[0] },
-          workspace: task.workspace,
-        });
-        note.textContent = ` · would have passed ${plural(impact.changes, "earlier change")} on its own`;
-      } catch (err) {
-        fail(err);
-      }
+      if (e.currentTarget.checked) await tellImpact();
     },
   });
-  return h("label", { class: "check remember" }, box, "Don't ask again in this folder", note);
+  if (box.checked) tellImpact();
+  return h("label", { class: "check remember" }, box, label, note);
 }
 
 async function openRules() {
@@ -4032,7 +4066,12 @@ async function renderRules() {
   } catch (err) {
     fail(err);
   }
-  const describe = (r) => (r.kind === "connect" ? `Connections to ${r.host}:${r.port}` : `Changes to ${r.path} (${r.rule})`);
+  const describe = (r) =>
+    r.kind === "connect"
+      ? `Connections to ${r.host}:${r.port}`
+      : r.kind === "files_of_kind"
+        ? `Files of kind ${r.file_kind}`
+        : `Changes to ${r.path} (${r.rule})`;
   const beside = await besideSection();
   if (state.view !== "rules") return;
   replace(
@@ -4063,6 +4102,7 @@ async function renderRules() {
               { class: "agent-card" },
               h("div", {}, h("strong", {}, describe(r))),
               h("div", { class: "muted" }, r.workspace ? `In ${r.workspace}` : "In every folder", ` · since ${when(r.added_unix)}`),
+              r.applies ? null : h("div", { class: "regroup-warn" }, "No longer applies: what runs code on its own is always asked."),
               forget
             );
           })

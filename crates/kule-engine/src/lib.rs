@@ -98,14 +98,15 @@ pub use meet::{Meeting, Touched, changed_entities, meet, touched};
 pub use network::{Connection, Proxy, connections, public_ip};
 pub use outline::{FileOutline, open_beneath};
 pub use policy::{
-    CAREFUL_POLICY, DEFAULT_POLICY, Judgement, Policy, PolicyChoice, REPO_POLICY, Ruling,
-    USER_POLICY, Verdict, choose_policy, policy_choice,
+    CAREFUL_POLICY, DEFAULT_POLICY, Held, Judgement, Policy, PolicyChoice, REPO_POLICY, Ruling,
+    USER_POLICY, Verdict, choose_policy, dotted, file_kind, policy_choice, policy_text, reason,
 };
 pub use ports::{Listener, listening_in};
 pub use preview::{Picture, Preview, previewable};
 pub use protect::{Kept, PutBack};
 pub use remembered::{
-    Allowance, Impact, REMEMBERABLE, REMEMBERED_FILE, Remembered, forget, impact, remember,
+    Allowance, Impact, REMEMBERABLE, REMEMBERED_FILE, Remembered, UNFAMILIAR_KINDS, allowances,
+    forget, impact, remember,
 };
 #[cfg(target_os = "macos")]
 pub use sandbox::ProcessFinder;

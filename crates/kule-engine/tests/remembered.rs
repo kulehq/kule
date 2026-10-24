@@ -3,7 +3,9 @@
 use std::fs;
 use std::path::Path;
 
-use kule_engine::{Allowance, Policy, Task, Verdict, forget, impact, remember};
+use kule_engine::{
+    Allowance, Judgement, Policy, Task, Verdict, allowances, forget, impact, remember,
+};
 use tempfile::TempDir;
 
 fn manifest(path: &str) -> Allowance {
@@ -16,7 +18,7 @@ fn manifest(path: &str) -> Allowance {
 /// The policy as Kule loads it for `workspace`, with `home`'s remembered
 /// allowances.
 fn policy(home: &Path, workspace: &Path) -> Policy {
-    Policy::load(Some(&home.join("policy.cedar")), workspace).unwrap()
+    Policy::load(Some(home), workspace).unwrap()
 }
 
 struct Setup {
@@ -134,6 +136,20 @@ fn what_is_denied_or_the_repositorys_own_is_never_remembered() {
             host: "example.com\" || true || \"".into(),
             port: 443,
         },
+        // What runs code on its own is always asked.
+        Allowance::File {
+            path: ".github/workflows/ci.yml".into(),
+            rule: "automation".into(),
+        },
+        Allowance::Kind { kind: "".into() },
+        Allowance::Kind {
+            kind: ".envrc".into(),
+        },
+        Allowance::Kind {
+            kind: "tar.gz".into(),
+        },
+        Allowance::Kind { kind: "VUE".into() },
+        Allowance::Kind { kind: "a/b".into() },
     ];
     for allowance in refused {
         assert!(
@@ -195,4 +211,156 @@ fn a_remembered_answer_never_cancels_a_repository_s_rule() {
             .contains(&"repo:manifests-and-lockfiles".to_owned()),
         "{cargo:?}"
     );
+}
+
+/// A kind answered for good is the project's from then on: files of it
+/// pass in that folder, and nowhere else; one in a hidden folder still
+/// waits for its place.
+#[test]
+fn a_kind_answered_for_good_passes_in_its_folder_only() {
+    let s = Setup::new();
+    let other = Setup::new();
+    for setup in [&s, &other] {
+        fs::write(setup.task.copy().join("a.weird"), "x\n").unwrap();
+        fs::create_dir(setup.task.copy().join(".cache")).unwrap();
+        fs::write(setup.task.copy().join(".cache/b.weird"), "y\n").unwrap();
+        fs::write(setup.task.copy().join("c.other"), "z\n").unwrap();
+    }
+    let weird = Allowance::Kind {
+        kind: "weird".into(),
+    };
+    assert_eq!(
+        impact(s.home.path(), &weird, Some(s.ws.path()))
+            .unwrap()
+            .changes,
+        2
+    );
+    remember(s.home.path(), weird.clone(), Some(s.ws.path())).unwrap();
+    remember(
+        other.home.path(),
+        weird,
+        Some(TempDir::new().unwrap().path()),
+    )
+    .unwrap();
+    let verdict = |setup: &Setup, path: &str| {
+        let found = setup.verdicts().into_iter().find(|(p, _, _)| p == path);
+        found.unwrap()
+    };
+    assert_eq!(
+        verdict(&s, "a.weird"),
+        ("a.weird".into(), Verdict::Allow, vec!["remembered".into()])
+    );
+    assert_eq!(
+        verdict(&s, ".cache/b.weird"),
+        (
+            ".cache/b.weird".into(),
+            Verdict::Ask,
+            vec!["dot-paths".into()]
+        )
+    );
+    assert_eq!(verdict(&s, "c.other").1, Verdict::Ask);
+    assert_eq!(verdict(&other, "a.weird").1, Verdict::Ask);
+}
+
+/// An answer an earlier version kept for what now runs code on its own is
+/// listed as no longer applying, and the file is asked about again.
+#[test]
+fn an_earlier_answer_for_what_runs_code_no_longer_applies() {
+    let s = Setup::new();
+    fs::create_dir_all(s.task.copy().join(".vscode")).unwrap();
+    fs::write(s.task.copy().join(".vscode/tasks.json"), "{}\n").unwrap();
+    let workspace = fs::canonicalize(s.ws.path()).unwrap();
+    fs::write(
+        s.home.path().join(kule_engine::REMEMBERED_FILE),
+        serde_json::json!({
+            "next": 2,
+            "remembered": [
+                { "id": 1, "kind": "file", "path": ".vscode/tasks.json", "rule": "automation",
+                  "workspace": workspace, "added_unix": 1 },
+                { "id": 2, "kind": "file", "path": ".vscode/tasks.json", "rule": "dot-paths",
+                  "workspace": workspace, "added_unix": 1 },
+            ]
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let kept = kule_engine::remembered::load(s.home.path()).unwrap();
+    assert_eq!(
+        kept.iter().map(|r| r.applies()).collect::<Vec<_>>(),
+        [false, true]
+    );
+    let tasks = s
+        .verdicts()
+        .into_iter()
+        .find(|(p, _, _)| p == ".vscode/tasks.json")
+        .unwrap();
+    assert_eq!(tasks.1, Verdict::Ask, "{tasks:?}");
+}
+
+/// What answering a question for good keeps: a kind for the rule that asks
+/// about kinds, the path for the others and for a hidden file; nothing for
+/// what runs code, what does not wait, or what is not a file.
+#[test]
+fn an_answer_for_good_keeps_a_kind_or_a_path() {
+    let judgement = |subject: &str, verdict: Verdict, rules: &[&str]| Judgement {
+        subject: subject.into(),
+        verdict,
+        rules: rules.iter().map(|r| r.to_string()).collect(),
+    };
+    let file = |path: &str, rule: &str| Allowance::File {
+        path: path.into(),
+        rule: rule.into(),
+    };
+    assert_eq!(
+        allowances(&judgement(
+            "ui/a.Weird",
+            Verdict::Ask,
+            &["unfamiliar-kinds"]
+        )),
+        [Allowance::Kind {
+            kind: "weird".into()
+        }]
+    );
+    assert_eq!(
+        allowances(&judgement(
+            ".gitignore",
+            Verdict::Ask,
+            &["dot-paths", "unfamiliar-kinds"]
+        )),
+        [
+            file(".gitignore", "dot-paths"),
+            file(".gitignore", "unfamiliar-kinds")
+        ]
+    );
+    assert_eq!(
+        allowances(&judgement(
+            "Cargo.toml",
+            Verdict::Ask,
+            &["manifests-and-lockfiles"]
+        )),
+        [file("Cargo.toml", "manifests-and-lockfiles")]
+    );
+    for nothing in [
+        judgement(".envrc", Verdict::Ask, &["automation", "dot-paths"]),
+        judgement("a.weird", Verdict::Allow, &["files"]),
+        judgement("a.weird", Verdict::Deny, &["unfamiliar-kinds"]),
+        judgement(
+            "git ref refs/heads/main: a.weird",
+            Verdict::Ask,
+            &["unfamiliar-kinds"],
+        ),
+    ] {
+        assert!(allowances(&nothing).is_empty(), "{nothing:?}");
+    }
+    // Each one is an answer Kule keeps.
+    let home = TempDir::new().unwrap();
+    for allowance in [
+        Allowance::Kind {
+            kind: "weird".into(),
+        },
+        file(".gitignore", "dot-paths"),
+        file(".gitignore", "unfamiliar-kinds"),
+    ] {
+        remember(home.path(), allowance, None).unwrap();
+    }
 }

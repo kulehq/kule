@@ -11,7 +11,7 @@ use std::time::Instant;
 use anyhow::{Context, Result, anyhow, bail};
 use clap::{Parser, Subcommand};
 use kule_engine::entities::{Change as EntityChange, Edit, Outline, Skip};
-use kule_engine::{CAREFUL_POLICY, PolicyChoice, USER_POLICY, choose_policy, policy_choice};
+use kule_engine::{CAREFUL_POLICY, PolicyChoice, choose_policy, policy_text};
 use kule_engine::{
     Change, Connection, DEFAULT_POLICY, Denial, DiffSkip, Effect, EffectSet, Error, GitSummary,
     Kind, LineKind, Money, Network, Policy, Proxy, RefChange, Ruling, RunUsage, Sandbox, Task,
@@ -36,14 +36,19 @@ enum RulesCmd {
     List,
     /// Ask again about what rule ID let through.
     Forget { id: u64 },
-    /// Let a connection (HOST:PORT) or the changes to a file (PATH, with
-    /// --rule) through without asking. Shows what it would have let
-    /// through so far; --yes keeps it.
+    /// Let a connection (HOST:PORT), the changes to a file (PATH, with
+    /// --rule) or files of one kind (--kind) through without asking. Shows
+    /// what it would have let through so far; --yes keeps it.
     Allow {
-        what: String,
+        #[arg(required_unless_present = "kind")]
+        what: Option<String>,
         /// For a file: the rule that asks about it.
         #[arg(long, default_value = "manifests-and-lockfiles")]
         rule: String,
+        /// Files of this kind, the project's from now on: an extension
+        /// without its dot (vue), or a name without one (makefile).
+        #[arg(long, conflicts_with_all = ["what", "rule"])]
+        kind: Option<String>,
         /// The folder it holds for (default: the current one).
         #[arg(long, conflicts_with = "everywhere")]
         folder: Option<PathBuf>,
@@ -434,7 +439,9 @@ enum Cmd {
         #[arg(long)]
         include_ignored: bool,
         /// With --approve: do not ask again, on this folder, about the files
-        /// approved now (manifests, CI and project files).
+        /// approved now: manifests and project files and hidden files by
+        /// path, kinds new to the project by kind. What runs code on its
+        /// own is always asked.
         #[arg(long, requires = "approve")]
         remember: bool,
         /// With --approve: the digest `kule status` printed for the changes
@@ -1248,22 +1255,8 @@ fn run() -> Result<ExitCode> {
                 policy
                     .judge(&task.pending(include_ignored)?)
                     .judgements
-                    .into_iter()
-                    .filter(|j| {
-                        j.verdict == Verdict::Ask
-                            && j.rules
-                                .iter()
-                                .all(|r| kule_engine::REMEMBERABLE.contains(&r.as_str()))
-                    })
-                    .flat_map(|j| {
-                        let path = j.subject;
-                        j.rules
-                            .into_iter()
-                            .map(move |rule| kule_engine::Allowance::File {
-                                path: path.clone(),
-                                rule,
-                            })
-                    })
+                    .iter()
+                    .flat_map(kule_engine::allowances)
                     .collect()
             } else {
                 Vec::new()
@@ -1324,25 +1317,18 @@ fn run() -> Result<ExitCode> {
         }
         Cmd::Secrets { action } => secrets_cmd(&home, action.unwrap_or(SecretsCmd::List))?,
         Cmd::Home { task, action } => home_cmd(&home, &task, action.unwrap_or(HomeCmd::List))?,
-        Cmd::Policy { choice } => {
-            let path = home.join(USER_POLICY);
-            match choice.as_deref() {
-                None => match policy_choice(&home)? {
-                    PolicyChoice::Balanced => print!("{DEFAULT_POLICY}"),
-                    PolicyChoice::Careful => print!("{CAREFUL_POLICY}"),
-                    PolicyChoice::Own => print!("{}", std::fs::read_to_string(&path)?),
-                },
-                Some(name) => {
-                    let choice = match name {
-                        "balanced" => PolicyChoice::Balanced,
-                        "careful" => PolicyChoice::Careful,
-                        _ => bail!("{name}: the policies to choose are balanced and careful"),
-                    };
-                    choose_policy(&home, choice)?;
-                    println!("policy: {name}");
-                }
+        Cmd::Policy { choice } => match choice.as_deref() {
+            None => print!("{}", policy_text(&home)?),
+            Some(name) => {
+                let choice = match name {
+                    "balanced" => PolicyChoice::Balanced,
+                    "careful" => PolicyChoice::Careful,
+                    _ => bail!("{name}: the policies to choose are balanced and careful"),
+                };
+                choose_policy(&home, choice)?;
+                println!("policy: {name}");
             }
-        }
+        },
         Cmd::Rollback { task } => {
             let task = Task::open(&home, &task)?;
             let set = task.rollback();
@@ -1733,13 +1719,23 @@ fn print_ruling(ruling: &Ruling) {
         Verdict::Deny => paint::red("denied"),
     };
     println!("{} {}", paint::dim("policy:"), word(ruling.verdict));
-    for judgement in ruling.holding() {
+    // Put together by why, each group saying it once.
+    for held in ruling.held() {
+        let kind = held
+            .kind
+            .as_deref()
+            .map(|k| format!(": {}", paint::plain_line(k)))
+            .unwrap_or_default();
         println!(
-            "  {} · {} {}",
-            paint::plain_line(&judgement.subject),
-            word(judgement.verdict),
-            paint::dim(&format!("({})", judgement.rules.join(", ")))
+            "  {}{kind} {} · {}",
+            held.reasons.join("; "),
+            // A repository's own rules name themselves.
+            paint::dim(&paint::plain_line(&format!("({})", held.rules.join(", ")))),
+            word(held.verdict)
         );
+        for subject in &held.subjects {
+            println!("    {}", paint::plain_line(subject));
+        }
     }
 }
 
@@ -2117,6 +2113,9 @@ fn describe_allowance(allowance: &kule_engine::Allowance) -> String {
     match allowance {
         kule_engine::Allowance::Connect { host, port } => format!("connections to {host}:{port}"),
         kule_engine::Allowance::File { path, rule } => format!("changes to {path} ({rule})"),
+        kule_engine::Allowance::Kind { kind } => {
+            format!("files of kind {kind} ({})", kule_engine::UNFAMILIAR_KINDS)
+        }
     }
 }
 
@@ -2177,11 +2176,7 @@ fn group_cmd(home: &Path, action: GroupCmd) -> Result<()> {
             let Some(choice) = choice else {
                 let group = find_group(home, id)?;
                 let text = match group.policy {
-                    GroupPolicy::Default => match policy_choice(home)? {
-                        PolicyChoice::Balanced => DEFAULT_POLICY.to_owned(),
-                        PolicyChoice::Careful => CAREFUL_POLICY.to_owned(),
-                        PolicyChoice::Own => std::fs::read_to_string(home.join(USER_POLICY))?,
-                    },
+                    GroupPolicy::Default => policy_text(home)?,
                     GroupPolicy::Balanced => DEFAULT_POLICY.to_owned(),
                     GroupPolicy::Careful => CAREFUL_POLICY.to_owned(),
                     GroupPolicy::Own => {
@@ -2241,9 +2236,14 @@ fn rules_cmd(home: &Path, action: RulesCmd) -> Result<()> {
                     .as_ref()
                     .map_or("every folder".to_owned(), |w| w.display().to_string());
                 println!(
-                    "{:>3}  {}  · {place}",
+                    "{:>3}  {}  · {place}{}",
                     r.id,
-                    describe_allowance(&r.allowance)
+                    describe_allowance(&r.allowance),
+                    if r.applies() {
+                        ""
+                    } else {
+                        " · no longer applies: what runs code on its own is always asked"
+                    }
                 );
             }
         }
@@ -2257,18 +2257,23 @@ fn rules_cmd(home: &Path, action: RulesCmd) -> Result<()> {
         RulesCmd::Allow {
             what,
             rule,
+            kind,
             folder,
             everywhere,
             yes,
         } => {
-            let allowance = match what.rsplit_once(':') {
-                Some((host, port)) if port.parse::<u16>().is_ok() && !host.contains('/') => {
-                    kule_engine::Allowance::Connect {
-                        host: host.to_owned(),
-                        port: port.parse()?,
+            let allowance = match (kind, what) {
+                (Some(kind), _) => kule_engine::Allowance::Kind { kind },
+                (None, Some(what)) => match what.rsplit_once(':') {
+                    Some((host, port)) if port.parse::<u16>().is_ok() && !host.contains('/') => {
+                        kule_engine::Allowance::Connect {
+                            host: host.to_owned(),
+                            port: port.parse()?,
+                        }
                     }
-                }
-                _ => kule_engine::Allowance::File { path: what, rule },
+                    _ => kule_engine::Allowance::File { path: what, rule },
+                },
+                (None, None) => bail!("say what to let through: HOST:PORT, PATH or --kind KIND"),
             };
             let folder = if everywhere {
                 None

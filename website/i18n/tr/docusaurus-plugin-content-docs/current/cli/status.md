@@ -87,7 +87,8 @@ $ kule status 3efe1ca8
       ~ function main
       + function wave
 policy: waits for approval
-  Cargo.toml · waits for approval (manifests-and-lockfiles)
+  decides what gets installed (manifests-and-lockfiles) · waits for approval
+    Cargo.toml
 ```
 
 **Silmelerden ayrı gösterilen taşımalar:**
@@ -109,7 +110,8 @@ policy: passes on its own
 $ kule status 3422f830
 git: hook pre-commit changed (it runs on the next matching git command)
 policy: denied
-  git hook pre-commit · denied (git-hooks)
+  a git hook, which runs on its own (git-hooks) · denied
+    git hook pre-commit
 ```
 
 **Klasör bu arada değişti:**
@@ -166,7 +168,8 @@ policy: passes on its own
 | `git: <path> is staged unlike the file (…)` | Index bu dosya için dosyanın kendisinden farklı bir içerik tutuyor; yani bir sonraki `git commit` kimsenin incelemediği bir şeyi kaydeder. Sizi bekler. |
 | `in your home, caught for review` | Ev dizininize yapılan yazmalar; bkz. [kule home](home.md). |
 | `policy: <verdict>` | Genel karar: `passes on its own` (kendiliğinden geçer), `waits for approval` (onay bekler) ya da `denied` (reddedilir). |
-| `  <subject> · <verdict> (<rule>)` | Doğrudan geçmeyen her değişiklik ve arkasındaki kural. Bkz. [Yerleşik politika kuralları](../reference/policy-rules.md). |
+| `  <reason> (<rules>) · <verdict>` | Doğrudan geçmeyenler, nedenlerine göre bir araya toplanmış olarak: sade sözcüklerle neden, arkasındaki kurallar ve karar. Yalnızca türü yüzünden bekleyen dosyalar, her tür için bir grup olur (`a kind of file this project has none of: weird`). Bkz. [Politika kuralları](../reference/policy-rules.md). |
+| `    <subject>` | Üstteki gruptaki bir değişiklik: bir yol ya da `git hook pre-commit` gibi bir git değişikliği. |
 | `digest: <hex> (to approve these: …)` | Bu değişikliklerin hash'i. `kule commit TASK --approve --reviewed <hex>` onları yalnızca hâlâ bunlar oldukları sürece commit eder. |
 | `home digest: <hex>` | Ev dizininizdeki yazmalar için aynısı; bkz. [kule home](home.md). |
 | `task <id> changes them too:` | Aynı klasördeki başka bir görev aynı dosyaları değiştiriyor; altındaki satırlar dosyayı ve fonksiyonu, bölümü ya da anahtarı adlandırır. |

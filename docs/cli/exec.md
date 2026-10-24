@@ -52,7 +52,12 @@ whatever became of its parent, and Kule names it:
 `kule: ended <names>, still running in the task's sandbox as the command ended`.
 Kule then prints the copy's changes (all of them, not only
 this command's), the connections it made, home writes, and on macOS what the
-sandbox refused. `kule exec` exits with the command's own exit code.
+sandbox refused. `kule exec` exits with the command's own exit code. When
+Kule cannot read or record what the sandbox refused, it says so, and a
+command that succeeded exits with `1`: part of what it did went untold.
+When the system log shows only part of it in time, Kule lists that part and
+says some refusals may be missing; the exit code stays the command's, since
+the sandbox refused them all the same.
 
 `exec` does not make steps; steps are an agent's tool calls. Commit and
 rollback are refused while an `exec` runs in the task.
@@ -176,6 +181,8 @@ kule exec "$TASK" --reveal ~/Library/Keychains \
 | `net: <host>:<port> · failed (<rule>)` | A connection the policy let through, which ended in an error of its own: the host went away, or the connection was reset. The task's `network.jsonl` says why. |
 | `net: <host>:<port> · refused, …` | A connection the policy did not let through. |
 | `sandbox: refused <operation> <path> (<program>)` | What the sandbox refused, on macOS. They are also kept in the task's `sandbox.jsonl`. |
+| `kule: what the sandbox refused cannot be read: …`, `kule: what the sandbox refused could not be recorded: …` | On stderr: Kule could not read what the sandbox refused, or could not keep it in `sandbox.jsonl`. The exit code stays the command's, except that `0` becomes `1`. |
+| `kule: The system log did not show all of what the sandbox refused; some refusals may be missing from what is listed` | On stderr, on macOS: the system log had not caught up, on a busy computer, when Kule stopped reading it. The `sandbox:` lines above are what it showed. The exit code stays the command's. |
 | `kule: ended <names>, still running in the task's sandbox as the command ended` | On stderr: what the command left running, which Kule ended with it. Each name once, with how many (`sleep ×2`). |
 | `kule: running without the sandbox` | You passed `--no-sandbox`. |
 | `kule: network open, bypassing the proxy and the policy` | You passed `--open-network`. |

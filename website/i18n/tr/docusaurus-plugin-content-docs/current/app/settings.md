@@ -75,9 +75,13 @@ geçmediği. Bkz. [Politika](../concepts/policy.md).
 
 Kule'ye bir daha sormamasını söyledikleriniz: bir bağlantıdaki *Approve and
 remember* ya da Review'da bekletilen bir dosyadaki *Don't ask again in this
-folder* (bu, önce neleri geçireceğini gösterir). Her kuralın bir
+folder* (bir tür için *Don't ask again about files of kind X in this
+folder*); bunlar önce neleri geçireceğini gösterir. Her kuralın bir
 **Forget** düğmesi vardır (onaylamak için yeniden tıklayın); bundan sonra
-Kule yeniden sorar.
+Kule yeniden sorar. Önceki bir sürümün kendiliğinden kod çalıştıran şeyler
+(`automation`) için sakladığı bir yanıtta **No longer applies** (artık
+geçerli değil) yazar: bu dosyalar her seferinde sorulur. Kaldırmak için onu
+unutturun.
 
 Reddedilen bir değişiklik hiçbir zaman burada olmaz; bir deponun kendi
 kurallarını tuttuğu `.kule/` altındaki hiçbir şey de burada olmaz.

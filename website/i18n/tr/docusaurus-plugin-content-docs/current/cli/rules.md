@@ -18,19 +18,24 @@ kule rules [OPTIONS] [COMMAND]
 | Alt komut | Ne yapar |
 | --- | --- |
 | [`list`](#kule-rules-list) | Kuralları listeler (varsayılan). |
-| [`allow`](#kule-rules-allow) | Bir bağlantıyı ya da tek bir dosyadaki değişiklikleri sormadan geçirir. |
+| [`allow`](#kule-rules-allow) | Bir bağlantıyı, tek bir dosyadaki değişiklikleri ya da bir türdeki dosyaları sormadan geçirir. |
 | [`forget`](#kule-rules-forget) | Bir kuralın geçirdiği şey için yeniden sorulmasını sağlar. |
 
 ## Açıklama {#description}
 
 [Politika](../concepts/policy.md) bir şeyi size sorduğunda, bir kez ve
-kalıcı olarak yanıtlayabilirsiniz. Hatırlanan bir kural iki türden biridir:
+kalıcı olarak yanıtlayabilirsiniz. Hatırlanan bir kural üç türden biridir:
 
 - **Bir bağlantı**: `HOST:PORT`, örneğin `api.example.com:443`. Bir Cedar
   `permit` kuralına dönüşür; böylece oraya yapılan bağlantılar kendiliğinden
   geçer.
 - **Bir dosya**: klasöre göre bir yol, örneğin `package.json`, ve o dosya
   hakkında soran kural. O tek dosya için o kurala dar bir istisna olur.
+  Gizli bir dosya (`dot-paths`) da böyle, yoluyla yanıtlanır.
+- **Bir dosya türü**: noktası olmadan küçük harfle bir uzantı (`vue`) ya da
+  uzantısız bir ad (`makefile`); `unfamiliar-kinds` kuralının sorduğu türden.
+  Bundan sonra o tür projede bulunan bir tür sayılır: o türdeki dosyalar
+  artık türleri yüzünden beklemez.
 
 Her biri **tek bir klasör** (varsayılan: geçerli dizin) ya da **tüm
 klasörler** (`--everywhere`) için geçerlidir.
@@ -38,11 +43,15 @@ klasörler** (`--everywhere`) için geçerlidir.
 Bazı şeyler asla hatırlanmaz:
 
 - politikanın **reddettikleri** (örneğin yeni bir git hook'u);
-- bir dosyanın adından başka bir nedenle bekleyenler: toplu silme, geçmişi
-  yeniden yazma, bir bağlantı (link), git config, çalıştırılabilir yapılan
-  bir dosya, değişen genişletilmiş öznitelikler. Yalnızca
-  `manifests-and-lockfiles`, `project-files` ve `automation` kuralları kalıcı
-  olarak yanıtlanabilir;
+- bir dosyanın adı, yeri ya da türü dışında bir nedenle bekleyenler: toplu
+  silme, geçmişi yeniden yazma, bir bağlantı (link), git config,
+  çalıştırılabilir yapılan bir dosya, değişen genişletilmiş öznitelikler.
+  Yalnızca `manifests-and-lockfiles`, `project-files`, `unfamiliar-kinds` ve
+  `dot-paths` kuralları kalıcı olarak yanıtlanabilir;
+- kendiliğinden kod çalıştıran şeyler (`automation`: CI, editör ve ajan
+  ayarları) ve başka bir sürüm kontrol sisteminin dosyaları (`other-vcs`):
+  bunlar her seferinde sorulur. Bunlardan biri ve ayrıca başka bir kural
+  tarafından tutulan bir dosya da hatırlanmaz;
 - bir deponun kendi kurallarını tuttuğu `.kule/` altındaki her şey;
 - deponun kendi bir kuralı (`repo:<id>`), `@id`'si ne olursa olsun:
   hatırlanan bir yanıt, deponun sorduğunu asla iptal etmez.
@@ -69,16 +78,28 @@ $ kule rules
 
 Hiçbir şey saklanmamışsa: `nothing remembered: every question is asked`.
 
+Önceki bir sürümün `automation` kuralı için sakladığı bir yanıt hâlâ
+listelenir, ama artık hiçbir şeyi geçirmez. Onu
+[`kule rules forget`](#kule-rules-forget) ile unutturun:
+
+```console
+$ kule rules
+  2  changes to .github/workflows/ci.yml (automation)  · ~/code/app · no longer applies: what runs code on its own is always asked
+  4  files of kind vue (unfamiliar-kinds)  · ~/code/app
+```
+
 ## kule rules allow {#kule-rules-allow}
 
 ```sh
 kule rules allow [OPTIONS] <WHAT>
+kule rules allow [OPTIONS] --kind <KIND>
 ```
 
 | Argüman / seçenek | Değer | Varsayılan | Anlamı |
 | --- | --- | --- | --- |
 | `WHAT` | `HOST:PORT` ya da `PATH` | | Bir bağlantı (küçük harfli bir host adı ve bir port, joker karakter yok) ya da klasöre göre bir dosya yolu (`..` yok). |
-| `--rule` | kural kimliği | `manifests-and-lockfiles` | Bir dosya için: o dosya hakkında soran kural. `manifests-and-lockfiles`, `project-files`, `automation`'dan biri. |
+| `--rule` | kural kimliği | `manifests-and-lockfiles` | Bir dosya için: o dosya hakkında soran kural. `manifests-and-lockfiles`, `project-files`, `unfamiliar-kinds`, `dot-paths`'ten biri. |
+| `--kind` | tür | | `WHAT` yerine, bu türdeki dosyalar: noktası olmadan bir uzantı (`vue`) ya da uzantısız bir ad (`makefile`), küçük harfle. |
 | `--folder` | yol | geçerli dizin | Kuralın geçerli olduğu klasör. |
 | `--everywhere` | | | Tüm klasörler için geçerli olur. |
 | `--yes` | | | Kuralı saklar. `--yes` olmadan hiçbir şey saklanmaz. |
@@ -109,11 +130,23 @@ would have let through so far: 0 connections, 0 changes, in 0 tasks
 kept as 2
 ```
 
-`automation` kuralının sorduğu bir dosya, örneğin bir CI workflow'u:
+Projede hiç olmayan bir türdeki dosyalar, bundan sonra:
 
 ```console
-$ kule rules allow .github/workflows/ci.yml --rule automation --yes
+$ kule rules allow --kind vue --yes
+files of kind vue (unfamiliar-kinds) · ~/code/app
+would have let through so far: 0 connections, 3 changes, in 1 tasks
+kept as 4
 ```
+
+Gizli bir dosya, yoluyla:
+
+```console
+$ kule rules allow .prettierrc.json --rule dot-paths --yes
+```
+
+`automation` kuralının sorduğu bir dosya, örneğin bir CI workflow'u,
+hatırlanamaz: kendiliğinden kod çalıştıran şey her seferinde sorulur.
 
 Tüm klasörler için bir host:
 
@@ -152,17 +185,23 @@ nothing remembered as 9
 | `HOST:PORT: a lowercase host name and a port, without a wildcard` | `api.example.com:443` gibi tek ve tam bir host yazın. |
 | `PATH: a path relative to the folder, without ..` | Yolu klasörün içindeki haliyle verin. |
 | `PATH: the repository's own rules are always put to a person` | `.kule/` altındaki dosyalar hatırlanamaz. |
-| `RULE: only a rule that asks about a file by its name can be answered for good` | `--rule`, `manifests-and-lockfiles`, `project-files` ya da `automation` alır. |
+| `RULE: only a rule that asks about a file by its name, place or kind can be answered for good; what runs code on its own is always asked` | `--rule`, `manifests-and-lockfiles`, `project-files`, `unfamiliar-kinds` ya da `dot-paths` alır. |
+| `KIND: a kind of file in lower case, as an extension without its dot (vue) or a name without one (makefile)` | Türü Kule'nin adlandırdığı gibi verin, örneğin `vue` ya da `makefile`. Gizli bir dosya yoluyla hatırlanır. |
 
 ## Uygulamada {#in-the-app}
 
 Bekleyen bir bağlantıda **Approve and remember** (onayla ve hatırla), görevin
 klasörü için bir bağlantı kuralı saklar. Review'da bekletilen bir dosyadaki
 **Don't ask again in this folder** (bu klasörde bir daha sorma) önce neleri
-geçireceğini gösterir, sonra bir dosya kuralı saklar. *Settings → Rules*
-hepsini, her birinin yanında **Forget** ile listeler. Komut satırından
-`kule commit --approve --remember`, onaylanan dosyalar için dosya kuralları
-saklar.
+geçireceğini gösterir, sonra bir dosya kuralı saklar. Yalnızca türü
+yüzünden bekleyen dosyalar tek bir grup olur; grubun **Don't ask again
+about files of kind X in this folder** (bu klasörde X türündeki dosyaları
+bir daha sorma) seçeneği türü saklar. *Settings → Rules* hepsini, her
+birinin yanında **Forget** ile listeler; önceki bir sürümün `automation`
+için sakladığı bir yanıtta **No longer applies** (artık geçerli değil)
+yazar. Komut satırından `kule commit --approve --remember`, onaylanan
+değişikliklerden hatırlanabilenleri saklar: türü yüzünden bekleyen dosyalar
+için türü, diğerleri için yolu.
 
 ## Ayrıca bakın {#see-also}
 

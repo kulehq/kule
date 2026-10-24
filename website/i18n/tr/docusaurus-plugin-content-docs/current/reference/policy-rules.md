@@ -34,13 +34,24 @@ Bir değişiklik kümesinin tamamı, etkilerinin en katı kararını alır.
 Cedar'da bir `forbid` her zaman bir `permit`'e üstün gelir ve değerlendirme
 sırasındaki bir hata reddeder.
 
-Köşeli parantezlerdeki kural adları her kuralın `@id`'sidir:
+Onay bekleyenler ya da reddedilenler, nedenlerine göre bir araya
+toplanarak gösterilir. Her grup önce sade sözcüklerle nedeni, sonra
+parantez içinde kural adlarını (her kuralın `@id`'si), sonra kararı söyler;
+tuttuğu yollar altında sıralanır. Yalnızca türü yüzünden bekleyen dosyalar,
+her tür için bir grup olur:
 
 ```text
 policy: waits for approval
-  Cargo.toml · waits for approval (manifests-and-lockfiles)
+  decides what gets installed (manifests-and-lockfiles) · waits for approval
+    Cargo.toml
+  a kind of file this project has none of: sh (unfamiliar-kinds) · waits for approval
+    scripts/release.sh
+    scripts/setup.sh
 net: example.com:443 · refused, would wait for approval; the command line asks no one (no-rule-lets-it-pass)
 ```
+
+Kendine ait bir nedeni olmayan bir kural, örneğin kendi yazdığınız bir
+politikadaki bir kural, `a rule of the policy` olarak gösterilir.
 
 ## Kule'nin balanced politikası {#kules-balanced-policy}
 
@@ -49,10 +60,12 @@ Varsayılan budur. Geçerliyken `kule policy` ile yazdırın.
 | Kural | Tür | Neyle eşleşir | Etkisi |
 | --- | --- | --- | --- |
 | `ask-by-default` | permit `ask` | Her şey. | Bir `forbid` aksini söylemedikçe her şey bir insana sorulabilir. |
-| `files` | permit `auto` | Her dosya değişikliği (`fs.*`). | Sıradan dosya değişiklikleri **kendiliğinden geçer**. |
+| `files` | permit `auto` | Her dosya değişikliği (`fs.*`). | Aşağıdaki bir kural tutmadıkça dosya değişiklikleri **kendiliğinden geçer**. Sonraki iki kuralla birlikte yalnızca gizli yolların dışındaki, bilinen türden dosyalar geçer. |
+| `unfamiliar-kinds` | forbid `auto` | Gizli yolların dışında (onları `dot-paths` tutar), türü ne aşağıdaki listede olan ne de projede zaten bulunan bir dosya (asla bir silme ya da klasör değil). Bir dosyanın türü, küçük harfle uzantısıdır; uzantısı yoksa adının tamamıdır. Bilinen türler: kaynak kod (`rs go py rb java kt kts scala swift m mm c h cc cpp cxx hpp hh cs fs fsx vb ts tsx js jsx mjs cjs vue svelte php pl pm lua r jl dart ex exs erl hrl hs elm clj cljs cljc ml mli nim zig sol sql graphql gql proto css scss sass less html htm xml svg`), belgeler (`md mdx markdown rst txt adoc org tex`), veri (`json jsonc json5 yaml yml toml csv tsv`), resimler (`png jpg jpeg gif webp avif ico bmp pdf`), fontlar (`woff woff2 ttf otf`) ve `README`, `LICENSE`, `LICENCE`, `COPYING`, `NOTICE`, `AUTHORS`, `CONTRIBUTORS`, `CHANGELOG` adları. Projede zaten bulunan bir tür, klasörünüzün git index'inin gizli yolların dışında tuttuğu bir türdür; Kule bunu görevin kopyasından değil, her zaman klasörünüzden okur. Git dışında yalnızca liste sayılır. Betikler (`sh`, `ps1`, `bat`, …) bilerek dışarıda bırakılmıştır. | **Onay bekler.** Türüne göre hatırlanabilir. |
+| `dot-paths` | forbid `auto` | Yolunun herhangi bir parçası noktayla başlayan bir dosya (asla bir silme ya da klasör değil): `.env`, `.config/tool.json`, `src/.eslintrc`; türü ne olursa olsun, izleniyor olsun ya da olmasın. Araçlar ayarlarını orada arar. | **Onay bekler.** Yoluna göre hatırlanabilir. |
 | `manifests-and-lockfiles` | forbid `auto` | Neyin kurulacağını ya da derleneceğini belirleyen dosyalar; adlarına göre, herhangi bir klasörde, büyük/küçük harf fark etmeksizin: `package.json`, `package-lock.json`, `npm-shrinkwrap.json`, `yarn.lock`, `pnpm-lock.yaml`, `bun.lock(b)`, `Cargo.toml`, `Cargo.lock`, `Directory.Packages.props`, `Directory.Build.props`/`.targets`, `nuget.config`, `packages.lock.json`, `global.json`, `go.mod`, `go.sum`, `pyproject.toml`, `setup.py`, `setup.cfg`, `poetry.lock`, `uv.lock`, `Pipfile`(`.lock`), `Gemfile`(`.lock`), Gradle derleme ve ayar dosyaları, `pom.xml`. | **Onay bekler.** Hatırlanabilir. |
 | `project-files` | forbid `auto` | `*.csproj`, `*.fsproj`, `requirements*.txt`. | **Onay bekler.** Hatırlanabilir. |
-| `automation` | forbid `auto` | Kimse projeyi çalıştırmadan kod çalıştıran ya da bir ajanı yönlendiren şeyler. `.github`, `.circleci`, `.devcontainer`, `.vscode`, `.idea`, `.zed`, `.kule`, `.husky`, `.claude`, `.cursor`, `.gemini`, `.codex`, `.cargo`, `.mvn`, `.yarn`, `.buildkite`, `.gitea`, `.forgejo`, `.woodpecker`, `.windsurf`, `.continue`, `.roo`, `.clinerules` ya da `gradle/wrapper/` içindeki her şey; ve `.gitlab-ci*`, `.envrc`, `.gitattributes`, `.gitmodules`, `.npmrc`, `.yarnrc(.yml)`, `.pnpmfile.cjs`, `build.rs`, `gradlew`, `mise.toml`, `.tool-versions`, `.pre-commit-config.yaml`, `lefthook.yml`, `.mcp.json`, `CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, `.cursorrules`, `rust-toolchain(.toml)`, `mvnw`, `bunfig.toml`, `dotnet-tools.json`, `azure-pipelines.yml`, `.travis.yml`, `Jenkinsfile`, `bitbucket-pipelines.yml`, `opencode.json`, `.aider.conf.yml` gibi dosyalar; bir kabuk isteminin klasöre girerken okuduğu sürüm dosyaları (`.nvmrc`, `.node-version`, `.python-version`, `.ruby-version`, `.java-version`, `.go-version`, `.sdkmanrc`, `.terraform-version`, `mise.local.toml`, `.rtx.toml`, mise'nin `config.toml`'u, `.mise` içindeki her şey) ve `*.code-workspace`. Bunlardan biri değişmiş bir kopyada Kule'nin terminali ve editörü açılmaz. | **Onay bekler.** Hatırlanabilir (`.kule/` altındakiler hariç). |
+| `automation` | forbid `auto` | Kimse projeyi çalıştırmadan kod çalıştıran ya da bir ajanı yönlendiren şeyler. `.github`, `.circleci`, `.devcontainer`, `.vscode`, `.idea`, `.zed`, `.kule`, `.husky`, `.claude`, `.cursor`, `.gemini`, `.codex`, `.cargo`, `.mvn`, `.yarn`, `.buildkite`, `.gitea`, `.forgejo`, `.woodpecker`, `.windsurf`, `.continue`, `.roo`, `.clinerules` ya da `gradle/wrapper/` içindeki her şey; ve `.gitlab-ci*`, `.envrc`, `.gitattributes`, `.gitmodules`, `.npmrc`, `.yarnrc(.yml)`, `.pnpmfile.cjs`, `build.rs`, `gradlew`, `mise.toml`, `.tool-versions`, `.pre-commit-config.yaml`, `lefthook.yml`, `.mcp.json`, `CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, `.cursorrules`, `rust-toolchain(.toml)`, `mvnw`, `bunfig.toml`, `dotnet-tools.json`, `azure-pipelines.yml`, `.travis.yml`, `Jenkinsfile`, `bitbucket-pipelines.yml`, `opencode.json`, `.aider.conf.yml` gibi dosyalar; bir kabuk isteminin klasöre girerken okuduğu sürüm dosyaları (`.nvmrc`, `.node-version`, `.python-version`, `.ruby-version`, `.java-version`, `.go-version`, `.sdkmanrc`, `.terraform-version`, `mise.local.toml`, `.rtx.toml`, mise'nin `config.toml`'u, `.mise` içindeki her şey) ve `*.code-workspace`. Bunlardan biri değişmiş bir kopyada Kule'nin terminali ve editörü açılmaz. | **Onay bekler.** Hatırlanamaz: kendiliğinden kod çalıştıran şey her seferinde sorulur. |
 | `other-vcs` | forbid `auto` | Herhangi bir derinlikte, başka bir sürüm kontrol sisteminin deposu: `.hg`, `.sl`, `.jj`, `_darcs`, `.pijul`, `.bzr`, `.svn`, `.fossil-settings` içindeki her şey ve `.fslckout` ya da `_FOSSIL_`. Config'i ve hook'ları bir sonraki komutunda çalışır ve Kule hiçbirini bir depo olarak okumaz. Bunlardan biri değişmiş bir kopyada Kule'nin terminali ve editörü açılmaz. | **Onay bekler.** Hatırlanamaz. |
 | `nested-repository` | forbid `auto` | Çalışma klasörünün içine yerleşmiş bir deponun `.git` klasöründeki dosyalar. | **Onay bekler.** |
 | `nested-git-hooks` | forbid all | İç içe bir depoda oluşturulan ya da değiştirilen bir hook. | **Reddedilir.** |
@@ -77,8 +90,9 @@ push, bir fetch'ten ayırt edilemez).
 
 ## Kule'nin careful politikası {#kules-careful-policy}
 
-`kule policy careful`, balanced politikayı sonuna bir kural daha ekleyerek
-yazar:
+`kule policy careful` bu seçimi `~/.kule/policy-choice` içinde saklar. Kule
+bundan sonra balanced politikayı, sonuna bir kural daha eklenmiş olarak
+uygular:
 
 | Kural | Tür | Neyle eşleşir | Etkisi |
 | --- | --- | --- | --- |
@@ -86,6 +100,13 @@ yazar:
 
 Careful altında hatırlanan bir dosya geçmez: `careful` her dosyayı sorar ve
 bu soru kalıcı olarak yanıtlanamaz.
+
+Saklanan metin değil seçimdir; bu yüzden careful her zaman bu sürümün
+kurallarını ifade eder. Önceki bir sürümün yazdığı (0.2.0-preview.1 ile
+0.2.0-preview.11 arası) bir balanced ya da careful metnini tutan
+`~/.kule/policy.cedar`, kendi politikanız değil, o seçim sayılır: bugünün
+kurallarıyla değerlendirilir ve `kule policy balanced` ya da `careful` onun
+yerini alır.
 
 ## Kule'nin eklediği adlar {#names-kule-adds}
 
@@ -97,7 +118,7 @@ ekler.
 | `no-rule-lets-it-pass` | onay bekler | Hiçbir `auto` permit eşleşmedi. |
 | `no-rule-allows-asking` | reddedilir | Hiçbir `ask` permit eşleşmedi; bu yüzden size sorulamaz bile. `ask-by-default`'u dışarıda bırakan kendi politikanızla olur. |
 | `policy-error: …` | reddedilir | Cedar bir kuralı değerlendiremedi; reddeder. |
-| `remembered` | kendiliğinden geçer | Kule'ye bir daha sormamasını söylediğiniz bir dosya ([`kule rules`](../cli/rules.md)). |
+| `remembered` | kendiliğinden geçer | Kule'ye bir daha sormamasını söylediğiniz bir dosya ya da dosya türü ([`kule rules`](../cli/rules.md)). |
 | `repo:<id>` | kuralın dediği gibi | Deponun kendi `.kule/policy.cedar` dosyasından bir kural. `@id`'si ne olursa olsun, hatırladığınız hiçbir yanıt onu iptal etmez. |
 | `remembered-<id>` | kendiliğinden geçer | Kule'ye bir daha sormamasını söylediğiniz bir bağlantı. |
 | `profile-<agent>` | kendiliğinden geçer | Ajanın profilindeki bir host ya da modelinin API'si; **yalnızca o ajan çalışırken** açıktır (örneğin `api.anthropic.com` için `profile-claude-code`). |
@@ -120,6 +141,9 @@ Her etki, şu özniteliklere sahip bir `Kule::Effect` varlığıdır:
 | `host`, `port` | `net.connect` için. |
 | `gains` | `fs.*` için: girdinin izin bitlerinde klasördekinde olmayan, kazandığı şey, `executable` ve `world-writable` (`!resource.gains.isEmpty()`). |
 | `xattrs_changed` | `fs.*` için: dosyanın genişletilmiş öznitelikleri klasördekinden farklı (macOS). |
+| `file_kind` | `fs.*` için: adın küçük harfle uzantısı (`vue`), uzantısı yoksa adın tamamı (`makefile`). |
+| `kind_tracked` | `fs.*` için: klasörün git index'i, gizli yolların dışında bu türden bir dosya tutuyor mu. Görevin kopyasından değil, klasörünüzden okunur. |
+| `dotted` | `fs.*` için: yolun bir parçası noktayla başlıyor mu, ya da yol bir deponun kendi dosyalarının içinde mi. |
 
 Ve `context`:
 
@@ -132,7 +156,9 @@ Ve `context`:
 ## Kendi politikanız, her görev için {#your-own-policy-for-every-task}
 
 Bir politikayı Kule'nin ev dizinine `policy.cedar` olarak kaydedin
-(`~/.kule/policy.cedar`). Bu, her görev için Kule'ninkinin **yerine geçer**
+(`~/.kule/policy.cedar`). Kule oraya kendisi hiçbir şey yazmaz: bu dosya
+yalnızca sizin kendi politikanızdır. Her görev için Kule'ninkinin **yerine
+geçer**
 (kendi politikası olan bir grup kendisininkini korur). Bir `forbid` hiçbir
 zaman geçersiz kılınamadığı için Kule'nin kurallarını gevşetmenin tek yolu
 onları değiştirmektir; bu yüzden Kule'nin metninden başlayın ve yalnızca
@@ -193,8 +219,9 @@ $ kule status 1046fb30
   + db/migrations/001.sql
   + notes.md
 policy: denied
-  db/migrations · denied (no-migrations)
-  db/migrations/001.sql · denied (no-migrations)
+  the repository's own rule (repo:no-migrations) · denied
+    db/migrations
+    db/migrations/001.sql
 $ kule commit 1046fb30 --approve
 ...
 kule: not committed; the policy denies the changes above
@@ -206,7 +233,8 @@ değişiklik **reddedilir**. Onun yerine onay **beklemesi** için
 
 - Kule bu dosyayı bir görevin kopyasından değil, her zaman **gerçek
   klasörünüzden** okur; böylece bir ajan onu zayıflatamaz. Bir kopyada ona
-  yapılan değişiklikler sizi bekler (`automation`) ve hatırlanamaz.
+  yapılan değişiklikler sizi bekler (`automation`, `dot-paths`) ve
+  hatırlanamaz.
 - İçindeki bir `permit` reddedilir: `.kule/policy.cedar may only contain
   forbid rules: a repository can tighten the policy, never loosen it`.
 - Deponun forbid kuralları her politikada geçerlidir: balanced, careful,

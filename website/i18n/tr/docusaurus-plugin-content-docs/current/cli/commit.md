@@ -25,8 +25,9 @@ gösterdiği değişiklikleri alır ve çalışma klasörüne uygular.
 
 - **kendiliğinden geçen** değişiklikler commit edilir;
 - **onay bekleyen** değişiklikler (yerleşik *balanced* politikasında
-  manifest'ler, lock dosyaları, CI dosyaları, git config, toplu silmeler,
-  çalıştırılabilir yapılan bir dosya, …) yalnızca `--approve` ile ve yalnızca
+  manifest'ler, lock dosyaları, CI dosyaları, projede olmayan dosya
+  türleri, gizli dosyalar, git config, toplu silmeler, çalıştırılabilir
+  yapılan bir dosya, …) yalnızca `--approve` ile ve yalnızca
   gözden geçirdiğiniz hâliyle commit edilir;
 - **reddedilen** değişiklikler (örneğin yeni bir git hook'u) `--approve` ile
   bile asla commit edilmez.
@@ -78,7 +79,7 @@ terminal (uygulamanınki ya da [kule shell](shell.md)) açıkken
 | Seçenek | Değer | Varsayılan | Anlamı |
 | --- | --- | --- | --- |
 | `--approve` | | | Politikanın bir insana sorduğu değişiklikleri de commit eder. Reddedilen değişiklikler yine asla geçmez. |
-| `--remember` | | | `--approve` ile birlikte: bu klasörde, şimdi onaylanan dosyalar (manifest'ler, CI ve proje dosyaları) hakkında bir daha sormaz. Bkz. [kule rules](rules.md). |
+| `--remember` | | | `--approve` ile birlikte: bu klasörde, şimdi onaylanan dosyalar hakkında bir daha sormaz: manifest'ler, proje dosyaları ve gizli dosyalar yollarıyla, projede hiç olmayan dosya türleri türleriyle hatırlanır. Kendiliğinden kod çalıştıran şeyler (CI, editör ve ajan ayarları) her seferinde sorulur. Bkz. [kule rules](rules.md). |
 | `--reviewed` | digest | | `--approve` ile birlikte: `kule status`'un gözden geçirdiğiniz değişiklikler için yazdırdığı digest. Yalnızca onlar commit edilir. Verilmezse Kule bir terminalde sorar, başka yerde reddeder. |
 | `--include-ignored` | | | Çalışma klasörünün `.gitignore`'unun dışarıda bıraktığı yolları da alır. |
 | `--home` | yol | `~/.kule` | Kule'nin ev klasörü (ya da `KULE_HOME`). Bkz. [genel seçenekler](index.md). |
@@ -97,7 +98,8 @@ committed 1 changes · checkpoint 2
 ```text
 $ kule commit 3efe1ca8
 policy: waits for approval
-  Cargo.toml · waits for approval (manifests-and-lockfiles)
+  decides what gets installed (manifests-and-lockfiles) · waits for approval
+    Cargo.toml
 kule: not committed; rerun with --approve to approve the changes above
 $ echo $?
 3
@@ -127,7 +129,8 @@ not asked again on this folder: changes to Cargo.toml (manifests-and-lockfiles)
 ```text
 $ kule commit 3422f830 --approve --reviewed 51d0…7c3b
 policy: denied
-  git hook pre-commit · denied (git-hooks)
+  a git hook, which runs on its own (git-hooks) · denied
+    git hook pre-commit
 kule: not committed; the policy denies the changes above
 ```
 

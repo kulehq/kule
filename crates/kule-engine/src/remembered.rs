@@ -1,6 +1,8 @@
 //! What a person told Kule not to ask again when they approved it: a
-//! connection to one host and port, or the changes to one file that a rule
-//! puts to a person (a manifest, a CI file), on one folder or everywhere.
+//! connection to one host and port, the changes to one file that a rule
+//! puts to a person (a manifest, a hidden file), or files of one kind the
+//! project had none of, on one folder or everywhere. What runs code on its
+//! own (CI, editor and agent settings) is always asked.
 //!
 //! A connection becomes a Cedar `permit` like any other; a file becomes a
 //! narrow exception to the rules that ask about it, since a Cedar `forbid`
@@ -20,15 +22,25 @@ use serde::{Deserialize, Serialize};
 use crate::error::{Error, IoContext, Result};
 use crate::fsops::{read_json, write_json};
 use crate::network::connections;
-use crate::policy::Verdict;
+use crate::policy::{Judgement, Verdict, file_kind};
 use crate::task::Task;
 
 pub const REMEMBERED_FILE: &str = "remembered.json";
 
-/// The rules that ask about one file by its name or place, whose question a
-/// person may answer once for good. Others (a mass delete, a history
-/// rewrite) ask about what a change does, not where.
-pub const REMEMBERABLE: &[&str] = &["manifests-and-lockfiles", "project-files", "automation"];
+/// The rules that ask about one file by its name, place or kind, whose
+/// question a person may answer once for good. Others ask about what a
+/// change does (a mass delete, a history rewrite), or about what runs code
+/// on its own, which is put to a person every time.
+pub const REMEMBERABLE: &[&str] = &[
+    "manifests-and-lockfiles",
+    "project-files",
+    UNFAMILIAR_KINDS,
+    "dot-paths",
+];
+
+/// The rule that asks about a file for its kind, answered for good by
+/// [`Allowance::Kind`].
+pub const UNFAMILIAR_KINDS: &str = "unfamiliar-kinds";
 
 /// What is not asked about again.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -39,6 +51,13 @@ pub enum Allowance {
     /// Changes to the file at `path` (relative to the folder) that `rule`
     /// would put to a person.
     File { path: String, rule: String },
+    /// Files of `kind` ([`file_kind`]) that [`UNFAMILIAR_KINDS`] would put
+    /// to a person: a kind the project now has.
+    #[serde(rename = "files_of_kind")]
+    Kind {
+        #[serde(rename = "file_kind")]
+        kind: String,
+    },
 }
 
 /// One allowance, where it holds and since when.
@@ -58,6 +77,46 @@ impl Remembered {
     pub fn holds_for(&self, workspace: &Path) -> bool {
         self.workspace.as_deref().is_none_or(|w| w == workspace)
     }
+
+    /// Whether it still lets anything through: an answer kept by an earlier
+    /// version for a rule no longer answered for good (what runs code on
+    /// its own) is listed, but asked again.
+    pub fn applies(&self) -> bool {
+        match &self.allowance {
+            Allowance::File { rule, .. } => REMEMBERABLE.contains(&rule.as_str()),
+            Allowance::Connect { .. } | Allowance::Kind { .. } => true,
+        }
+    }
+}
+
+/// What answering `judgement` for good keeps: its file's kind for the rule
+/// that asks about kinds, its path for each other rule (and for a hidden
+/// file's kind, which is its name). Nothing when it does not wait for a
+/// person, when it is not a file, or when one of the rules that hold it may
+/// not be answered for good.
+pub fn allowances(judgement: &Judgement) -> Vec<Allowance> {
+    let rememberable = judgement.verdict == Verdict::Ask
+        && !judgement.rules.is_empty()
+        && !judgement.subject.starts_with("git ")
+        && judgement
+            .rules
+            .iter()
+            .all(|r| REMEMBERABLE.contains(&r.as_str()));
+    if !rememberable {
+        return Vec::new();
+    }
+    let path = &judgement.subject;
+    judgement
+        .rules
+        .iter()
+        .map(|rule| match file_kind(path) {
+            kind if rule == UNFAMILIAR_KINDS && !kind.starts_with('.') => Allowance::Kind { kind },
+            _ => Allowance::File {
+                path: path.clone(),
+                rule: rule.clone(),
+            },
+        })
+        .collect()
 }
 
 /// What an allowance would have let through so far.
@@ -161,7 +220,16 @@ fn check(allowance: &Allowance) -> Result<()> {
             }
             if !REMEMBERABLE.contains(&rule.as_str()) {
                 return refuse(format!(
-                    "{rule}: only a rule that asks about a file by its name can be answered for good"
+                    "{rule}: only a rule that asks about a file by its name, place or kind can be answered for good; what runs code on its own is always asked"
+                ));
+            }
+        }
+        Allowance::Kind { kind } => {
+            // One kind as Kule names it: `vue`, `makefile`; a hidden
+            // file is answered by its path.
+            if kind.is_empty() || kind.starts_with('.') || file_kind(kind) != *kind {
+                return refuse(format!(
+                    "{kind}: a kind of file in lower case, as an extension without its dot (vue) or a name without one (makefile)"
                 ));
             }
         }
@@ -201,23 +269,28 @@ pub fn impact(home: &Path, allowance: &Allowance, workspace: Option<&Path>) -> R
                 .iter()
                 .filter(|c| c.host == *host && c.port == *port && c.verdict != Verdict::Allow)
                 .count(),
-            Allowance::File { path, .. } => {
+            Allowance::File { .. } | Allowance::Kind { .. } => {
+                let covers = |e: &crate::effects::Effect| match allowance {
+                    Allowance::File { path, .. } => e.path == *path,
+                    Allowance::Kind { kind } => file_kind(&e.path) == *kind,
+                    Allowance::Connect { .. } => false,
+                };
                 let committed = task
                     .checkpoints()?
                     .iter()
-                    .filter(|c| c.effects.iter().any(|e| e.path == *path))
-                    .count();
+                    .map(|c| c.effects.iter().filter(|e| covers(e)).count())
+                    .sum::<usize>();
                 let pending = task
                     .effects()
-                    .map(|set| set.effects.iter().any(|e| e.path == *path))
-                    .unwrap_or(false);
-                committed + usize::from(pending)
+                    .map(|set| set.effects.iter().filter(|e| covers(e)).count())
+                    .unwrap_or(0);
+                committed + pending
             }
         };
         if found > 0 {
             match allowance {
                 Allowance::Connect { .. } => impact.connections += found,
-                Allowance::File { .. } => impact.changes += found,
+                Allowance::File { .. } | Allowance::Kind { .. } => impact.changes += found,
             }
             impact.tasks += 1;
         }
