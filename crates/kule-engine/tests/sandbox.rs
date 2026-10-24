@@ -2943,7 +2943,7 @@ fn calls_that_reach_past_the_command_are_refused_without_namespaces() {
     ];
     let script = format!(
         "import ctypes\nlibc = ctypes.CDLL(None, use_errno=True)\nfor name, nr in {:?}:\n    r = libc.syscall(nr, 0, 0, 0, 0, 0)\n    print(name, r, ctypes.get_errno())\n",
-        calls.iter().map(|(n, nr)| (n.to_string(), *nr as i64)).collect::<Vec<_>>()
+        calls.iter().map(|(n, nr)| (n.to_string(), *nr)).collect::<Vec<_>>()
     )
     .replace('"', "'");
     let out = sandbox_python(&sandbox, &script);

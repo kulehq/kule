@@ -893,9 +893,11 @@ pub(crate) const RUNS_AS_OWNER: u32 = 0o6000;
 /// writes, saying where it came from, never what it holds: left out of
 /// what a review compares, or every file the agent writes would be asked
 /// about.
+#[cfg(target_os = "macos")]
 const SET_BY_THE_SYSTEM: &[&str] = &["com.apple.provenance"];
 
 /// The most of a file's extended attributes read for a review, together.
+#[cfg(target_os = "macos")]
 const XATTRS_MAX: usize = 64 << 20;
 
 /// The extended attributes of the file `rel` under `root`, as [`beneath`]

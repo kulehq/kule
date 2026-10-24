@@ -156,8 +156,16 @@ mod tests {
         let home = tempfile::TempDir::new().unwrap();
         std::os::unix::fs::symlink(theirs, socket_path(home.path())).unwrap();
         fs::write(token_path(home.path()), "secret-token").unwrap();
-        let e = Client::new(home.path())
-            .call::<Hello>(Call::Hello)
+        // What listens there never answers: a client that talked to it
+        // would wait forever.
+        let (tx, rx) = std::sync::mpsc::channel();
+        let client = Client::new(home.path());
+        std::thread::spawn(move || {
+            let _ = tx.send(client.call::<Hello>(Call::Hello));
+        });
+        let e = rx
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("the client talked to what listens there")
             .unwrap_err();
         assert!(e.contains("not your own Kule daemon"), "{e}");
     }
