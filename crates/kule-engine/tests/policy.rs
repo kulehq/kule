@@ -246,10 +246,14 @@ fn a_hidden_path_waits_whatever_its_kind() {
     for path in [".gitignore", ".notes/todo.md", "docs/.draft.md"] {
         assert!(waits_by(&ruling, path, "dot-paths"), "{path}");
     }
-    assert_eq!(
-        on(&ruling, "docs/.draft.md"),
-        (Verdict::Ask, rules(&["dot-paths"]))
-    );
+    // Held for its place alone, whatever its kind: one reason, one answer.
+    for path in ["docs/.draft.md", ".gitignore"] {
+        assert_eq!(
+            on(&ruling, path),
+            (Verdict::Ask, rules(&["dot-paths"])),
+            "{path}"
+        );
+    }
     assert_eq!(
         on(&ruling, "scripts/pre-commit"),
         (Verdict::Ask, rules(&["unfamiliar-kinds"]))

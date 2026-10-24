@@ -255,7 +255,7 @@ fn a_kind_answered_for_good_passes_in_its_folder_only() {
         (
             ".cache/b.weird".into(),
             Verdict::Ask,
-            vec!["dot-paths".into(), "unfamiliar-kinds".into()]
+            vec!["dot-paths".into()]
         )
     );
     assert_eq!(verdict(&s, "c.other").1, Verdict::Ask);

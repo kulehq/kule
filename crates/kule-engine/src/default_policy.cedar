@@ -47,11 +47,12 @@ when { resource.kind like "fs.*" };
 // data, pictures and fonts) or one the project already tracks in git.
 // Every other kind waits: what passes is what is known, never what is not
 // yet known to run. Scripts (sh, ps1, bat, ...) are left out on purpose.
+// A hidden path waits by the next rule, whatever its kind.
 @id("unfamiliar-kinds")
 forbid (principal, action == Kule::Action::"auto", resource)
 when {
   resource.kind like "fs.*" && resource.entry == "file" && resource.change != "deleted" &&
-  !resource.kind_tracked &&
+  !resource.dotted && !resource.kind_tracked &&
   !["rs", "go", "py", "rb", "java", "kt", "kts", "scala", "swift", "m", "mm",
     "c", "h", "cc", "cpp", "cxx", "hpp", "hh", "cs", "fs", "fsx", "vb",
     "ts", "tsx", "js", "jsx", "mjs", "cjs", "vue", "svelte", "php", "pl", "pm",

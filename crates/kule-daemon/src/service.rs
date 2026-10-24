@@ -4178,7 +4178,7 @@ mod tests {
         let held = s.app.review(&id, true).unwrap().held;
         assert_eq!(held.len(), 1);
         assert_eq!(held[0].subjects, [".env"]);
-        assert_eq!(held[0].rules, ["dot-paths", "unfamiliar-kinds"]);
+        assert_eq!(held[0].rules, ["dot-paths"]);
         assert!(matches!(
             s.app.commit(&id, false, true, None).unwrap(),
             Commit::Held { .. }

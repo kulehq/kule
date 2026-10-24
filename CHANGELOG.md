@@ -13,8 +13,8 @@
   kind known not to run by itself (source, docs, data, pictures and fonts)
   or of a kind your folder's git repository already holds. Every other kind
   waits for you (`unfamiliar-kinds`), scripts such as `.sh` among them, and
-  so does whatever the task writes in a hidden file or folder, of any kind
-  (`dot-paths`). The kinds your project has are read from the folder's own
+  so does whatever the task writes in a hidden file or folder, of any kind,
+  for that reason alone (`dot-paths`). The kinds your project has are read from the folder's own
   repository, never the task's copy. Deletions and folders pass as before.
   Policies can read `file_kind`, `kind_tracked` and `dotted`.
 - A kind of file can be answered for good, as the project's from then on:
