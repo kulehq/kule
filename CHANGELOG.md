@@ -1,5 +1,13 @@
 # Changes
 
+## Unreleased
+
+### Changed
+
+- `kule exec` says what of the sandbox's refusals Kule could not read or
+  record, and still exits with the command's own code; a command that
+  succeeded fails then, since part of what it did went untold.
+
 ## 0.2.0-preview.11
 
 A hardening preview. An approval card says what approving lets through,

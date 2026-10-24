@@ -837,13 +837,27 @@ fn run() -> Result<ExitCode> {
             print_set(&task, &task.effects()?);
             print_connections(&connections(&task)?[logged_before..]);
             print_home(&task)?;
-            if let Some(sandbox) = used
-                && let Some(denials) = sandbox.denials(started.elapsed())?
-            {
-                record_denials(&task, &denials)?;
-                print_denials(&denials);
+            // What Kule cannot read or record of the refusals is said, and
+            // the command's own exit code still comes back.
+            let mut untold = false;
+            if let Some(sandbox) = used {
+                match sandbox.denials(started.elapsed()) {
+                    Ok(Some(denials)) => {
+                        print_denials(&denials);
+                        if let Err(e) = record_denials(&task, &denials) {
+                            eprintln!("kule: what the sandbox refused could not be recorded: {e}");
+                            untold = true;
+                        }
+                    }
+                    Ok(None) => {}
+                    Err(e) => {
+                        eprintln!("kule: what the sandbox refused cannot be read: {e}");
+                        untold = true;
+                    }
+                }
             }
             return Ok(match status.code() {
+                Some(0) if untold => ExitCode::FAILURE,
                 Some(0) => ExitCode::SUCCESS,
                 Some(code) => ExitCode::from(code.clamp(1, 255) as u8),
                 None => ExitCode::FAILURE,
