@@ -98,8 +98,8 @@ pub use meet::{Meeting, Touched, changed_entities, meet, touched};
 pub use network::{Connection, Proxy, connections, public_ip};
 pub use outline::{FileOutline, open_beneath};
 pub use policy::{
-    CAREFUL_POLICY, DEFAULT_POLICY, Judgement, Policy, PolicyChoice, REPO_POLICY, Ruling,
-    USER_POLICY, Verdict, choose_policy, dotted, file_kind, policy_choice, policy_text,
+    CAREFUL_POLICY, DEFAULT_POLICY, Held, Judgement, Policy, PolicyChoice, REPO_POLICY, Ruling,
+    USER_POLICY, Verdict, choose_policy, dotted, file_kind, policy_choice, policy_text, reason,
 };
 pub use ports::{Listener, listening_in};
 pub use preview::{Picture, Preview, previewable};

@@ -1717,13 +1717,23 @@ fn print_ruling(ruling: &Ruling) {
         Verdict::Deny => paint::red("denied"),
     };
     println!("{} {}", paint::dim("policy:"), word(ruling.verdict));
-    for judgement in ruling.holding() {
+    // Put together by why, each group saying it once.
+    for held in ruling.held() {
+        let kind = held
+            .kind
+            .as_deref()
+            .map(|k| format!(": {}", paint::plain_line(k)))
+            .unwrap_or_default();
         println!(
-            "  {} · {} {}",
-            paint::plain_line(&judgement.subject),
-            word(judgement.verdict),
-            paint::dim(&format!("({})", judgement.rules.join(", ")))
+            "  {}{kind} {} · {}",
+            held.reasons.join("; "),
+            // A repository's own rules name themselves.
+            paint::dim(&paint::plain_line(&format!("({})", held.rules.join(", ")))),
+            word(held.verdict)
         );
+        for subject in &held.subjects {
+            println!("    {}", paint::plain_line(subject));
+        }
     }
 }
 

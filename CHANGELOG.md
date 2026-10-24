@@ -23,6 +23,13 @@
   code on its own (CI, editor and agent settings: `automation`) is asked
   every time; an answer an earlier version kept for it is listed as no
   longer applying, in `kule rules` and in the app, and can be forgotten.
+- What holds a commit is shown put together by why, in `kule status`,
+  `kule commit` and the app's review: one heading per reason in plain words
+  ("a kind of file this project has none of: weird", "runs code when a tool
+  or an agent opens the folder"), the rules after it, and the paths under
+  it. Files that wait only for their kind are one group per kind, answered
+  at once. Rule names a repository's own policy gives are shown with their
+  control characters escaped.
 
 ## 0.2.0-preview.11
 

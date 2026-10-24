@@ -301,6 +301,9 @@ pub struct RuleView {
 pub struct Review {
     pub effects: EffectSet,
     pub ruling: Ruling,
+    /// What holds the commit, put together by why ([`Ruling::held`]).
+    #[serde(default)]
+    pub held: Vec<kule_engine::Held>,
     /// The digest of what a commit would take; a commit that names it is
     /// refused if anything changed since.
     pub digest: String,
@@ -1285,6 +1288,7 @@ impl Service {
         let home = task.home_changes().map_err(text)?;
         Ok(Review {
             effects,
+            held: ruling.held(),
             ruling,
             digest: pending.digest(),
             outline,
@@ -4170,7 +4174,11 @@ mod tests {
             Commit::Nothing
         ));
         assert!(!s.ws.path().join(".env").exists());
-        // A hidden file waits for a person, ignored or not.
+        // A hidden file waits for a person, ignored or not, and says why.
+        let held = s.app.review(&id, true).unwrap().held;
+        assert_eq!(held.len(), 1);
+        assert_eq!(held[0].subjects, [".env"]);
+        assert_eq!(held[0].rules, ["dot-paths", "unfamiliar-kinds"]);
         assert!(matches!(
             s.app.commit(&id, false, true, None).unwrap(),
             Commit::Held { .. }

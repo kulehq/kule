@@ -224,6 +224,74 @@ impl Ruling {
             .iter()
             .filter(|j| j.verdict != Verdict::Allow)
     }
+
+    /// [`Ruling::holding`] put together by why: the same rules, and for
+    /// what waits only for its kind, the same kind. Groups come in the
+    /// order their first subject does.
+    pub fn held(&self) -> Vec<Held> {
+        let mut groups: Vec<Held> = Vec::new();
+        for judgement in self.holding() {
+            let kind = (judgement.rules == [crate::remembered::UNFAMILIAR_KINDS])
+                .then(|| file_kind(&judgement.subject));
+            match groups.iter_mut().find(|g| {
+                g.rules == judgement.rules && g.kind == kind && g.verdict == judgement.verdict
+            }) {
+                Some(group) => group.subjects.push(judgement.subject.clone()),
+                None => groups.push(Held {
+                    verdict: judgement.verdict,
+                    reasons: judgement.rules.iter().map(|r| reason(r)).collect(),
+                    rules: judgement.rules.clone(),
+                    kind,
+                    subjects: vec![judgement.subject.clone()],
+                }),
+            }
+        }
+        groups
+    }
+}
+
+/// Subjects that wait, or are denied, for the same reasons.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Held {
+    pub verdict: Verdict,
+    /// The `@id`s of the rules that hold them.
+    pub rules: Vec<String>,
+    /// Why, in a person's words: one for each of `rules` ([`reason`]).
+    pub reasons: Vec<String>,
+    /// What kind of file they all are ([`file_kind`]), when only their
+    /// kind holds them, and a person may answer the kind for good.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    pub subjects: Vec<String>,
+}
+
+/// Why rule `rule` holds what it holds, in a person's words.
+pub fn reason(rule: &str) -> String {
+    if rule.starts_with("repo:") {
+        return "the repository's own rule".to_owned();
+    }
+    if rule.starts_with("policy-error") {
+        return "the policy could not judge it".to_owned();
+    }
+    match rule {
+        "unfamiliar-kinds" => "a kind of file this project has none of",
+        "dot-paths" => "a hidden file or folder, where tools find their settings",
+        "automation" => "runs code when a tool or an agent opens the folder",
+        "other-vcs" => "another version control system's files, which run on its next command",
+        "nested-repository" => "a repository's own files, which git reads and runs",
+        "nested-git-hooks" | "git-hooks" => "a git hook, which runs on its own",
+        "manifests-and-lockfiles" => "decides what gets installed",
+        "project-files" => "decides what gets built",
+        "permissions" => "made executable, or writable by anyone",
+        "extended-attributes" => "carries attributes no diff shows",
+        "links" => "a link, which leads wherever it points",
+        "mass-delete" => "one of more than 200 deletions",
+        "deletes-outside-git" => "one of more than 20 deletions outside git",
+        "careful" => "the careful policy asks about every change",
+        "no-rule-lets-it-pass" => "no rule lets it pass on its own",
+        _ => "a rule of the policy",
+    }
+    .to_owned()
 }
 
 /// The start of the ids a repository's own rules are added under.

@@ -1097,3 +1097,67 @@ fn a_file_s_extended_attributes_are_reviewed() {
     );
     assert_ne!(s.task.pending(false).unwrap().digest(), before);
 }
+
+/// What holds a commit is put together by why: one group per set of rules,
+/// each saying why in a person's words, and what waits only for its kind
+/// in one group per kind, which a person may answer at once.
+#[test]
+fn what_waits_is_put_together_by_why() {
+    let s = Setup::new(PROJECT, false);
+    let copy = s.copy();
+    for path in [
+        "ui/a.weird",
+        ".github/workflows/ci.yml",
+        "tool.sh",
+        "ui/b.weird",
+        ".vscode/settings.json",
+        "src/lib.rs",
+    ] {
+        write(&copy.join(path), "x\n");
+    }
+    let held = s.judged().held();
+    let groups: Vec<(Vec<String>, Option<&str>, Vec<&str>)> = held
+        .iter()
+        .map(|g| {
+            (
+                g.rules.clone(),
+                g.kind.as_deref(),
+                g.subjects.iter().map(String::as_str).collect(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        groups,
+        [
+            // The folders on the way, held for their place alone.
+            (
+                rules(&["automation"]),
+                None,
+                vec![".github", ".github/workflows", ".vscode"]
+            ),
+            (
+                rules(&["automation", "dot-paths"]),
+                None,
+                vec![".github/workflows/ci.yml", ".vscode/settings.json"]
+            ),
+            (rules(&["unfamiliar-kinds"]), Some("sh"), vec!["tool.sh"]),
+            (
+                rules(&["unfamiliar-kinds"]),
+                Some("weird"),
+                vec!["ui/a.weird", "ui/b.weird"]
+            ),
+        ]
+    );
+    assert_eq!(
+        held[1].reasons,
+        [
+            "runs code when a tool or an agent opens the folder",
+            "a hidden file or folder, where tools find their settings"
+        ]
+    );
+    assert_eq!(held[3].reasons, ["a kind of file this project has none of"]);
+    assert_eq!(
+        kule_engine::reason("repo:docs"),
+        "the repository's own rule"
+    );
+}

@@ -152,8 +152,12 @@ fn a_kind_answered_for_good_passes_from_then_on() {
     );
     fs::write(copy.join("a.weird"), "x\n").unwrap();
     let status = text(&kule(home, ws, &["status", &id]));
-    assert!(status.contains("a.weird"), "{status}");
-    assert!(status.contains("unfamiliar-kinds"), "{status}");
+    assert!(
+        status.contains(
+            "  a kind of file this project has none of: weird (unfamiliar-kinds) · waits for approval\n    a.weird\n"
+        ),
+        "{status}"
+    );
 
     let out = kule(home, ws, &["rules", "allow", "--kind", "weird"]);
     let said = text(&out);
