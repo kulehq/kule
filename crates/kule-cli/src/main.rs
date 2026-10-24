@@ -439,7 +439,9 @@ enum Cmd {
         #[arg(long)]
         include_ignored: bool,
         /// With --approve: do not ask again, on this folder, about the files
-        /// approved now (manifests, CI and project files).
+        /// approved now: manifests and project files and hidden files by
+        /// path, kinds new to the project by kind. What runs code on its
+        /// own is always asked.
         #[arg(long, requires = "approve")]
         remember: bool,
         /// With --approve: the digest `kule status` printed for the changes

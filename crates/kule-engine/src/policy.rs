@@ -152,7 +152,9 @@ pub fn policy_text(home: &Path) -> Result<String> {
 /// never replaced: they move it away first.
 pub fn choose_policy(home: &Path, choice: PolicyChoice) -> Result<()> {
     let path = home.join(USER_POLICY);
-    if policy_choice(home)? == PolicyChoice::Own {
+    // Only the person's own text is kept from being replaced: a choice
+    // Kule cannot read is put right by choosing again.
+    if path.is_file() && kules_text(&read(&path)?).is_none() {
         return Err(Error::Invalid(format!(
             "{} is a policy of your own; Kule does not replace it",
             path.display()

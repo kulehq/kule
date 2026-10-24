@@ -926,6 +926,12 @@ fn a_policy_choice_kule_cannot_read_is_refused() {
     write(&home.path().join("policy-choice"), "lenient\n");
     assert!(policy_choice(home.path()).is_err());
     assert!(Policy::load(Some(home.path()), s.task.workspace()).is_err());
+    // Choosing again, as the refusal says, puts it right.
+    kule_engine::choose_policy(home.path(), kule_engine::PolicyChoice::Careful).unwrap();
+    assert_eq!(
+        policy_choice(home.path()).unwrap(),
+        kule_engine::PolicyChoice::Careful
+    );
 }
 
 #[test]
