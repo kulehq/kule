@@ -1160,6 +1160,17 @@ fn a_task_whose_record_cannot_be_read_is_named_apart() {
         "{err}"
     );
     assert!(err.contains("`kule rm garbled`"), "{err}");
+    // Opened by its id, it says the same, without the home's path.
+    let err = Task::open(home.path(), "garbled")
+        .err()
+        .unwrap()
+        .to_string();
+    assert!(
+        err.contains("task garbled's record cannot be read"),
+        "{err}"
+    );
+    assert!(err.contains("`kule rm garbled`"), "{err}");
+    assert!(!err.contains(home.path().to_str().unwrap()), "{err}");
 }
 
 /// A task whose record cannot be read can be removed by its id, with its

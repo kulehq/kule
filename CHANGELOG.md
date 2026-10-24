@@ -33,7 +33,8 @@
   not the rows.
 - One task whose record cannot be read no longer fails the whole task list:
   `kule list` names it on stderr and lists the rest, and the app lists it
-  by its id as one that cannot be read. What needs every task (commands and
+  by its id as one that cannot be read; selected, it shows why, with
+  *Delete task*, instead of trying to load it. What needs every task (commands and
   runs in any task, since Kule cannot tell which folder that one hides, and
   budgets) still refuses while it is there, and now says which task and
   that `kule rm <id>` (or *Delete task* in the app) removes it; that works

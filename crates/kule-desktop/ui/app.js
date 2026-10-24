@@ -1375,10 +1375,18 @@ function renderTask() {
     return;
   }
   const task = currentTask();
+  // One whose record cannot be read opens nothing: what would load it
+  // fails. It is said as it is, with the one thing to do about it.
+  const unreadable = Boolean(task && task.unreadable);
   $("empty").hidden = Boolean(task);
-  $("task").hidden = !task;
+  $("task").hidden = !task || unreadable;
+  $("unreadable").hidden = !unreadable;
   renderLayout();
   if (!task) return;
+  if (unreadable) {
+    renderUnreadable(task);
+    return;
+  }
 
   $("task-name").textContent = shown(taskName(task));
   $("titlebar-title").textContent = shown(`${taskName(task)} — Kule`);
@@ -1422,6 +1430,36 @@ function renderTask() {
   if (isShown("files")) loadFiles(task.id);
   if (isShown("preview")) loadPreview(task);
   if (isShown("terminal")) showTerminal(task.id);
+}
+
+/** A task whose record cannot be read: why, what it holds, and Delete,
+ * armed as the task menu's is. */
+function renderUnreadable(task) {
+  $("titlebar-title").textContent = shown(`${taskName(task)} — Kule`);
+  const remove = h("button", { class: "button danger", type: "button" }, "Delete task");
+  remove.addEventListener("click", () => {
+    if (!remove.classList.contains("armed")) {
+      remove.classList.add("armed");
+      remove.textContent = shown(`Click again to delete ${task.id}`);
+      setTimeout(() => {
+        remove.classList.remove("armed");
+        remove.textContent = "Delete task";
+      }, 4000);
+      return;
+    }
+    removeTask(task);
+  });
+  replace(
+    $("unreadable"),
+    h("h1", {}, shown(`Task ${task.id}'s record cannot be read`)),
+    h("p", { class: "muted" }, shown(task.unreadable)),
+    h(
+      "p",
+      {},
+      "Kule cannot tell which folder it was made from, so no command or run starts in any task while it is here. Deleting it takes it and its copy away; no folder of yours is touched."
+    ),
+    remove
+  );
 }
 
 function renderComposer(task) {

@@ -511,7 +511,14 @@ impl Task {
             // Without the home's path: the message reaches extensions too.
             return Err(Error::Invalid(format!("no task {id}")));
         }
-        let info: TaskInfo = read_json(&dir.join("task.json"))?;
+        // Without the home's path, and saying what it holds.
+        let info: TaskInfo = read_json(&dir.join("task.json")).map_err(|e| {
+            Error::Invalid(format!(
+                "task {id}'s record cannot be read ({}); remove it with `kule rm {id}`, \
+                 or Delete task in the app",
+                why_unread(e)
+            ))
+        })?;
         if info.id != id {
             return Err(Error::Invalid(format!("task {id} says it is another")));
         }
@@ -542,13 +549,7 @@ impl Task {
                     Ok(info) => infos.push(info),
                     Err(e) => unreadable.push(Unreadable {
                         id: entry.file_name().to_string_lossy().into_owned(),
-                        // Without the home's path: the message reaches
-                        // extensions too.
-                        why: match e {
-                            Error::State { source, .. } => source.to_string(),
-                            Error::Io { source, .. } => source.to_string(),
-                            other => other.to_string(),
-                        },
+                        why: why_unread(e),
                     }),
                 }
             }
@@ -569,8 +570,8 @@ impl Task {
             Some(u) => Err(Error::Invalid(format!(
                 "task {id}'s record cannot be read ({why}): Kule cannot tell which folder it \
                  was made from, so no command or run starts in any task, and nothing that \
-                 counts every task goes on, until it is removed: `kule rm {id}` (its copy \
-                 goes with it; no folder of yours is touched)",
+                 counts every task goes on, until it is removed: `kule rm {id}`, or Delete task \
+                 in the app (its copy goes with it; no folder of yours is touched)",
                 id = u.id,
                 why = u.why
             ))),
@@ -2001,6 +2002,16 @@ impl Task {
 
     pub(crate) fn lock(&self) -> Result<Lock> {
         lock_at(&self.dir, &self.info.id)
+    }
+}
+
+/// Why a task's record could not be read, without the home's path: the
+/// message reaches extensions too.
+fn why_unread(e: Error) -> String {
+    match e {
+        Error::State { source, .. } => source.to_string(),
+        Error::Io { source, .. } => source.to_string(),
+        other => other.to_string(),
     }
 }
 
