@@ -10,6 +10,9 @@
   making them as the task is made or forked; one that comes before they are
   ready waits and says so, in the terminal, in Live, or on the command
   line, as does the CLI's first command when it makes them itself.
+- A terminal tab shows a turning line until its shell starts, saying what
+  it waits for (still with less motion turned on), and keeps a line saying
+  so once the shell is there.
 - Two terminals opened at once on a task (the app's own and one you open)
   both open: one waits a moment while the other masks the copy's secrets,
   instead of being refused as if a commit were under way.

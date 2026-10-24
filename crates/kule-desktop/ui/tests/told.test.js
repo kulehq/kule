@@ -185,3 +185,14 @@ test("a task whose record cannot be read is listed by its id", () => {
   assert.equal(told.taskFolder({ id: "6c2816d8", workspace: "/Users/me/code/app" }), "app");
   assert.equal(told.taskFolder({ id: "6c2816d8", unreadable: "its record cannot be read: EOF" }), "6c2816d8");
 });
+
+test("a tab waiting for its shell turns its line over itself, or holds it still", () => {
+  const first = told.spinnerLine(0, "starting the shell", false);
+  const next = told.spinnerLine(1, "starting the shell", false);
+  assert.ok(first.startsWith("\r\x1b[2K"), JSON.stringify(first));
+  assert.ok(first.includes(`${told.SPINNER[0]} starting the shell`));
+  assert.notEqual(first, next);
+  assert.equal(told.spinnerLine(0, "x", false), told.spinnerLine(told.SPINNER.length, "x", false));
+  // Less motion asked for: the same line every time.
+  assert.equal(told.spinnerLine(0, "x", true), told.spinnerLine(1, "x", true));
+});

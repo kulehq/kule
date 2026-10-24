@@ -215,6 +215,17 @@ function permissionLine(title, chosen, granted) {
 /** What a terminal the person closed said as its shell ended (what the
  * sandbox refused it, what Kule ended), as notes for the task's Live: its
  * tab is gone, so they would be lost there. */
+/** What a terminal tab shows until its shell starts, frame by frame. */
+const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+/** The line a tab waiting for its shell shows at frame `i`, written over
+ * itself; with `still` (the person asked for less motion) it does not
+ * turn. */
+function spinnerLine(i, text, still) {
+  const frame = still ? "…" : SPINNER[i % SPINNER.length];
+  return `\r\x1b[2K\x1b[2m${frame} ${text}\x1b[0m`;
+}
+
 /** The name a task is listed by: its folder's, or its id when its record
  * cannot be read and there is no folder to name it by. */
 function taskFolder(task) {
@@ -228,6 +239,8 @@ function closedTerminalNotes(notes) {
 
 if (typeof module !== "undefined") {
   module.exports = {
+    spinnerLine,
+    SPINNER,
     taskFolder,
     closedTerminalNotes,
     UNREPORTED,

@@ -6200,12 +6200,17 @@ async function newTerminal(taskId = state.current) {
   term.onResize(({ cols, rows }) => {
     if (entry.id && !entry.ended) call("terminal_resize", { id: entry.id, cols, rows }).catch(() => {});
   });
+  // Until the shell starts, the tab shows that it is coming and what
+  // holds it up (the task's caches, say); what held it up stays said.
+  entry.starting = terminalStarting(term);
   try {
     const opened = await call("terminal_open", { task: taskId, cols: term.cols, rows: term.rows, key: entry.key });
+    entry.starting.stop();
     entry.id = opened.id;
     entry.shell = opened.shell;
     for (const note of opened.notes || []) term.write(`\x1b[33mkule: ${terminalText(note)}\x1b[0m\r\n`);
   } catch (err) {
+    entry.starting.stop();
     // Refused: the tab says so, and does not look like a shell waiting.
     entry.ended = true;
     term.options.cursorBlink = false;
@@ -6215,6 +6220,34 @@ async function newTerminal(taskId = state.current) {
   renderTerminals(taskId);
   term.focus();
   return entry;
+}
+
+/** A turning line in `term` while its shell starts. `say` puts what holds
+ * it up in its place; `stop` takes the line away and leaves what was said
+ * as a `kule:` line, once. */
+function terminalStarting(term) {
+  const still = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+  let text = "starting the shell in the task's sandbox";
+  let said = null;
+  let i = 0;
+  const draw = () => term.write(spinnerLine(i++, text, still));
+  draw();
+  const timer = still ? null : setInterval(draw, 100);
+  let stopped = false;
+  return {
+    say(why) {
+      said = why;
+      text = why;
+      draw();
+    },
+    stop() {
+      if (stopped) return;
+      stopped = true;
+      clearInterval(timer);
+      term.write("\r\x1b[2K");
+      if (said) term.write(`\x1b[33mkule: ${said}\x1b[0m\r\n`);
+    },
+  };
 }
 
 /** The open task's terminal in front, and the tab bars that show them. */
@@ -6272,6 +6305,7 @@ async function closeTerminal(taskId, key) {
     closedTerminals.set(entry.id, taskId);
     await call("terminal_close", { id: entry.id }).catch(() => {});
   }
+  entry.starting?.stop();
   entry.term.dispose();
   entry.el.remove();
   const at = tabs.list.indexOf(entry);
@@ -6301,7 +6335,7 @@ function onTerminal(event) {
   if (event.kind === "preparing") {
     for (const tabs of terminals.values()) {
       const entry = tabs.list.find((e) => e.key === event.key);
-      if (entry) entry.term.write(`\x1b[33mkule: ${terminalText(event.text)}\x1b[0m\r\n`);
+      if (entry && entry.starting) entry.starting.say(terminalText(event.text));
     }
     return;
   }
@@ -6337,6 +6371,7 @@ function forgetTerminal(taskId) {
   if (!tabs) return;
   for (const e of tabs.list) {
     if (e.id && !e.ended) call("terminal_close", { id: e.id }).catch(() => {});
+    e.starting?.stop();
     e.term.dispose();
     e.el.remove();
   }
