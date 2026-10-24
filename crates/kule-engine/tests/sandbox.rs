@@ -2955,3 +2955,56 @@ fn calls_that_reach_past_the_command_are_refused_without_namespaces() {
         );
     }
 }
+
+/// A command another sandbox of this process is starting holds this
+/// process's files, another task's among them, until it runs its program:
+/// that task's clean-up leaves it be once it has, and ends one that holds
+/// on to them past the moment it is given.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_command_starting_for_another_task_is_not_its_stray() {
+    use std::os::unix::process::{CommandExt, ExitStatusExt};
+    let s = Setup::new();
+    // One of the task's files, open in this process as Kule's own are:
+    // closed when a command runs its program.
+    let held = fs::File::open(s.task.copy().join("README.md")).unwrap();
+    let start = |pause_ms: u64| {
+        let mut command = Command::new("sleep");
+        command.arg("30");
+        // SAFETY: prctl and nanosleep only, between fork and exec.
+        unsafe {
+            command.pre_exec(move || {
+                if libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                let pause = libc::timespec {
+                    tv_sec: (pause_ms / 1000) as libc::time_t,
+                    tv_nsec: ((pause_ms % 1000) * 1_000_000) as libc::c_long,
+                };
+                libc::nanosleep(&pause, std::ptr::null_mut());
+                Ok(())
+            });
+        }
+        std::thread::spawn(move || command.spawn().unwrap())
+    };
+    let moment = std::time::Duration::from_millis(20);
+
+    // Runs its program within a moment: left alone.
+    let quick = start(60);
+    std::thread::sleep(moment);
+    Sandbox::end_all(&s.task).unwrap();
+    let mut quick = quick.join().unwrap();
+    let ran = quick.try_wait().unwrap();
+    let _ = quick.kill();
+    let _ = quick.wait();
+    assert_eq!(ran, None, "a command starting elsewhere was ended");
+
+    // Holds on to the task's file without running its program: ended.
+    let slow = start(1500);
+    std::thread::sleep(moment);
+    Sandbox::end_all(&s.task).unwrap();
+    let mut slow = slow.join().unwrap();
+    let status = slow.wait().unwrap();
+    assert_eq!(status.signal(), Some(libc::SIGKILL), "{status:?}");
+    drop(held);
+}

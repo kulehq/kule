@@ -1540,9 +1540,16 @@ impl Sandbox {
     /// process of ours under no-new-privileges (as every sandboxed one is,
     /// and a person's shell is not) that works in the task's folders, by
     /// its directory, its program or a file it holds open.
+    ///
+    /// One found only by a file it holds, while it is still this program,
+    /// may be a command another of this process's sandboxes is starting:
+    /// until it runs its program it holds this process's files, another
+    /// task's among them, which close as it does. It is looked at again
+    /// once it has, or after [`FORK_WAIT`] if it has not, as what it is then.
     #[cfg(target_os = "linux")]
     fn strays(&self) -> Vec<i32> {
         use std::fs;
+        use std::os::unix::fs::MetadataExt;
         let dirs: Vec<PathBuf> = [&self.copy, &self.tmp]
             .into_iter()
             .chain(self.layer.iter())
@@ -1554,35 +1561,56 @@ impl Sandbox {
         // SAFETY: getuid cannot fail.
         let uid = unsafe { libc::getuid() }.to_string();
         let me = std::process::id() as i32;
+        // How `pid` is in the task's folders: `Some(true)` by a file it
+        // holds alone, `Some(false)` by its directory or program.
+        let found = |pid: i32| -> Option<bool> {
+            let status = fs::read_to_string(format!("/proc/{pid}/status")).ok()?;
+            let field = |name: &str| {
+                status
+                    .lines()
+                    .find_map(|l| l.strip_prefix(name))
+                    .map(|v| v.split_whitespace().next().unwrap_or("").to_owned())
+            };
+            if field("Uid:").as_deref() != Some(uid.as_str())
+                || field("NoNewPrivs:").as_deref() != Some("1")
+            {
+                return None;
+            }
+            let base = PathBuf::from(format!("/proc/{pid}"));
+            if inside(base.join("cwd")) || inside(base.join("exe")) {
+                return Some(false);
+            }
+            fs::read_dir(base.join("fd"))
+                .is_ok_and(|fds| fds.flatten().any(|fd| inside(fd.path())))
+                .then_some(true)
+        };
+        let program = |path: String| fs::metadata(path).ok().map(|m| (m.dev(), m.ino()));
+        let ours = program("/proc/self/exe".to_owned());
+        let still_ours = |pid: i32| ours.is_some() && program(format!("/proc/{pid}/exe")) == ours;
         let Ok(procs) = fs::read_dir("/proc") else {
             return Vec::new();
         };
-        procs
+        let (mut strays, mut forks) = (Vec::new(), Vec::new());
+        for pid in procs
             .flatten()
             .filter_map(|e| e.file_name().to_str()?.parse::<i32>().ok())
             .filter(|&pid| pid > 1 && pid != me)
-            .filter(|&pid| {
-                let Ok(status) = fs::read_to_string(format!("/proc/{pid}/status")) else {
-                    return false;
-                };
-                let field = |name: &str| {
-                    status
-                        .lines()
-                        .find_map(|l| l.strip_prefix(name))
-                        .map(|v| v.split_whitespace().next().unwrap_or("").to_owned())
-                };
-                if field("Uid:").as_deref() != Some(uid.as_str())
-                    || field("NoNewPrivs:").as_deref() != Some("1")
-                {
-                    return false;
-                }
-                let base = PathBuf::from(format!("/proc/{pid}"));
-                inside(base.join("cwd"))
-                    || inside(base.join("exe"))
-                    || fs::read_dir(base.join("fd"))
-                        .is_ok_and(|fds| fds.flatten().any(|fd| inside(fd.path())))
-            })
-            .collect()
+        {
+            match found(pid) {
+                Some(true) if still_ours(pid) => forks.push(pid),
+                Some(_) => strays.push(pid),
+                None => {}
+            }
+        }
+        if forks.is_empty() {
+            return strays;
+        }
+        let deadline = std::time::Instant::now() + FORK_WAIT;
+        while forks.iter().any(|&pid| still_ours(pid)) && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        strays.extend(forks.into_iter().filter(|&pid| found(pid).is_some()));
+        strays
     }
 
     #[cfg(not(any(target_os = "macos", target_os = "linux")))]
@@ -1955,6 +1983,11 @@ const NEVER_DEVICES: &[&str] = &[
 
 /// How many times [`Sandbox::end_strays`] looks before it gives up.
 const STRAY_LOOKS: usize = 200;
+
+/// How long a process this program started may take to run its program
+/// before Kule judges it by the files it holds (see `Sandbox::strays`).
+#[cfg(target_os = "linux")]
+const FORK_WAIT: Duration = Duration::from_millis(200);
 
 /// The resolved form of a path that may not exist: its nearest existing
 /// ancestor resolved, the rest appended.

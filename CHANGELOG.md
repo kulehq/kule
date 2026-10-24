@@ -12,6 +12,9 @@ Encrypted Client Hello says what turns it off in each tool, as measured.
 
 ### Fixes
 
+- On Linux, a command starting in one task is no longer ended by another
+  task's clean-up (before a commit, sync or rollback) that happens at the
+  same moment: Kule looks again once the command runs its program.
 - A connection cut for Encrypted Client Hello says what turns it off, as
   measured in #34: for Chromium-based browsers the policy
   `EncryptedClientHelloEnabled` set to false (the `--disable-features`
