@@ -176,6 +176,22 @@ function questionsForExtensions(waiting) {
   }));
 }
 
+/** How long a question's card shows before Approve takes a click or a
+ * key: a card that appears under the pointer, or under a key already on
+ * its way, is not approved by accident. */
+const QUESTION_GUARD_MS = 600;
+
+/** Whether a card shown at `shownAt` takes an approval at `now`. */
+function answerableYet(shownAt, now) {
+  return shownAt !== undefined && now - shownAt >= QUESTION_GUARD_MS;
+}
+
+/** What a frame is told when it connects: the task chosen now only with
+ * `tasks.read`, as `task-selected` is. */
+function frameContext(context, task, perms) {
+  return { ...context, task: perms.has("tasks.read") ? task || null : null };
+}
+
 /** What Kule answered an agent asking for permission: what Kule did, from
  * the option's kind, and the agent's own words for it only quoted after. */
 function permissionLine(title, chosen, granted) {
@@ -200,5 +216,8 @@ if (typeof module !== "undefined") {
     summarizeConnections,
     questionsForExtensions,
     permissionLine,
+    frameContext,
+    QUESTION_GUARD_MS,
+    answerableYet,
   };
 }

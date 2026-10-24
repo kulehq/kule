@@ -122,7 +122,7 @@ yaptığını söyleyen ayrı bir satırdır.
 
 | Düğme | Tuşlar | Ne yapar |
 | --- | --- | --- |
-| **Approve** | Mod+Shift+Y | Yalnızca bu bağlantının geçmesine izin verir. |
+| **Approve** | Mod+Shift+Y | Yalnızca bu bağlantının geçmesine izin verir. Kart göründükten sonra kısa bir an (0,6 sn) Approve ne tıklama ne tuş alır; böylece imlecinizin altında beliren bir kart yanlışlıkla onaylanmaz. |
 | **Approve and remember** | varsayılan yok | Bu host'a ve port'a bu klasörde bundan sonra sorulmadan izin verir. *Settings → Rules*, Kule'ye hatırlamasını söylediklerinizi listeler ve bir kuralı unutturur. |
 | **Deny** | Mod+Shift+N | Bağlantıyı reddeder. Ajan onsuz devam eder. |
 

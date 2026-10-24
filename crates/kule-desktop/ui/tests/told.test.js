@@ -130,3 +130,28 @@ test("a permission note says what Kule did, the agent's label only quoted after"
   assert.equal(told.permissionLine("Run rm -rf", "Allow", false), "Kule did not allow “Run rm -rf” (the agent's option: “Allow”)");
   assert.equal(told.permissionLine("Edit a.txt", "Yes", true), "Kule allowed “Edit a.txt” (the agent's option: “Yes”)");
 });
+
+test("an extension learns which task is chosen only with tasks.read", () => {
+  assert.equal(told.frameContext({ panel: "notes" }, "t1", new Set(["events.read"])).task, null);
+  assert.deepEqual(told.frameContext({ panel: "notes" }, "t1", new Set(["tasks.read"])), { panel: "notes", task: "t1" });
+  assert.equal(told.frameContext({}, undefined, new Set(["tasks.read"])).task, null);
+});
+
+test("the window's unseen characters are the set Kule's checks of extensions use", () => {
+  const fixture = JSON.parse(fs.readFileSync(path.join(__dirname, "unseen.json"), "utf8"));
+  const source = fs.readFileSync(path.join(__dirname, "..", "highlight.js"), "utf8");
+  const literal = source.match(/const UNSEEN = \/(.+)\/gu;/);
+  assert.ok(literal, "UNSEEN is where it was");
+  const unseen = new RegExp(literal[1], "u");
+  const char = (u) => String.fromCodePoint(parseInt(u.slice(2), 16));
+  for (const u of fixture.unseen) assert.ok(unseen.test(char(u)), u);
+  for (const u of fixture.seen) assert.ok(!unseen.test(char(u)), u);
+});
+
+test("a question takes an approval only once its card has been there a moment", () => {
+  assert.ok(!told.answerableYet(1000, 1000));
+  assert.ok(!told.answerableYet(1000, 1000 + told.QUESTION_GUARD_MS - 1));
+  assert.ok(told.answerableYet(1000, 1000 + told.QUESTION_GUARD_MS));
+  assert.ok(!told.answerableYet(undefined, 5000));
+  assert.ok(told.QUESTION_GUARD_MS >= 500);
+});

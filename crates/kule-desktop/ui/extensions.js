@@ -189,7 +189,7 @@ function connectFrame(rec) {
     {
       kule: "connect",
       extension: { id: m.id, name: m.name, version: m.version },
-      context: { ...rec.context, task: state.current || null },
+      context: frameContext(rec.context, state.current, rec.ext.perms),
       theme: themeForFrames(),
     },
     "*",
@@ -391,7 +391,7 @@ function extensionsSeeTask() {
   const task = state.current || null;
   if (EXT.taskTold === task) return;
   EXT.taskTold = task;
-  tellExtensions("task-selected", { task });
+  tellExtensions("task-selected", { task }, "tasks.read");
 }
 
 /** After a review loads: tells extensions that read reviews, once per change. */
@@ -517,6 +517,9 @@ function extensionCard(l) {
     }
     if (perms.includes("net") && perms.some((p) => READS_WORK.includes(p))) {
       parts.push(h("p", { class: "ext-warning" }, "It can read your work and send data to the hosts above."));
+    } else if ((l.together || []).length) {
+      // One reads, another sends: what they can do together.
+      parts.push(h("p", { class: "ext-warning" }, `Together with ${l.together.join(", ")}, it can read your work and send data.`));
     }
     const c = m.contributes || {};
     const adds = [

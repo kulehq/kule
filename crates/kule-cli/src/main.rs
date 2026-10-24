@@ -2718,6 +2718,12 @@ fn print_listed(listed: &kule_ext::Listed) {
             &listed.new_permissions,
             &listed.new_hosts,
         );
+        if !listed.together.is_empty() {
+            println!(
+                "warning:     together with {}, it can read your work and send data",
+                listed.together.join(", ")
+            );
+        }
     }
     if let Some(why) = &listed.held {
         println!("held:        {why}");

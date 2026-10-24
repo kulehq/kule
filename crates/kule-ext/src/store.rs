@@ -67,6 +67,11 @@ pub struct Approval {
     pub digest: String,
     pub permissions: Vec<Permission>,
     pub hosts: Vec<String>,
+    /// The other extensions the person approved it beside, knowing that
+    /// together they can read their work and send data (see
+    /// [`Listed::together`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub together: Vec<String>,
 }
 
 /// One installed extension, as the person sees it.
@@ -87,6 +92,12 @@ pub struct Listed {
     pub new_permissions: Vec<Permission>,
     /// Hosts it asks for that the last approval did not give.
     pub new_hosts: Vec<String>,
+    /// The other extensions that would run beside it with which it can
+    /// read the person's work and send data, where it cannot do both
+    /// alone: one reads, another sends. A combination the person did not
+    /// approve holds it.
+    #[serde(default)]
+    pub together: Vec<String>,
 }
 
 impl Listed {
@@ -98,13 +109,106 @@ impl Listed {
 
 pub struct Store {
     dir: PathBuf,
+    /// More folders agents can write, where a folder under development is
+    /// refused (see [`Store::refusing`]).
+    refused: Vec<PathBuf>,
+}
+
+/// Fills each extension's [`Listed::together`] and holds the combinations
+/// the person did not approve: of two extensions that would run (on, and
+/// approved as they are), one reading their work and the other sending
+/// data, approving either one beside the other approves the pair.
+fn together(listed: &mut [Listed]) {
+    /// What one extension can do, and the others it was approved beside.
+    struct Facts {
+        id: String,
+        would_run: bool,
+        reads: bool,
+        sends: bool,
+        approved_beside: Vec<String>,
+    }
+    let can = |l: &Listed| {
+        let perms = l
+            .manifest
+            .as_ref()
+            .map(|m| m.permissions.as_slice())
+            .unwrap_or_default();
+        (
+            perms.iter().any(|p| p.reads_work()),
+            perms.contains(&Permission::Net),
+        )
+    };
+    let facts: Vec<Facts> = listed
+        .iter()
+        .map(|l| {
+            let (reads, sends) = can(l);
+            Facts {
+                id: l.id.clone(),
+                would_run: l.enabled && l.held.is_none(),
+                reads,
+                sends,
+                approved_beside: l
+                    .approved
+                    .as_ref()
+                    .map(|a| a.together.clone())
+                    .unwrap_or_default(),
+            }
+        })
+        .collect();
+    for l in listed.iter_mut() {
+        let (reads, sends) = can(l);
+        if reads && sends {
+            // Its own card says so already.
+            continue;
+        }
+        l.together = facts
+            .iter()
+            .filter(|f| f.would_run && f.id != l.id && ((reads && f.sends) || (sends && f.reads)))
+            .map(|f| f.id.clone())
+            .collect();
+        if l.held.is_some() || !l.enabled {
+            continue;
+        }
+        let mine = l
+            .approved
+            .as_ref()
+            .map(|a| a.together.clone())
+            .unwrap_or_default();
+        let unapproved: Vec<&str> = l
+            .together
+            .iter()
+            .filter(|other| {
+                !mine.contains(other)
+                    && !facts
+                        .iter()
+                        .any(|f| f.id == **other && f.approved_beside.contains(&l.id))
+            })
+            .map(String::as_str)
+            .collect();
+        if !unapproved.is_empty() {
+            l.held = Some(format!(
+                "together with {} it can read your work and send data; approve it to let them run together",
+                unapproved.join(", ")
+            ));
+        }
+    }
 }
 
 impl Store {
     pub fn new(kule_home: &Path) -> Store {
         Store {
             dir: kule_home.join("extensions"),
+            refused: Vec::new(),
         }
+    }
+
+    /// The store, holding every folder under development that sits under
+    /// one of `dirs` (the folders tasks work on, the agents' own, which the
+    /// caller knows), as it holds one under a temporary directory: told
+    /// each time it is listed or run, not only when it was installed.
+    pub fn refusing(mut self, dirs: Vec<PathBuf>) -> Store {
+        self.refused = dirs;
+        self
     }
 
     /// Installs or updates a package. An update is held until approved.
@@ -177,18 +281,19 @@ impl Store {
     pub fn list(&self) -> Result<Vec<Listed>> {
         let installed = self.installed()?;
         let approved = self.approved()?;
-        Ok(installed
+        let mut listed: Vec<Listed> = installed
             .iter()
             .map(|(id, i)| self.listed(id, i, approved.get(id)))
-            .collect())
+            .collect();
+        together(&mut listed);
+        Ok(listed)
     }
 
     pub fn get(&self, id: &str) -> Result<Listed> {
-        let installed = self.installed()?;
-        let i = installed
-            .get(id)
-            .ok_or_else(|| Error::NotFound(id.to_owned()))?;
-        Ok(self.listed(id, i, self.approved()?.get(id)))
+        self.list()?
+            .into_iter()
+            .find(|l| l.id == id)
+            .ok_or_else(|| Error::NotFound(id.to_owned()))
     }
 
     fn listed(&self, id: &str, i: &Installed, approval: Option<&Approval>) -> Listed {
@@ -236,6 +341,7 @@ impl Store {
             approved: approval.cloned(),
             new_permissions,
             new_hosts,
+            together: Vec::new(),
         }
     }
 
@@ -253,7 +359,9 @@ impl Store {
 
     fn source(&self, id: &str, i: &Installed) -> Result<Source> {
         if let Some(dir) = &i.dev
-            && let Some(root) = self.agent_writable(dir)
+            && let Some(root) = self
+                .agent_writable(dir)
+                .or_else(|| under_any(dir, &self.refused))
         {
             return Err(invalid(format!(
                 "its folder is under {}, where agents can write",
@@ -291,6 +399,8 @@ impl Store {
                 "extension {id} changed since you looked at it; look again"
             )));
         }
+        // What it can do beside the others, as the person saw it.
+        let beside = self.get(id)?.together;
         let mut approved = self.approved()?;
         approved.insert(
             id.to_owned(),
@@ -298,6 +408,7 @@ impl Store {
                 digest: digest.to_owned(),
                 permissions: source.manifest().permissions.clone(),
                 hosts: source.manifest().hosts.clone(),
+                together: beside,
             },
         );
         self.write(APPROVED, &approved)?;
@@ -406,7 +517,11 @@ impl Store {
         }
         let source = self.source(id, i).map_err(|e| held(&e.to_string()))?;
         match self.approved()?.get(id) {
-            Some(a) if a.digest == source.digest() => Ok(source),
+            // Approved as it is, and beside the others that run with it.
+            Some(a) if a.digest == source.digest() => match self.get(id)?.held {
+                Some(why) => Err(held(&why)),
+                None => Ok(source),
+            },
             Some(_) => Err(held("it changed since you approved it")),
             None => Err(held("not approved yet")),
         }

@@ -39,16 +39,20 @@ kule ext approve me.hello    # let it run
 ```
 
 Open the panel from the command palette (`Show Hello`), or drag its tab where
-you want it. While you write, code changes run as they are; a change to
-`kule-extension.json` waits for approval again.
+you want it. Its digest covers every file in the folder that a package of it
+would carry, so any change, to the code or to `kule-extension.json`, waits
+for approval again (`kule ext approve`, or the card's **Approve the
+change**) before it runs.
 
 `kule ext approve` shows what it approves and asks first; a script passes
 `--yes`. With the app open, `kule ext` makes its changes through the daemon,
 so the app hears of them at once.
 
-The folder must be somewhere only you can write. Because its code runs
-unapproved, Kule refuses folders an agent could rewrite: those under `/tmp`,
-`/var/tmp`, `/dev/shm`, Kule's home, or an agent's own directories.
+The folder must be somewhere only you can write. Kule refuses folders an
+agent could rewrite: those under `/tmp`, `/var/tmp`, `/dev/shm`, Kule's home,
+an agent's own directories, or a folder a task works on (an agent's work
+reaches it with a commit). A task made later on a folder that holds one
+holds the extension from then on, and its card says why.
 
 To share it:
 
@@ -162,7 +166,11 @@ No permission reaches any of these:
 - the daemon's token.
 
 The approval screen warns when an extension can both read the person's work
-and send data out.
+and send data out. It warns too when it can do so together with another
+extension that runs: one reads, the other sends ("Together with acme.sender,
+it can read your work and send data"). Approving it approves the pair; a
+pair nobody approved (each approved while the other was off, say) holds both
+until one of them is approved beside the other.
 
 ## The SDK
 
@@ -209,7 +217,7 @@ await kule.net.fetch("https://hooks.slack.com/…", { method: "POST", headers, b
 | `task` | `{ task, change }`: `created`, `committed`, `rolled_back`, `undone`, `removed`, `went_back`, `synced` | `events.read` |
 | `questions` | The questions waiting now. Each says what kind of connection it is (`inside`: `null` for a tunnel, or `{ read_only, fills_secrets }`), never the names of the secrets Kule would fill | `questions.read` |
 | `review` | `{ task, digest }`: a review was drawn with new changes | `review.read` |
-| `task-selected` | `{ task }`: the person chose another task | — |
+| `task-selected` | `{ task }`: the person chose another task | `tasks.read` |
 | `theme` | `{ scheme, colors }`. The SDK already set `--kule-<part>` CSS variables (`--kule-bg`, `--kule-text`, `--kule-accent`, …) | — |
 | `config` | `{ key, value }`: the person changed a setting | — |
 
@@ -231,11 +239,12 @@ Events arrive only while the desktop app is open.
   hidden. Moving a panel to another region reloads its page.
 - **Each load is fresh:** the page gets a new connection, and `kule.ready`
   resolves again. Keep what must last in `kule.storage`, not in variables.
-  `kule.context.task` is the task chosen when the page loaded; listen to
-  `task-selected` for later ones.
-- **While you write:** a folder installed with `kule ext dev` is read live.
-  Its card in Settings → Extensions has **Reload**, which starts its frames
-  again with the code as it is now.
+  With `tasks.read`, `kule.context.task` is the task chosen when the page
+  loaded (`null` without it); listen to `task-selected` for later ones.
+- **While you write:** a folder installed with `kule ext dev` is read live,
+  and each change waits for approval again. Once approved, its card in
+  Settings → Extensions has **Reload**, which starts its frames again with
+  the code as it is now.
 
 ## Debugging
 

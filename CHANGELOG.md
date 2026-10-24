@@ -40,6 +40,20 @@
 - A permission note says what Kule did, from the kind of option it chose
   ("Kule allowed", "Kule did not allow"), with the agent's label only
   quoted after.
+- An extension's approval warns when, together with another that runs, it
+  can read your work and send data (one reads, the other sends). Approving
+  it approves the pair; a pair nobody approved holds both until one is
+  approved beside the other.
+- A folder under development is approved as all its files are: any change
+  to its code waits for approval again. One that a task's folder takes in
+  after it was installed is held from then on, saying why.
+- Extensions learn which task is chosen only with `tasks.read`.
+- What an extension shows (names, notifications) is checked against the
+  same set of characters that show nothing as the window uses, zero-width
+  ones and line separators included.
+- Approve on a question's card, and its shortcut, take nothing for a moment
+  after the card appears, so a card that shows up under the pointer is not
+  approved by accident.
 
 - A task's first run no longer waits while Kule walks the package caches it
   starts with. Only a disk limit needs them measured: the first run under

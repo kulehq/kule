@@ -412,15 +412,28 @@ fn a_package_changed_on_disk_is_held() {
 }
 
 #[test]
-fn a_folder_under_development_needs_approval_again_only_when_its_manifest_changes() {
+fn a_folder_under_development_needs_approval_again_when_any_file_changes() {
     let home = TempDir::new().unwrap();
     let store = Store::new(home.path());
     let dir = folder(&manifest(json!({})));
     let listed = store.install_folder(dir.path(), &[]).unwrap();
     assert!(listed.dev.is_some());
     store.approve("acme.notes", &listed.digest).unwrap();
-    fs::write(dir.path().join("main.js"), "// new code").unwrap();
     assert!(store.runnable("acme.notes").is_ok());
+    // Its code changed: held until the person looks again.
+    fs::write(dir.path().join("main.js"), "// new code").unwrap();
+    let held = store.get("acme.notes").unwrap();
+    assert_eq!(
+        held.held.as_deref(),
+        Some("it changed since you approved it")
+    );
+    assert!(store.runnable("acme.notes").is_err());
+    // A file no entry names, which a panel may load, counts too.
+    store.approve("acme.notes", &held.digest).unwrap();
+    fs::write(dir.path().join("helper.js"), "// more").unwrap();
+    assert!(store.runnable("acme.notes").is_err());
+    let listed = store.get("acme.notes").unwrap();
+    store.approve("acme.notes", &listed.digest).unwrap();
     assert_eq!(
         store
             .runnable("acme.notes")
@@ -589,4 +602,55 @@ fn a_folder_already_installed_where_agents_can_write_is_held() {
     let held = store.get("acme.notes").unwrap().held.unwrap();
     assert!(held.contains("where agents can write"), "{held}");
     assert!(store.runnable("acme.notes").is_err());
+}
+
+/// One extension reads the person's work, another sends data: alone each
+/// is harmless, together they are not. The approval shows them together,
+/// and a combination nobody approved holds both until one is approved
+/// beside the other.
+#[test]
+fn extensions_that_together_read_and_send_are_approved_together() {
+    let home = TempDir::new().unwrap();
+    let store = Store::new(home.path());
+    let reader = folder(&manifest(
+        json!({ "id": "acme.reader", "permissions": ["files.read"] }),
+    ));
+    let sender = folder(&manifest(
+        json!({ "id": "acme.sender", "permissions": ["net"], "hosts": ["api.example.com"] }),
+    ));
+    let r = store.install_folder(reader.path(), &[]).unwrap();
+    store.approve("acme.reader", &r.digest).unwrap();
+    assert!(store.get("acme.reader").unwrap().runs());
+
+    // The second one's approval names the first.
+    let s = store.install_folder(sender.path(), &[]).unwrap();
+    assert_eq!(s.together, ["acme.reader"]);
+    store.approve("acme.sender", &s.digest).unwrap();
+    for id in ["acme.reader", "acme.sender"] {
+        let l = store.get(id).unwrap();
+        assert!(l.runs(), "{id}: {:?}", l.held);
+        assert!(store.runnable(id).is_ok(), "{id}");
+    }
+    assert_eq!(store.get("acme.reader").unwrap().together, ["acme.sender"]);
+
+    // Approved apart (the other turned off): together, held.
+    let home = TempDir::new().unwrap();
+    let store = Store::new(home.path());
+    let r = store.install_folder(reader.path(), &[]).unwrap();
+    store.approve("acme.reader", &r.digest).unwrap();
+    store.set_enabled("acme.reader", false).unwrap();
+    let s = store.install_folder(sender.path(), &[]).unwrap();
+    store.approve("acme.sender", &s.digest).unwrap();
+    store.set_enabled("acme.reader", true).unwrap();
+    for id in ["acme.reader", "acme.sender"] {
+        let held = store.get(id).unwrap().held.unwrap_or_default();
+        assert!(held.starts_with("together with acme."), "{id}: {held}");
+        assert!(store.runnable(id).is_err(), "{id}");
+    }
+    // Approving either beside the other approves the pair.
+    let r = store.get("acme.reader").unwrap();
+    store.approve("acme.reader", &r.digest).unwrap();
+    for id in ["acme.reader", "acme.sender"] {
+        assert!(store.get(id).unwrap().runs(), "{id}");
+    }
 }

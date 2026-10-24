@@ -110,7 +110,7 @@ many were waiting) is a line of its own that says it was Kule.
 
 | Button | Keys | What it does |
 | --- | --- | --- |
-| **Approve** | Mod+Shift+Y | Lets this one connection through. |
+| **Approve** | Mod+Shift+Y | Lets this one connection through. For a moment after the card appears (0.6 s), Approve takes no click or key, so a card that shows up under your pointer is not approved by accident. |
 | **Approve and remember** | none by default | Lets this host and port through on this folder from now on, without asking. *Settings → Rules* lists what you told Kule to remember, and forgets a rule. |
 | **Deny** | Mod+Shift+N | Refuses it. The agent goes on without it. |
 

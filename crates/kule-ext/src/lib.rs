@@ -22,4 +22,4 @@ pub use manifest::{
 pub use package::{MAX_ENTRY, MAX_PACKAGE, Package, Source, media_type, pack, plain_path};
 pub use scaffold::{SDK_TYPES, scaffold};
 pub use store::{Approval, Listed, OfferedMcp, Store, under_any};
-pub use text::host_ok;
+pub use text::{host_ok, unseen};

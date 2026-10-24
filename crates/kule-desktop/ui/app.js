@@ -2878,6 +2878,12 @@ function renderQuestions() {
     // Seen for the first time: it opens, and its edge pulses twice.
     if (!questionsSeen.has(q.id)) arrive(`question:${q.id}`, QUESTION_ARRIVES_MS);
     questionsSeen.add(q.id);
+    if (!questionShownAt.has(q.id)) questionShownAt.set(q.id, performance.now());
+    // An approval only once the card has been there a moment.
+    const approving = (remember) => (e) => {
+      if (!answerableYet(questionShownAt.get(q.id), performance.now())) return;
+      inFlight(e.currentTarget, () => answer(q.id, true, remember));
+    };
     return arriving(
         h(
           "div",
@@ -2900,7 +2906,7 @@ function renderQuestions() {
             { class: "question-actions" },
             h(
               "button",
-              { class: "button ask", type: "button", "data-key": `approve:${q.id}`, "aria-label": `Approve ${q.host}:${q.port}`, onclick: (e) => inFlight(e.currentTarget, () => answer(q.id, true)) },
+              { class: "button ask", type: "button", "data-key": `approve:${q.id}`, "aria-label": `Approve ${q.host}:${q.port}`, onclick: approving(false) },
               "Approve"
             ),
             h(
@@ -2910,7 +2916,7 @@ function renderQuestions() {
                 type: "button",
                 "data-key": `remember:${q.id}`,
                 title: `Let ${q.host}:${q.port} through on this folder from now on, without asking`,
-                onclick: (e) => inFlight(e.currentTarget, () => answer(q.id, true, true)),
+                onclick: approving(true),
               },
               "Approve and remember"
             ),
@@ -2944,6 +2950,8 @@ function renderQuestions() {
 
 /** The questions shown at least once, and the task they were shown for. */
 const questionsSeen = new Set();
+/** When each question's card was first shown (see answerableYet). */
+const questionShownAt = new Map();
 let questionsFor;
 /** It opens, then its edge pulses twice. */
 const QUESTION_ARRIVES_MS = 2400;
@@ -7114,6 +7122,14 @@ async function answerFirst(approve, remember) {
   const q = firstQuestion();
   if (!q) {
     toast("No agent is waiting for an answer");
+    return;
+  }
+  // As the card's own button: a key already on its way approves nothing
+  // that just appeared. Its card may not be on screen: then it counts
+  // from now.
+  if (!questionShownAt.has(q.id)) questionShownAt.set(q.id, performance.now());
+  if (approve && !answerableYet(questionShownAt.get(q.id), performance.now())) {
+    toast(`${q.host}:${q.port} just asked; look at it, then approve`);
     return;
   }
   await answer(q.id, approve, remember);
