@@ -24,7 +24,7 @@ yalnızca uygulamayı ya da ikisini birden kullanabilirsiniz.
 :::note Bir önizleme
 
 Kule bir **önizleme** (preview): bir önizlemeden ötekine değişiklikler
-bekleyin. En son ön sürüm, [`0.2.0-preview.9`](https://github.com/kulehq/kule/releases/tag/v0.2.0-preview.9), sürümler sayfasında:
+bekleyin. En son ön sürüm, [`0.2.0-preview.10`](https://github.com/kulehq/kule/releases/tag/v0.2.0-preview.10), sürümler sayfasında:
 [indirin](#download-a-preview-release) ya da
 [kaynak koddan derleyin](#build-from-source).
 
@@ -222,7 +222,7 @@ kule --version
 ```
 
 ```text
-kule 0.2.0-preview.9
+kule 0.2.0-preview.10
 ```
 
 (Sayı, derlediğiniz ya da indirdiğiniz sürümdür.)
