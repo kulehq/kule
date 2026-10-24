@@ -4139,8 +4139,14 @@ mod tests {
             Commit::Nothing
         ));
         assert!(!s.ws.path().join(".env").exists());
+        // A hidden file waits for a person, ignored or not.
         assert!(matches!(
             s.app.commit(&id, false, true, None).unwrap(),
+            Commit::Held { .. }
+        ));
+        let review = s.app.review(&id, true).unwrap();
+        assert!(matches!(
+            s.app.commit(&id, true, true, Some(&review.digest)).unwrap(),
             Commit::Applied { changes: 1, .. }
         ));
         assert!(s.ws.path().join(".env").exists());

@@ -1607,7 +1607,7 @@ const POLICIES = [
   {
     choice: "balanced",
     name: "Balanced",
-    text: "Changes to files pass on their own. What decides what gets installed, built or run (manifests, lockfiles, CI, editor settings), git history rewrites and mass deletes wait for you.",
+    text: "Source, docs and data pass on their own, and so do kinds of file your project already tracks in git. Other kinds (scripts among them), hidden files and folders, what decides what gets installed, built or run (manifests, lockfiles, CI, editor settings), git history rewrites and mass deletes wait for you.",
   },
   {
     choice: "careful",

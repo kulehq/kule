@@ -84,8 +84,9 @@ const EARLIER_TEXTS: [(&str, PolicyChoice); 6] = [
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum PolicyChoice {
-    /// The built-in policy: changes to files pass, what decides what gets
-    /// installed, built or run waits.
+    /// The built-in policy: source, docs and data, and kinds of file the
+    /// project already tracks, pass; other kinds, hidden paths, and what
+    /// decides what gets installed, built or run wait.
     Balanced,
     /// [`CAREFUL_POLICY`].
     Careful,
@@ -431,6 +432,7 @@ impl Policy {
             let mut subject = Subject::file(kind, &effect.path, effect.change, effect.kind);
             subject.gains = set.gains.get(&effect.path).cloned().unwrap_or_default();
             subject.xattrs_changed = set.xattrs.contains_key(&effect.path);
+            subject.kind_tracked = set.tracked_kinds.contains(&subject.file_kind);
             subject.in_git_dir = set.git_dirs.iter().any(|d| {
                 effect
                     .path
@@ -484,7 +486,7 @@ impl Policy {
                                 Change::Modified => "fs.modify",
                                 Change::Deleted => "fs.delete",
                             };
-                            let subject = match c.entry {
+                            let mut subject = match c.entry {
                                 CarriedEntry::File => {
                                     Subject::file(kind, &c.path, c.change, Kind::File)
                                 }
@@ -494,6 +496,7 @@ impl Policy {
                                 // What another repository holds: a person's.
                                 CarriedEntry::Submodule => Subject::git("git.other", &c.path),
                             };
+                            subject.kind_tracked = set.tracked_kinds.contains(&subject.file_kind);
                             judgements.push(self.judge_one(
                                 format!("git ref {}: {}", change.name, c.path),
                                 &subject,
@@ -671,6 +674,10 @@ struct Subject {
     gains: Vec<String>,
     /// See [`EffectSet::xattrs`].
     xattrs_changed: bool,
+    /// See [`file_kind`]; "" for git and network.
+    file_kind: String,
+    /// See [`EffectSet::tracked_kinds`].
+    kind_tracked: bool,
 }
 
 impl Subject {
@@ -684,6 +691,7 @@ impl Subject {
             },
             path: path.to_owned(),
             change: change_name(change),
+            file_kind: file_kind(path),
             ..Subject::default()
         }
     }
@@ -789,8 +797,40 @@ impl Subject {
                 "xattrs_changed".into(),
                 RestrictedExpression::new_bool(self.xattrs_changed),
             ),
+            (
+                "file_kind".into(),
+                RestrictedExpression::new_string(self.file_kind.clone()),
+            ),
+            (
+                "kind_tracked".into(),
+                RestrictedExpression::new_bool(self.kind_tracked),
+            ),
+            (
+                "dotted".into(),
+                RestrictedExpression::new_bool(
+                    !self.entry.is_empty() && (self.in_git_dir || dotted(&self.path)),
+                ),
+            ),
         ])
     }
+}
+
+/// What kind of file `path` is, as the policy's `file_kind` sees it: the
+/// extension of its name in lower case (`vue`), or the whole name where it
+/// has none (`makefile`, `.envrc`). Not folded: a name that only folds to
+/// one with an extension (`x．md`) has none, and is a kind of its own.
+pub fn file_kind(path: &str) -> String {
+    let name = path.rsplit('/').next().unwrap_or(path).to_lowercase();
+    match name.rfind('.') {
+        Some(i) if i > 0 => name[i + 1..].to_owned(),
+        _ => name,
+    }
+}
+
+/// Whether a component of `path`, folded, starts with a dot: a hidden
+/// file or folder, where tools look for their settings.
+pub fn dotted(path: &str) -> bool {
+    fold(path).split('/').any(|part| part.starts_with('.'))
 }
 
 /// `text` as a disk that ignores case and Unicode forms may read it, and

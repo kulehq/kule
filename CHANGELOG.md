@@ -9,6 +9,14 @@
   version's rules. A careful policy an earlier version wrote out whole is
   that choice too: it is judged by today's rules and can be changed again,
   where it read as a policy of your own before.
+- Under the balanced policy, a file passes on its own only when it is of a
+  kind known not to run by itself (source, docs, data, pictures and fonts)
+  or of a kind your folder's git repository already holds. Every other kind
+  waits for you (`unfamiliar-kinds`), scripts such as `.sh` among them, and
+  so does whatever the task writes in a hidden file or folder, of any kind
+  (`dot-paths`). The kinds your project has are read from the folder's own
+  repository, never the task's copy. Deletions and folders pass as before.
+  Policies can read `file_kind`, `kind_tracked` and `dotted`.
 
 ## 0.2.0-preview.11
 

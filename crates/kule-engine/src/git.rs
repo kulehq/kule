@@ -215,6 +215,42 @@ pub(crate) fn open(root: &Path) -> Result<gix::Repository> {
     })
 }
 
+/// Which kinds ([`crate::policy::file_kind`]) of `paths` the index of the
+/// repository at `work`, the person's folder, already holds a file of. A
+/// hidden path counts for neither side: a tracked `.husky/pre-commit` makes
+/// no `pre-commit` file elsewhere a kind the project has.
+pub(crate) fn tracked_kinds<'a>(
+    work: &Path,
+    paths: impl Iterator<Item = &'a str>,
+) -> Result<std::collections::BTreeSet<String>> {
+    use crate::policy::{dotted, file_kind};
+    let mut wanted: std::collections::BTreeSet<String> =
+        paths.filter(|path| !dotted(path)).map(file_kind).collect();
+    let mut found = std::collections::BTreeSet::new();
+    if wanted.is_empty() || !work.join(".git").is_dir() {
+        return Ok(found);
+    }
+    let repo = open(work)?;
+    let index = repo.index_or_empty().map_err(|e| Error::Git {
+        path: work.to_path_buf(),
+        message: e.to_string(),
+    })?;
+    for entry in index.entries() {
+        let path = entry.path(&index).to_string();
+        if dotted(&path) {
+            continue;
+        }
+        let kind = file_kind(&path);
+        if wanted.remove(&kind) {
+            found.insert(kind);
+            if wanted.is_empty() {
+                break;
+            }
+        }
+    }
+    Ok(found)
+}
+
 fn target(reference: &gix::Reference<'_>) -> String {
     match reference.target() {
         gix::refs::TargetRef::Object(id) => id.to_hex().to_string(),
