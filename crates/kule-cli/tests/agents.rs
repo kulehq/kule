@@ -215,3 +215,80 @@ fn releasing_an_unfinished_reservation_is_said_and_kept() {
     let daily = stdout(&kule(home.path(), &["daily-budget"]));
     assert!(daily.contains("10.00 USD left"), "{daily}");
 }
+
+/// A copy Kule cannot read back after a run (a folder the agent made
+/// unreadable) hides nothing else: what the sandbox refused is still told
+/// and recorded, why the changes cannot be shown is said, and the run's own
+/// error comes back.
+#[test]
+fn what_cannot_be_shown_after_a_run_hides_nothing_else() {
+    let (home, ws, outside) = (
+        TempDir::new().unwrap(),
+        TempDir::new().unwrap(),
+        TempDir::new_in(env!("CARGO_TARGET_TMPDIR")).unwrap(),
+    );
+    let created = stdout(&kule(home.path(), &["new", ws.path().to_str().unwrap()]));
+    let id = created.split_whitespace().nth(1).unwrap();
+    let copy = stdout(&kule(home.path(), &["path", id])).trim().to_owned();
+    let target = fs::canonicalize(outside.path()).unwrap().join("x");
+    // The agent starts in the task's tmp, not in the copy.
+    let script = format!(
+        "mkdir -p '{copy}/locked' && chmod 000 '{copy}/locked'; echo x > {}; sleep 1; exit 3",
+        target.display()
+    );
+    fs::write(
+        home.path().join("agents.toml"),
+        format!("[[agent]]\nname = \"broken\"\ncommand = [\"sh\", \"-c\", {script:?}]\n"),
+    )
+    .unwrap();
+    stdout(&kule(home.path(), &["agents", "approve", "broken"]));
+    // So the folder can be removed, however the test ends.
+    struct Unlock(std::path::PathBuf);
+    impl Drop for Unlock {
+        fn drop(&mut self) {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = fs::set_permissions(&self.0, fs::Permissions::from_mode(0o755));
+        }
+    }
+    let _unlock = Unlock(Path::new(&copy).join("locked"));
+
+    let run = kule(home.path(), &["run", id, "--agent", "broken", "hello"]);
+    let (out, err) = (
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr),
+    );
+    assert!(!run.status.success(), "{out}");
+    assert!(err.contains("agent.log"), "{err}");
+    assert!(
+        err.contains("kule: what the run changed cannot be shown"),
+        "{err}"
+    );
+    if cfg!(target_os = "macos") {
+        // The system log did not show all of it: the refusal may be missing.
+        if err.contains(kule_engine::INCOMPLETE) {
+            use std::io::Write;
+            let _ = writeln!(
+                std::io::stderr().lock(),
+                "INCONCLUSIVE what_cannot_be_shown_after_a_run_hides_nothing_else: {err}"
+            );
+            return;
+        }
+        assert!(
+            out.contains(&format!(
+                "sandbox: refused file-write-create {}",
+                target.display()
+            )),
+            "{out}"
+        );
+        let task = kule_engine::Task::open(home.path(), id).unwrap();
+        assert!(
+            kule_engine::denials(&task)
+                .unwrap()
+                .iter()
+                .any(|d| Path::new(&d.path) == target),
+            "{out}"
+        );
+    } else {
+        assert!(err.contains(kule_engine::UNREPORTED), "{err}");
+    }
+}

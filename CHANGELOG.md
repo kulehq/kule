@@ -1,5 +1,18 @@
 # Changes
 
+## Unreleased
+
+### Fixes
+
+- `kule exec`, `kule run` and `kule shell` tell all of what came after a
+  command, a run or a shell even when one part cannot be shown (a folder in
+  the copy that cannot be read back, say): that part is a `kule: … cannot
+  be shown` line, what the sandbox refused is still listed and recorded, and
+  the command's, run's or shell's own exit code or error still comes back.
+  One that succeeded fails, as part of it went untold. On Linux, `kule exec`
+  says after a failed command that Linux does not tell Kule what the
+  sandbox refused, as `kule run` and `kule shell` do.
+
 ## 0.2.0-preview.12
 
 What passes on its own under the balanced policy is now an allow-list:

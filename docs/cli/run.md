@@ -200,6 +200,7 @@ which is easier to log.
 | `kule: what the run spent could not be read (…), so the <amount> set aside for it stays counted` | Kule could not read what the run's agent reported. The run's whole share counts, as above. |
 | `kule: Kule could not put back the protected paths the run changed: …` | Look at the changes with [kule status](status.md) before you commit, or [roll them back](rollback.md). |
 | `kule: what the sandbox refused cannot be read: …` / `… could not be recorded: …` | The refusals are not listed, or not kept for the agent's next run and the app's Timeline. |
+| `kule: what the run changed cannot be shown: …` / `the connections the run made …` / `what the run wrote in your home …` / `the policy …` / `what the run spent …` | Kule could not read that part back (a folder in the copy that cannot be read, say). The rest is still told, the refusals among it, and the run's own error, if any, comes after. |
 | `kule: the run ended, but Kule could not do all of the above` | The run itself went well; one of the lines above says what Kule could not do. |
 | `· Kule could not write the agent's log (…); what the agent writes to it is not kept for the rest of this run` | A note, not an error: the agent goes on, but its messages from then on are not in `agent.log`. Check that Kule's home can be written. |
 | `kule: <agent> reported no cost, so the task's budget does not count this run` | A warning, not an error: agents signed in with a subscription may report tokens only, and a budget cannot hold what is not reported. |

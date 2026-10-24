@@ -44,8 +44,9 @@ what the sandbox refused, as `kule exec` does, and `kule shell` exits with
 the shell's exit code. On macOS, Kule also ends what the shell left running
 in its sandbox and names it. On Linux, when the shell exited with an error,
 Kule says that Linux does not tell it what the sandbox refused. When Kule
-could not read or record what the sandbox refused, it says so, and
-`kule shell` fails even if the shell exited with 0.
+could not show one of these, or read or record what the sandbox refused, it
+says so, still tells the rest, and `kule shell` fails even if the shell
+exited with 0.
 
 **While the shell is open**, no agent starts work in the task (`kule run`
 and `kule exec` are refused too), and commit, sync and applying home

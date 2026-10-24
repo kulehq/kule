@@ -626,15 +626,18 @@ fn run() -> Result<ExitCode> {
             let logged_before = connections(&task)?.len();
             let _watch = watch_servers(&task);
             let (code, end) = relay::run(&home, task.id(), &shell)?;
-            print_set(&task, &task.effects()?);
-            print_connections(&connections(&task)?[logged_before..]);
-            print_home(&task)?;
+            // What cannot be shown is said, and the rest is told all the same.
+            let mut failed = Vec::new();
+            print_after(&task, logged_before, "the shell", &mut failed);
             print_denials(&end.denials);
             for note in end.notes(code != Some(0)) {
                 eprintln!("kule: {}", paint::plain_line(&note));
             }
+            for e in &failed {
+                eprintln!("kule: {}", paint::plain_line(e));
+            }
             return Ok(match code {
-                Some(0) if end.error.is_some() => ExitCode::FAILURE,
+                Some(0) if end.error.is_some() || !failed.is_empty() => ExitCode::FAILURE,
                 Some(0) => ExitCode::SUCCESS,
                 Some(code) => ExitCode::from(code.clamp(1, 255) as u8),
                 None => ExitCode::FAILURE,
@@ -841,12 +844,10 @@ fn run() -> Result<ExitCode> {
             if let Some(proxy) = proxy {
                 proxy.stop();
             }
-            print_set(&task, &task.effects()?);
-            print_connections(&connections(&task)?[logged_before..]);
-            print_home(&task)?;
-            // What Kule cannot read or record of the refusals is said, and
-            // the command's own exit code still comes back.
-            let mut untold = false;
+            // What Kule cannot show, read or record is said, the rest is
+            // told all the same, and the command's own exit code comes back.
+            let mut failed = Vec::new();
+            print_after(&task, logged_before, "the command", &mut failed);
             if let Some(sandbox) = used {
                 match sandbox.denials(started.elapsed()) {
                     Ok(Some(refused)) => {
@@ -857,19 +858,24 @@ fn run() -> Result<ExitCode> {
                             eprintln!("kule: {}", kule_engine::INCOMPLETE);
                         }
                         if let Err(e) = record_denials(&task, &refused.denials) {
-                            eprintln!("kule: what the sandbox refused could not be recorded: {e}");
-                            untold = true;
+                            failed.push(format!(
+                                "what the sandbox refused could not be recorded: {e}"
+                            ));
                         }
                     }
-                    Ok(None) => {}
-                    Err(e) => {
-                        eprintln!("kule: what the sandbox refused cannot be read: {e}");
-                        untold = true;
+                    // A command that failed may have failed for a refusal.
+                    Ok(None) if !status.success() => {
+                        eprintln!("kule: {}", kule_engine::UNREPORTED);
                     }
+                    Ok(None) => {}
+                    Err(e) => failed.push(format!("what the sandbox refused cannot be read: {e}")),
                 }
             }
+            for e in &failed {
+                eprintln!("kule: {}", paint::plain_line(e));
+            }
             return Ok(match status.code() {
-                Some(0) if untold => ExitCode::FAILURE,
+                Some(0) if !failed.is_empty() => ExitCode::FAILURE,
                 Some(0) => ExitCode::SUCCESS,
                 Some(code) => ExitCode::from(code.clamp(1, 255) as u8),
                 None => ExitCode::FAILURE,
@@ -995,7 +1001,11 @@ fn run() -> Result<ExitCode> {
                     failed.push(kept_whole(format!(
                         "what the run spent could not be recorded ({e})"
                     )));
-                } else if usage.cost.is_none() && task.budget()?.is_some() {
+                } else if usage.cost.is_none()
+                    && or_told(task.budget(), "the task's budget", &mut failed)
+                        .flatten()
+                        .is_some()
+                {
                     eprintln!(
                         "kule: {} reported no cost, so the task's budget does not count this run",
                         profile.name
@@ -1008,9 +1018,7 @@ fn run() -> Result<ExitCode> {
             failed.extend(after.failed);
             println!();
             proxy.stop();
-            print_set(&task, &task.effects()?);
-            print_connections(&connections(&task)?[logged_before..]);
-            print_home(&task)?;
+            let set = print_after(&task, logged_before, "the run", &mut failed);
             print_denials(&after.refused);
             if after.unreported && outcome.is_err() {
                 eprintln!("kule: {}", kule_engine::UNREPORTED);
@@ -1031,8 +1039,13 @@ fn run() -> Result<ExitCode> {
                     ),
                 }
             }
-            print_ruling(&load_policy(&home, &task)?.judge(&task.effects()?.to_commit(false)));
-            print_spent(&task)?;
+            if let (Some(set), Some(policy)) = (
+                set,
+                or_told(load_policy(&home, &task), "the policy", &mut failed),
+            ) {
+                print_ruling(&policy.judge(&set.to_commit(false)));
+            }
+            or_told(print_spent(&task), "what the run spent", &mut failed);
             println!("{} {}", paint::dim("took:"), paint::took(started.elapsed()));
             for e in &failed {
                 eprintln!("kule: {}", paint::plain_line(e));
@@ -1690,6 +1703,51 @@ fn tell_ended(task: &Task) {
     for text in task.take_ended() {
         eprintln!("kule: {}", paint::plain_line(&text));
     }
+}
+
+/// What `step` gives, or `None` once why it could not be had (`what`) is
+/// added to `failed`: what comes after it is told all the same.
+fn or_told<T, E: std::fmt::Display>(
+    step: std::result::Result<T, E>,
+    what: &str,
+    failed: &mut Vec<String>,
+) -> Option<T> {
+    match step {
+        Ok(value) => Some(value),
+        Err(e) => {
+            failed.push(format!("{what} cannot be shown: {e}"));
+            None
+        }
+    }
+}
+
+/// What `who` (the command, the shell, the run) changed in the copy, the
+/// connections logged since `logged_before`, and what it wrote in the
+/// home, each told whatever became of the others; the changes, where they
+/// could be read.
+fn print_after(
+    task: &Task,
+    logged_before: usize,
+    who: &str,
+    failed: &mut Vec<String>,
+) -> Option<EffectSet> {
+    let set = or_told(task.effects(), &format!("what {who} changed"), failed);
+    if let Some(set) = &set {
+        print_set(task, set);
+    }
+    if let Some(all) = or_told(
+        connections(task),
+        &format!("the connections {who} made"),
+        failed,
+    ) {
+        print_connections(all.get(logged_before..).unwrap_or_default());
+    }
+    or_told(
+        print_home(task),
+        &format!("what {who} wrote in your home"),
+        failed,
+    );
+    set
 }
 
 fn print_denials(denials: &[Denial]) {

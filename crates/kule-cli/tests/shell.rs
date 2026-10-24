@@ -289,3 +289,32 @@ fn exec_shields_its_servers_while_it_runs() {
     let _ = exec.wait_with_output();
     assert!(held, "the port was never held");
 }
+
+/// A copy Kule cannot read back after the shell (a folder made unreadable
+/// in it) hides nothing else: why the changes cannot be shown is said, the
+/// shell's own exit code comes back, and a shell that exited well fails,
+/// since part of what it did went untold.
+#[test]
+fn what_cannot_be_shown_after_the_shell_hides_nothing_else() {
+    struct Unlock(PathBuf);
+    impl Drop for Unlock {
+        fn drop(&mut self) {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = fs::set_permissions(&self.0, fs::Permissions::from_mode(0o755));
+        }
+    }
+    let s = Setup::new();
+    let _unlock = Unlock(s.copy.join("locked"));
+    for (code, expected) in [(3, 3), (0, 1)] {
+        let out = s.kule(
+            &["shell", &s.id],
+            &format!("mkdir -p locked && chmod 000 locked\nexit {code}\n"),
+        );
+        let text = said(&out);
+        assert_eq!(out.status.code(), Some(expected), "{text}");
+        assert!(
+            text.contains("kule: what the shell changed cannot be shown"),
+            "{text}"
+        );
+    }
+}

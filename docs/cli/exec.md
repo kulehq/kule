@@ -53,8 +53,11 @@ whatever became of its parent, and Kule names it:
 Kule then prints the copy's changes (all of them, not only
 this command's), the connections it made, home writes, and on macOS what the
 sandbox refused. `kule exec` exits with the command's own exit code. When
-Kule cannot read or record what the sandbox refused, it says so, and a
-command that succeeded exits with `1`: part of what it did went untold.
+Kule cannot show one of these (the copy cannot be read back, say) or cannot
+read or record what the sandbox refused, it says so in a `kule: … cannot
+be shown` line, still tells the rest, and a command that succeeded exits
+with `1`: part of what it did went untold. On Linux, after a command that
+failed, Kule says that Linux does not tell it what the sandbox refused.
 When the system log shows only part of it in time, Kule lists that part and
 says some refusals may be missing; the exit code stays the command's, since
 the sandbox refused them all the same.

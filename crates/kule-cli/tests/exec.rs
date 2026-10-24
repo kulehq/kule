@@ -99,3 +99,74 @@ fn an_unrecorded_refusal_is_said_and_the_exit_code_kept() {
         );
     }
 }
+
+/// A copy Kule cannot read back after the command (a folder the command
+/// made unreadable) hides nothing else: what the sandbox refused is still
+/// told and recorded, why the changes cannot be shown is said, and the
+/// command's own exit code comes back; a command that succeeded fails.
+#[test]
+fn what_cannot_be_shown_after_a_command_hides_nothing_else() {
+    let (home, ws) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+    let outside = TempDir::new_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
+    let kule = |args: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_kule"))
+            .args(args)
+            .env("KULE_HOME", home.path())
+            .output()
+            .unwrap()
+    };
+    let out = kule(&["new", ws.path().to_str().unwrap()]);
+    let id = String::from_utf8_lossy(&out.stdout)
+        .split_whitespace()
+        .nth(1)
+        .unwrap()
+        .to_owned();
+    let copy = String::from_utf8_lossy(&kule(&["path", &id]).stdout)
+        .trim()
+        .to_owned();
+    // So the folder can be removed, however the test ends.
+    struct Unlock(std::path::PathBuf);
+    impl Drop for Unlock {
+        fn drop(&mut self) {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = fs::set_permissions(&self.0, fs::Permissions::from_mode(0o755));
+        }
+    }
+    let _unlock = Unlock(std::path::Path::new(&copy).join("locked"));
+    let target = fs::canonicalize(outside.path()).unwrap().join("x");
+    for (code, expected) in [(3, 3), (0, 1)] {
+        let script = format!(
+            "mkdir -p locked && chmod 000 locked; echo x > {}; exit {code}",
+            target.display()
+        );
+        let out = kule(&["exec", &id, "--", "sh", "-c", &script]);
+        let (said, err) = (
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr),
+        );
+        assert_eq!(out.status.code(), Some(expected), "{said}{err}");
+        assert!(
+            err.contains("kule: what the command changed cannot be shown"),
+            "{err}"
+        );
+        if cfg!(target_os = "macos") {
+            assert!(
+                said.contains(&format!(
+                    "sandbox: refused file-write-create {}",
+                    target.display()
+                )),
+                "{said}{err}"
+            );
+            let task = kule_engine::Task::open(home.path(), &id).unwrap();
+            assert!(
+                kule_engine::denials(&task)
+                    .unwrap()
+                    .iter()
+                    .any(|d| std::path::Path::new(&d.path) == target),
+                "{said}{err}"
+            );
+        } else if code != 0 {
+            assert!(err.contains(kule_engine::UNREPORTED), "{err}");
+        }
+    }
+}

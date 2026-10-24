@@ -55,8 +55,12 @@ Ardından Kule kopyadaki değişiklikleri (yalnızca bu komutunkileri
 değil, hepsini), yaptığı bağlantıları, ev dizinine yazmaları ve macOS'ta
 sandbox'ın reddettiklerini yazdırır. `kule exec` komutun kendi çıkış koduyla
 çıkar. Kule sandbox'ın reddettiklerini okuyamaz ya da kaydedemezse bunu
-söyler ve başarılı olmuş bir komut `1` ile çıkar: yaptıklarının bir kısmı
-anlatılmadan kalmıştır. Sistem günlüğü bunların yalnızca bir kısmını zamanında
+söyler; bunlardan birini gösteremediğinde de (örneğin kopya geri
+okunamıyorsa) bir `kule: … cannot be shown` satırıyla söyler ve geri
+kalanını yine anlatır. İki durumda da başarılı olmuş bir komut `1` ile
+çıkar: yaptıklarının bir kısmı anlatılmadan kalmıştır. Linux'ta, başarısız
+olmuş bir komuttan sonra Kule, Linux'un sandbox'ın reddettiklerini kendisine
+söylemediğini belirtir. Sistem günlüğü bunların yalnızca bir kısmını zamanında
 gösterirse Kule o kısmı listeler ve bazı retlerin eksik olabileceğini söyler;
 çıkış kodu komutunki olarak kalır, çünkü sandbox hepsini yine de reddetmiştir.
 
