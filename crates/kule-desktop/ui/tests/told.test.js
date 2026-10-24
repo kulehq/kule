@@ -156,3 +156,11 @@ test("a question takes an approval only once its card has been there a moment", 
   assert.ok(!told.answerableYet(undefined, 5000));
   assert.ok(told.QUESTION_GUARD_MS >= 500);
 });
+
+test("a terminal the person closed tells its end in the task's Live", () => {
+  assert.deepEqual(told.closedTerminalNotes(["sandbox: refused file-write-create /x (sh)", "Kule ended sleep, which the shell left running in its sandbox"]), [
+    { kind: "note", text: "A terminal you closed: sandbox: refused file-write-create /x (sh)" },
+    { kind: "note", text: "A terminal you closed: Kule ended sleep, which the shell left running in its sandbox" },
+  ]);
+  assert.deepEqual(told.closedTerminalNotes(undefined), []);
+});

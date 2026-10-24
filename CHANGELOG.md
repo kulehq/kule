@@ -15,6 +15,10 @@
 - `kule run` gives the agent the MCP servers you approved from extensions,
   as the app's runs do; it ran without them before, saying nothing. When
   what you approved cannot be read, the run goes without them and says so.
+- What the sandbox refused a terminal in the app is no longer lost when you
+  close its tab before its shell ends (the lines go to the task's Live) or
+  quit Kule with it open (its shell ends with Kule, and the refusals are
+  kept for the Timeline and the task's next run).
 
 ## 0.2.0-preview.12
 

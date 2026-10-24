@@ -1206,8 +1206,16 @@ fn main() {
             start_run,
             stream,
         ])
-        .run(context)
-        .expect("the window could not start");
+        .build(context)
+        .expect("the window could not start")
+        .run(|app, event| {
+            // A terminal open as the app quits ends with it, and what its
+            // sandbox refused is recorded first.
+            if let tauri::RunEvent::Exit = event {
+                app.state::<pty::Terminals>()
+                    .end_all(std::time::Duration::from_secs(15));
+            }
+        });
 }
 
 #[cfg(test)]

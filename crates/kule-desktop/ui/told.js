@@ -203,8 +203,16 @@ function permissionLine(title, chosen, granted) {
   return `${granted ? "Kule allowed" : "Kule did not allow"} “${title}” (the agent's option: “${chosen}”)`;
 }
 
+/** What a terminal the person closed said as its shell ended (what the
+ * sandbox refused it, what Kule ended), as notes for the task's Live: its
+ * tab is gone, so they would be lost there. */
+function closedTerminalNotes(notes) {
+  return (notes || []).map((note) => ({ kind: "note", text: `A terminal you closed: ${note}` }));
+}
+
 if (typeof module !== "undefined") {
   module.exports = {
+    closedTerminalNotes,
     UNREPORTED,
     INCOMPLETE,
     groupDenials,

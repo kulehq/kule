@@ -53,7 +53,12 @@ edilir.
   ipuçlarını ve kabuğun sandbox'ında çalışır bıraktığı, Kule'nin
   sonlandırdığı şeyi (macOS) söyler. Linux'ta, kabuk bir hatayla çıktıysa,
   Linux'un sandbox'ın reddettiklerini Kule'ye söylemediğini belirtir.
-  Ardından *[the shell ended; press Enter for a new one]* gelir.
+  Ardından *[the shell ended; press Enter for a new one]* gelir. Sekmesini
+  önce kapattıysanız aynı satırlar görevin **Live**'ında, her biri
+  *A terminal you closed:* ile başlayarak yer alır. Kule'yi açık bir
+  terminalle kapattığınızda kabuk Kule ile birlikte biter; sandbox'ın ona
+  reddettikleri yine görevin Timeline'ı ve bir sonraki çalıştırması için
+  saklanır.
 - **Bir görevde terminal açıkken** o görevde hiçbir ajan çalıştırması
   başlamaz; **Commit**, **Sync**, **Roll back**, **Undo**, bir adıma geri
   dönmek ve ev değişikliklerini uygulamak ya da geri almak bekler. Kule

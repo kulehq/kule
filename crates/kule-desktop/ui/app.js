@@ -6213,11 +6213,18 @@ async function showTerminal(taskId) {
   renderTerminals(taskId);
 }
 
+/** Terminals the person closed while their shell ran, by id: what each
+ * says as it ends goes to its task's Live (see `onTerminal`). */
+const closedTerminals = new Map();
+
 async function closeTerminal(taskId, key) {
   const tabs = terminals.get(taskId);
   const entry = tabs && tabs.list.find((e) => e.key === key);
   if (!entry) return;
-  if (entry.id && !entry.ended) await call("terminal_close", { id: entry.id }).catch(() => {});
+  if (entry.id && !entry.ended) {
+    closedTerminals.set(entry.id, taskId);
+    await call("terminal_close", { id: entry.id }).catch(() => {});
+  }
   entry.term.dispose();
   entry.el.remove();
   const at = tabs.list.indexOf(entry);
@@ -6255,6 +6262,16 @@ function onTerminal(event) {
       if (taskId === state.current) renderTerminals(taskId);
     }
     return;
+  }
+  // Its tab is gone: what it says as it ends is told in its task's Live.
+  const taskId = closedTerminals.get(event.id);
+  if (event.kind === "exit" && taskId) {
+    closedTerminals.delete(event.id);
+    const notes = closedTerminalNotes(event.notes);
+    if (notes.length) {
+      streamOf(taskId).push(...notes);
+      if (taskId === state.current) renderStream(taskId);
+    }
   }
 }
 

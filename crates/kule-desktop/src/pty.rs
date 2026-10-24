@@ -35,6 +35,9 @@ struct Term {
 pub struct Terminals {
     next: AtomicU64,
     open: Mutex<HashMap<u64, Term>>,
+    /// Each shell's end, done once it is: what its sandbox refused it is
+    /// recorded there (see [`Terminals::end_all`]).
+    ending: Mutex<Vec<std::thread::JoinHandle<()>>>,
 }
 
 /// What the window hears about a terminal: output, as base64 so a cut
@@ -221,7 +224,7 @@ impl Terminals {
         // The shell's end, not its terminal's: what it left running in the
         // background may hold the terminal on, but the task's work goes on
         // once the shell is gone (a commit ends what was left).
-        std::thread::spawn(move || {
+        let ending = std::thread::spawn(move || {
             let status = child.wait().ok();
             // What it wrote last, before its end is told.
             let _ = all_read.recv_timeout(Duration::from_millis(300));
@@ -229,6 +232,12 @@ impl Terminals {
             let notes = sandboxed.end().lines(code != Some(0));
             tell(Event::Exit { id, code, notes });
         });
+        let mut ends = self
+            .ending
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        ends.retain(|end| !end.is_finished());
+        ends.push(ending);
         Ok(id)
     }
 
@@ -257,6 +266,37 @@ impl Terminals {
             return Err(std::io::Error::last_os_error().to_string());
         }
         Ok(())
+    }
+
+    /// As the app quits: ends every terminal's shell, and waits up to
+    /// `within` for each end to be done, so what the sandbox refused them is
+    /// recorded and their tasks are let go of.
+    pub fn end_all(&self, within: Duration) {
+        let deadline = std::time::Instant::now() + within;
+        let open: Vec<u64> = self
+            .open
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .keys()
+            .copied()
+            .collect();
+        for id in open {
+            self.close(id);
+        }
+        let ends = std::mem::take(
+            &mut *self
+                .ending
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        );
+        for end in ends {
+            while !end.is_finished() && std::time::Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            if end.is_finished() {
+                let _ = end.join();
+            }
+        }
     }
 
     /// Ends terminal `id`'s shell, and what it runs in front.
@@ -493,6 +533,43 @@ mod tests {
             .unwrap_err();
         assert!(e.contains("agent is at work"), "{e}");
         drop(at_work);
+    }
+
+    /// As the app quits with a terminal open, its shell is ended and what
+    /// the sandbox refused it is still recorded (macOS): the task's next
+    /// run and its Timeline hear of it, and the task is let go of.
+    #[test]
+    fn quitting_with_a_terminal_open_still_records_its_refusals() {
+        let s = Setup::new();
+        let terms = Terminals::default();
+        let target = std::fs::canonicalize(s.outside.path())
+            .unwrap()
+            .join("escaped");
+        let (_, rx) = s.start(
+            &terms,
+            &format!(
+                "echo x > '{}' 2>/dev/null; printf up; sleep 60",
+                target.display()
+            ),
+        );
+        until(&rx, "up");
+        let started = Instant::now();
+        terms.end_all(Duration::from_secs(30));
+        let task = kule_engine_task(&s);
+        assert!(task.terminals_open().is_empty());
+        assert!(started.elapsed() < Duration::from_secs(30));
+        if cfg!(target_os = "macos") {
+            let recorded = kule_daemon::Service::new(s.home.path().to_owned())
+                .timeline(&s.task)
+                .unwrap()
+                .denials;
+            assert!(
+                recorded
+                    .iter()
+                    .any(|d| std::path::Path::new(&d.path) == target),
+                "{recorded:?}"
+            );
+        }
     }
 
     fn kule_engine_task(s: &Setup) -> kule_daemon::shell::Task {
