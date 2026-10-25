@@ -1,6 +1,11 @@
 # Changes
 
-## Unreleased
+## 0.2.0-preview.14
+
+On macOS, what a task's sandbox refused is read as the system log streams
+it and checked against the log's store, and when macOS dropped the kernel's
+log messages while the sandbox was in use, a quiet line says when. Each
+sandbox's mark is chosen at random.
 
 ### Security
 
