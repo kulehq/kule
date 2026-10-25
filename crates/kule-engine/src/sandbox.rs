@@ -1541,11 +1541,11 @@ impl Sandbox {
     /// and a person's shell is not) that works in the task's folders, by
     /// its directory, its program or a file it holds open.
     ///
-    /// One found only by a file it holds, while it is still this program,
-    /// may be a command another of this process's sandboxes is starting:
-    /// until it runs its program it holds this process's files, another
+    /// One found only by a file it holds may be a command another of this
+    /// process's sandboxes is starting: until it runs its program, and for
+    /// a moment while it does, it holds this process's files, another
     /// task's among them, which close as it does. It is looked at again
-    /// once it has, or after [`FORK_WAIT`] if it has not, as what it is then.
+    /// once it has (after [`FORK_WAIT`] at the most), as what it is then.
     #[cfg(target_os = "linux")]
     fn strays(&self) -> Vec<i32> {
         use std::fs;
@@ -1597,8 +1597,8 @@ impl Sandbox {
             .filter(|&pid| pid > 1 && pid != me)
         {
             match found(pid) {
-                Some(true) if still_ours(pid) => forks.push(pid),
-                Some(_) => strays.push(pid),
+                Some(true) => forks.push(pid),
+                Some(false) => strays.push(pid),
                 None => {}
             }
         }
@@ -1606,6 +1606,9 @@ impl Sandbox {
             return strays;
         }
         let deadline = std::time::Instant::now() + FORK_WAIT;
+        // At least once: one running its program now drops the files as
+        // it finishes, a moment after it shows the program.
+        std::thread::sleep(Duration::from_millis(5));
         while forks.iter().any(|&pid| still_ours(pid)) && std::time::Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(5));
         }
