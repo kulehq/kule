@@ -730,9 +730,14 @@ impl Sandbox {
     /// allowed; hidden is only Kule's home, apart from that copy and tmp.
     pub fn new(task: &Task) -> Result<Sandbox> {
         let tmp = task.tmp()?;
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_or(0, |d| d.as_nanos());
+        // At random, not by the clock: sandboxes made at the same moment
+        // must not share the mark their processes and refusals are found by.
+        let random = Path::new("/dev/urandom");
+        let mut bytes = [0u8; 8];
+        std::fs::File::open(random)
+            .and_then(|mut f| std::io::Read::read_exact(&mut f, &mut bytes))
+            .at(random)?;
+        let own: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
         Ok(Sandbox {
             copy: real(&task.copy())?,
             tmp: real(&tmp)?,
@@ -763,9 +768,9 @@ impl Sandbox {
             devices: Vec::new(),
             keychain: false,
             file_size: None,
-            tag: format!("kule-{}-{nanos:x}", task.id()),
+            tag: format!("kule-{}-{own}", task.id()),
             task: task.id().to_owned(),
-            own: format!("{nanos:x}"),
+            own,
             // A choice that cannot be read is no choice.
             accept_weaker: crate::isolation::isolation(&task.home()).is_ok_and(|i| i.accept_weaker),
             terminal: None,
@@ -3076,6 +3081,43 @@ mod tests {
             hint.contains("window server") && hint.contains("pandoc"),
             "{hint}"
         );
+    }
+}
+
+#[cfg(test)]
+mod marks_tests {
+    use super::*;
+
+    /// Sandboxes of one task made at the same moment each have a mark of
+    /// their own: what one ends or is told was refused is never another's.
+    #[test]
+    fn sandboxes_made_at_once_have_marks_of_their_own() {
+        let (home, ws) = (
+            tempfile::TempDir::new().unwrap(),
+            tempfile::TempDir::new().unwrap(),
+        );
+        let task = Task::create(home.path(), ws.path()).unwrap();
+        // Made on many threads at once, as a daemon's runs and terminals are.
+        let (threads, each) = (16, 64);
+        let start = std::sync::Barrier::new(threads);
+        let sandboxes: Vec<Sandbox> = std::thread::scope(|scope| {
+            let made: Vec<_> = (0..threads)
+                .map(|_| {
+                    scope.spawn(|| {
+                        start.wait();
+                        (0..each)
+                            .map(|_| Sandbox::new(&task).unwrap())
+                            .collect::<Vec<_>>()
+                    })
+                })
+                .collect();
+            made.into_iter().flat_map(|m| m.join().unwrap()).collect()
+        });
+        let owns: std::collections::HashSet<&str> =
+            sandboxes.iter().map(|s| s.own.as_str()).collect();
+        let tags: std::collections::HashSet<&str> =
+            sandboxes.iter().map(|s| s.tag.as_str()).collect();
+        assert_eq!((owns.len(), tags.len()), (threads * each, threads * each));
     }
 }
 

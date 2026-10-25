@@ -1,5 +1,13 @@
 # Changes
 
+## Unreleased
+
+### Security
+
+- Each sandbox's mark is chosen at random rather than taken from the clock,
+  so sandboxes made at the same moment are told their own refusals, and
+  what one ends is never another's.
+
 ## 0.2.0-preview.13
 
 Kule tells you, where you work, more of what it cut, ended or refused, and
