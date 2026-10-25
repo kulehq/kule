@@ -200,13 +200,16 @@ sandbox: refused file-read-data /Users/me/.config/gh/config.yml (gh)
 sandbox: refused file-read-data /Users/me/.ssh/id_ed25519 (ssh)
 ```
 
-Kule bunları macOS'un sistem günlüğü akıttıkça okur ve listeyi,
-komutlarınkilerden sonra kendi yaptığı bir retle karşılaştırır. İki şey bir
-reddi listenin dışında bırakabilir; Kule ikisini de, çıkış kodunu
-değiştirmeden söyler:
+Kule bunları macOS'un sistem günlüğü akıttıkça okur ve listeyi günlüğün
+deposuyla karşılaştırır: komutlarınkilerden sonra kendi yaptığı bir ret
+orada görünmeli, depo da akışın getirmediği bir ret göstermemelidir; çünkü
+günlük, geride kalan bir akış okuyucusuna borçlu olduklarının bir kısmını
+haber vermeden düşürür. İki şey bir reddi listenin dışında bırakabilir;
+Kule ikisini de, çıkış kodunu değiştirmeden söyler:
 
 - Kule beklemeyi bıraktığında günlük, çok yoğun bir bilgisayarda, henüz
-  yetişmemişti: *some refusals may be missing from what is listed*.
+  yetişmemişti ya da akış geride kalmıştı: Kule deponun gösterdiklerini
+  ekler ve *some refusals may be missing from what is listed* der.
 - Günlük, sandbox kullanılırken çekirdeğin mesajlarından bazılarını
   düşürdü. macOS bunu yoğun bir Mac'te, çok yazan herhangi bir sistem
   parçası yüzünden birkaç saniyede bir yapar ve kimin mesajlarını

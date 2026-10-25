@@ -61,8 +61,10 @@ kalanını yine anlatır. İki durumda da başarılı olmuş bir komut `1` ile
 çıkar: yaptıklarının bir kısmı anlatılmadan kalmıştır. Linux'ta, başarısız
 olmuş bir komuttan sonra Kule, Linux'un sandbox'ın reddettiklerini kendisine
 söylemediğini belirtir. macOS'ta Kule retleri sistem günlüğü onları
-akıttıkça okur. Günlük hepsini zamanında göstermediyse Kule gösterdiklerini
-listeler ve bazı retlerin eksik olabileceğini söyler. Günlük, sandbox
+akıttıkça okur ve listeyi günlüğün deposuyla karşılaştırır. Günlük hepsini
+zamanında göstermediyse ya da akış geride kalıp günlük ona borçlu
+olduklarının bir kısmını düşürdüyse Kule günlüğün gösterdiklerini listeler
+ve bazı retlerin eksik olabileceğini söyler. Günlük, sandbox
 kullanılırken çekirdeğin mesajlarından bazılarını düşürdüyse (yoğun bir Mac
 bunu birkaç saniyede bir yapar) Kule bunun ne zaman olduğunu gri bir
 `sandbox:` satırında söyler: o anda yapılmış bir ret listede olmaz. İki

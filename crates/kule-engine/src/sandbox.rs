@@ -605,9 +605,10 @@ pub const INCOMPLETE: &str = "The system log did not show all of what the sandbo
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Refusals {
     pub denials: Vec<Denial>,
-    /// The system log had not caught up when Kule stopped reading it, or
-    /// sent what Kule could not read, so some refusals may be missing
-    /// (macOS; see [`INCOMPLETE`]). The sandbox refused them all the same.
+    /// The system log had not caught up when Kule stopped reading it, sent
+    /// what Kule could not read, or dropped part of what it owed Kule's
+    /// reader of its stream, so some refusals may be missing (macOS; see
+    /// [`INCOMPLETE`]). The sandbox refused them all the same.
     pub incomplete: bool,
     /// When, as times of day, the system log noted that it dropped the
     /// kernel's messages while the sandbox was in use (macOS): a refusal
@@ -2291,9 +2292,10 @@ impl Sandbox {
     }
 
     /// What the sandbox's commands were refused, as the system log streamed
-    /// it (see [`crate::refusal_log`]). Where the stream cannot show it all,
-    /// what the log's store shows within `window` is added, and the list is
-    /// told as [`Refusals::incomplete`], never as all there was.
+    /// it and its store shows it (see [`crate::refusal_log`]). Where the
+    /// store cannot be shown to have caught up, what it shows within
+    /// `window` is added all the same, and the list is told as
+    /// [`Refusals::incomplete`], never as all there was.
     fn platform_denials(&self, window: Duration) -> Result<Option<Refusals>> {
         // No command was made in it, so none was refused.
         let Some(watch) = self.watch.get() else {
