@@ -190,7 +190,7 @@ Ajanlar sandbox'larını **profillerinden** alır (hangi durum dizinini ve
 oturumu kullanabildiği, sunucuları, anahtarları). Bkz.
 [Ajanlar](../using-agents.md).
 
-## Sandbox'ın reddettikleri
+## Sandbox'ın reddettikleri {#what-the-sandbox-refused}
 
 macOS'ta sandbox'ın reddettikleri komuttan sonra ekrana yazılır ve görevin
 `sandbox.jsonl` dosyasında saklanır:
@@ -199,6 +199,22 @@ macOS'ta sandbox'ın reddettikleri komuttan sonra ekrana yazılır ve görevin
 sandbox: refused file-read-data /Users/me/.config/gh/config.yml (gh)
 sandbox: refused file-read-data /Users/me/.ssh/id_ed25519 (ssh)
 ```
+
+Kule bunları macOS'un sistem günlüğü akıttıkça okur ve listeyi,
+komutlarınkilerden sonra kendi yaptığı bir retle karşılaştırır. İki şey bir
+reddi listenin dışında bırakabilir; Kule ikisini de, çıkış kodunu
+değiştirmeden söyler:
+
+- Kule beklemeyi bıraktığında günlük, çok yoğun bir bilgisayarda, henüz
+  yetişmemişti: *some refusals may be missing from what is listed*.
+- Günlük, sandbox kullanılırken çekirdeğin mesajlarından bazılarını
+  düşürdü. macOS bunu yoğun bir Mac'te, çok yazan herhangi bir sistem
+  parçası yüzünden birkaç saniyede bir yapar ve kimin mesajlarını
+  düşürdüğünü söylemez. Kule ne zaman olduğunu sakin, gri bir satırda
+  söyler: o anda yapılmış bir ret listede olmaz.
+
+Her iki durumda da sandbox reddettiği her şeyi reddetmiştir; eksik olan
+yalnızca listedir.
 
 Uygulama reddedilenleri [Timeline](../app/timeline.md)'da gösterir;
 [Live](../app/live.md)'da biten bir çalıştırmanın satırı da onları listeler.

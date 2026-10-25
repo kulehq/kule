@@ -192,6 +192,21 @@ sandbox: refused file-read-data /Users/me/.config/gh/config.yml (gh)
 sandbox: refused file-read-data /Users/me/.ssh/id_ed25519 (ssh)
 ```
 
+Kule reads them as macOS's system log streams them, and checks the list
+against a refusal of its own made after the commands'. Two things can keep
+a refusal out of it, and Kule tells both, without changing the exit code:
+
+- The log had not caught up when Kule stopped waiting for it, on a very busy
+  computer: *some refusals may be missing from what is listed*.
+- The log dropped some of the kernel's messages while the sandbox was in
+  use. macOS does that every few seconds on a busy Mac, for whatever part
+  of the system logs a lot, and does not say whose messages it dropped.
+  Kule says when, in a quiet grey line: a refusal made just then would not
+  be listed.
+
+Either way the sandbox refused everything it refuses; only the list is
+short.
+
 The app shows refusals in [Timeline](../app/timeline.md), and a finished
 run's line in [Live](../app/live.md) lists them too. Linux reports
 Landlock refusals only to the audit log, so they are not listed; the

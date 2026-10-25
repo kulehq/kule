@@ -364,6 +364,9 @@ struct RunEnd {
     denials: Vec<Denial>,
     unreported: bool,
     incomplete: bool,
+    /// When the system log dropped the kernel's messages meanwhile (see
+    /// `RunEvent::Finished`).
+    lost: Option<String>,
     /// Kule's notes on its end (see `RunEvent::Finished`).
     notes: Vec<String>,
 }
@@ -426,6 +429,12 @@ pub enum RunEvent {
         /// (see `kule_engine::INCOMPLETE`): `denials` may not be all.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         incomplete: bool,
+        /// When the system log dropped the kernel's messages while the
+        /// sandbox was in use, which a refusal may have been among (see
+        /// `kule_engine::Refusals::lost_note`): told quietly, as macOS does
+        /// it every few seconds on a busy Mac.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        lost: Option<String>,
         /// What else Kule says of how it ended, a sentence each: that a
         /// budget does not count a run whose agent reported no cost.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -1743,16 +1752,10 @@ impl Service {
         let service = Arc::clone(self);
         std::thread::spawn(move || {
             let run = service.run(&task, &profile, &prompt, &pictures, plan, &control);
-            let (error, denials, unreported, incomplete, notes) = match run {
-                Ok(end) => (
-                    end.error,
-                    end.denials,
-                    end.unreported,
-                    end.incomplete,
-                    end.notes,
-                ),
-                Err(e) => (Some(e), Vec::new(), false, false, Vec::new()),
-            };
+            let end = run.unwrap_or_else(|e| RunEnd {
+                error: Some(e),
+                ..RunEnd::default()
+            });
             drop(at_work);
             service
                 .controls
@@ -1769,11 +1772,12 @@ impl Service {
             service.emit(
                 task.id(),
                 RunEvent::Finished {
-                    error,
-                    denials,
-                    unreported,
-                    incomplete,
-                    notes,
+                    error: end.error,
+                    denials: end.denials,
+                    unreported: end.unreported,
+                    incomplete: end.incomplete,
+                    lost: end.lost,
+                    notes: end.notes,
                 },
             );
         });
@@ -2087,6 +2091,7 @@ impl Service {
             denials,
             unreported: after.unreported,
             incomplete: after.incomplete,
+            lost: after.lost,
             notes,
         })
     }
@@ -3953,8 +3958,11 @@ mod tests {
         s.app.approve_agent(name, &digest).unwrap();
     }
 
-    /// How the run in `id` finished, waiting a while for it, never forever.
-    fn finished(s: &Setup, id: &str) -> (Option<String>, Vec<Denial>, bool) {
+    /// How the run in `id` finished, waiting a while for it, never forever:
+    /// its error, what its sandbox refused, whether the platform does not
+    /// tell (Linux), and whether Kule said the list may not hold all of it
+    /// (macOS: the log did not show it all, or dropped messages meanwhile).
+    fn finished(s: &Setup, id: &str) -> (Option<String>, Vec<Denial>, bool, bool) {
         let deadline = Instant::now() + Duration::from_secs(60);
         loop {
             let found = s
@@ -3966,8 +3974,10 @@ mod tests {
                         error,
                         denials,
                         unreported,
+                        incomplete,
+                        lost,
                         ..
-                    } => Some((error, denials, unreported)),
+                    } => Some((error, denials, unreported, incomplete || lost.is_some())),
                     _ => None,
                 });
             if let Some(found) = found {
@@ -3976,6 +3986,23 @@ mod tests {
             assert!(Instant::now() < deadline, "the run never ended");
             std::thread::sleep(Duration::from_millis(50));
         }
+    }
+
+    /// When the system log dropped messages reaches the window, by the
+    /// name it reads it by.
+    #[test]
+    fn a_dropped_log_is_told_with_the_run_end() {
+        let event = RunEvent::Finished {
+            error: None,
+            denials: Vec::new(),
+            unreported: false,
+            incomplete: false,
+            lost: Some("dropped".to_owned()),
+            notes: Vec::new(),
+        };
+        let json = serde_json::to_value(&event).unwrap();
+        assert_eq!(json["lost"], "dropped");
+        assert!(json.get("incomplete").is_none());
     }
 
     /// A run that fails still says what its sandbox refused it, where the
@@ -3995,16 +4022,22 @@ mod tests {
             &format!("echo x > {}; sleep 1; exit 3", target.display()),
         );
         s.app.start_run(&id, "broken", "hi", Vec::new()).unwrap();
-        let (error, denials, unreported) = finished(&s, &id);
+        let (error, denials, unreported, told) = finished(&s, &id);
         let error = error.expect("the run failed");
         assert!(error.contains("agent.log"), "{error}");
         assert!(!target.exists());
         if cfg!(target_os = "macos") {
-            assert!(
-                denials.iter().any(|d| d.path == target.to_string_lossy()),
-                "{denials:?}"
-            );
             assert!(!unreported);
+            let listed = denials.iter().any(|d| d.path == target.to_string_lossy());
+            // Missing only where Kule said the list may not hold it all.
+            assert!(listed || told, "{denials:?}");
+            if !listed {
+                use std::io::Write;
+                let _ = writeln!(
+                    std::io::stderr().lock(),
+                    "INCONCLUSIVE a_failed_run_says_what_the_sandbox_refused: the log dropped it"
+                );
+            }
         } else {
             assert!(unreported);
         }
@@ -4107,7 +4140,7 @@ mod tests {
             assert!(Instant::now() < deadline, "the run never started");
             std::thread::sleep(Duration::from_millis(50));
         }
-        let (error, _, _) = finished(&s, &id);
+        let (error, _, _, _) = finished(&s, &id);
         assert_eq!(error.as_deref(), Some("stopped: you stopped the run"));
     }
 

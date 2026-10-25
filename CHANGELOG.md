@@ -1,5 +1,27 @@
 # Changes
 
+## 0.2.0-preview.14
+
+On macOS, what a task's sandbox refused is read as the system log streams
+it and checked against the log's store, and when macOS dropped the kernel's
+log messages while the sandbox was in use, a quiet line says when. Each
+sandbox's mark is chosen at random.
+
+### Security
+
+- On macOS, Kule reads what a task's sandbox refused as the system log
+  streams it, through one stream per Kule process opened before the
+  sandbox's first command, and lists it as all the log kept only once the
+  log's store, too, shows a refusal Kule makes after the commands'.
+  Otherwise `kule exec`, `kule run`, `kule shell` and the app's run and
+  terminal notes say some refusals may be missing. When the log noted that
+  it dropped the kernel's messages while the sandbox was in use, which a
+  busy Mac does every few seconds, a quiet grey line says when: a refusal
+  made just then is not listed. The exit code stays the command's.
+- Each sandbox's mark is chosen at random rather than taken from the clock,
+  so sandboxes made at the same moment are told their own refusals, and
+  what one ends is never another's.
+
 ## 0.2.0-preview.13
 
 Kule tells you, where you work, more of what it cut, ended or refused, and

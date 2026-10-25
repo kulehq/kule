@@ -176,6 +176,7 @@ took: 41s
 | `net:` | Çalıştırmanın yaptığı her bağlantı ve ona ne olduğu: geçtiyse `tunneled`; Kule onu kestiyse ya da içindeki bir isteği reddettiyse `cut`; kendi hatasıyla bittiyse (host gitti, bağlantı sıfırlandı) `failed`; politika geçirmediyse `refused, …`. `cut` ve `failed` için nedeni `network.jsonl` söyler. |
 | `in your home, caught for review` | Ev klasörünüze yapılan ve ev katmanında bekleyen yazmalar. Bkz. [kule home](home.md). |
 | `sandbox: refused …` | Sandbox'ın reddettikleri (macOS bunları listeler; Linux'ta komut yalnızca bir hata alır). |
+| `sandbox: macOS's log dropped some kernel messages …` | Gri, macOS'te: sistem günlüğünün çalıştırma sırasında çekirdeğin mesajlarını ne zaman düşürdüğü; yoğun bir Mac bunu birkaç saniyede bir yapar. O anda yapılmış bir ret listede yoktur. Bkz. [kule exec](exec.md#output). |
 | `sandbox: <path> changed during the run; Kule put it back …` | Çalıştırmanın değiştiremeyeceği, Kule'nin eski hâline geri koyduğu bir yol. |
 | `policy:` | Değişiklikler hakkındaki karar: *passes on its own* (kendiliğinden geçer), *waits for approval* (onay bekler) ya da *denied* (reddedildi), her birinin arkasındaki kuralla birlikte. |
 | `spent:` | Görevin çalıştırmalarının, ajanların bildirdiğine göre, şimdiye kadar ne kadar tuttuğu ve bütçesinden ne kaldığı. Görevin kullanım kayıtlarından bazıları okunamıyorsa ` (N records cannot be read)`. Çalıştırmalar, kullanımlarının henüz kapatmadığı bir pay tutuyorsa ` (<amount> set aside for runs at work or that did not end)`; bu kalandan düşülür. |

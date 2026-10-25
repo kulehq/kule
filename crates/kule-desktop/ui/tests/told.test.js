@@ -179,6 +179,19 @@ test("a terminal the person closed tells its end in the task's Live", () => {
     { kind: "note", text: "A terminal you closed: Kule ended sleep, which the shell left running in its sandbox" },
   ]);
   assert.deepEqual(told.closedTerminalNotes(undefined), []);
+  // When the log dropped messages: a quiet note of its own, after the rest.
+  assert.deepEqual(told.closedTerminalNotes(["a"], "macOS's log dropped some kernel messages"), [
+    { kind: "note", text: "A terminal you closed: a" },
+    { kind: "note", quiet: true, text: "A terminal you closed: macOS's log dropped some kernel messages" },
+  ]);
+});
+
+test("a shell's end writes Kule's notes in yellow, and a dropped log quietly", () => {
+  assert.equal(told.terminalEnd(["Kule ended sleep"], null), "\r\n\x1b[33mkule: Kule ended sleep\x1b[0m");
+  assert.equal(told.terminalEnd([], "dropped"), "\r\n\x1b[90mkule: dropped\x1b[0m");
+  assert.equal(told.terminalEnd(undefined, undefined), "");
+  // What it says cannot move the cursor or end the colour early.
+  assert.ok(!told.terminalEnd([], "a\x1b[2Jb").includes("\x1b[2J"));
 });
 
 test("a task whose record cannot be read is listed by its id", () => {

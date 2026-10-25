@@ -52,6 +52,9 @@ agent's work.
   hints about those refusals, and what Kule ended that the shell left
   running in its sandbox (macOS). On Linux, when the shell exited with an
   error, it says that Linux does not tell Kule what the sandbox refused.
+  On macOS, a grey line says when the system log dropped the kernel's
+  messages while the shell ran, as a busy Mac does every few seconds: a
+  refusal made just then is not listed.
   Then comes *[the shell ended; press Enter for a new one]*. When you
   closed its tab first, the same lines are in the task's **Live**, each
   after *A terminal you closed:*. When you quit Kule with a terminal open,

@@ -51,10 +51,14 @@ enum Event {
     },
     /// `notes`: what the sandbox refused the shell and what Kule ended or
     /// could not do as it ended, a line each (see `ShellEnd::lines`).
+    /// `lost`: when the system log dropped the kernel's messages while
+    /// the shell ran (see `ShellEnd::lost`), told apart and quietly.
     Exit {
         id: u64,
         code: Option<u32>,
         notes: Vec<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        lost: Option<String>,
     },
     /// What Kule does before the shell starts and that takes a while, for
     /// the tab the window opened as `key`: it knows no id yet.
@@ -250,8 +254,14 @@ impl Terminals {
             // What it wrote last, before its end is told.
             let _ = all_read.recv_timeout(Duration::from_millis(300));
             let code = status.and_then(|s| s.code()).map(|c| c as u32);
-            let notes = sandboxed.end().lines(code != Some(0));
-            tell(Event::Exit { id, code, notes });
+            let end = sandboxed.end();
+            let notes = end.lines(code != Some(0));
+            tell(Event::Exit {
+                id,
+                code,
+                notes,
+                lost: end.lost,
+            });
         });
         let mut ends = self
             .ending

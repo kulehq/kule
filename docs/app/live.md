@@ -74,7 +74,9 @@ As they come:
   For example, a program that wants the screen (LibreOffice, even with
   `--headless`) cannot run in a task, and macOS may report that it quit
   unexpectedly. The agent is told the same at its next prompt, in Kule's
-  words, once.
+  words, once. On macOS, a grey line says when the system log dropped the
+  kernel's messages during the run, as a busy Mac does every few seconds: a
+  refusal made just then is not listed.
 
 The daemon keeps a task's latest events, so a window opened later shows what
 happened meanwhile. When older ones were let go, that window starts with
