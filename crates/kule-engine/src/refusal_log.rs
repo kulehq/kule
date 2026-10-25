@@ -6,21 +6,26 @@
 //! kernel's messages for a moment, and notes each loss in its store, with
 //! when, but not whose messages they were. What
 //! `log show` reads back from the store comes late and out of order; the
-//! live stream gets each refusal in order, but never the notes of a loss.
-//! So Kule reads both:
+//! live stream gets each refusal in order, but never the notes of a loss,
+//! and a reader of the stream held up for a moment, as a busy Mac holds
+//! one up, is given its backlog only up to a cap: the rest the log drops
+//! with no word, and still delivers what comes after. So Kule reads both:
 //!
 //! - one stream per process, on every Kule sandbox's refusals, shown to
 //!   listen by a refusal of Kule's own before any sandbox's first command;
 //! - once a sandbox's commands are done, one more refusal of Kule's own,
-//!   read up to on the stream and then in the store, which notes a loss
-//!   before what came after it.
+//!   waited for in the store, which shows what it kept before that refusal
+//!   and notes a loss before what came after it.
 //!
-//! The list is all the log kept only when the stream brought that refusal
-//! and the store showed it. It is all there was only where the store also
-//! notes no loss of the kernel's messages since Kule began to listen for
-//! the sandbox. On a Mac that loses them every few seconds, so a loss is
-//! told as a note of its own, when it was ([`Refusals::lost`]), not as a
-//! list Kule could not read ([`Refusals::incomplete`]).
+//! The list is what the stream brought, and it is all the log kept only
+//! when the store showed that refusal and shows nothing refused that the
+//! stream did not bring; otherwise what the store shows is added to it
+//! ([`stored`]) and it is told as perhaps not all. It is all there was
+//! only where the store also notes no loss of the kernel's messages since
+//! Kule began to listen for the sandbox. On a Mac that loses them every
+//! few seconds, so a loss is told as a note of its own, when it was
+//! ([`Refusals::lost`]), not as a list Kule could not read
+//! ([`Refusals::incomplete`]).
 
 use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader, Read};
@@ -32,8 +37,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::sandbox::{Denial, Refusals, parse_denial};
 
-/// How long Kule waits for a refusal of its own, on the stream and then in
-/// the store.
+/// How long Kule waits for a refusal of its own to show in the store, or
+/// on the stream when it opens.
 const WAIT: Duration = Duration::from_secs(10);
 
 /// How long Kule waits for the stream's first refusal before it makes it
@@ -89,12 +94,39 @@ struct State {
 struct Seen {
     denials: Vec<Denial>,
     known: HashSet<(String, String, String)>,
-    /// Kule's own refusals under the sandbox's tag that came, by their
-    /// words.
-    own: HashSet<String>,
     /// Something came that Kule cannot read, or more came than are kept:
     /// the list may not be all.
     short: bool,
+}
+
+impl Seen {
+    /// Adds a refusal, once however often it came; past [`MOST`] of them
+    /// the list is short.
+    fn add(&mut self, denial: Denial) {
+        if self.knows(&denial) {
+            return;
+        }
+        if self.known.len() >= MOST {
+            self.short = true;
+            return;
+        }
+        self.known.insert(key(&denial));
+        self.denials.push(denial);
+    }
+
+    /// Whether the refusal came already.
+    fn knows(&self, denial: &Denial) -> bool {
+        self.known.contains(&key(denial))
+    }
+}
+
+/// What makes two reports one refusal.
+fn key(denial: &Denial) -> (String, String, String) {
+    (
+        denial.process.clone(),
+        denial.operation.clone(),
+        denial.path.clone(),
+    )
 }
 
 /// What one message is to the sandboxes being listened for.
@@ -150,38 +182,34 @@ impl Watch {
         }
     }
 
-    /// What the stream brought refused: all the log kept once the stream
-    /// and then the store show a refusal Kule makes now, after the
-    /// commands'. The losses of the kernel's messages the store notes
-    /// meanwhile come with it, as a refusal may be among them.
+    /// What the stream brought refused: all the log kept once the store
+    /// shows a refusal Kule makes now, after the commands', and nothing
+    /// refused that the stream did not bring, as the log drops part of
+    /// what it owes a stream held up for a moment, with no word. The
+    /// losses of the kernel's messages the store notes meanwhile come with
+    /// it, as a refusal may be among them.
     pub(crate) fn refusals(&self) -> Refusals {
         let Some(stream) = &self.stream else {
             return told(false, None);
         };
-        let asked = Instant::now();
-        let mut lost = Vec::new();
-        let all = own_word(&self.tag, "flush").is_some_and(|word| {
-            refuse(&word)
-                && stream.wait(WAIT, |state| {
-                    state
-                        .sandboxes
-                        .get(&self.tag)
-                        .is_some_and(|s| s.own.contains(&word))
-                })
-                && stream
-                    .losses_until(self.since, &word, WAIT.saturating_sub(asked.elapsed()))
-                    .map(|noted| lost = noted)
-                    .is_some()
-        });
-        let mut refusals = told(all, stream.lock().sandboxes.get(&self.tag));
-        refusals.lost = lost;
+        let shown = own_word(&self.tag, "flush")
+            .filter(|word| refuse(word))
+            .and_then(|word| stream.shown_until(self.since, &self.tag, &word, WAIT));
+        let state = stream.lock();
+        let seen = state.sandboxes.get(&self.tag);
+        let all = match (seen, &shown) {
+            (Some(seen), Some(shown)) => shown.refused.iter().all(|d| seen.knows(d)),
+            _ => false,
+        };
+        let mut refusals = told(all, seen);
+        refusals.lost = shown.map(|s| s.lost).unwrap_or_default();
         refusals
     }
 }
 
-/// What a sandbox is told was refused: what the stream brought for it
-/// (`seen`), as all there was only where `all` holds and nothing came that
-/// Kule could not read.
+/// What a sandbox is told was refused: what came for it (`seen`), as all
+/// there was only where `all` holds and nothing came that Kule could not
+/// read.
 fn told(all: bool, seen: Option<&Seen>) -> Refusals {
     Refusals {
         denials: seen.map(|s| s.denials.clone()).unwrap_or_default(),
@@ -364,29 +392,13 @@ fn take(state: &mut State, line: &str) {
     };
     match read_line(&message, |tag| state.sandboxes.contains_key(tag)) {
         Line::Refused(tag, denial) => {
-            let Some(seen) = state.sandboxes.get_mut(&tag) else {
-                return;
-            };
-            let key = (
-                denial.process.clone(),
-                denial.operation.clone(),
-                denial.path.clone(),
-            );
-            if seen.known.contains(&key) {
-                return;
-            }
-            if seen.known.len() >= MOST {
-                seen.short = true;
-                return;
-            }
-            seen.known.insert(key);
-            seen.denials.push(denial);
-        }
-        Line::Own(tag, word) => {
             if let Some(seen) = state.sandboxes.get_mut(&tag) {
-                seen.own.insert(word);
+                seen.add(denial);
             }
         }
+        // Kule's refusal after a sandbox's commands is waited for in the
+        // store, which the stream says nothing about.
+        Line::Own(..) => {}
         Line::Listening(word) => {
             state.listening.insert(word);
         }
@@ -434,15 +446,32 @@ const STORE_EVERY: Duration = Duration::from_millis(250);
 /// loss is noted by when it began, a moment before it reached `from`.
 const LOSS_BEFORE: f64 = 5.0;
 
-/// Kule's own refusals waited for in the log's store.
+/// Kule's own refusals waited for in the log's store, by their words.
 #[derive(Default)]
 struct Store {
-    /// By each refusal's words: since when a loss counts for it (seconds
-    /// since the epoch), and once the store showed it, the losses it notes
-    /// from then until that refusal.
-    waiting: HashMap<String, (f64, Option<Vec<String>>)>,
+    waiting: HashMap<String, Waiting>,
     /// A thread reads the store for them.
     reading: bool,
+}
+
+/// One refusal of Kule's own waited for in the store.
+struct Waiting {
+    /// Since when a loss counts for it (seconds since the epoch).
+    from: f64,
+    /// The sandbox it was made for.
+    tag: String,
+    /// What the store said, once it showed the refusal.
+    said: Option<Shown>,
+}
+
+/// What the store showed for a sandbox once it showed Kule's refusal after
+/// its commands.
+#[derive(Debug, Default, PartialEq)]
+struct Shown {
+    /// When it lost the kernel's messages since Kule began to listen.
+    lost: Vec<String>,
+    /// What it shows refused under the sandbox's tag.
+    refused: Vec<Denial>,
 }
 
 /// One loss of the kernel's messages the store notes: when it began and
@@ -462,9 +491,27 @@ struct StoreRead {
     /// (`None` where Kule cannot place it).
     shown: HashMap<String, Option<f64>>,
     losses: Vec<Loss>,
+    /// What it shows refused, by the tag of the sandbox listened for.
+    refused: Vec<(String, Denial)>,
 }
 
 impl StoreRead {
+    /// What the store showed for the sandbox tagged `tag`, once it showed
+    /// Kule's refusal carrying `word` for it: the losses from `from` until
+    /// that refusal, and what it shows refused under the tag.
+    fn said(&self, from: f64, tag: &str, word: &str) -> Option<Shown> {
+        let made = self.shown.get(word)?;
+        Some(Shown {
+            lost: self.lost_between(from, *made),
+            refused: self
+                .refused
+                .iter()
+                .filter(|(t, _)| t == tag)
+                .map(|(_, denial)| denial.clone())
+                .collect(),
+        })
+    }
+
     /// When the losses it notes between `from` and `until` began, each time
     /// of day once: a loss that ended before `from` or began after `until`
     /// is none of theirs, and one Kule cannot place is taken as theirs.
@@ -485,29 +532,38 @@ impl StoreRead {
 }
 
 impl Stream {
-    /// When the log's store notes it lost the kernel's messages, from
-    /// `since` until the refusal carrying `word`, once it shows that
-    /// refusal: the store notes a loss before what came after it. `None`
-    /// where it does not show it within `within`.
-    fn losses_until(
+    /// What the log's store shows for the sandbox tagged `tag` once it
+    /// shows the refusal carrying `word`: what it kept refused under the
+    /// tag, and when it lost the kernel's messages from `since` until that
+    /// refusal, as it notes a loss before what came after it. `None` where
+    /// it does not show the refusal within `within`.
+    fn shown_until(
         self: &Arc<Self>,
         since: SystemTime,
+        tag: &str,
         word: &str,
         within: Duration,
-    ) -> Option<Vec<String>> {
+    ) -> Option<Shown> {
         // A clock read a moment early or late is no gap.
         let from = unix(since) - 1.0;
         let deadline = Instant::now() + within;
         let mut store = self.store();
-        store.waiting.insert(word.to_owned(), (from, None));
+        store.waiting.insert(
+            word.to_owned(),
+            Waiting {
+                from,
+                tag: tag.to_owned(),
+                said: None,
+            },
+        );
         if !store.reading {
             store.reading = true;
             let reading = Arc::clone(self);
             std::thread::spawn(move || reading.read_store());
         }
-        let noted = loop {
-            if let Some((_, Some(lost))) = store.waiting.get(word) {
-                break Some(lost.clone());
+        let shown = loop {
+            if let Some(shown) = store.waiting.get_mut(word).and_then(|w| w.said.take()) {
+                break Some(shown);
             }
             let now = Instant::now();
             if now >= deadline {
@@ -519,7 +575,7 @@ impl Stream {
             };
         };
         store.waiting.remove(word);
-        noted
+        shown
     }
 
     fn store(&self) -> MutexGuard<'_, Store> {
@@ -530,13 +586,14 @@ impl Stream {
     /// what it said once it shows it.
     fn read_store(&self) {
         let predicate = "(eventType == lossEvent AND processID == 0) OR \
-             (sender == \"Sandbox\" AND eventMessage CONTAINS \"kule-\" AND eventMessage CONTAINS \"-flush-\")";
+             (sender == \"Sandbox\" AND eventMessage CONTAINS \"kule-\")";
         loop {
-            let earliest = {
+            let (earliest, tags) = {
                 let mut store = self.store();
-                let open = store.waiting.values().filter(|(_, said)| said.is_none());
-                match open.map(|(from, _)| *from).reduce(f64::min) {
-                    Some(earliest) => earliest,
+                let open = store.waiting.values().filter(|w| w.said.is_none());
+                let tags: HashSet<String> = open.clone().map(|w| w.tag.clone()).collect();
+                match open.map(|w| w.from).reduce(f64::min) {
+                    Some(earliest) => (earliest, tags),
                     None => {
                         store.reading = false;
                         return;
@@ -550,13 +607,13 @@ impl Stream {
                 .stdin(Stdio::null())
                 .output();
             if let Ok(out) = out {
-                let read = store_read(&String::from_utf8_lossy(&out.stdout));
+                let read = store_read(&String::from_utf8_lossy(&out.stdout), |tag| {
+                    tags.contains(tag)
+                });
                 let mut store = self.store();
-                for (word, (from, said)) in &mut store.waiting {
-                    if said.is_none()
-                        && let Some(made) = read.shown.get(word)
-                    {
-                        *said = Some(read.lost_between(*from, *made));
+                for (word, waiting) in &mut store.waiting {
+                    if waiting.said.is_none() {
+                        waiting.said = read.said(waiting.from, &waiting.tag, word);
                     }
                 }
                 self.stored.notify_all();
@@ -567,8 +624,9 @@ impl Stream {
 }
 
 /// What `ndjson`, what `log show` printed, says: Kule's own refusals it
-/// shows, and the losses of the kernel's messages it notes.
-fn store_read(ndjson: &str) -> StoreRead {
+/// shows, what it shows refused for the sandboxes `listened` says are
+/// listened for, and the losses of the kernel's messages it notes.
+fn store_read(ndjson: &str, listened: impl Fn(&str) -> bool) -> StoreRead {
     let mut read = StoreRead::default();
     for line in ndjson.lines() {
         let Ok(entry) = serde_json::from_str::<serde_json::Value>(line) else {
@@ -588,12 +646,16 @@ fn store_read(ndjson: &str) -> StoreRead {
                 });
             }
             Some("logEvent") => {
-                if let Some((_, last)) = entry["eventMessage"]
-                    .as_str()
-                    .and_then(|m| m.rsplit_once('\n'))
-                {
-                    let made = entry["timestamp"].as_str().and_then(timestamp);
-                    read.shown.insert(last.to_owned(), made);
+                let Some(message) = entry["eventMessage"].as_str() else {
+                    continue;
+                };
+                match read_line(message, &listened) {
+                    Line::Refused(tag, denial) => read.refused.push((tag, denial)),
+                    Line::Own(_, word) => {
+                        let made = entry["timestamp"].as_str().and_then(timestamp);
+                        read.shown.insert(word, made);
+                    }
+                    Line::Listening(_) | Line::Unreadable(_) | Line::Other => {}
                 }
             }
             _ => {}
@@ -640,40 +702,57 @@ fn unix(at: SystemTime) -> f64 {
         .map_or(0.0, |d| d.as_secs_f64())
 }
 
-/// What the log's store shows refused under `tag` within `window`: never
-/// all there was (see the note at the top), and nothing where it cannot be
-/// read.
+/// How long the store is given to stop growing, read once a second, where
+/// what it shows is read as the list: a busy Mac fills it seconds late.
+const SETTLE: Duration = Duration::from_secs(8);
+
+/// What the log's store shows refused under `tag` within `window`, once it
+/// stops growing or [`SETTLE`] has passed: never all there was (see the
+/// note at the top), and nothing where it cannot be read.
 pub(crate) fn stored(tag: &str, window: Duration) -> Vec<Denial> {
     let predicate = format!("sender == \"Sandbox\" AND eventMessage CONTAINS \"{tag}\"");
-    let seconds = window.as_secs() + 2;
-    let Ok(out) = Command::new("/usr/bin/log")
-        .args([
-            "show",
-            "--last",
-            &format!("{seconds}s"),
-            "--style",
-            "ndjson",
-        ])
-        .args(["--predicate", &predicate])
-        .stdin(Stdio::null())
-        .output()
-    else {
-        return Vec::new();
+    let seconds = window.as_secs() + SETTLE.as_secs() + 2;
+    let read = || {
+        let Ok(out) = Command::new("/usr/bin/log")
+            .args([
+                "show",
+                "--last",
+                &format!("{seconds}s"),
+                "--style",
+                "ndjson",
+            ])
+            .args(["--predicate", &predicate])
+            .stdin(Stdio::null())
+            .output()
+        else {
+            return Vec::new();
+        };
+        String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+            .filter_map(|entry| entry["eventMessage"].as_str().map(str::to_owned))
+            .filter_map(|message| match read_line(&message, |t| t == tag) {
+                Line::Refused(_, denial) => Some(denial),
+                _ => None,
+            })
+            .fold(Vec::new(), |mut denials, denial| {
+                if !denials.contains(&denial) {
+                    denials.push(denial);
+                }
+                denials
+            })
     };
-    String::from_utf8_lossy(&out.stdout)
-        .lines()
-        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
-        .filter_map(|entry| entry["eventMessage"].as_str().map(str::to_owned))
-        .filter_map(|message| match read_line(&message, |t| t == tag) {
-            Line::Refused(_, denial) => Some(denial),
-            _ => None,
-        })
-        .fold(Vec::new(), |mut denials, denial| {
-            if !denials.contains(&denial) {
-                denials.push(denial);
-            }
-            denials
-        })
+    let started = Instant::now();
+    let mut denials = read();
+    while started.elapsed() < SETTLE {
+        std::thread::sleep(Duration::from_secs(1));
+        let again = read();
+        if again.len() == denials.len() {
+            break;
+        }
+        denials = again;
+    }
+    denials
 }
 
 /// Words no one can guess, under `tag`, for a refusal of Kule's own:
@@ -742,7 +821,6 @@ mod tests {
         let seen = &state.sandboxes[TAG];
         let paths: Vec<_> = seen.denials.iter().map(|d| d.path.as_str()).collect();
         assert_eq!(paths, ["/Users/me/x"]);
-        assert!(seen.own.contains("kule-1-2-flush-ab"));
         assert!(state.listening.contains("kule-listening-cd"));
         assert!(!seen.short);
     }
@@ -758,7 +836,7 @@ mod tests {
             event("Sandbox: sh(3) deny(1) process-exec* /usr/bin/true\nkule-1-23-flush-ab"),
         ]);
         let seen = &state.sandboxes[TAG];
-        assert!(seen.denials.is_empty() && seen.own.is_empty() && !seen.short);
+        assert!(seen.denials.is_empty() && !seen.short);
     }
 
     /// What Kule cannot read is never passed over as nothing: the list is
@@ -930,10 +1008,9 @@ mod tests {
         assert!((from - 1_792_847_061.188_527).abs() < 1e-5, "{from}");
         let word = "kule-1-2-flush-ab";
         let read = |lines: &[String]| {
-            let read = store_read(&lines.join("\n"));
-            read.shown
-                .get(word)
-                .map(|made| read.lost_between(from, *made))
+            store_read(&lines.join("\n"), |t| t == TAG)
+                .said(from, TAG, word)
+                .map(|shown| shown.lost)
         };
         assert_eq!(read(&[]), None);
         assert_eq!(read(std::slice::from_ref(&flush)), Some(vec![]));
@@ -972,6 +1049,49 @@ mod tests {
         assert_eq!(
             read(&[unplaced, flush]),
             Some(vec!["at a time it did not say".to_owned()])
+        );
+    }
+
+    /// What the store shows refused under the sandbox's tag comes with
+    /// Kule's refusal, once each; another sandbox's does not, nor does
+    /// anything before the store shows that refusal.
+    #[test]
+    fn the_store_tells_what_it_kept_refused_once_it_shows_kules_refusal() {
+        let refused = |path: &str, tag: &str| {
+            event(&format!(
+                "Sandbox: sh(3) deny(1) file-write-create {path}\n{tag}"
+            ))
+        };
+        let flush = event(
+            "Sandbox: sandbox-exec(2) deny(1) process-exec* /usr/bin/true\nkule-1-2-flush-ab",
+        );
+        let read = |lines: &[String]| {
+            store_read(&lines.join("\n"), |t| t == TAG)
+                .said(0.0, TAG, "kule-1-2-flush-ab")
+                .map(|shown| {
+                    shown
+                        .refused
+                        .iter()
+                        .map(|d| d.path.clone())
+                        .collect::<Vec<_>>()
+                })
+        };
+        let lines = [
+            refused("/Users/me/x", TAG),
+            refused("/Users/me/y", "kule-9-9"),
+            event(
+                "1 duplicate report for Sandbox: sh(3) deny(1) file-write-create /Users/me/x\nkule-1-2",
+            ),
+            refused("/Users/me/z", TAG),
+        ];
+        assert_eq!(read(&lines), None);
+        assert_eq!(
+            read(&[lines.as_slice(), &[flush]].concat()),
+            Some(vec![
+                "/Users/me/x".to_owned(),
+                "/Users/me/x".to_owned(),
+                "/Users/me/z".to_owned()
+            ])
         );
     }
 }

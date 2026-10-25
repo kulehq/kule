@@ -58,9 +58,11 @@ read or record what the sandbox refused, it says so in a `kule: … cannot
 be shown` line, still tells the rest, and a command that succeeded exits
 with `1`: part of what it did went untold. On Linux, after a command that
 failed, Kule says that Linux does not tell it what the sandbox refused.
-On macOS, Kule reads the refusals as the system log streams them. When the
-log has not shown them all in time, Kule lists what it showed and says some
-refusals may be missing. When the log dropped some of the kernel's messages
+On macOS, Kule reads the refusals as the system log streams them, and checks
+the list against the log's store. When the log has not shown them all in
+time, or the stream fell behind and the log dropped part of what it owed it,
+Kule lists what the log showed and says some refusals may be missing. When
+the log dropped some of the kernel's messages
 while the sandbox was in use, which a busy Mac does every few seconds, Kule
 says when, in a grey `sandbox:` line: a refusal made just then would not be
 listed. The exit code stays the command's either way, since the sandbox

@@ -1724,7 +1724,7 @@ fn a_refusal_the_log_dropped_is_told_when() {
         let sandbox = s.sandbox();
         let dir = s.outside().join(format!("burst{round}"));
         fs::create_dir_all(&dir).unwrap();
-        {
+        let out = {
             let _burst = flood(&s, 1, 16);
             std::thread::sleep(std::time::Duration::from_millis(300));
             sh(
@@ -1733,7 +1733,19 @@ fn a_refusal_the_log_dropped_is_told_when() {
                     "i=0; while [ $i -lt 50 ]; do echo x > '{}'/x$i; i=$((i+1)); done",
                     dir.display()
                 ),
-            );
+            )
+        };
+        let written = (0..50)
+            .filter(|i| dir.join(format!("x{i}")).exists())
+            .count();
+        assert_eq!(written, 0, "the sandbox let {written} writes through");
+        // How many writes the shell saw refused: none where it did not
+        // run at all, on a machine too busy to start it.
+        let refused = String::from_utf8_lossy(&out.stderr)
+            .matches("Operation not permitted")
+            .count();
+        if refused == 0 {
+            continue;
         }
         let refusals = sandbox
             .denials(std::time::Duration::from_secs(60))
@@ -1751,7 +1763,8 @@ fn a_refusal_the_log_dropped_is_told_when() {
         }
         assert!(
             !refusals.lost.is_empty(),
-            "{missing} missing, told as all there was: {refusals:?}"
+            "{missing} missing ({refused} refused as the shell saw it, {:?}), told as all there was: {refusals:?}",
+            out.status
         );
         seen += 1;
         if seen == 2 {
@@ -1764,6 +1777,157 @@ fn a_refusal_the_log_dropped_is_told_when() {
             "no round had the log drop a refusal and still catch up",
         );
     }
+}
+
+/// Processes stopped until dropped, as a busy Mac stops a reader of the
+/// log for a moment.
+#[cfg(target_os = "macos")]
+struct Paused(Vec<u32>);
+
+#[cfg(target_os = "macos")]
+impl Paused {
+    fn new(pids: &[u32]) -> Paused {
+        for pid in pids {
+            // SAFETY: kill only sends a signal.
+            unsafe { libc::kill(*pid as libc::pid_t, libc::SIGSTOP) };
+        }
+        Paused(pids.to_vec())
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl Drop for Paused {
+    fn drop(&mut self) {
+        for pid in &self.0 {
+            // SAFETY: kill only sends a signal.
+            unsafe { libc::kill(*pid as libc::pid_t, libc::SIGCONT) };
+        }
+    }
+}
+
+/// The paths the log's store shows refused under `dir`, read once it stops
+/// growing (macOS).
+#[cfg(target_os = "macos")]
+fn stored_under(since: std::time::SystemTime, dir: &Path) -> std::collections::BTreeSet<String> {
+    let start = format!(
+        "@{}",
+        since
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            .saturating_sub(5)
+    );
+    let predicate = format!(
+        "sender == \"Sandbox\" AND eventMessage CONTAINS \"{}/\"",
+        dir.display()
+    );
+    let read = || {
+        let out = Command::new("/usr/bin/log")
+            .args(["show", "--start", &start, "--style", "ndjson"])
+            .args(["--predicate", &predicate])
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+            .filter_map(|entry| entry["eventMessage"].as_str().map(str::to_owned))
+            .filter_map(|message| {
+                // `… deny(1) file-write-create /the/path` and the tag after.
+                message
+                    .lines()
+                    .next()?
+                    .rsplit_once(' ')
+                    .map(|(_, p)| p.to_owned())
+            })
+            .collect::<std::collections::BTreeSet<_>>()
+    };
+    let mut last = read();
+    for _ in 0..20 {
+        std::thread::sleep(std::time::Duration::from_secs(2));
+        let now = read();
+        if now == last {
+            return now;
+        }
+        last = now;
+    }
+    last
+}
+
+/// A reader of the log's stream that falls behind, as a busy Mac holds it
+/// up, is given its backlog only up to a cap the log keeps (some 700 to
+/// 2000 of a sandbox's refusals, measured): the rest the log drops with no
+/// word, and still delivers what comes after, Kule's own refusal among it.
+/// What the log's store shows refused is listed all the same, and such a
+/// list is never told as all there was, as the store fills late (macOS).
+#[cfg(target_os = "macos")]
+#[test]
+fn refusals_the_stream_dropped_are_read_from_the_store() {
+    // The process's one stream is held up: no other test may read refusals.
+    let _flooding = FLOODING
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let s = Setup::new();
+    let sandbox = s.sandbox();
+    assert!(ok(&sh(&sandbox, "true")));
+    let streams = refusal_streams(std::process::id());
+    assert_eq!(streams.len(), 2, "{streams:?}");
+    let since = std::time::SystemTime::now();
+    let dir = s.outside().join("dropped");
+    fs::create_dir_all(&dir).unwrap();
+    let out = {
+        let _paused = Paused::new(&streams);
+        sh(
+            &sandbox,
+            &format!(
+                "i=0; while [ $i -lt 4000 ]; do echo x > '{}'/x$i; i=$((i+1)); done",
+                dir.display()
+            ),
+        )
+    };
+    let written = (0..4000)
+        .filter(|i| dir.join(format!("x{i}")).exists())
+        .count();
+    assert_eq!(written, 0, "the sandbox let {written} writes through");
+    let refused = String::from_utf8_lossy(&out.stderr)
+        .matches("Operation not permitted")
+        .count();
+    assert_eq!(
+        refused, 4000,
+        "the shell saw {refused} refused: {:?}",
+        out.status
+    );
+    let refusals = sandbox
+        .denials(std::time::Duration::from_secs(60))
+        .unwrap()
+        .unwrap();
+    let stored = stored_under(since, &dir);
+    if stored.len() <= 2000 {
+        inconclusive(
+            "refusals_the_stream_dropped_are_read_from_the_store",
+            &format!("the store kept only {} of the 4000", stored.len()),
+        );
+        return;
+    }
+    let missing: Vec<_> = stored
+        .iter()
+        .filter(|path| !refusals.denials.iter().any(|d| &d.path == *path))
+        .collect();
+    let what = format!(
+        "{} of the {} refusals the store shows are not listed; {} listed, incomplete {}, lost {:?}; first missing {:?}",
+        missing.len(),
+        stored.len(),
+        refusals.denials.len(),
+        refusals.incomplete,
+        refusals.lost,
+        missing.first()
+    );
+    assert!(
+        refusals.incomplete || missing.is_empty(),
+        "told as all there was: {what}"
+    );
+    // What the store had shown when Kule stopped reading it is listed; a
+    // few it showed only later may not be.
+    assert!(missing.len() * 10 < stored.len(), "{what}");
 }
 
 /// One stream of refusals serves every sandbox of a process, so Kule adds

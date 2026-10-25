@@ -193,11 +193,15 @@ sandbox: refused file-read-data /Users/me/.ssh/id_ed25519 (ssh)
 ```
 
 Kule reads them as macOS's system log streams them, and checks the list
-against a refusal of its own made after the commands'. Two things can keep
-a refusal out of it, and Kule tells both, without changing the exit code:
+against the log's store: a refusal of Kule's own made after the commands'
+must show there, and the store must show nothing refused that the stream
+did not bring, as the log drops part of what it owes a reader of the stream
+that falls behind, with no word. Two things can keep a refusal out of the
+list, and Kule tells both, without changing the exit code:
 
 - The log had not caught up when Kule stopped waiting for it, on a very busy
-  computer: *some refusals may be missing from what is listed*.
+  computer, or the stream fell behind: Kule adds what the store shows and
+  says *some refusals may be missing from what is listed*.
 - The log dropped some of the kernel's messages while the sandbox was in
   use. macOS does that every few seconds on a busy Mac, for whatever part
   of the system logs a lot, and does not say whose messages it dropped.
