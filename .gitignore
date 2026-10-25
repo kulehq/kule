@@ -10,3 +10,6 @@ website/video/
 
 # Editors
 .idea/
+
+# Presentations and sales material: kept locally
+presentations/
