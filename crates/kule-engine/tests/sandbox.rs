@@ -1198,13 +1198,14 @@ fn the_shield_keeps_an_unhooked_server_off_the_network() {
 
 /// A sandboxed server, `python3 -I`, that leaves its parent and its
 /// session first (as a daemon does) and listens on `host`; its pid and
-/// port, once it listens.
+/// port, once it listens. It sends one byte on each connection it accepts,
+/// so a test knows when it holds one.
 #[cfg(target_os = "macos")]
 fn detached_server(s: &Setup, host: &str) -> (i32, u16) {
     let copy = s.task.copy();
     let _ = fs::remove_file(copy.join("server.txt"));
     let code = format!(
-        "import os, socket, time\nif os.fork(): os._exit(0)\nos.setsid()\nif os.fork(): os._exit(0)\ns=socket.socket()\ns.bind(('{host}',0))\ns.listen()\nopen('server.tmp','w').write(f'{{os.getpid()}} {{s.getsockname()[1]}}')\nos.rename('server.tmp','server.txt')\nheld=[]\nwhile True:\n try: held.append(s.accept()[0])\n except OSError: pass"
+        "import os, socket, time\nif os.fork(): os._exit(0)\nos.setsid()\nif os.fork(): os._exit(0)\ns=socket.socket()\ns.bind(('{host}',0))\ns.listen()\nopen('server.tmp','w').write(f'{{os.getpid()}} {{s.getsockname()[1]}}')\nos.rename('server.tmp','server.txt')\nheld=[]\nwhile True:\n try:\n  c=s.accept()[0]\n  c.send(b'a')\n  held.append(c)\n except OSError: pass"
     );
     // Its pipes would stay open as long as it runs.
     let status = s
@@ -1263,7 +1264,7 @@ fn a_task_process_holding_a_connection_from_the_network_is_stopped() {
     };
     let s = Setup::new();
     let (pid, port) = detached_server(&s, "0.0.0.0");
-    let Ok(_connection) = std::net::TcpStream::connect_timeout(
+    let Ok(mut connection) = std::net::TcpStream::connect_timeout(
         &(outward, port).into(),
         std::time::Duration::from_secs(5),
     ) else {
@@ -1271,8 +1272,13 @@ fn a_task_process_holding_a_connection_from_the_network_is_stopped() {
         Sandbox::end_all(&s.task).unwrap();
         return;
     };
-    // Accepted, held by the server.
-    std::thread::sleep(std::time::Duration::from_millis(300));
+    // Accepted, held by the server: it says so, however long a busy
+    // machine takes.
+    connection
+        .set_read_timeout(Some(std::time::Duration::from_secs(30)))
+        .unwrap();
+    let mut accepted = [0u8; 1];
+    std::io::Read::read_exact(&mut connection, &mut accepted).expect("the server never accepted");
     let mut shield = Shield::new();
     let guarded = shield.guard(&Sandbox::processes_of(s.task.id()));
     let stopped = guarded.stopped.iter().find(|x| x.pid == pid as u32);
