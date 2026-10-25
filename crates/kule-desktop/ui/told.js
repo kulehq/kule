@@ -233,8 +233,23 @@ function taskFolder(task) {
   return parts.length ? parts[parts.length - 1] : task.id;
 }
 
-function closedTerminalNotes(notes) {
-  return (notes || []).map((note) => ({ kind: "note", text: `A terminal you closed: ${note}` }));
+/** What a closed tab's shell said as it ended, for its task's Live; when
+ * the system log dropped the kernel's messages (`lost`), a quiet note. */
+function closedTerminalNotes(notes, lost) {
+  return [
+    ...(notes || []).map((note) => ({ kind: "note", text: `A terminal you closed: ${note}` })),
+    ...(lost ? [{ kind: "note", quiet: true, text: `A terminal you closed: ${lost}` }] : []),
+  ];
+}
+
+/** What a shell's end writes in its tab: Kule's notes in yellow, and when
+ * the system log dropped the kernel's messages (`lost`), that in the dim
+ * grey shells use for hints, as macOS does it every few seconds. */
+function terminalEnd(notes, lost) {
+  return [
+    ...(notes || []).map((note) => `\r\n\x1b[33mkule: ${terminalText(note)}\x1b[0m`),
+    ...(lost ? [`\r\n\x1b[90mkule: ${terminalText(lost)}\x1b[0m`] : []),
+  ].join("");
 }
 
 if (typeof module !== "undefined") {
@@ -243,6 +258,7 @@ if (typeof module !== "undefined") {
     SPINNER,
     taskFolder,
     closedTerminalNotes,
+    terminalEnd,
     UNREPORTED,
     INCOMPLETE,
     groupDenials,

@@ -169,6 +169,7 @@ took: 41s
 | `net:` | Each connection the run made and what became of it: `tunneled` when it went through; `cut` when Kule ended it or refused a request in it; `failed` when it ended in an error of its own (the host went away, a reset); `refused, …` when the policy did not let it through. `network.jsonl` says why for `cut` and `failed`. |
 | `in your home, caught for review` | Writes in your home folder, waiting in the home layer. See [kule home](home.md). |
 | `sandbox: refused …` | What the sandbox refused (macOS lists them; on Linux the command just gets an error). |
+| `sandbox: macOS's log dropped some kernel messages …` | In grey, on macOS: when the system log dropped the kernel's messages during the run, as a busy Mac does every few seconds; a refusal made just then is not listed. See [kule exec](exec.md#output). |
 | `sandbox: <path> changed during the run; Kule put it back …` | A path the run may not change, which Kule put back as it was. |
 | `policy:` | The ruling on the changes: *passes on its own*, *waits for approval* or *denied*, with the rule behind each. |
 | `spent:` | What the task's runs have cost so far, as the agents reported it, and what is left of its budget. ` (N records cannot be read)` when some of the task's usage records cannot be read. ` (<amount> set aside for runs at work or that did not end)` when runs hold a share that their usage has not closed yet; it counts in what is left. |

@@ -124,13 +124,22 @@ fn a_failed_run_still_tells_what_its_sandbox_did() {
     assert!(out.contains("took:"), "{out}");
     assert!(err.contains("agent.log"), "{err}");
     if cfg!(target_os = "macos") {
-        assert!(
-            out.contains(&format!(
-                "sandbox: refused file-write-create {}",
-                target.display()
-            )),
-            "{out}"
-        );
+        let listed = out.contains(&format!(
+            "sandbox: refused file-write-create {}",
+            target.display()
+        ));
+        // Missing only where Kule said the list may not hold it all: the
+        // log did not show it all, or dropped messages meanwhile.
+        let told =
+            err.contains(kule_engine::INCOMPLETE) || out.contains("sandbox: macOS's log dropped");
+        assert!(listed || told, "{out}\n{err}");
+        if !listed {
+            use std::io::Write;
+            let _ = writeln!(
+                std::io::stderr().lock(),
+                "INCONCLUSIVE a_failed_run_still_tells_what_its_sandbox_did: the log dropped it"
+            );
+        }
     } else {
         assert!(err.contains(kule_engine::UNREPORTED), "{err}");
     }

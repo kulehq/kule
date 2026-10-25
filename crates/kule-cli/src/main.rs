@@ -662,7 +662,7 @@ fn run() -> Result<ExitCode> {
             // What cannot be shown is said, and the rest is told all the same.
             let mut failed = Vec::new();
             print_after(&task, logged_before, "the shell", &mut failed);
-            print_denials(&end.denials);
+            print_denials(&end.denials, end.lost.as_deref());
             for note in end.notes(code != Some(0)) {
                 eprintln!("kule: {}", paint::plain_line(&note));
             }
@@ -885,7 +885,7 @@ fn run() -> Result<ExitCode> {
             if let Some(sandbox) = used {
                 match sandbox.denials(started.elapsed()) {
                     Ok(Some(refused)) => {
-                        print_denials(&refused.denials);
+                        print_denials(&refused.denials, refused.lost_note().as_deref());
                         // Told, and the command's own code kept: the
                         // sandbox refused them all the same.
                         if refused.incomplete {
@@ -1067,7 +1067,7 @@ fn run() -> Result<ExitCode> {
             println!();
             proxy.stop();
             let set = print_after(&task, logged_before, "the run", &mut failed);
-            print_denials(&after.refused);
+            print_denials(&after.refused, after.lost.as_deref());
             if after.unreported && outcome.is_err() {
                 eprintln!("kule: {}", kule_engine::UNREPORTED);
             }
@@ -1804,8 +1804,10 @@ fn print_after(
 }
 
 /// What the sandbox refused, the same refusal once with how many times
-/// (the terminals a shell probes as one), then the hints.
-fn print_denials(denials: &[Denial]) {
+/// (the terminals a shell probes as one), then the hints, then when the
+/// system log dropped the kernel's messages meanwhile (`lost`, macOS):
+/// quietly, as macOS does it every few seconds on a busy Mac.
+fn print_denials(denials: &[Denial], lost: Option<&str>) {
     let mut hints: Vec<String> = Vec::new();
     for (d, count) in Denial::grouped(denials) {
         let times = match count {
@@ -1826,6 +1828,9 @@ fn print_denials(denials: &[Denial]) {
     }
     for hint in hints {
         println!("  {hint}");
+    }
+    if let Some(lost) = lost {
+        println!("{}", paint::dim(&format!("sandbox: {lost}")));
     }
 }
 

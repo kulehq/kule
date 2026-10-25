@@ -53,6 +53,8 @@ mod policy;
 mod ports;
 mod preview;
 mod protect;
+#[cfg(target_os = "macos")]
+mod refusal_log;
 pub mod remembered;
 pub mod resources;
 mod sandbox;

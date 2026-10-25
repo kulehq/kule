@@ -82,7 +82,10 @@ Geldikçe şunlar görünür:
   satırın altında söyler. Örneğin ekran isteyen bir program (`--headless`
   ile bile LibreOffice) bir görevde çalışamaz ve macOS onun beklenmedik
   şekilde kapandığını bildirebilir. Ajana da aynı şey, bir sonraki
-  prompt'unda, Kule'nin sözleriyle, bir kez söylenir.
+  prompt'unda, Kule'nin sözleriyle, bir kez söylenir. macOS'ta gri bir
+  satır, çalıştırma sırasında sistem günlüğünün çekirdek mesajlarını ne
+  zaman düşürdüğünü söyler; yoğun bir Mac bunu birkaç saniyede bir yapar. O
+  anda yapılmış bir ret listede yoktur.
 
 Daemon bir görevin son olaylarını saklar; böylece daha sonra açılan bir
 pencere bu arada olanları gösterir. Daha eski olaylar bırakıldıysa o pencere

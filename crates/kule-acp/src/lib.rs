@@ -697,6 +697,9 @@ pub struct AfterRun {
     /// The system log did not show all of them (see
     /// [`kule_engine::INCOMPLETE`]).
     pub incomplete: bool,
+    /// When the system log dropped the kernel's messages meanwhile, as the
+    /// person is told it (see [`kule_engine::Refusals::lost_note`]).
+    pub lost: Option<String>,
     /// What Kule could not do or read of it, one sentence each.
     pub failed: Vec<String>,
 }
@@ -723,6 +726,7 @@ pub fn after_run(
     }
     match sandbox.denials(took) {
         Ok(Some(refused)) => {
+            after.lost = refused.lost_note();
             after.refused = refused.denials;
             after.incomplete = refused.incomplete;
         }

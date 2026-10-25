@@ -3083,7 +3083,7 @@ function streamItem(item) {
       return output;
     }
     case "note":
-      return h("div", { class: "event" }, h("span", { class: "event-mark" }, "·"), h("span", {}, item.text));
+      return h("div", { class: item.quiet ? "event quiet" : "event" }, h("span", { class: "event-mark" }, "·"), h("span", {}, item.text));
     case "answered": {
       // Approved and through: done; refused, by the person or by Kule, or
       // approved and then cut: said as what it is.
@@ -3105,6 +3105,7 @@ function streamItem(item) {
           {},
           item.text,
           (item.hints || []).map((hint) => h("span", { class: "event-hint" }, hint)),
+          item.lost ? h("span", { class: "event-quiet" }, item.lost) : null,
           refusedList(item)
         )
       );
@@ -3282,6 +3283,9 @@ function fold(task, event) {
         // Kule's own notes on the end: a budget that does not count the run.
         ...(event.notes || []),
       ],
+      // When the system log dropped the kernel's messages: quietly, apart
+      // from the hints, as macOS does it every few seconds.
+      lost: event.lost || null,
       // What was refused, the same once (see the Timeline for all).
       refused: groupDenials(event.denials),
       text: stopped
@@ -6347,7 +6351,7 @@ function onTerminal(event) {
       entry.ended = true;
       entry.term.options.cursorBlink = false;
       // What the sandbox refused the shell, and what Kule ended with it.
-      for (const note of event.notes || []) entry.term.write(`\r\n\x1b[33mkule: ${terminalText(note)}\x1b[0m`);
+      entry.term.write(terminalEnd(event.notes, event.lost));
       entry.term.write("\r\n\x1b[2m[the shell ended; press Enter for a new one]\x1b[0m\r\n");
       if (taskId === state.current) renderTerminals(taskId);
     }
@@ -6357,7 +6361,7 @@ function onTerminal(event) {
   const taskId = closedTerminals.get(event.id);
   if (event.kind === "exit" && taskId) {
     closedTerminals.delete(event.id);
-    const notes = closedTerminalNotes(event.notes);
+    const notes = closedTerminalNotes(event.notes, event.lost);
     if (notes.length) {
       streamOf(taskId).push(...notes);
       if (taskId === state.current) renderStream(taskId);

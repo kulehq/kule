@@ -25,6 +25,10 @@ pub struct ShellEnd {
     /// The system log did not show all of them (see
     /// `kule_engine::INCOMPLETE`).
     pub incomplete: bool,
+    /// When the system log dropped the kernel's messages while the shell
+    /// ran (see `kule_engine::Refusals::lost_note`): told apart from
+    /// [`ShellEnd::lines`], quietly, as macOS does it every few seconds.
+    pub lost: Option<String>,
     /// What it left running, which Kule ended with it, by name.
     pub ended: Vec<String>,
     /// What Kule could not do or read of it.
@@ -195,6 +199,7 @@ impl Sandboxed {
         self.proxy.stop();
         match self.sandbox.denials(self.started.elapsed()) {
             Ok(Some(refused)) => {
+                end.lost = refused.lost_note();
                 end.denials = refused.denials;
                 end.incomplete = refused.incomplete;
             }
@@ -259,5 +264,11 @@ mod tests {
             ..ShellEnd::default()
         };
         assert_eq!(late.lines(false), [kule_engine::INCOMPLETE]);
+        // What the log dropped is told apart, quietly: not among the lines.
+        let dropped = ShellEnd {
+            lost: Some("dropped".to_owned()),
+            ..ShellEnd::default()
+        };
+        assert!(dropped.lines(true).is_empty());
     }
 }

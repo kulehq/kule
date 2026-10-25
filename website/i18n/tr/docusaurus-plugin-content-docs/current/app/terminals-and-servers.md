@@ -53,6 +53,9 @@ edilir.
   ipuçlarını ve kabuğun sandbox'ında çalışır bıraktığı, Kule'nin
   sonlandırdığı şeyi (macOS) söyler. Linux'ta, kabuk bir hatayla çıktıysa,
   Linux'un sandbox'ın reddettiklerini Kule'ye söylemediğini belirtir.
+  macOS'ta gri bir satır, kabuk çalışırken sistem günlüğünün çekirdek
+  mesajlarını ne zaman düşürdüğünü söyler; yoğun bir Mac bunu birkaç
+  saniyede bir yapar. O anda yapılmış bir ret listede yoktur.
   Ardından *[the shell ended; press Enter for a new one]* gelir. Sekmesini
   önce kapattıysanız aynı satırlar görevin **Live**'ında, her biri
   *A terminal you closed:* ile başlayarak yer alır. Kule'yi açık bir

@@ -58,9 +58,13 @@ read or record what the sandbox refused, it says so in a `kule: … cannot
 be shown` line, still tells the rest, and a command that succeeded exits
 with `1`: part of what it did went untold. On Linux, after a command that
 failed, Kule says that Linux does not tell it what the sandbox refused.
-When the system log shows only part of it in time, Kule lists that part and
-says some refusals may be missing; the exit code stays the command's, since
-the sandbox refused them all the same.
+On macOS, Kule reads the refusals as the system log streams them. When the
+log has not shown them all in time, Kule lists what it showed and says some
+refusals may be missing. When the log dropped some of the kernel's messages
+while the sandbox was in use, which a busy Mac does every few seconds, Kule
+says when, in a grey `sandbox:` line: a refusal made just then would not be
+listed. The exit code stays the command's either way, since the sandbox
+refused them all the same. See [What the sandbox refused](../concepts/sandbox.md#what-the-sandbox-refused).
 
 `exec` does not make steps; steps are an agent's tool calls. Commit and
 rollback are refused while an `exec` runs in the task.
@@ -185,7 +189,8 @@ kule exec "$TASK" --reveal ~/Library/Keychains \
 | `net: <host>:<port> · refused, …` | A connection the policy did not let through. |
 | `sandbox: refused <operation> <path> (<program>)` | What the sandbox refused, on macOS, each once with `×N` when it was refused N times; a shell's probes of the terminals around it are one line, `/dev/ttys*`. They are all kept in the task's `sandbox.jsonl`. |
 | `kule: what the sandbox refused cannot be read: …`, `kule: what the sandbox refused could not be recorded: …` | On stderr: Kule could not read what the sandbox refused, or could not keep it in `sandbox.jsonl`. The exit code stays the command's, except that `0` becomes `1`. |
-| `kule: The system log did not show all of what the sandbox refused; some refusals may be missing from what is listed` | On stderr, on macOS: the system log had not caught up, on a busy computer, when Kule stopped reading it. The `sandbox:` lines above are what it showed. The exit code stays the command's. |
+| `sandbox: macOS's log dropped some kernel messages while the sandbox was in use (16:04:20, …), as it does when busy; a refusal made just then would not be listed` | In grey, on macOS: the system log noted that it dropped the kernel's messages at those times (the first three named). macOS does that every few seconds on a busy Mac, for any part of the system that logs a lot, and does not say whose messages they were. The `sandbox: refused` lines above are all the log kept. The exit code stays the command's. |
+| `kule: The system log did not show all of what the sandbox refused; some refusals may be missing from what is listed` | On stderr, on macOS: the system log had not caught up when Kule stopped waiting for it, on a very busy computer, or sent something Kule could not read. The `sandbox:` lines above are what it showed. The exit code stays the command's. |
 | `kule: ended <names>, still running in the task's sandbox as the command ended` | On stderr: what the command left running, which Kule ended with it. Each name once, with how many (`sleep ×2`). |
 | `kule: running without the sandbox` | You passed `--no-sandbox`. |
 | `kule: network open, bypassing the proxy and the policy` | You passed `--open-network`. |

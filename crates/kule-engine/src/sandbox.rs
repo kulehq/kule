@@ -15,7 +15,7 @@ use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
@@ -534,6 +534,10 @@ pub struct Sandbox {
     /// own (macOS; see [`Sandbox::terminal_command`]).
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     terminal: Option<PathBuf>,
+    /// The system log's stream of this sandbox's refusals, opened before
+    /// its first command and shared by its copies (macOS).
+    #[cfg(target_os = "macos")]
+    watch: std::sync::Arc<std::sync::OnceLock<crate::refusal_log::Watch>>,
 }
 
 /// The service name no service has that a task's sandboxes, and only
@@ -601,10 +605,36 @@ pub const INCOMPLETE: &str = "The system log did not show all of what the sandbo
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Refusals {
     pub denials: Vec<Denial>,
-    /// The system log had not caught up when Kule stopped reading it, so
-    /// some refusals may be missing (macOS; see [`INCOMPLETE`]). The
-    /// sandbox refused them all the same.
+    /// The system log had not caught up when Kule stopped reading it, or
+    /// sent what Kule could not read, so some refusals may be missing
+    /// (macOS; see [`INCOMPLETE`]). The sandbox refused them all the same.
     pub incomplete: bool,
+    /// When, as times of day, the system log noted that it dropped the
+    /// kernel's messages while the sandbox was in use (macOS): a refusal
+    /// made just then is not in `denials`. macOS drops them every few
+    /// seconds on a busy Mac, so this is told as a note of its own (see
+    /// [`Refusals::lost_note`]), not as [`Refusals::incomplete`].
+    pub lost: Vec<String>,
+}
+
+/// How many times of day [`Refusals::lost_note`] names.
+const LOST_NAMED: usize = 3;
+
+impl Refusals {
+    /// What the person is told of [`Refusals::lost`], in one line.
+    pub fn lost_note(&self) -> Option<String> {
+        if self.lost.is_empty() {
+            return None;
+        }
+        let mut at = self.lost[..self.lost.len().min(LOST_NAMED)].join(", ");
+        if self.lost.len() > LOST_NAMED {
+            at.push_str(", …");
+        }
+        Some(format!(
+            "macOS's log dropped some kernel messages while the sandbox was in use ({at}), \
+             as it does when busy; a refusal made just then would not be listed"
+        ))
+    }
 }
 
 /// One operation the sandbox refused.
@@ -774,6 +804,8 @@ impl Sandbox {
             // A choice that cannot be read is no choice.
             accept_weaker: crate::isolation::isolation(&task.home()).is_ok_and(|i| i.accept_weaker),
             terminal: None,
+            #[cfg(target_os = "macos")]
+            watch: Default::default(),
         })
     }
 
@@ -2023,6 +2055,9 @@ fn real_or_planned(path: &Path) -> Result<PathBuf> {
 #[cfg(target_os = "macos")]
 impl Sandbox {
     fn platform_command(&self, program: &str, args: &[String]) -> Result<Command> {
+        // Listening before anything it runs can be refused.
+        self.watch
+            .get_or_init(|| crate::refusal_log::Watch::start(&self.tag));
         let (profile, params) = self.seatbelt_profile();
         let mut command = self.session_command("/usr/bin/sandbox-exec");
         command.arg("-p").arg(profile);
@@ -2255,141 +2290,24 @@ impl Sandbox {
         (text, params)
     }
 
-    /// The system log shows a refusal a moment after the kernel made it,
-    /// longer on a busy machine, and may leave some out. So Kule makes one
-    /// more refusal under this sandbox's tag, after the commands', and
-    /// reads the log until that one shows: an empty list then means nothing
-    /// was refused. A log that never shows it gives what it showed, told as
-    /// [`Refusals::incomplete`], never as all there was.
+    /// What the sandbox's commands were refused, as the system log streamed
+    /// it (see [`crate::refusal_log`]). Where the stream cannot show it all,
+    /// what the log's store shows within `window` is added, and the list is
+    /// told as [`Refusals::incomplete`], never as all there was.
     fn platform_denials(&self, window: Duration) -> Result<Option<Refusals>> {
-        let asked = std::time::Instant::now();
-        let flush = self.flush()?;
-        let predicate = format!(
-            "sender == \"Sandbox\" AND eventMessage CONTAINS \"{}\"",
-            self.tag
-        );
-        let log = Path::new("/usr/bin/log");
-        let mut partial = Refusals {
-            denials: Vec::new(),
-            incomplete: true,
+        // No command was made in it, so none was refused.
+        let Some(watch) = self.watch.get() else {
+            return Ok(Some(Refusals::default()));
         };
-        let read = || {
-            let seconds = (window + asked.elapsed()).as_secs() + 2;
-            let out = Command::new(log)
-                .args([
-                    "show",
-                    "--last",
-                    &format!("{seconds}s"),
-                    "--style",
-                    "ndjson",
-                ])
-                .args(["--predicate", &predicate])
-                .output()
-                .at(log)?;
-            if !out.status.success() {
-                return Ok(None);
+        let mut refusals = watch.refusals();
+        if refusals.incomplete {
+            for denial in crate::refusal_log::stored(&self.tag, window) {
+                if !refusals.denials.contains(&denial) {
+                    refusals.denials.push(denial);
+                }
             }
-            // Without a refusal of Kule's own to read up to, no read is all.
-            let read = refusals_through(
-                &String::from_utf8_lossy(&out.stdout),
-                flush.as_deref().unwrap_or("\0"),
-            );
-            if read.incomplete {
-                partial = read;
-                return Ok(None);
-            }
-            Ok(Some(read))
-        };
-        let reads = if flush.is_some() { LOG_READS } else { 1 };
-        let found = read_until(read, || asked.elapsed(), Duration::from_millis(200), reads)?;
-        Ok(Some(found.unwrap_or(partial)))
-    }
-
-    /// Makes a refusal of Kule's own under this sandbox's tag, and returns
-    /// the words it carries in the log; `None` when none was made.
-    fn flush(&self) -> Result<Option<String>> {
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_or(0, |d| d.as_nanos());
-        let flush = format!("{}-flush-{nanos:x}", self.tag);
-        let exec = Path::new("/usr/bin/sandbox-exec");
-        // Refused by design: sandbox-exec cannot start true, and says so.
-        let status = Command::new(exec)
-            .arg("-p")
-            .arg(format!(
-                "(version 1)\n(allow default)\n\
-                 (deny process-exec (literal \"/usr/bin/true\") (with message \"{flush}\"))\n"
-            ))
-            .arg("/usr/bin/true")
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .at(exec)?;
-        // It ran: no refusal was made, and none will show.
-        Ok((!status.success()).then_some(flush))
-    }
-}
-
-/// How long Kule waits for the system log to show a sandbox's refusals.
-#[cfg(target_os = "macos")]
-const LOG_WAIT: Duration = Duration::from_secs(10);
-
-/// How often Kule reads the log at least before it gives up: the first
-/// read on a machine that just started can take the whole wait by itself.
-#[cfg(target_os = "macos")]
-const LOG_READS: usize = 3;
-
-/// Calls `read` until it has an answer: for [`LOG_WAIT`] by `elapsed`, and
-/// `least` times at least, `pause` apart; `None` when it never has.
-#[cfg(target_os = "macos")]
-fn read_until<T>(
-    mut read: impl FnMut() -> Result<Option<T>>,
-    mut elapsed: impl FnMut() -> Duration,
-    pause: Duration,
-    least: usize,
-) -> Result<Option<T>> {
-    let mut reads = 0;
-    loop {
-        if let Some(found) = read()? {
-            return Ok(Some(found));
         }
-        reads += 1;
-        if reads >= least && elapsed() >= LOG_WAIT {
-            return Ok(None);
-        }
-        std::thread::sleep(pause);
-    }
-}
-
-/// The refusals in `ndjson` (what `log show` printed), incomplete until it
-/// holds the refusal carrying `flush`, made after them. That one is Kule's
-/// own and is left out.
-#[cfg(target_os = "macos")]
-fn refusals_through(ndjson: &str, flush: &str) -> Refusals {
-    let mut denials = Vec::new();
-    let mut flushed = false;
-    for line in ndjson.lines() {
-        let Ok(entry) = serde_json::from_str::<serde_json::Value>(line) else {
-            continue;
-        };
-        let Some(message) = entry["eventMessage"].as_str() else {
-            continue;
-        };
-        if message.contains(flush) {
-            flushed = true;
-            continue;
-        }
-        let Some(denial) = parse_denial(message) else {
-            continue;
-        };
-        if !denials.contains(&denial) {
-            denials.push(denial);
-        }
-    }
-    Refusals {
-        denials,
-        incomplete: !flushed,
+        Ok(Some(refusals))
     }
 }
 
@@ -2398,7 +2316,7 @@ fn refusals_through(ndjson: &str, flush: &str) -> Refusals {
 /// `1 duplicate report for Sandbox: …`, and is often the only one left in
 /// the log.
 #[cfg(target_os = "macos")]
-fn parse_denial(message: &str) -> Option<Denial> {
+pub(crate) fn parse_denial(message: &str) -> Option<Denial> {
     let first = message.lines().next()?;
     let line = &first[first.find("Sandbox: ")? + "Sandbox: ".len()..];
     let (process, rest) = line.split_once('(')?;
@@ -2965,75 +2883,33 @@ mod tests {
         assert!(parse_denial("something else").is_none());
     }
 
-    /// One slow read, the first on a machine that just started, does not
-    /// use up the wait: the log is read again before Kule gives up.
+    /// When the log dropped the kernel's messages is told in one line, a
+    /// few times of day at most; nothing where it dropped none.
     #[test]
-    fn a_slow_first_read_of_the_log_is_not_the_last() {
-        let mut reads = 0;
-        let found = read_until(
-            || {
-                reads += 1;
-                Ok((reads == 2).then_some("shown"))
-            },
-            || LOG_WAIT + Duration::from_secs(1),
-            Duration::ZERO,
-            LOG_READS,
-        )
-        .unwrap();
-        assert_eq!(found, Some("shown"));
-        let mut reads = 0;
-        let never = read_until(
-            || {
-                reads += 1;
-                Ok(None::<()>)
-            },
-            || LOG_WAIT,
-            Duration::ZERO,
-            LOG_READS,
-        )
-        .unwrap();
-        assert_eq!((never, reads), (None, LOG_READS));
-    }
-
-    #[test]
-    fn refusals_are_all_there_only_once_the_log_shows_the_last_one() {
-        let line = |message: &str| {
-            format!(
-                "{}\n",
-                serde_json::json!({ "eventMessage": message, "sender": "Sandbox" })
-            )
+    fn a_dropped_message_is_told_when() {
+        assert_eq!(Refusals::default().lost_note(), None);
+        let unsure = Refusals {
+            incomplete: true,
+            ..Refusals::default()
         };
-        let refused = line("Sandbox: bash(1) deny(1) file-write-create /Users/me/x\nkule-1-2");
-        let flush =
-            line("Sandbox: sandbox-exec(2) deny(1) process-exec* /usr/bin/true\nkule-1-2-flush-9");
-        let paths = |r: &Refusals| {
-            (
-                r.denials.iter().map(|d| d.path.clone()).collect::<Vec<_>>(),
-                r.incomplete,
-            )
+        assert_eq!(unsure.lost_note(), None);
+        let lost = |at: &[&str]| Refusals {
+            lost: at.iter().map(|at| (*at).to_owned()).collect(),
+            ..Refusals::default()
         };
-        let x = || vec!["/Users/me/x".to_owned()];
-        // The log has not caught up: what it shows, never as all there was.
         assert_eq!(
-            paths(&refusals_through("", "kule-1-2-flush-9")),
-            (vec![], true)
+            lost(&["18:21:47"]).lost_note().unwrap(),
+            "macOS's log dropped some kernel messages while the sandbox was in use (18:21:47), \
+             as it does when busy; a refusal made just then would not be listed"
         );
-        assert_eq!(
-            paths(&refusals_through(&refused, "kule-1-2-flush-9")),
-            (x(), true)
-        );
-        // Caught up, Kule's own refusal is not the command's.
-        assert_eq!(
-            paths(&refusals_through(
-                &format!("{refused}{flush}"),
-                "kule-1-2-flush-9"
-            )),
-            (x(), false)
-        );
-        assert_eq!(
-            paths(&refusals_through(&flush, "kule-1-2-flush-9")),
-            (vec![], false)
-        );
+        let three = lost(&["10:00:01", "10:00:02", "10:00:03"])
+            .lost_note()
+            .unwrap();
+        assert!(three.contains("(10:00:01, 10:00:02, 10:00:03)"), "{three}");
+        let more = lost(&["10:00:01", "10:00:02", "10:00:03", "10:00:04"])
+            .lost_note()
+            .unwrap();
+        assert!(more.contains("(10:00:01, 10:00:02, 10:00:03, …)"), "{more}");
     }
 
     #[test]

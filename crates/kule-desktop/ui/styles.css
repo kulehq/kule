@@ -1212,6 +1212,18 @@ select:focus-visible {
   color: var(--ask);
 }
 
+/* Said for completeness, not to act on: when the system log dropped
+   messages. */
+.event-quiet {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+}
+
+.event.quiet {
+  color: var(--muted);
+}
+
 /* What the sandbox refused the run, folded under its last line. */
 .event-refused {
   margin-top: 6px;

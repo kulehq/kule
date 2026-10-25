@@ -1426,12 +1426,35 @@ fn sandbox_python_isolated(sandbox: &Sandbox, script: &str) -> Output {
         .unwrap()
 }
 
+/// The tests that read refusals back as all there was, beside the one
+/// that floods the system log, which makes the log lose refusals on the
+/// whole computer while it runs.
+#[cfg(target_os = "macos")]
+static FLOODING: std::sync::RwLock<()> = std::sync::RwLock::new(());
+
+#[cfg(target_os = "macos")]
+fn reading_refusals() -> std::sync::RwLockReadGuard<'static, ()> {
+    FLOODING
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Says, past the test harness's capture so it is seen, that a test could
+/// not tell what it meant to, and why.
+#[cfg(target_os = "macos")]
+fn inconclusive(test: &str, why: &str) {
+    use std::io::Write;
+    let _ = writeln!(std::io::stderr().lock(), "INCONCLUSIVE {test}: {why}");
+}
+
 /// macOS reports each refusal to the system log, tagged per sandbox, and
 /// Kule reads them only once the log has caught up, so one read right after
 /// the command holds them all; Linux has no unprivileged way to read
 /// Landlock's refusals and says so.
 #[test]
 fn refusals_are_reported_where_the_platform_allows() {
+    #[cfg(target_os = "macos")]
+    let _reading = reading_refusals();
     let s = Setup::new();
     let secrets = s.outside().join("secrets");
     fs::create_dir(&secrets).unwrap();
@@ -1458,20 +1481,356 @@ fn refusals_are_reported_where_the_platform_allows() {
     };
     let token = secrets.join("token");
     let refusals = sandbox.denials(window).unwrap().unwrap();
-    assert!(!refusals.incomplete);
-    let denials = refusals.denials;
-    assert!(
-        denials.iter().any(|d| wanted(d, "file-write", &evil)),
-        "{denials:?}"
-    );
-    assert!(
-        denials.iter().any(|d| wanted(d, "file-read", &token)),
-        "{denials:?}"
-    );
+    // No command ran in it: nothing was refused, and that is all there was.
     assert_eq!(
         bystander.denials(window).unwrap(),
         Some(kule_engine::Refusals::default())
     );
+    // Missing only where Kule said the list may not hold it all: the log
+    // did not show it all, or dropped the kernel's messages meanwhile.
+    let told = refusals.incomplete || !refusals.lost.is_empty();
+    for (operation, path) in [("file-write", &evil), ("file-read", &token)] {
+        let listed = refusals.denials.iter().any(|d| wanted(d, operation, path));
+        assert!(listed || told, "{refusals:?}");
+        #[cfg(target_os = "macos")]
+        if !listed {
+            inconclusive(
+                "refusals_are_reported_where_the_platform_allows",
+                "the log dropped a refusal, and said so",
+            );
+        }
+    }
+}
+
+/// The children of `parent` still running that name `words` in how they
+/// were started.
+#[cfg(target_os = "macos")]
+fn children_with(parent: u32, words: &str) -> Vec<u32> {
+    let out = Command::new("/usr/bin/pgrep")
+        .args(["-P", &parent.to_string(), "-f", words])
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter_map(|l| l.trim().parse().ok())
+        .collect()
+}
+
+/// The `log stream` Kule's process `pid` reads refusals from, under the
+/// shell that holds it: the shell's and the stream's pids.
+#[cfg(target_os = "macos")]
+fn refusal_streams(pid: u32) -> Vec<u32> {
+    // Not "log stream": a pgrep looking for it, another test's, names it too.
+    let stream = "[l]og stream";
+    children_with(pid, stream)
+        .into_iter()
+        .flat_map(|shell| std::iter::once(shell).chain(children_with(shell, stream)))
+        .collect()
+}
+
+/// Loops that refuse writes, each the group it leads, ended with all they
+/// started once dropped.
+#[cfg(target_os = "macos")]
+struct Flood(Vec<std::process::Child>);
+
+#[cfg(target_os = "macos")]
+impl Drop for Flood {
+    fn drop(&mut self) {
+        for child in &mut self.0 {
+            // SAFETY: kill only sends a signal.
+            unsafe { libc::kill(-(child.id() as libc::pid_t), libc::SIGKILL) };
+            let _ = child.wait();
+        }
+    }
+}
+
+/// `flooders` loops start other sandboxes, one after another, each refused
+/// ten writes, and `readers` other programs read the system log's stream
+/// as a log viewer does; with readers, each loop is one sandbox refused
+/// writes as fast as it can make them.
+#[cfg(target_os = "macos")]
+fn flood(s: &Setup, flooders: usize, readers: usize) -> Flood {
+    use std::os::unix::process::CommandExt;
+    let flooded = s.outside().join("flooded");
+    fs::create_dir_all(&flooded).unwrap();
+    Flood(
+        (0..flooders)
+            .map(|_| {
+                let one = if readers > 0 {
+                    "while :; do echo > \"{dir}\"/$RANDOM; done"
+                } else {
+                    "for k in 1 2 3 4 5 6 7 8 9 10; do echo > \"{dir}\"/$RANDOM; done"
+                };
+                let profile = "(version 1)(allow default)(deny file-write* (subpath \"{dir}\"))";
+                let script = format!(
+                    "while :; do /usr/bin/sandbox-exec -p '{profile}' /bin/sh -c '{one}'; done 2>/dev/null"
+                )
+                .replace("{dir}", &flooded.display().to_string());
+                Command::new("/bin/sh")
+                    .arg("-c")
+                    .arg(script)
+                    .process_group(0)
+                    .spawn()
+                    .unwrap()
+            })
+            .chain((0..readers).map(|i| {
+                Command::new("/usr/bin/log")
+                    .args(["stream", "--style", "ndjson", "--predicate"])
+                    .arg(format!(
+                        "sender == \"Sandbox\" AND eventMessage CONTAINS \"nothing-{i}\""
+                    ))
+                    .stdout(std::process::Stdio::null())
+                    .process_group(0)
+                    .spawn()
+                    .unwrap()
+            }))
+            .collect(),
+    )
+}
+
+/// Sandboxes refused one write each at once, `sandboxes` of them, during a
+/// [`flood`] of `flooders` and `readers`. What each was told, with the path
+/// it was refused.
+#[cfg(target_os = "macos")]
+fn refused_at_once(
+    s: &Setup,
+    sandboxes: usize,
+    flooders: usize,
+    readers: usize,
+) -> Vec<(PathBuf, kule_engine::Refusals)> {
+    let _flood = flood(s, flooders, readers);
+    let window = std::time::Duration::from_secs(60);
+    std::thread::scope(|scope| {
+        let runs: Vec<_> = (0..sandboxes)
+            .map(|i| {
+                scope.spawn(move || {
+                    let sandbox = s.sandbox();
+                    let target = s.outside().join(format!("x{i}"));
+                    sh(
+                        &sandbox,
+                        &format!("echo x > '{}'; sleep 1", target.display()),
+                    );
+                    (target, sandbox.denials(window).unwrap().unwrap())
+                })
+            })
+            .collect();
+        runs.into_iter().map(|run| run.join().unwrap()).collect()
+    })
+}
+
+/// Many sandboxes at once, each made at the same moment as others: each is
+/// told its own refusal, and the list is all there was (macOS).
+#[cfg(target_os = "macos")]
+#[test]
+fn sandboxes_at_once_are_each_told_their_own_refusals() {
+    let _reading = reading_refusals();
+    let s = Setup::new();
+    // A round in which the log fell behind proves nothing either way. Up
+    // to ten rounds for one in which it kept up.
+    for _ in 0..10 {
+        let told = refused_at_once(&s, 16, 0, 0);
+        if told.iter().any(|(_, r)| r.incomplete) {
+            continue;
+        }
+        for (target, refusals) in told {
+            let paths: Vec<_> = refusals
+                .denials
+                .iter()
+                .map(|d| PathBuf::from(&d.path))
+                .collect();
+            // Never another sandbox's; its own missing only where the log
+            // said it dropped messages meanwhile.
+            assert!(
+                paths == [target.clone()] || (paths.is_empty() && !refusals.lost.is_empty()),
+                "{}: {refusals:?}",
+                target.display()
+            );
+        }
+        return;
+    }
+    inconclusive(
+        "sandboxes_at_once_are_each_told_their_own_refusals",
+        "the log fell behind in every round",
+    );
+}
+
+/// Other sandboxes refusing all the time, as a busy machine or a command
+/// that means to bury its own refusals has them, and other programs
+/// reading the log: the system log then shows refusals late and out of
+/// order, and drops some. A list that is missing a refusal is never told
+/// as all there was: Kule says it may not be all, or when the log dropped
+/// messages (macOS).
+#[cfg(target_os = "macos")]
+#[test]
+fn refusals_made_in_a_flood_of_others_are_never_told_as_all_when_one_is_missing() {
+    let _flooding = FLOODING
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let s = Setup::new();
+    // The log falls behind only now and then, in two ways: its store, when
+    // many sandboxes refuse at once; and its stream too, when other
+    // programs read it as well.
+    let told: Vec<_> = [(4, 0), (1, 16), (1, 16), (1, 16)]
+        .into_iter()
+        .flat_map(|(flooders, readers)| refused_at_once(&s, 16, flooders, readers))
+        .collect();
+    // The log goes on losing messages a while after the flood, as it
+    // catches up: the other tests wait until a sandbox is told all again.
+    let settled = std::time::Instant::now();
+    loop {
+        let sandbox = s.sandbox();
+        assert!(ok(&sh(&sandbox, "true")));
+        let refusals = sandbox
+            .denials(std::time::Duration::from_secs(60))
+            .unwrap()
+            .unwrap();
+        if !refusals.incomplete || settled.elapsed().as_secs() > 60 {
+            break;
+        }
+    }
+    for (target, refusals) in told {
+        assert!(
+            refusals.incomplete
+                || !refusals.lost.is_empty()
+                || refusals
+                    .denials
+                    .iter()
+                    .any(|d| Path::new(&d.path) == target),
+            "{}: {refusals:?}",
+            target.display()
+        );
+    }
+}
+
+/// Refusals made in a burst of others' that ends before Kule reads the
+/// log: the log drops some of them, and its stream catches up in time for
+/// Kule's own refusal after them. A list missing one then says when the
+/// log dropped messages; it never reads as all there was (macOS).
+#[cfg(target_os = "macos")]
+#[test]
+fn a_refusal_the_log_dropped_is_told_when() {
+    let _flooding = FLOODING
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let s = Setup::new();
+    let mut seen = 0;
+    for round in 0..12 {
+        let sandbox = s.sandbox();
+        let dir = s.outside().join(format!("burst{round}"));
+        fs::create_dir_all(&dir).unwrap();
+        {
+            let _burst = flood(&s, 1, 16);
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            sh(
+                &sandbox,
+                &format!(
+                    "i=0; while [ $i -lt 50 ]; do echo x > '{}'/x$i; i=$((i+1)); done",
+                    dir.display()
+                ),
+            );
+        }
+        let refusals = sandbox
+            .denials(std::time::Duration::from_secs(60))
+            .unwrap()
+            .unwrap();
+        if refusals.incomplete {
+            continue;
+        }
+        let missing = (0..50)
+            .map(|i| dir.join(format!("x{i}")))
+            .filter(|t| !refusals.denials.iter().any(|d| Path::new(&d.path) == t))
+            .count();
+        if missing == 0 {
+            continue;
+        }
+        assert!(
+            !refusals.lost.is_empty(),
+            "{missing} missing, told as all there was: {refusals:?}"
+        );
+        seen += 1;
+        if seen == 2 {
+            return;
+        }
+    }
+    if seen == 0 {
+        inconclusive(
+            "a_refusal_the_log_dropped_is_told_when",
+            "no round had the log drop a refusal and still catch up",
+        );
+    }
+}
+
+/// One stream of refusals serves every sandbox of a process, so Kule adds
+/// one reader of the system log, not one per sandbox (macOS).
+#[cfg(target_os = "macos")]
+#[test]
+fn one_refusal_stream_serves_every_sandbox_of_a_process() {
+    // Beside a flood a stream may not be shown to listen in time.
+    let _reading = reading_refusals();
+    let s = Setup::new();
+    let sandboxes: Vec<_> = (0..3).map(|_| s.sandbox()).collect();
+    for sandbox in &sandboxes {
+        assert!(ok(&sh(sandbox, "true")));
+    }
+    let streams = refusal_streams(std::process::id());
+    assert_eq!(streams.len(), 2, "{streams:?}");
+}
+
+/// Not a test of its own: the process that
+/// [`a_refusal_stream_ends_with_the_process_that_opened_it`] starts and
+/// kills. It opens the stream for the task it is given and waits.
+#[cfg(target_os = "macos")]
+#[test]
+fn opens_a_refusal_stream_and_waits() {
+    let (Some(home), Some(id)) = (
+        std::env::var_os("KULE_TEST_STREAM_HOME"),
+        std::env::var("KULE_TEST_STREAM_TASK").ok(),
+    ) else {
+        return;
+    };
+    let task = Task::open(Path::new(&home), &id).unwrap();
+    let sandbox = Sandbox::new(&task).unwrap();
+    assert!(ok(&sh(&sandbox, "true")));
+    println!("listening");
+    std::thread::sleep(std::time::Duration::from_secs(120));
+}
+
+/// However the process that opened the stream ends, even killed with no
+/// chance to clean up, the stream ends with it (macOS).
+#[cfg(target_os = "macos")]
+#[test]
+fn a_refusal_stream_ends_with_the_process_that_opened_it() {
+    use std::io::BufRead;
+    let s = Setup::new();
+    let mut opener = Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "opens_a_refusal_stream_and_waits", "--nocapture"])
+        .env("KULE_TEST_STREAM_HOME", s._home.path())
+        .env("KULE_TEST_STREAM_TASK", s.task.id())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let out = std::io::BufReader::new(opener.stdout.take().unwrap());
+    assert!(
+        out.lines()
+            .map_while(Result::ok)
+            .any(|l| l.contains("listening")),
+        "the opener never listened"
+    );
+    let streams = refusal_streams(opener.id());
+    assert_eq!(streams.len(), 2, "{streams:?}");
+    opener.kill().unwrap();
+    opener.wait().unwrap();
+    let gone = std::time::Instant::now();
+    let running = || {
+        streams
+            .iter()
+            .filter(|pid| unsafe { libc::kill(**pid as libc::pid_t, 0) } == 0)
+            .count()
+    };
+    while running() > 0 {
+        assert!(gone.elapsed().as_secs() < 5, "{streams:?} still run");
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
 }
 
 /// Shells and tools write to /tmp by hard-coded path. On Linux the
