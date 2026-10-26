@@ -415,3 +415,117 @@ fn the_windows_credential_stores_are_hidden() {
         );
     }
 }
+
+/// The folders on the way to what the sandbox grants are listed, so that
+/// paths resolve, and nothing beside them: a folder next to the way, in
+/// the temporary folder or the person's profile, cannot be listed, while
+/// the copy can. Breaks when what is beside the way is not denied.
+#[test]
+fn nothing_beside_the_way_to_a_grant_can_be_listed() {
+    if !available() {
+        return;
+    }
+    let s = Setup::new();
+    fs::write(s.outside().join("beside-in-temp.txt"), "x\n").unwrap();
+    let profile = kule_engine::osfs::person_home().unwrap();
+    let mine = TempDir::new_in(&profile).unwrap();
+    let mine = kule_engine::osfs::plain(&fs::canonicalize(mine.path()).unwrap());
+    fs::write(mine.join("beside-in-profile.txt"), "x\n").unwrap();
+    let sandbox = s.sandbox();
+    let out = cmd(&sandbox, "dir /b");
+    assert!(
+        ok(&out) && text(&out).contains("README.md"),
+        "{}",
+        text(&out)
+    );
+    for (dir, name) in [
+        (s.outside(), "beside-in-temp.txt"),
+        (mine.clone(), "beside-in-profile.txt"),
+    ] {
+        let out = cmd(&sandbox, &format!("dir /b {}", q(&dir)));
+        assert!(
+            !text(&out).contains(name),
+            "listed {}: {}",
+            dir.display(),
+            text(&out)
+        );
+    }
+}
+
+/// A folder revealed to a command (`kule exec --reveal`) is read, not
+/// written, as on every platform; one not revealed is not read.
+#[test]
+fn a_revealed_folder_is_read_and_not_written() {
+    if !available() {
+        return;
+    }
+    let s = Setup::new();
+    let outside = s.outside();
+    fs::write(outside.join("shown.txt"), "shown\n").unwrap();
+    let out = cmd(
+        &s.sandbox(),
+        &format!("type {}", q(&outside.join("shown.txt"))),
+    );
+    assert!(!ok(&out), "read without a grant: {}", text(&out));
+    let mut sandbox = s.sandbox();
+    sandbox.reveal(&outside).unwrap();
+    let out = cmd(&sandbox, &format!("type {}", q(&outside.join("shown.txt"))));
+    assert!(ok(&out) && text(&out).contains("shown"), "{}", text(&out));
+    let out = cmd(
+        &sandbox,
+        &format!("echo x> {}", q(&outside.join("put.txt"))),
+    );
+    assert!(
+        !ok(&out) && !outside.join("put.txt").exists(),
+        "{}",
+        text(&out)
+    );
+}
+
+/// A command gets a home of its own, in the task's folders, and nothing
+/// of the person's profile: `USERPROFILE` and `APPDATA` are the task's and
+/// writable, `HOMEDRIVE` and `HOMEPATH` are not passed, and a file in the
+/// person's own profile cannot be read. Preparing the task's home layer,
+/// which `kule exec` asks for, changes none of that and needs no link
+/// privilege.
+#[test]
+fn a_command_gets_a_home_of_its_own_and_none_of_the_persons() {
+    if !available() {
+        return;
+    }
+    let s = Setup::new();
+    let person = kule_engine::osfs::person_home().unwrap();
+    let mut sandbox = s.sandbox();
+    s.task
+        .prepare_home(&person, &[], sandbox.hidden(), sandbox.shown(), &[])
+        .unwrap();
+    sandbox.use_home(&s.task, &person).unwrap();
+    let out = cmd(
+        &sandbox,
+        "echo h> \"%USERPROFILE%\\own.txt\" && echo a> \"%APPDATA%\\own.txt\" && echo P=%USERPROFILE% A=%APPDATA% D=%HOMEDRIVE%%HOMEPATH%",
+    );
+    assert!(ok(&out), "{}", text(&out));
+    let shown = text(&out);
+    let task_dir = kule_engine::osfs::plain(&fs::canonicalize(s.home.path()).unwrap());
+    for name in ["P=", "A="] {
+        let value = shown
+            .split_whitespace()
+            .find_map(|w| w.strip_prefix(name))
+            .unwrap_or_default();
+        assert!(
+            Path::new(value).starts_with(&task_dir),
+            "{name}{value} is not the task's own ({shown})"
+        );
+    }
+    assert!(shown.contains("D=%HOMEDRIVE%%HOMEPATH%"), "{shown}");
+    let mine = TempDir::new_in(&person).unwrap();
+    let theirs =
+        kule_engine::osfs::plain(&fs::canonicalize(mine.path()).unwrap()).join("theirs.txt");
+    fs::write(&theirs, "theirs\n").unwrap();
+    let out = cmd(&sandbox, &format!("type {}", q(&theirs)));
+    assert!(
+        !ok(&out) && !text(&out).contains("theirs"),
+        "read the person's file: {}",
+        text(&out)
+    );
+}

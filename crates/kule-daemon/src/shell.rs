@@ -13,6 +13,8 @@ use std::time::Instant;
 use kule_engine::{Denial, OpenTerminal, Policy, Proxy, Sandbox, record_denials};
 
 pub use kule_engine::Task;
+#[cfg(windows)]
+pub use kule_engine::{Terminal, TerminalInput, TerminalStart, sandbox_refusals};
 
 use crate::Result;
 
@@ -184,6 +186,24 @@ impl Sandboxed {
             .map_err(text)?;
         command.env("KULE_TASK", self.task.id());
         Ok(command)
+    }
+
+    /// `program` on a pseudo console of `cols` × `rows` in the sandbox
+    /// (Windows; see `Sandbox::terminal_start`).
+    #[cfg(windows)]
+    pub fn terminal(
+        &self,
+        program: &str,
+        args: &[String],
+        cols: u16,
+        rows: u16,
+    ) -> Result<TerminalStart> {
+        let mut start = self
+            .sandbox
+            .terminal_start(program, args, cols, rows)
+            .map_err(text)?;
+        start.env("KULE_TASK", self.task.id());
+        Ok(start)
     }
 
     /// Once the shell ended: ends what it left running, cuts what it left

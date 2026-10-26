@@ -1,21 +1,9 @@
 mod paint;
 #[cfg(unix)]
 mod relay;
-
-/// `kule shell` on Windows: the terminal inside the sandbox comes with a
-/// later release; until then it is refused, never opened outside.
 #[cfg(windows)]
-mod relay {
-    pub fn run(
-        _home: &std::path::Path,
-        _task: &str,
-        _shell: &str,
-    ) -> anyhow::Result<(Option<i32>, kule_daemon::shell::ShellEnd)> {
-        anyhow::bail!(
-            "kule shell is not available on Windows yet: the shell inside the task's sandbox comes with a later release"
-        )
-    }
-}
+#[path = "relay_windows.rs"]
+mod relay;
 mod scopes;
 
 use std::collections::HashMap;

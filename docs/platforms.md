@@ -19,9 +19,19 @@ proxy. Windows 11 24H2 with update 26100.9278 or later is required, and
 a desktop session: from a service or a remote shell, and on an older
 build, sandboxed commands are refused with the reason, in the terminal
 and under Settings → Policy; there is no weaker mode to accept there.
-The terminal (`kule shell`) and the Windows release files come with the
-last work package. See `docs/windows-measurements.md` for what was
-measured.
+The terminal (`kule shell` and the app's terminals) opens the shell on a
+pseudo console inside the task's container. On Windows a task's commands
+get a home of their own, empty, in the task's folders (`USERPROFILE`,
+`APPDATA`, `TEMP`): nothing of your profile is read or layered there,
+and `kule home` has nothing to show. Windows PowerShell inside the
+container runs in its Constrained Language mode, which the lockdown
+policy of every app container brings: cmdlets, scripts and the programs
+they start work, calls into .NET (`[System.IO.File]::...`, `Add-Type`)
+do not; and as it cannot find its application-data folder there, it
+writes its command history beside wherever the shell is, in the task's
+copy, where review shows it. The release workflow builds the Windows
+installer and the CLI's archive for x64 and ARM64. See
+`docs/windows-measurements.md` for what was measured.
 
 ## Support at a glance
 

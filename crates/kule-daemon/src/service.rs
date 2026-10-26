@@ -3239,6 +3239,8 @@ mod tests {
         assert_eq!(s.app.rollback(&id).unwrap(), 1);
     }
 
+    // No home layer is made on Windows (see `Task::prepare_home`).
+    #[cfg(unix)]
     #[test]
     fn home_changes_are_reviewed_and_applied_apart_from_the_commit() {
         let s = Setup::new();
@@ -3674,7 +3676,9 @@ mod tests {
     }
 
     /// A settings file in the home Kule could not mask is told in the run's
-    /// notes, word for word as the app shows it.
+    /// notes, word for word as the app shows it. No home layer is made on
+    /// Windows (see `Task::prepare_home`).
+    #[cfg(unix)]
     #[test]
     fn a_withheld_home_file_is_told_in_the_run() {
         let s = Setup::new();

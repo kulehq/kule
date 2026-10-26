@@ -3535,6 +3535,7 @@ dependencies = [
  "gix",
  "keyring",
  "kule-entities",
+ "kule-pty-helper",
  "kule-view",
  "landlock",
  "libc",
@@ -3595,6 +3596,13 @@ dependencies = [
  "kule-engine",
  "serde_json",
  "tempfile",
+]
+
+[[package]]
+name = "kule-pty-helper"
+version = "0.2.0-preview.14"
+dependencies = [
+ "windows 0.62.2",
 ]
 
 [[package]]

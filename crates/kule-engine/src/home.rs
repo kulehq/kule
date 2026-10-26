@@ -337,6 +337,12 @@ impl Task {
     /// the layer clones (`.config`); `ignored` paths (relative to `real`)
     /// are the agent's own business, never offered. Returns the layer, to
     /// be the commands' `HOME`.
+    ///
+    /// On Windows no layer is made: the layer links the person's files,
+    /// which Windows allows only with Developer Mode or a privilege, so a
+    /// task's commands get a home of their own, empty, in the task's
+    /// folders instead (see `Sandbox::use_home`). The layer's path is
+    /// returned all the same, with nothing in it.
     pub fn prepare_home(
         &self,
         real: &Path,
@@ -345,6 +351,9 @@ impl Task {
         shown: &[PathBuf],
         ignored: &[String],
     ) -> Result<PathBuf> {
+        if cfg!(windows) {
+            return Ok(self.home_layer());
+        }
         let given = real.to_path_buf();
         let real = fs::canonicalize(real).at(real)?;
         let dir = self.home_layer();
