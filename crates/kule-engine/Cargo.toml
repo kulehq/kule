@@ -61,6 +61,9 @@ landlock = "0.4.7"
 # this version. No features: the micro-VM backend's build step downloads
 # binaries, and the others are not Kule's.
 mxc-sdk = { version = "=1.0.1", default-features = false }
+# The frames a terminal's helper reads (the helper itself ships beside
+# Kule's programs).
+kule-pty-helper = { version = "0.2.0-preview.14", path = "../kule-pty-helper" }
 # Handle-relative file calls (no link followed on the way), access lists,
 # locks and process queries; the proxy's app container, its pipes and the
 # job around it; the certificates the system trusts; the Windows build,

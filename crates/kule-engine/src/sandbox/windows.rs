@@ -29,7 +29,7 @@ use mxc_sdk::v1::{ContainerRequest, Containment, WaitResult};
 
 use super::start::{Environment, Io, Process, read_all, resolve_program};
 use super::{Network, Sandbox};
-use crate::error::{Error, Result};
+use crate::error::{Error, IoContext, Result};
 use crate::osfs::plain;
 
 /// A command to start in a container of its own (see [`super::Start`]).
@@ -43,6 +43,9 @@ pub struct Container {
     denied: Vec<PathBuf>,
     enumerate: Vec<PathBuf>,
     network: Network,
+    /// The terminal helper the command runs under, and the size it opens
+    /// its console at (see [`Sandbox::terminal_start`]).
+    terminal: Option<(PathBuf, u16, u16)>,
     pub(crate) io: (Io, Io, Io),
 }
 
@@ -86,7 +89,25 @@ impl Container {
                 format!("{}: no such program on your PATH", self.program),
             )
         })?;
-        let command = command_line(&program, &self.args)?;
+        let (application, mut command) = command_line(&program, &self.args)?;
+        if let Some((helper, cols, rows)) = &self.terminal {
+            let args = kule_pty_helper::Args {
+                cols: *cols,
+                rows: *rows,
+                program: application,
+                line: command,
+            };
+            let args: Vec<String> = args
+                .to_args()
+                .into_iter()
+                .map(|a| {
+                    a.into_string().map_err(|_| {
+                        io::Error::new(io::ErrorKind::InvalidInput, "a path that is not text")
+                    })
+                })
+                .collect::<io::Result<_>>()?;
+            command = command_line(helper, &args)?.1;
+        }
         let text = |paths: &[PathBuf]| -> Vec<String> {
             paths
                 .iter()
@@ -169,6 +190,64 @@ impl Container {
     }
 }
 
+/// A shell to start on a pseudo console in its sandbox (see
+/// [`Sandbox::terminal_start`]): its environment may still be set.
+#[derive(Debug)]
+pub struct TerminalStart(pub(super) Container);
+
+impl TerminalStart {
+    pub fn env(&mut self, name: impl AsRef<OsStr>, value: impl AsRef<OsStr>) -> &mut Self {
+        self.0.env(name.as_ref(), value.as_ref());
+        self
+    }
+
+    /// Starts the helper and the shell on its console.
+    pub fn spawn(mut self) -> io::Result<Terminal> {
+        self.0.io = (Io::Piped, Io::Piped, Io::Piped);
+        let mut process = self.0.spawn()?;
+        let piped = || io::Error::other("the terminal's pipes were not made");
+        Ok(Terminal {
+            input: TerminalInput(process.stdin.take().ok_or_else(piped)?),
+            output: process.stdout.take().ok_or_else(piped)?,
+            errors: process.stderr.take().ok_or_else(piped)?,
+            process,
+        })
+    }
+}
+
+/// A shell on a pseudo console in its sandbox: what is typed goes in
+/// through `input`, what the console shows comes out on `output`, and what
+/// the helper itself has to say (that the shell could not start) on
+/// `errors`. `process` ends when the shell does, with its exit code.
+pub struct Terminal {
+    pub input: TerminalInput,
+    pub output: Box<dyn Read + Send>,
+    pub errors: Box<dyn Read + Send>,
+    pub process: Process,
+}
+
+/// What goes in to a [`Terminal`]: dropped, the shell ends.
+pub struct TerminalInput(Box<dyn Write + Send>);
+
+impl TerminalInput {
+    /// Passes what the person typed or pasted to the shell.
+    pub fn write(&mut self, bytes: &[u8]) -> io::Result<()> {
+        for chunk in bytes.chunks(kule_pty_helper::MAX_DATA) {
+            kule_pty_helper::write_frame(
+                &mut self.0,
+                &kule_pty_helper::Frame::Data(chunk.to_vec()),
+            )?;
+        }
+        Ok(())
+    }
+
+    /// The person's terminal is now `cols` × `rows`.
+    pub fn resize(&mut self, cols: u16, rows: u16) -> io::Result<()> {
+        let (cols, rows) = kule_pty_helper::clamp(cols, rows);
+        kule_pty_helper::write_frame(&mut self.0, &kule_pty_helper::Frame::Resize { cols, rows })
+    }
+}
+
 /// A command's output stream as asked for: kept for the caller, relayed to
 /// ours on a thread, or drained (not dropped: a closed pipe would fail the
 /// command's writes). The thread goes on `relays`, to be joined once the
@@ -209,10 +288,10 @@ pub(crate) fn status_of(result: WaitResult) -> ExitStatus {
 }
 
 /// `program` and `args` as one command line, each quoted as the C runtime
-/// reads it back. A batch file is run by `cmd.exe`, which reads its
-/// arguments its own way: one that holds a character `cmd` would act on
-/// is refused rather than passed.
-fn command_line(program: &Path, args: &[String]) -> io::Result<OsString> {
+/// reads it back, and the program that line starts. A batch file is run
+/// by `cmd.exe`, which reads its arguments its own way: one that holds a
+/// character `cmd` would act on is refused rather than passed.
+fn command_line(program: &Path, args: &[String]) -> io::Result<(PathBuf, OsString)> {
     use crate::windows::appcontainer::quoted;
     let batch = program
         .extension()
@@ -233,9 +312,8 @@ fn command_line(program: &Path, args: &[String]) -> io::Result<OsString> {
                 ));
             }
         }
-        line.push(quoted(
-            Path::new(&root).join("System32\\cmd.exe").as_os_str(),
-        ));
+        let cmd = Path::new(&root).join("System32\\cmd.exe");
+        line.push(quoted(cmd.as_os_str()));
         line.push(" /d /s /c \"");
         line.push(quoted(program.as_os_str()));
         for arg in args {
@@ -243,6 +321,7 @@ fn command_line(program: &Path, args: &[String]) -> io::Result<OsString> {
             line.push(quoted(OsStr::new(arg)));
         }
         line.push("\"");
+        return Ok((cmd, line));
     } else if program
         .file_name()
         .and_then(OsStr::to_str)
@@ -267,7 +346,7 @@ fn command_line(program: &Path, args: &[String]) -> io::Result<OsString> {
             line.push(quoted(OsStr::new(arg)));
         }
     }
-    Ok(line)
+    Ok((program.to_owned(), line))
 }
 
 /// The container's network as Kule's [`Network`] says, and the app
@@ -307,6 +386,45 @@ fn network_policy(network: Network) -> (NetworkPolicy, Option<String>) {
     };
     let peer = proxy.map(|_| crate::windows::appcontainer::PROFILE.to_owned());
     (policy, peer)
+}
+
+/// What is beside the way to the grants: each folder in a folder on the
+/// way (`enumerate`) that is neither a grant nor on the way itself,
+/// compared as Windows compares names, without regard to case. A file
+/// there is listed but not read, and has nothing below it; the container
+/// denies folders only. A link is left as it is: what it leads to is
+/// judged by its own path, and denying a link by name could deny a grant
+/// it leads to. A folder Kule cannot list, the command cannot list either.
+fn beside_the_way(
+    enumerate: &[PathBuf],
+    readwrite: &[PathBuf],
+    readonly: &[PathBuf],
+) -> Vec<PathBuf> {
+    let key = |p: &Path| p.to_string_lossy().trim_end_matches('\\').to_lowercase();
+    let kept: std::collections::HashSet<String> = enumerate
+        .iter()
+        .chain(readwrite)
+        .chain(readonly)
+        .map(|p| key(p))
+        .collect();
+    let mut beside = Vec::new();
+    for dir in enumerate {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = dir.join(entry.file_name());
+            let folder = std::fs::symlink_metadata(&path).is_ok_and(|m| {
+                use std::os::windows::fs::MetadataExt;
+                const REPARSE_POINT: u32 = 0x400;
+                m.is_dir() && m.file_attributes() & REPARSE_POINT == 0
+            });
+            if folder && !kept.contains(&key(&path)) {
+                beside.push(path);
+            }
+        }
+    }
+    beside
 }
 
 /// Where the person's tools are, readable to every command: Windows and
@@ -376,9 +494,20 @@ impl Sandbox {
     /// The container for `program` with `args`, from what this sandbox
     /// grants and hides (see the module's notes).
     pub(super) fn contained(&self, program: &str, args: &[String]) -> Result<Container> {
+        self.contained_with(program, args, None)
+    }
+
+    /// [`Sandbox::contained`], with folder `also` readable too.
+    fn contained_with(
+        &self,
+        program: &str,
+        args: &[String],
+        also: Option<&Path>,
+    ) -> Result<Container> {
         let mut readwrite: Vec<PathBuf> = self.writable().into_iter().map(Path::to_owned).collect();
         readwrite.extend(self.layer.iter().cloned());
         let mut readonly: Vec<PathBuf> = self.see_through.clone();
+        readonly.extend(also.map(Path::to_owned));
         readonly.extend(self.protected.iter().cloned());
         readonly.extend(self.beside_links.iter().cloned());
         readonly.extend(tool_roots());
@@ -431,18 +560,67 @@ impl Sandbox {
             };
             env.set(OsStr::new(&name), &value);
         }
+        let (readwrite, readonly, mut denied, enumerate) = (
+            plain_all(readwrite),
+            plain_all(readonly),
+            plain_all(denied),
+            plain_all(enumerate),
+        );
+        // Windows lets a command list everything below a folder it may
+        // list (measured): what is beside the way is denied, so a listing
+        // on the way shows names and leads no further.
+        denied.extend(beside_the_way(&enumerate, &readwrite, &readonly));
+        denied.sort();
+        denied.dedup();
         Ok(Container {
             program: program.to_owned(),
             args: args.to_vec(),
             cwd: plain(&self.copy),
             env,
-            readwrite: plain_all(readwrite),
-            readonly: plain_all(readonly),
-            denied: plain_all(denied),
-            enumerate: plain_all(enumerate),
+            readwrite,
+            readonly,
+            denied,
+            enumerate,
             network: self.network,
+            terminal: None,
             io: (Io::Inherit, Io::Inherit, Io::Inherit),
         })
+    }
+
+    /// The container for `program` with `args` on a pseudo console of
+    /// `cols` × `rows`: the command the container starts is Kule's terminal
+    /// helper, which opens the console inside and starts `program` on it
+    /// (see `kule_pty_helper`). The helper is the one beside Kule's own
+    /// program, and its folder is read, never written: one a command could
+    /// write to, or that holds the person's home, is refused.
+    pub(super) fn on_terminal(
+        &self,
+        program: &str,
+        args: &[String],
+        cols: u16,
+        rows: u16,
+    ) -> Result<Container> {
+        let helper = crate::windows::beside_me("kule-pty-helper.exe")
+            .map_err(|e| Error::Invalid(format!("the terminal cannot open: {e}")))?;
+        let helper = std::fs::canonicalize(&helper).at(&helper)?;
+        let dir = helper
+            .parent()
+            .ok_or_else(|| Error::Invalid("the terminal helper is in no folder".into()))?;
+        let mut container = self.contained_with(program, args, Some(dir))?;
+        let (dir, helper) = (plain(dir), plain(&helper));
+        let overlaps = |p: &Path| p.starts_with(&dir) || dir.starts_with(p);
+        if container.readwrite.iter().any(|w| overlaps(w))
+            || crate::osfs::person_home().is_some_and(|h| plain(&h).starts_with(&dir))
+        {
+            return Err(Error::Invalid(format!(
+                "the terminal helper's folder {} is one a command could write to or that holds your \
+                 home; Kule starts no terminal from there",
+                dir.display()
+            )));
+        }
+        let (cols, rows) = kule_pty_helper::clamp(cols, rows);
+        container.terminal = Some((helper, cols, rows));
+        Ok(container)
     }
 
     /// Why no command runs in a sandbox on this computer (see
@@ -471,7 +649,8 @@ mod tests {
 
     #[test]
     fn a_batch_file_runs_under_cmd_and_takes_only_plain_text() {
-        let line = command_line(Path::new("C:\\t\\npx.cmd"), &["a b".to_owned()]).unwrap();
+        let (cmd, line) = command_line(Path::new("C:\\t\\npx.cmd"), &["a b".to_owned()]).unwrap();
+        assert!(cmd.ends_with("System32\\cmd.exe"), "{}", cmd.display());
         let line = line.to_string_lossy();
         assert!(
             line.contains("cmd.exe /d /s /c \"C:\\t\\npx.cmd \"a b\"\""),
@@ -480,9 +659,10 @@ mod tests {
         for bad in ["a&b", "x|y", "%PATH%", "q\"q"] {
             assert!(command_line(Path::new("C:\\t\\run.bat"), &[bad.to_owned()]).is_err());
         }
-        let plain = command_line(Path::new("C:\\t\\node.exe"), &["a b\"c".to_owned()]).unwrap();
+        let (_, plain) =
+            command_line(Path::new("C:\\t\\node.exe"), &["a b\"c".to_owned()]).unwrap();
         assert_eq!(plain.to_string_lossy(), "C:\\t\\node.exe \"a b\\\"c\"");
-        let shell = command_line(
+        let (_, shell) = command_line(
             Path::new("C:\\Windows\\System32\\cmd.exe"),
             &[
                 "/d".to_owned(),
