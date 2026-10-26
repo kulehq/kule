@@ -31,8 +31,13 @@ tier `base-container`. Dates: 2026-10-26.
   peer; a direct connection past the proxy was cut at once; a listener
   outside the profile, with the profile still named, was never reached. The
   identity-less mode reaches a plain host listener and not the profiled one.
-  (Measured as an administrator; to be repeated as a standard user before
-  the installer step is designed.)
+  Measured twice with the same result: as an administrator (UAC off) and as
+  a **standard user in an interactive console session**, both with the
+  firewall on all three profiles at its defaults, no package-scoped rule and
+  no loopback exemption. Kule's installer therefore writes no firewall rule
+  and no exemption for the proxy; a machine policy that blocks outbound
+  traffic by default would stop the proxy's own egress, and Kule's end-to-end
+  self-check names that instead of weakening anything.
 - **The container cannot reach what is the person's.** Another user's files,
   the Credential Manager's stored credentials (`cmdkey /list` shows none),
   an owner-only named pipe (access denied), writes to the registry hive and
@@ -60,7 +65,10 @@ tier `base-container`. Dates: 2026-10-26.
   (microsoft/mxc#1465). Kule's daemon and CLI run in the person's desktop
   session, so this is a precondition Kule checks and names, not a gap. It
   also means GitHub-hosted runners cannot run the sandbox tests; the test
-  VM does.
+  VM does. A standard user cannot register a scheduled task for itself
+  (the ScheduledTasks module's CIM session is refused), so the standard-user
+  measurements were started by an administrator as a task that runs in the
+  standard user's console session.
 - **Every ancestor of a grant must be enumerable.** Without it, tools that
   resolve paths upward fail in confusing ways: `dir` of a granted folder
   says "Access is denied", a batch file given by absolute path does not run.
@@ -88,9 +96,6 @@ tier `base-container`. Dates: 2026-10-26.
 
 ## Open
 
-- Repeat the proxy-path measurement as a standard, interactive user before
-  WP2 fixes what the installer must create; the administrator result
-  suggests nothing, the MXC documentation suggests a firewall rule.
 - `git` inside a container refuses a repository whose folder is owned by
   `Administrators` ("dubious ownership"); a standard user's copies are owned
   by the user, so Kule only has to carry `safe.directory` for people who run
