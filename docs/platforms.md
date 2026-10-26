@@ -29,9 +29,9 @@ policy of every app container brings: cmdlets, scripts and the programs
 they start work, calls into .NET (`[System.IO.File]::...`, `Add-Type`)
 do not; and as it cannot find its application-data folder there, it
 writes its command history beside wherever the shell is, in the task's
-copy, where review shows it. The Windows release files come with the
-last work package. See `docs/windows-measurements.md` for what was
-measured.
+copy, where review shows it. The release workflow builds the Windows
+installer and the CLI's archive for x64 and ARM64. See
+`docs/windows-measurements.md` for what was measured.
 
 ## Support at a glance
 

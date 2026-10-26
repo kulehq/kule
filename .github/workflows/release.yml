@@ -1,11 +1,13 @@
 name: release
 
-# A tag vX.Y.Z builds the macOS app (universal) and the Linux .deb and .rpm,
-# each with the kule CLI inside, and opens a draft release with them, their
-# checksums, an SBOM of each and build provenance attestations.
+# A tag vX.Y.Z builds the macOS app (universal), the Linux .deb and .rpm
+# and the Windows installer (x64 and ARM64), each with the kule CLI inside,
+# and opens a draft release with them, their checksums, an SBOM of each
+# and build provenance attestations.
 #
-# The macOS app is signed ad hoc, never notarized; the notes of every
-# release say how to check a download and open it. No job holds a secret.
+# The macOS app is signed ad hoc, never notarized, and the Windows files
+# are not signed; the notes of every release say how to check a download
+# and open it. No job holds a secret.
 # Publishing is a job of its own in the `release` environment, which waits
 # for a maintainer's approval: nothing reaches even the draft before it.
 # Run by hand, it builds and publishes nothing.
@@ -184,6 +186,110 @@ jobs:
           path: dist/
           if-no-files-found: error
 
+  # The Windows app and CLI, for x64 and for ARM64, each on a runner of its
+  # architecture, with the two programs the CLI starts beside itself: the
+  # task's proxy and the terminal's helper. The NSIS installer installs for
+  # the user who runs it, no administrator asked; the bundler fetches NSIS
+  # at the version and hash the pinned Tauri CLI names. Nothing is signed.
+  windows:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-latest
+            target: x86_64-pc-windows-msvc
+            arch: x64
+          - runner: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: The tag names the version being built
+        id: version
+        shell: bash
+        env:
+          TAG: ${{ github.ref_name }}
+          IS_TAG: ${{ startsWith(github.ref, 'refs/tags/v') }}
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)
+          if [ "$IS_TAG" = "true" ] && [ "${TAG#v}" != "$version" ]; then
+            echo "Cargo.toml is not at ${TAG#v}"; exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Rust toolchain (rust-toolchain.toml) and the target
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          rustup toolchain install
+          rustup target add "$TARGET"
+      - name: Tauri CLI, and cargo-auditable at the version the gate pins
+        shell: bash
+        run: |
+          cargo install tauri-cli --version "$TAURI_CLI_VERSION" --locked
+          cargo install cargo-auditable --version "$(sed -n 's/^CARGO_AUDITABLE=//p' scripts/release-gate.sh)" --locked
+      - name: The kule CLI, the proxy and the terminal helper, each with its dependency tree inside
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          cargo auditable build --release --locked --target "$TARGET" -p kule -p kule-proxy -p kule-pty-helper
+          bin=crates/kule-desktop/binaries
+          mkdir -p "$bin"
+          for name in kule kule-proxy kule-pty-helper; do
+            cp "target/$TARGET/release/$name.exe" "$bin/$name-$TARGET.exe"
+          done
+      - name: Build the installer
+        working-directory: crates/kule-desktop
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          cargo tauri build --target "$TARGET" --bundles nsis \
+            --config tauri.release.conf.json --config tauri.windows-release.conf.json
+      # Installed silently for this user, then the installed programs are
+      # checked: the CLI says its version, and the two it starts beside
+      # itself are there, or no task's proxy and no terminal would start.
+      - name: Check what was built, and install it
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          TARGET: ${{ matrix.target }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          set -eu
+          release="target/$TARGET/release"
+          "$release/kule.exe" --version | grep -F "$VERSION"
+          setup=$(ls "$release"/bundle/nsis/*-setup.exe)
+          cmd //c start "" //wait "$(cygpath -w "$setup")" //S
+          installed="$LOCALAPPDATA/Kule"
+          test -f "$installed/kule-desktop.exe"
+          for name in kule kule-proxy kule-pty-helper; do
+            test -f "$installed/$name.exe"
+          done
+          "$installed/kule.exe" --version | grep -F "$VERSION"
+          mkdir dist
+          cp "$setup" "dist/Kule_${VERSION}_${ARCH}-setup.exe"
+      - name: The CLI and its two programs, as one archive
+        shell: pwsh
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          TARGET: ${{ matrix.target }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          $release = "target/$env:TARGET/release"
+          Compress-Archive -Path "$release/kule.exe", "$release/kule-proxy.exe", "$release/kule-pty-helper.exe" `
+            -DestinationPath "dist/kule-$env:VERSION-windows-$env:ARCH.zip"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: windows-${{ matrix.arch }}
+          path: dist/
+          if-no-files-found: error
+
   # What the CLI and the app are made of, every platform's crates included,
   # as CycloneDX: read from Cargo.lock, nothing built.
   sbom:
@@ -277,10 +383,69 @@ jobs:
       - name: Real projects install, build and test in a task
         run: KULE="$RUNNER_TEMP/kule/kule" scripts/release-gate.sh project
 
+  # The Windows CLI as it is about to be published, and the two programs
+  # it starts: the crates inside each against the advisories, and a real
+  # command in a task's container, on a Windows 11 runner (the Windows
+  # Server runner cannot make the container), for x64 under Windows's own
+  # emulation and for ARM64. sandbox-probe and the real projects run on
+  # the Windows test machine, by hand, before a release.
+  gate-windows:
+    needs: [windows]
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x64, arm64]
+    runs-on: windows-11-arm
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: windows-${{ matrix.arch }}
+          path: dist
+      - name: The kule CLI from the release's archive
+        shell: pwsh
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.*)"' | Select-Object -First 1).Matches[0].Groups[1].Value
+          Expand-Archive -Path "dist/kule-$version-windows-$env:ARCH.zip" -DestinationPath "$env:RUNNER_TEMP/kule"
+          & "$env:RUNNER_TEMP/kule/kule.exe" --version
+      - name: Rust toolchain (rust-toolchain.toml), for cargo-audit
+        shell: bash
+        run: rustup toolchain install
+      - name: The crates inside each program, against the advisories
+        shell: bash
+        run: |
+          cargo install cargo-audit --version "$(sed -n 's/^CARGO_AUDIT=//p' scripts/release-gate.sh)" --locked
+          for name in kule kule-proxy kule-pty-helper; do
+            KULE="$RUNNER_TEMP/kule/$name.exe" scripts/release-gate.sh binary
+          done
+      - name: A command runs in a task's container, through this CLI
+        shell: bash
+        env:
+          KULE_HOME: ${{ runner.temp }}/kule-home
+          # Else bash on Windows turns cmd's /c and /d into drive paths.
+          MSYS_NO_PATHCONV: "1"
+        run: |
+          set -eu
+          kule="$RUNNER_TEMP/kule/kule.exe"
+          ws="$RUNNER_TEMP/ws"
+          mkdir -p "$ws" && echo hello > "$ws/README.md"
+          task=$("$kule" new "$ws" | sed -n 's/^task \([0-9a-f]*\) .*/\1/p')
+          test -n "$task"
+          outside="$(cygpath -w "$RUNNER_TEMP")\\escaped.txt"
+          "$kule" exec "$task" -- cmd /d /c "echo inside > inside.txt && type inside.txt"
+          "$kule" exec "$task" -- cmd /d /c "echo x > \"$outside\"" && { echo "wrote outside the task"; exit 1; }
+          test ! -f "$RUNNER_TEMP/escaped.txt"
+          "$kule" status "$task"
+
   publish:
     # A tag that was pushed, never a run by hand.
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-    needs: [macos, linux, sbom, gate]
+    needs: [macos, linux, windows, sbom, gate, gate-windows]
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     # It waits for a maintainer's approval. Only this job may mint an OIDC
@@ -297,7 +462,7 @@ jobs:
           persist-credentials: false
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          pattern: "{macos,linux,sbom}"
+          pattern: "{macos,linux,windows-x64,windows-arm64,sbom}"
           path: dist
           merge-multiple: true
       - name: Checksums and the notes
@@ -307,6 +472,10 @@ jobs:
           version="${TAG#v}"
           test -f "dist/Kule_${version}_universal.dmg"
           test -f "dist/kule-$version-macos-universal.tar.gz"
+          for arch in x64 arm64; do
+            test -f "dist/Kule_${version}_${arch}-setup.exe"
+            test -f "dist/kule-$version-windows-$arch.zip"
+          done
           test -s "dist/kule-$version.cdx.json"
           test -s "dist/kule-desktop-$version.cdx.json"
           (cd dist && sha256sum -- * > SHA256SUMS)
