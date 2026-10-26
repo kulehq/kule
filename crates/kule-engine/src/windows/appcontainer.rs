@@ -57,6 +57,15 @@ use windows::core::{PCWSTR, PWSTR};
 use crate::osfs::win::io_error;
 use crate::proxy_pipe::{ChildProcess, Launched};
 
+/// An error of one Windows call, named: which call failed is what a
+/// person needs when a container cannot be made.
+fn at(step: &'static str) -> impl Fn(windows::core::Error) -> io::Error {
+    move |e| {
+        let e = io_error(e);
+        io::Error::new(e.kind(), format!("{step}: {e}"))
+    }
+}
+
 /// The profile the proxy runs under. Its SID is derived from this name
 /// alone, the same on every computer.
 pub const PROFILE: &str = "Kule.Proxy";
@@ -106,7 +115,7 @@ pub(crate) fn launch(exe: &Path, args: &[&OsStr]) -> io::Result<Launched> {
     for ours in [&stdin_write, &stdout_read, &stderr_read] {
         // SAFETY: an open handle this function owns.
         unsafe { SetHandleInformation(handle(ours), HANDLE_FLAG_INHERIT.0, HANDLE_FLAGS(0)) }
-            .map_err(io_error)?;
+            .map_err(at("SetHandleInformation"))?;
     }
     let process = profile.spawn(exe, args, [&stdin_read, &stdout_write, &stderr_write])?;
     drop((stdin_read, stdout_write, stderr_write));
@@ -199,9 +208,9 @@ impl Profile {
                 Ok(sid) => sid,
                 Err(e) if e.code() == ERROR_ALREADY_EXISTS.to_hresult() => {
                     DeriveAppContainerSidFromAppContainerName(PCWSTR(name.as_ptr()))
-                        .map_err(io_error)?
+                        .map_err(at("DeriveAppContainerSidFromAppContainerName"))?
                 }
-                Err(e) => return Err(io_error(e)),
+                Err(e) => return Err(at("CreateAppContainerProfile")(e)),
             }
         };
         Ok(Profile { sid })
@@ -222,7 +231,7 @@ impl Profile {
             let mut sid = PSID::default();
             // SAFETY: the string is NUL-terminated; the SID is freed below.
             unsafe { ConvertStringSidToSidW(PCWSTR(wide_text.as_ptr()), &mut sid) }
-                .map_err(io_error)?;
+                .map_err(at("ConvertStringSidToSidW"))?;
             capabilities.push(sid);
         }
         let result = self.spawn_with(exe, args, stdio, &capabilities);
@@ -269,7 +278,7 @@ impl Profile {
                 None,
                 None,
             )
-            .map_err(io_error)?;
+            .map_err(at("UpdateProcThreadAttribute (capabilities)"))?;
             UpdateProcThreadAttribute(
                 list.0,
                 0,
@@ -279,7 +288,7 @@ impl Profile {
                 None,
                 None,
             )
-            .map_err(io_error)?;
+            .map_err(at("UpdateProcThreadAttribute (handles)"))?;
         }
         let mut startup = STARTUPINFOEXW::default();
         startup.StartupInfo.cb = std::mem::size_of::<STARTUPINFOEXW>() as u32;
@@ -311,7 +320,7 @@ impl Profile {
                 &startup.StartupInfo,
                 &mut info,
             )
-            .map_err(io_error)?;
+            .map_err(at("CreateProcessW"))?;
         }
         // SAFETY: handles CreateProcessW just returned, owned from here.
         let (process, thread) = unsafe {
@@ -352,7 +361,7 @@ impl Job {
         // SAFETY: the job handle is owned below; the process handle is
         // open; the limit struct is the size the class wants.
         unsafe {
-            let job = CreateJobObjectW(None, PCWSTR::null()).map_err(io_error)?;
+            let job = CreateJobObjectW(None, PCWSTR::null()).map_err(at("CreateJobObjectW"))?;
             let job = Job(OwnedHandle::from_raw_handle(job.0));
             let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
             limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
@@ -362,8 +371,9 @@ impl Job {
                 (&limits as *const JOBOBJECT_EXTENDED_LIMIT_INFORMATION).cast(),
                 std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
             )
-            .map_err(io_error)?;
-            AssignProcessToJobObject(handle(&job.0), process).map_err(io_error)?;
+            .map_err(at("SetInformationJobObject"))?;
+            AssignProcessToJobObject(handle(&job.0), process)
+                .map_err(at("AssignProcessToJobObject"))?;
             Ok(job)
         }
     }
@@ -426,7 +436,7 @@ impl AttributeList {
             let mut buffer = vec![0u8; size];
             let list = LPPROC_THREAD_ATTRIBUTE_LIST(buffer.as_mut_ptr().cast());
             InitializeProcThreadAttributeList(Some(list), count, None, &mut size)
-                .map_err(io_error)?;
+                .map_err(at("InitializeProcThreadAttributeList"))?;
             Ok(AttributeList(list, buffer))
         }
     }
@@ -449,7 +459,7 @@ fn pipe() -> io::Result<(OwnedHandle, OwnedHandle)> {
     let (mut read, mut write) = (HANDLE::default(), HANDLE::default());
     // SAFETY: the handles are owned once the call returns them.
     unsafe {
-        CreatePipe(&mut read, &mut write, Some(&attributes), 0).map_err(io_error)?;
+        CreatePipe(&mut read, &mut write, Some(&attributes), 0).map_err(at("CreatePipe"))?;
         Ok((
             OwnedHandle::from_raw_handle(read.0),
             OwnedHandle::from_raw_handle(write.0),

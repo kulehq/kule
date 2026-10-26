@@ -65,7 +65,8 @@ fn the_container_reads_nothing_of_the_tasks_or_kules() {
     let open = Path::new("C:\\Windows\\win.ini");
     let probe = |path: &Path| {
         let args = [OsStr::new("--probe"), path.as_os_str()];
-        appcontainer::run(Path::new(PROXY), &args, Duration::from_secs(30)).unwrap()
+        appcontainer::run(Path::new(PROXY), &args, Duration::from_secs(30))
+            .unwrap_or_else(|e| panic!("{PROXY} (exists: {}): {e}", Path::new(PROXY).is_file()))
     };
     let (code, errors) = probe(&in_task);
     assert_eq!(code, Some(2), "{errors}");
@@ -100,7 +101,8 @@ fn the_container_reads_nothing_of_the_tasks_or_kules() {
 fn what_runs_in_the_container_ends_with_the_process_that_started_it() {
     if std::env::var_os("KULE_TEST_HOLD_CONTAINER").is_some() {
         let args = [OsStr::new("--hold"), OsStr::new("60")];
-        let running = appcontainer::start(Path::new(PROXY), &args).unwrap();
+        let running = appcontainer::start(Path::new(PROXY), &args)
+            .unwrap_or_else(|e| panic!("{PROXY} (exists: {}): {e}", Path::new(PROXY).is_file()));
         std::thread::sleep(Duration::from_millis(500));
         println!(
             "running-pid={} alive={}",
@@ -122,7 +124,12 @@ fn what_runs_in_the_container_ends_with_the_process_that_started_it() {
     let line = text
         .lines()
         .find_map(|l| l.strip_prefix("running-pid="))
-        .unwrap_or_else(|| panic!("no pid in {text}"));
+        .unwrap_or_else(|| {
+            panic!(
+                "no pid in {text}; stderr: {}",
+                String::from_utf8_lossy(&out.stderr)
+            )
+        });
     let (pid, alive) = line.split_once(" alive=").unwrap();
     let pid: u32 = pid.parse().unwrap();
     assert_eq!(
@@ -156,7 +163,12 @@ fn the_proxy_ends_with_the_process_that_started_it() {
     let pid: u32 = text
         .lines()
         .find_map(|l| l.strip_prefix("proxy-pid="))
-        .unwrap_or_else(|| panic!("no pid in {text}"))
+        .unwrap_or_else(|| {
+            panic!(
+                "no pid in {text}; stderr: {}",
+                String::from_utf8_lossy(&out.stderr)
+            )
+        })
         .trim()
         .parse()
         .unwrap();
