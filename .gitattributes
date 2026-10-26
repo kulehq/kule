@@ -1,0 +1,10 @@
+# Every text file is checked out with LF on every platform, Windows
+# included: texts the binaries embed (policies, scripts, lock files) and
+# the fixtures tests compare are then the same bytes everywhere.
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.ico binary
+*.icns binary
+*.mp4 binary

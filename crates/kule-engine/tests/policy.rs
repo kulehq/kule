@@ -892,6 +892,32 @@ fn a_person_chooses_between_kules_policies_but_keeps_their_own() {
     assert_eq!(fs::read_to_string(&user).unwrap(), own);
 }
 
+/// Kule's own policy text with Windows line endings, as an editor there or
+/// a checkout with autocrlf leaves it, is still that choice: line endings
+/// change no rule.
+#[test]
+fn kules_policy_text_with_windows_line_endings_stays_that_choice() {
+    use kule_engine::{CAREFUL_POLICY, DEFAULT_POLICY, PolicyChoice, USER_POLICY, policy_choice};
+    let home = TempDir::new().unwrap();
+    let user = home.path().join(USER_POLICY);
+    let earlier = include_str!("fixtures/careful-0.2.0-preview.10.cedar");
+    for (text, choice) in [
+        (earlier, PolicyChoice::Careful),
+        (CAREFUL_POLICY, PolicyChoice::Careful),
+        (DEFAULT_POLICY, PolicyChoice::Balanced),
+    ] {
+        assert!(!text.contains('\r'), "the source is LF");
+        write(&user, &text.replace('\n', "\r\n"));
+        assert_eq!(policy_choice(home.path()).unwrap(), choice);
+    }
+    // A word changed is still the person's own, whatever the line endings.
+    write(
+        &user,
+        &earlier.replace("careful", "carefull").replace('\n', "\r\n"),
+    );
+    assert_eq!(policy_choice(home.path()).unwrap(), PolicyChoice::Own);
+}
+
 /// The careful policy an earlier version wrote out whole is still the
 /// careful choice, judged by this version's rules, and never a policy of
 /// the person's own that Kule may not replace.

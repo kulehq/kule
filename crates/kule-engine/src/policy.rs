@@ -123,12 +123,15 @@ pub fn policy_choice(home: &Path) -> Result<PolicyChoice> {
 }
 
 /// Which of Kule's policies `text` is, today's or an earlier version's.
+/// Line endings change no rule: a copy an editor or a checkout turned to
+/// CRLF is still that policy.
 fn kules_text(text: &str) -> Option<PolicyChoice> {
-    match text {
+    let unix = text.replace("\r\n", "\n");
+    match unix.as_str() {
         DEFAULT_POLICY => Some(PolicyChoice::Balanced),
         CAREFUL_POLICY => Some(PolicyChoice::Careful),
         _ => {
-            let hash = blake3::hash(text.as_bytes()).to_hex();
+            let hash = blake3::hash(unix.as_bytes()).to_hex();
             EARLIER_TEXTS
                 .iter()
                 .find(|(earlier, _)| *earlier == hash.as_str())
