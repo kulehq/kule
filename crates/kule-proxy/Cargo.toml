@@ -1,0 +1,21 @@
+[package]
+name = "kule-proxy"
+description = "Kule's task proxy as a program of its own, for the platforms where it runs apart from Kule in a container"
+# kule-engine is not on crates.io yet.
+publish = false
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "kule-proxy"
+path = "src/main.rs"
+
+[dependencies]
+kule-engine = { version = "0.2.0-preview.14", path = "../kule-engine" }
+
+[dev-dependencies]
+serde_json.workspace = true
+tempfile.workspace = true

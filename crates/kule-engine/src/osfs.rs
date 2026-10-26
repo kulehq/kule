@@ -945,7 +945,7 @@ pub mod win {
     }
 
     /// `sid` as text in its S-1-... form, never an alias.
-    unsafe fn sid_string(sid: PSID) -> io::Result<String> {
+    pub(crate) unsafe fn sid_string(sid: PSID) -> io::Result<String> {
         use windows::Win32::Security::Authorization::ConvertSidToStringSidW;
         use windows::core::PWSTR;
         // SAFETY: the caller passes a valid SID; the string is freed here.
@@ -1009,8 +1009,8 @@ pub mod win {
 
     /// An entry of an access list that lets someone in: whom, as a SID in
     /// text, and as the system names them.
-    struct Allow {
-        sid: String,
+    pub(crate) struct Allow {
+        pub(crate) sid: String,
         shown: String,
     }
 
@@ -1020,7 +1020,7 @@ pub mod win {
     /// are compared in their S-1-... form, never through SDDL text, whose
     /// aliases (`LA` for the built-in administrator, `BA`, `SY`, ...)
     /// would hide a match.
-    fn owner_and_allows(path: &Path) -> io::Result<(String, Option<Vec<Allow>>)> {
+    pub(crate) fn owner_and_allows(path: &Path) -> io::Result<(String, Option<Vec<Allow>>)> {
         use windows::Win32::Security::Authorization::{GetSecurityInfo, SE_FILE_OBJECT};
         use windows::Win32::Security::{
             ACCESS_ALLOWED_ACE, ACE_HEADER, ACL, DACL_SECURITY_INFORMATION, GetAce,
@@ -1266,8 +1266,15 @@ pub mod win {
         }
     }
 
+    /// A Windows error as an I/O error: a Win32 code as that code, any
+    /// other HRESULT with its text and number.
     pub fn io_error(e: windows::core::Error) -> io::Error {
-        io::Error::from_raw_os_error(e.code().0 & 0xFFFF)
+        let code = e.code().0 as u32;
+        if code >> 16 == 0x8007 {
+            io::Error::from_raw_os_error((code & 0xFFFF) as i32)
+        } else {
+            io::Error::other(format!("{} (0x{code:08X})", e.message()))
+        }
     }
 
     /// A Windows time (100 ns ticks since 1601) as seconds and nanoseconds

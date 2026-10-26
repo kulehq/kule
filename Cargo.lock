@@ -3571,6 +3571,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "kule-proxy"
+version = "0.2.0-preview.14"
+dependencies = [
+ "kule-engine",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "kule-view"
 version = "0.2.0-preview.14"
 dependencies = [

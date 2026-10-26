@@ -51,6 +51,9 @@ mod policy;
 mod ports;
 mod preview;
 mod protect;
+mod proxy_core;
+mod proxy_pipe;
+pub mod proxy_program;
 #[cfg(target_os = "macos")]
 mod refusal_log;
 pub mod remembered;
@@ -68,6 +71,8 @@ mod task;
 mod textdiff;
 mod tls;
 mod usage;
+#[cfg(windows)]
+pub mod windows;
 
 pub use approvals::{
     AfterApproval, Answer, Approvals, DEFAULT_TIMEOUT, Inside, MAX_TIMEOUT, MAX_WAITING,

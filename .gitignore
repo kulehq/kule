@@ -13,3 +13,6 @@ website/video/
 
 # Presentations and sales material: kept locally
 presentations/
+
+# Finder metadata
+.DS_Store

@@ -4371,6 +4371,12 @@ mod tests {
         assert!(s.ws.path().join(".env").exists());
     }
 
+    // On Windows the proxy serves inside an app container, which nothing
+    // but a sandboxed command reaches: these two connect to it directly,
+    // so they run where the proxy serves in Kule's own process until the
+    // sandbox on Windows lets them connect from inside it. The pipes and
+    // the container are tested in `kule-proxy`.
+    #[cfg(unix)]
     #[test]
     fn a_question_shows_on_its_task_and_its_answer_opens_the_connection() {
         use std::io::{Read, Write};
@@ -4442,6 +4448,7 @@ mod tests {
 
     /// A question Kule refused unanswered, and a connection the person
     /// approved that Kule then cut, reach the task's run events with why.
+    #[cfg(unix)]
     #[test]
     fn what_kule_refused_or_cut_after_a_question_reaches_the_task_s_events() {
         use std::io::{Read, Write};

@@ -442,6 +442,43 @@ impl Policy {
         })
     }
 
+    /// The rules with their ids, for a proxy in another process to judge
+    /// connections by exactly as this one would ([`Policy::from_parts`]).
+    /// What a person remembered about files is not among them: a proxy
+    /// judges connections alone.
+    pub(crate) fn to_parts(&self) -> Result<Vec<(String, String)>> {
+        self.set
+            .policies()
+            .map(|p| {
+                p.to_cedar()
+                    .map(|text| (p.id().to_string(), text))
+                    .ok_or_else(|| {
+                        Error::Invalid(format!(
+                            "policy: rule {} cannot be written out for the proxy",
+                            p.id()
+                        ))
+                    })
+            })
+            .collect()
+    }
+
+    /// The policy [`Policy::to_parts`] wrote out, each rule under the id
+    /// it had, so a repository's rules are still told as the repository's.
+    pub(crate) fn from_parts(parts: &[(String, String)]) -> Result<Policy> {
+        let invalid = |e: &dyn std::fmt::Display| Error::Invalid(format!("policy: {e}"));
+        let mut set = PolicySet::new();
+        for (id, text) in parts {
+            let policy = cedar_policy::Policy::parse(Some(PolicyId::new(id)), text)
+                .map_err(|e| invalid(&e))?;
+            set.add(policy).map_err(|e| invalid(&e))?;
+        }
+        Ok(Policy {
+            set,
+            files: Vec::new(),
+            kinds: Vec::new(),
+        })
+    }
+
     /// A check for [`Task::commit_if`](crate::Task::commit_if): passes what
     /// the policy allows, and what it would ask about when a person
     /// `approved` it; holds everything else with [`Error::Held`].

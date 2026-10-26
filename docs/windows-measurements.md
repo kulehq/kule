@@ -31,8 +31,13 @@ tier `base-container`. Dates: 2026-10-26.
   peer; a direct connection past the proxy was cut at once; a listener
   outside the profile, with the profile still named, was never reached. The
   identity-less mode reaches a plain host listener and not the profiled one.
-  (Measured as an administrator; to be repeated as a standard user before
-  the installer step is designed.)
+  Measured twice with the same result: as an administrator (UAC off) and as
+  a **standard user in an interactive console session**, both with the
+  firewall on all three profiles at its defaults, no package-scoped rule and
+  no loopback exemption. Kule's installer therefore writes no firewall rule
+  and no exemption for the proxy; a machine policy that blocks outbound
+  traffic by default would stop the proxy's own egress, and Kule's end-to-end
+  self-check names that instead of weakening anything.
 - **The container cannot reach what is the person's.** Another user's files,
   the Credential Manager's stored credentials (`cmdkey /list` shows none),
   an owner-only named pipe (access denied), writes to the registry hive and
@@ -60,7 +65,10 @@ tier `base-container`. Dates: 2026-10-26.
   (microsoft/mxc#1465). Kule's daemon and CLI run in the person's desktop
   session, so this is a precondition Kule checks and names, not a gap. It
   also means GitHub-hosted runners cannot run the sandbox tests; the test
-  VM does.
+  VM does. A standard user cannot register a scheduled task for itself
+  (the ScheduledTasks module's CIM session is refused), so the standard-user
+  measurements were started by an administrator as a task that runs in the
+  standard user's console session.
 - **Every ancestor of a grant must be enumerable.** Without it, tools that
   resolve paths upward fail in confusing ways: `dir` of a granted folder
   says "Access is denied", a batch file given by absolute path does not run.
@@ -76,6 +84,26 @@ tier `base-container`. Dates: 2026-10-26.
 - **A listener inside the container is not reachable from the host** on this
   build, in every network mode (connections time out). Kule's port chips say
   so instead of offering a dead link; nothing is weakened to get around it.
+  The same holds for the proxy's own app container: a plain process of the
+  person's cannot connect to the proxy's port either. So Kule's end-to-end
+  check of the proxy path (a connection from a fresh container, through the
+  proxy, answered) can only be made from inside a container, and arrives
+  with the sandbox; until then Kule knows the proxy serves by what it says
+  over its pipe.
+- **The proxy's program needs no grant to run in its container** (WP2,
+  measured on the build): Kule opens the image when it creates the process,
+  so a copy of `kule-proxy.exe` under the person's own folder, which no
+  package may read, runs in the container all the same, while the process
+  cannot read that file, the task's files or Kule's home from inside. Kule
+  therefore changes no access list for its proxy, and a per-user install
+  works like a per-machine one. Creating a process in an app container
+  with an environment of Kule's own choosing needs `LOCALAPPDATA` in it
+  (without, `CreateProcessW` fails with `ERROR_ENVVAR_NOT_FOUND`); Kule
+  gives the proxy that, `SystemRoot`, `SystemDrive`, `windir` and a `PATH`
+  of the system folder, and nothing of its own environment. A job with
+  kill-on-close ends a contained program that touches nothing when the
+  process that started it is gone; a program that reads its input ends on
+  its own when that input closes.
 - **DPAPI is reachable from inside**: a blob protected by the user can be
   unprotected by a contained process. Hiding the files that hold protected
   secrets (browser profiles, credential stores, `UserSecrets`) is therefore
@@ -88,9 +116,6 @@ tier `base-container`. Dates: 2026-10-26.
 
 ## Open
 
-- Repeat the proxy-path measurement as a standard, interactive user before
-  WP2 fixes what the installer must create; the administrator result
-  suggests nothing, the MXC documentation suggests a firewall rule.
 - `git` inside a container refuses a repository whose folder is owned by
   `Administrators` ("dubious ownership"); a standard user's copies are owned
   by the user, so Kule only has to carry `safe.directory` for people who run

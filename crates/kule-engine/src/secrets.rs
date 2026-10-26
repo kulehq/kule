@@ -538,7 +538,7 @@ impl TaskSecrets {
 }
 
 /// One secret a task's proxy holds.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct Held {
     name: String,
     placeholder: String,
@@ -573,7 +573,7 @@ impl std::fmt::Debug for AgentKey {
 
 /// What a task's proxy holds: every placeholder of the task with its value,
 /// and where each may go.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Vault {
     held: Vec<Held>,
     /// Where each placeholder took a setting's place, with the value as
