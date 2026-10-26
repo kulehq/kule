@@ -57,17 +57,22 @@ landlock = "0.4.7"
 
 [target.'cfg(windows)'.dependencies]
 # Handle-relative file calls (no link followed on the way), access lists,
-# locks and process queries.
+# locks and process queries; the proxy's app container, its pipes and the
+# job around it; the certificates the system trusts.
 windows = { version = "0.62.2", features = [
     "Wdk_Foundation",
     "Wdk_Storage_FileSystem",
     "Win32_Foundation",
     "Win32_Security",
     "Win32_Security_Authorization",
+    "Win32_Security_Cryptography",
+    "Win32_Security_Isolation",
     "Win32_Storage_FileSystem",
     "Win32_System_IO",
     "Win32_System_Ioctl",
     "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_JobObjects",
+    "Win32_System_Pipes",
     "Win32_System_ProcessStatus",
     "Win32_System_SystemServices",
     "Win32_System_Threading",

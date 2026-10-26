@@ -8,11 +8,13 @@ description: What Kule supports on macOS and on Linux, how the sandbox differs b
 
 Kule runs on **macOS** and **Linux**. Windows is being ported: Kule
 builds and its tests run there, the daemon listens on a named pipe only
-the same user can open, and the task's copy, commit, rollback and undo
-work on NTFS and ReFS; the sandbox, the proxy process and the terminal
-come with later work packages, and until then a sandboxed command,
-`kule run`, `kule exec` and `kule shell` are refused on Windows with a
-message rather than run unsandboxed. Windows 11 24H2 (build 26100.9278)
+the same user can open, the task's copy, commit, rollback and undo work
+on NTFS and ReFS, and a task's proxy runs as a process of its own,
+`kule-proxy.exe`, inside an app container that holds the task's secrets
+and reaches the network and nothing of yours; the sandbox and the
+terminal come with later work packages, and until then a sandboxed
+command, `kule run`, `kule exec` and `kule shell` are refused on Windows
+with a message rather than run unsandboxed. Windows 11 24H2 (build 26100.9278)
 or later will be required. See `docs/windows-measurements.md` for what was
 measured.
 
