@@ -143,3 +143,39 @@ jobs:
             sudo sysctl -w user.max_user_namespaces=0
           fi
           cargo test -p kule-engine --locked --test sandbox weaker_isolation
+
+  # The Windows sandbox, required: windows-latest is Windows Server, whose
+  # process container cannot hide a path or open the way to a folder
+  # without its contents, so there the container tests skip. windows-11-arm
+  # is a Windows 11 client; x86_64 runs there under Windows's own x64
+  # emulation. A skip here is a failure (KULE_TEST_REQUIRE_SANDBOX). The
+  # runner's account is an administrator; the standard-user runs stay on
+  # the Windows test machine.
+  windows-sandbox:
+    if: github.event_name != 'workflow_dispatch' || inputs.os == 'windows-latest' || inputs.os == 'all'
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [aarch64-pc-windows-msvc, x86_64-pc-windows-msvc]
+    runs-on: windows-11-arm
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Rust toolchain (rust-toolchain.toml) and the target
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          rustup toolchain install
+          rustup target add "$TARGET"
+      - name: Commands and the proxy run in their containers (the sandbox required)
+        shell: bash
+        env:
+          KULE_TEST_REQUIRE_SANDBOX: "1"
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -e
+          cargo test --locked --target "$TARGET" -p kule-engine --test sandbox_windows
+          cargo test --locked --target "$TARGET" -p kule-proxy --test container

@@ -134,6 +134,25 @@ tier `base-container`. Dates: 2026-10-26.
   (presence only; measured in step 0), and nothing else of Kule's own
   environment is inherited.
 
+## Where CI can run the container
+
+Measured on GitHub's hosted runners on 2026-10-26, with the container
+tests required (`KULE_TEST_REQUIRE_SANDBOX`):
+
+| Runner | Windows | Container tests |
+| --- | --- | --- |
+| `windows-latest` | Server 2025 Datacenter 24H2, 26100, x86_64 | Refused: the probe reports no path denial and no folder-only enumeration, so Kule refuses the sandbox |
+| `windows-11-arm` | Windows 11 Enterprise 25H2, 26200, ARM64 | All pass |
+| `windows-11-arm`, x86_64 build | Same, under Windows's x64 emulation | All pass |
+
+Both runners have the build, the non-zero session and the INTERACTIVE
+group Kule asks for; what differs is the container itself. The proxy's
+AppContainer tests pass on both. So CI requires the sandbox on
+`windows-11-arm` for both targets, and `windows-latest` keeps the rest of
+the tests. The runner's account is an administrator: runs as a standard
+user stay on a Windows 11 test machine. Native x86_64 hardware is not
+covered by either.
+
 ## Open
 
 - `git` inside a container refuses a repository whose folder is owned by
