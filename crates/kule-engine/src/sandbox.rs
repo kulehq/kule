@@ -33,6 +33,8 @@ use crate::protect::{Kept, PutBack};
 use crate::task::{CACHES_LOCK, Task};
 
 pub use start::{Io, Process, Start};
+#[cfg(windows)]
+pub use windows::{Terminal, TerminalInput, TerminalStart};
 
 /// Credentials and keys that commands in a task never get to read.
 /// Environment variables passed on to everything the sandbox runs: what
@@ -752,7 +754,11 @@ const LISTED: usize = 8;
 
 /// What the person is told where [`Sandbox::denials`] has nothing to say
 /// (Linux): not that nothing was refused.
+#[cfg(not(windows))]
 pub const UNREPORTED: &str = "Linux does not tell Kule what the sandbox refused; each refusal reached the command as an error";
+/// On Windows, what the container refused is not read back yet.
+#[cfg(windows)]
+pub const UNREPORTED: &str = "Windows does not tell Kule what the sandbox refused yet; each refusal reached the command as an error";
 
 /// What the person is told where [`Refusals::incomplete`] holds: the list
 /// they see may not be all.
@@ -1391,6 +1397,12 @@ impl Sandbox {
         if revealed && here.ends_with("Library/Keychains") {
             self.keychain = true;
         }
+        // Windows grants rather than hides: a path that was not hidden is
+        // not readable either until it is granted, read-only.
+        #[cfg(windows)]
+        if !revealed && !self.see_through.contains(&here) {
+            self.see_through.push(here);
+        }
         Ok(())
     }
 
@@ -1427,7 +1439,14 @@ impl Sandbox {
     /// (and `XDG_CONFIG_HOME`, where it is the real home's `.config`), and
     /// lets them write there. The real files whose secrets the layer holds
     /// masked are hidden: commands read the masked clones.
+    ///
+    /// On Windows nothing changes: there is no layer (see
+    /// `Task::prepare_home`), and the commands' `USERPROFILE` and
+    /// `APPDATA` are the task's own, empty, whatever the person's.
     pub fn use_home(&mut self, task: &Task, real_home: &Path) -> Result<()> {
+        if cfg!(windows) {
+            return Ok(());
+        }
         for masked in task.home_masked()? {
             self.hide(&masked)?;
         }
@@ -1891,6 +1910,26 @@ impl Sandbox {
         }
     }
 
+    /// What starts `program` with `args` in the sandbox on a pseudo
+    /// console of `cols` × `rows` (Windows), refused as [`Sandbox::start`]
+    /// refuses: the console is opened inside the command's container by
+    /// Kule's terminal helper, so nothing of the shell runs outside it.
+    #[cfg(windows)]
+    pub fn terminal_start(
+        &self,
+        program: &str,
+        args: &[String],
+        cols: u16,
+        rows: u16,
+    ) -> Result<TerminalStart> {
+        let refusals = self.refusals();
+        if !refusals.is_empty() {
+            return Err(windows::refused(&refusals));
+        }
+        self.refuse_gaps()?;
+        Ok(TerminalStart(self.on_terminal(program, args, cols, rows)?))
+    }
+
     /// Less isolated than meant only with the person's say.
     fn refuse_gaps(&self) -> Result<()> {
         let gaps = crate::isolation::isolation_gaps(self.network, self.servers);
@@ -1954,17 +1993,21 @@ impl Sandbox {
         #[cfg(windows)]
         {
             // Windows tools take their temporary folder from TEMP and TMP,
-            // and their settings and data from the application-data
-            // folders: the task's own, in its home layer where it has one,
-            // in its temporary folder otherwise, never the person's.
+            // their profile from USERPROFILE and their settings and data
+            // from the application-data folders: the task's own, never the
+            // person's, whose profile the container does not grant (see
+            // [`Sandbox::use_home`]). HOMEDRIVE and HOMEPATH would name
+            // the person's; they go.
             put(&mut set, "TEMP", &self.tmp);
             put(&mut set, "TMP", &self.tmp);
             let own = self.layer.as_deref().unwrap_or(&self.tmp);
-            put(&mut set, "APPDATA", own.join("AppData").join("Roaming"));
-            if let Some(layer) = &self.layer {
-                put(&mut set, "USERPROFILE", layer);
-                set.retain(|(k, _)| !same_name(k, "HOMEDRIVE") && !same_name(k, "HOMEPATH"));
-            }
+            // Made here: a tool that writes a file straight into it does
+            // not make the folder first.
+            let roaming = own.join("AppData").join("Roaming");
+            std::fs::create_dir_all(&roaming).at(&roaming)?;
+            put(&mut set, "APPDATA", roaming);
+            put(&mut set, "USERPROFILE", own);
+            set.retain(|(k, _)| !same_name(k, "HOMEDRIVE") && !same_name(k, "HOMEPATH"));
         }
         for (name, value) in &self.env {
             put(&mut set, name, value.clone());

@@ -125,6 +125,8 @@ pub use sandbox::{
     PERSONAL_IN_HOME, Process, Refusals, Sandbox, Start, UNREPORTED, denials, isolates_network,
     own_processes, protects_in_place, record_denials,
 };
+#[cfg(windows)]
+pub use sandbox::{Terminal, TerminalInput, TerminalStart};
 
 /// Why this computer gives a task's commands no sandbox at all, one
 /// sentence each, or nothing: on Windows, a build before the one Kule

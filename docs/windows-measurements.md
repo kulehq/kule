@@ -134,6 +134,63 @@ tier `base-container`. Dates: 2026-10-26.
   (presence only; measured in step 0), and nothing else of Kule's own
   environment is inherited.
 
+## Found while building the terminal (WP4)
+
+- **A pseudo console opens inside the container.** The container gives a
+  command pipes and no console, so Kule's terminal helper
+  (`kule-pty-helper.exe`, beside Kule's programs) runs as the contained
+  command, opens a `ConPTY` there and starts the shell on it; Kule passes
+  keys and the size in as length-prefixed frames and the console's output
+  out. Ctrl-C reaches what the shell runs, a resize reaches the shell, and
+  the helper ends the shell when Kule closes the terminal. The helper's
+  folder is read, never written: Kule refuses to start a terminal from a
+  folder a command could write to or that holds the person's home, since a
+  helper replaced there would be what the next terminal runs.
+- **What is listed on the way to a grant is denied beside the way.** A
+  folder a command may list, so that paths resolve, lets it list everything
+  below that folder too; Kule denies each folder in it that is neither a
+  grant nor on the way to one, so a listing on the way shows names and
+  leads no further. Files there are listed, not read.
+- **`kule exec --reveal PATH` grants a read.** On macOS and Linux a path is
+  readable unless hidden; on Windows nothing is readable unless granted, so
+  revealing a path that was never hidden grants it read-only.
+- **Windows PowerShell runs in Constrained Language mode inside the
+  container** (the lockdown policy every app container gets): cmdlets and
+  scripts work, .NET method calls do not. It also cannot find its
+  application-data folder there (`GetFolderPath` is empty), so PSReadLine
+  writes its command history to a relative path, beside wherever the
+  shell is: in the task's copy, where review shows it. `HOMEDRIVE` and
+  `HOMEPATH` keep naming the person's profile, which the container cannot
+  read. PowerShell 7 installed for one user is not on a standard user's
+  `PATH`.
+- **The home layer needs file links.** The layer puts the person's own
+  files in the task's home as symbolic links, which Windows allows only
+  with Developer Mode or a privilege; without, preparing the home fails.
+  Decided (2026-10-26): on Windows a task's commands get a home of their
+  own, empty, in the task's folders (`USERPROFILE`, `APPDATA`, `TEMP` point
+  there, `HOMEDRIVE` and `HOMEPATH` are not passed); the person's profile
+  is neither granted nor layered, and `kule home` has nothing to show.
+  Cloning or linking the person's files can come later.
+
+## Where CI can run the container
+
+Measured on GitHub's hosted runners on 2026-10-26, with the container
+tests required (`KULE_TEST_REQUIRE_SANDBOX`):
+
+| Runner | Windows | Container tests |
+| --- | --- | --- |
+| `windows-latest` | Server 2025 Datacenter 24H2, 26100, x86_64 | Refused: the probe reports no path denial and no folder-only enumeration, so Kule refuses the sandbox |
+| `windows-11-arm` | Windows 11 Enterprise 25H2, 26200, ARM64 | All pass |
+| `windows-11-arm`, x86_64 build | Same, under Windows's x64 emulation | All pass |
+
+Both runners have the build, the non-zero session and the INTERACTIVE
+group Kule asks for; what differs is the container itself. The proxy's
+AppContainer tests pass on both. So CI requires the sandbox on
+`windows-11-arm` for both targets, and `windows-latest` keeps the rest of
+the tests. The runner's account is an administrator: runs as a standard
+user stay on a Windows 11 test machine. Native x86_64 hardware is not
+covered by either.
+
 ## Open
 
 - `git` inside a container refuses a repository whose folder is owned by
