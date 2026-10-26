@@ -114,6 +114,26 @@ tier `base-container`. Dates: 2026-10-26.
 - **The restricted-token design was dropped** (earlier round): the
   AppContainer holds more and `mxc-sdk` builds on it.
 
+## Found while building the sandbox (WP3)
+
+- **The container takes one command line, not an argument list**, and
+  starts it with no program name of its own, so Windows would look for a
+  bare program name in the working directory first: the task's copy, where
+  a repository could plant one. Kule resolves a bare name on the person's
+  `PATH` itself (with the `PATHEXT` extensions) and hands the container the
+  full path; a name with a folder in it is taken from there. A batch file
+  runs under `cmd.exe`, which reads its arguments its own way, so an
+  argument holding a character `cmd` acts on is refused rather than passed.
+- **`cmd.exe` and many tools refuse a `\\?\` path** as a working directory
+  or an argument. Resolved paths carry that prefix on Windows; the container
+  gets every path plain.
+- **Environment names are read without regard to case** (`Path` is `PATH`),
+  so the allow-list of variables a command gets is matched that way, and
+  one name keeps one value.
+- The container's `environment` must hold `SystemRoot` and `LOCALAPPDATA`
+  (presence only; measured in step 0), and nothing else of Kule's own
+  environment is inherited.
+
 ## Open
 
 - `git` inside a container refuses a repository whose folder is owned by

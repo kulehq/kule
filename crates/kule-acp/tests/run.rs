@@ -35,7 +35,7 @@ impl Setup {
     fn run(&self, script: &str) -> Vec<Event> {
         let sandbox = Sandbox::new(&self.task).unwrap();
         let agent = sandbox
-            .command(env!("CARGO_BIN_EXE_kule-test-agent"), &[])
+            .start(env!("CARGO_BIN_EXE_kule-test-agent"), &[])
             .unwrap();
         let (tx, rx) = mpsc::unbounded();
         let runtime = tokio::runtime::Runtime::new().unwrap();
@@ -52,7 +52,7 @@ impl Setup {
     fn run_limited(&self, script: &str, limit: Cost) -> (Result<String, String>, Vec<Event>) {
         let sandbox = Sandbox::new(&self.task).unwrap();
         let agent = sandbox
-            .command(env!("CARGO_BIN_EXE_kule-test-agent"), &[])
+            .start(env!("CARGO_BIN_EXE_kule-test-agent"), &[])
             .unwrap();
         let (tx, rx) = mpsc::unbounded();
         let runtime = tokio::runtime::Runtime::new().unwrap();
@@ -496,7 +496,7 @@ impl Setup {
     ) -> Vec<Event> {
         let sandbox = Sandbox::new(&self.task).unwrap();
         let agent = sandbox
-            .command(env!("CARGO_BIN_EXE_kule-test-agent"), &[])
+            .start(env!("CARGO_BIN_EXE_kule-test-agent"), &[])
             .unwrap();
         let (tx, rx) = mpsc::unbounded();
         let runtime = tokio::runtime::Runtime::new().unwrap();
@@ -617,7 +617,7 @@ fn pictures_go_only_to_an_agent_that_takes_them() {
         let sandbox = Sandbox::new(&s.task).unwrap();
         let args: Vec<String> = args.iter().map(|a| a.to_string()).collect();
         let agent = sandbox
-            .command(env!("CARGO_BIN_EXE_kule-test-agent"), &args)
+            .start(env!("CARGO_BIN_EXE_kule-test-agent"), &args)
             .unwrap();
         let (tx, rx) = mpsc::unbounded();
         let runtime = tokio::runtime::Runtime::new().unwrap();
@@ -691,7 +691,7 @@ fn the_session_is_given_the_mcp_servers_it_is_offered() {
     );
     let sandbox = Sandbox::new(&s.task).unwrap();
     let agent = sandbox
-        .command(env!("CARGO_BIN_EXE_kule-test-agent"), &[])
+        .start(env!("CARGO_BIN_EXE_kule-test-agent"), &[])
         .unwrap();
     let (tx, rx) = mpsc::unbounded();
     let runtime = tokio::runtime::Runtime::new().unwrap();

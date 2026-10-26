@@ -1716,7 +1716,7 @@ async function openPolicy() {
 // What this computer cannot give an agent's commands. With a gap and no
 // acceptance no agent runs; accepted, the title bar says so while it holds.
 
-let isolation = { gaps: [], accept_weaker: false };
+let isolation = { gaps: [], accept_weaker: false, refused: [] };
 
 async function loadIsolation() {
   try {
@@ -1740,14 +1740,36 @@ async function setIsolation(accept) {
 
 function renderIsolation() {
   const chip = $("isolation-warning");
-  chip.hidden = !isolation.gaps.length;
-  chip.textContent = isolation.accept_weaker ? "Weaker isolation" : "Agents held: isolation";
-  chip.classList.toggle("deny", !isolation.accept_weaker);
-  chip.title = `This computer cannot give an agent's commands ${isolation.gaps.join("; nor ")}.`;
+  const refused = (isolation.refused || []).length > 0;
+  chip.hidden = !isolation.gaps.length && !refused;
+  chip.textContent = refused
+    ? "Agents refused: no sandbox"
+    : isolation.accept_weaker
+      ? "Weaker isolation"
+      : "Agents held: isolation";
+  chip.classList.toggle("deny", refused || !isolation.accept_weaker);
+  chip.title = refused
+    ? `Sandboxed commands are refused on this computer: ${isolation.refused.join("; ")}.`
+    : `This computer cannot give an agent's commands ${isolation.gaps.join("; nor ")}.`;
 }
 
-/** Policy's word on isolation, where this computer leaves a gap. */
+/** Policy's word on isolation, where this computer leaves a gap, or gives
+ * no sandbox at all (nothing to accept then: it is closed, or no agent runs). */
 function isolationSection() {
+  const refused = isolation.refused || [];
+  if (refused.length) {
+    return h(
+      "section",
+      { class: "isolation refused", "aria-label": "Isolation" },
+      h("h3", {}, "Sandboxed commands are refused on this computer"),
+      h("ul", {}, refused.map((reason) => h("li", {}, reason))),
+      h(
+        "p",
+        { class: "muted" },
+        "Kule runs no command without its sandbox, and there is no weaker mode to accept here. Close what is named above; the next run checks again."
+      )
+    );
+  }
   if (!isolation.gaps.length) return null;
   return h(
     "section",

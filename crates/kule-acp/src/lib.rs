@@ -20,7 +20,7 @@ pub mod terminals;
 pub mod trial;
 
 use std::collections::HashMap;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -275,7 +275,7 @@ fn error(e: impl std::fmt::Display) -> Error {
 /// sandbox ends too.
 pub async fn run(
     task: &Task,
-    agent: Command,
+    agent: kule_engine::Start,
     sandbox: &kule_engine::Sandbox,
     prompt: &str,
     mode: Option<&str>,
@@ -289,7 +289,7 @@ pub async fn run(
 /// and the run fails with why.
 pub async fn run_limited(
     task: &Task,
-    agent: Command,
+    agent: kule_engine::Start,
     sandbox: &kule_engine::Sandbox,
     prompt: &str,
     mode: Option<&str>,
@@ -304,7 +304,7 @@ pub async fn run_limited(
 #[allow(clippy::too_many_arguments)]
 pub async fn run_with(
     task: &Task,
-    agent: Command,
+    agent: kule_engine::Start,
     sandbox: &kule_engine::Sandbox,
     prompt: &str,
     mode: Option<&str>,
@@ -346,7 +346,7 @@ pub struct Picture {
 #[allow(clippy::too_many_arguments)]
 pub async fn run_pictured(
     task: &Task,
-    agent: Command,
+    agent: kule_engine::Start,
     prompt: &str,
     pictures: &[Picture],
     mode: Option<&str>,
@@ -376,13 +376,8 @@ pub async fn run_pictured(
     let log = kule_engine::osfs::append_private(&log).map_err(error)?;
     // Through a pipe, not the file itself: the log sits in Kule's home,
     // which the sandbox hides, and the agent must not hold it open.
-    let mut child = async_process::Command::from(agent)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true)
-        .spawn()
-        .map_err(|e| Error(format!("could not start the agent: {e}")))?;
+    let mut child =
+        AgentChild::start(agent).map_err(|e| Error(format!("could not start the agent: {e}")))?;
     if let Some(stderr) = child.stderr.take() {
         let (path, told) = (task.agent_log(), events.clone());
         std::thread::spawn(move || {
@@ -739,6 +734,89 @@ pub fn after_run(
         ));
     }
     after
+}
+
+/// The agent's process with its streams made asynchronous, however its
+/// sandbox started it: a plain process on macOS and Linux, a process in
+/// its container on Windows, whose pipes are read on the blocking pool.
+/// Killed when dropped.
+struct AgentChild {
+    id: u32,
+    stdin: Option<std::pin::Pin<Box<dyn futures::io::AsyncWrite + Send>>>,
+    stdout: Option<std::pin::Pin<Box<dyn futures::io::AsyncRead + Send>>>,
+    stderr: Option<std::pin::Pin<Box<dyn futures::io::AsyncRead + Send>>>,
+    inner: AgentProcess,
+}
+
+enum AgentProcess {
+    Plain(async_process::Child),
+    Contained(kule_engine::Process),
+}
+
+impl AgentChild {
+    fn start(agent: kule_engine::Start) -> std::io::Result<AgentChild> {
+        match agent {
+            kule_engine::Start::Command(command) => {
+                let mut child = async_process::Command::from(command)
+                    .stdin(Stdio::piped())
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped())
+                    .kill_on_drop(true)
+                    .spawn()?;
+                Ok(AgentChild {
+                    id: child.id(),
+                    stdin: child.stdin.take().map(|s| Box::pin(s) as _),
+                    stdout: child.stdout.take().map(|s| Box::pin(s) as _),
+                    stderr: child.stderr.take().map(|s| Box::pin(s) as _),
+                    inner: AgentProcess::Plain(child),
+                })
+            }
+            #[allow(unreachable_patterns)]
+            mut other => {
+                other
+                    .stdin(kule_engine::Io::Piped)
+                    .stdout(kule_engine::Io::Piped)
+                    .stderr(kule_engine::Io::Piped);
+                let mut process = other.spawn()?;
+                Ok(AgentChild {
+                    id: process.id(),
+                    stdin: process
+                        .stdin
+                        .take()
+                        .map(|s| Box::pin(blocking::Unblock::new(s)) as _),
+                    stdout: process
+                        .stdout
+                        .take()
+                        .map(|s| Box::pin(blocking::Unblock::new(s)) as _),
+                    stderr: process
+                        .stderr
+                        .take()
+                        .map(|s| Box::pin(blocking::Unblock::new(s)) as _),
+                    inner: AgentProcess::Contained(process),
+                })
+            }
+        }
+    }
+
+    fn id(&self) -> u32 {
+        self.id
+    }
+
+    fn kill(&mut self) -> std::io::Result<()> {
+        match &mut self.inner {
+            AgentProcess::Plain(child) => child.kill(),
+            AgentProcess::Contained(process) => process.kill(),
+        }
+    }
+}
+
+impl Drop for AgentChild {
+    fn drop(&mut self) {
+        // A plain child is killed on drop by its own runtime.
+        if let AgentProcess::Contained(process) = &mut self.inner {
+            let _ = process.kill();
+        }
+    }
 }
 
 /// How long a stopped agent has to end its turn.

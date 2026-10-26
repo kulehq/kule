@@ -14,11 +14,10 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Component, Path};
-use std::process::Command;
 
 use kule_engine::{
     AgentKey, CacheSources, Error, HIDDEN_IN_HOME, Kept, PERSONAL_IN_HOME, Policy, Proxy, Result,
-    Sandbox, Task,
+    Sandbox, Start, Task,
 };
 use serde::{Deserialize, Serialize};
 
@@ -1445,7 +1444,7 @@ impl Profile {
         }
         sandbox.use_proxy(proxy);
         let kept = sandbox.keep_protected()?;
-        let mut command = sandbox.command(&program, &args)?;
+        let mut command = sandbox.start(&program, &args)?;
         command.envs(&self.env);
         if let (Some(var), Some(dir)) = (&self.own_home, &own_home) {
             command.env(var, dir);
@@ -1591,7 +1590,7 @@ pub(crate) fn exact_version(version: &str) -> bool {
 /// An agent ready to start, and the sandbox it runs in, which reports what
 /// it refused once the agent is done.
 pub struct Launch {
-    pub command: Command,
+    pub command: Start,
     pub sandbox: Sandbox,
     /// The agent's settings, to put back once it is gone where the sandbox
     /// could not keep them read-only.
@@ -1669,7 +1668,7 @@ mod tests {
             .unwrap()
             .launch_for(&task, &proxy, None)
             .unwrap();
-        let env: Vec<_> = launch.command.get_envs().collect();
+        let env = launch.command.get_envs();
         assert!(env.contains(&(
             OsStr::new("GEMINI_FORCE_FILE_STORAGE"),
             Some(OsStr::new("true"))

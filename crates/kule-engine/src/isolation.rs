@@ -54,9 +54,16 @@ pub fn isolation_gaps(network: Network, servers: bool) -> Vec<String> {
             crate::bind_filter::available(),
         )
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_os = "macos")]
     {
         macos_gaps(network, servers)
+    }
+    // Windows: the process container gives a command all of its isolation
+    // or none (see [`crate::sandbox_refusals`]); nothing in between to accept.
+    #[cfg(windows)]
+    {
+        let _ = (network, servers);
+        Vec::new()
     }
 }
 
@@ -64,7 +71,7 @@ pub fn isolation_gaps(network: Network, servers: bool) -> Vec<String> {
 /// run's servers may listen while its network goes through the proxy, only
 /// the hooks (see `loopback`) and the shield from outside (see `shield`)
 /// keep them off the network.
-#[cfg_attr(target_os = "linux", allow(dead_code))]
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub(crate) fn macos_gaps(network: Network, servers: bool) -> Vec<String> {
     if servers && matches!(network, Network::Proxy(_)) {
         vec![

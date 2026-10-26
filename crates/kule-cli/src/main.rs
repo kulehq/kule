@@ -802,7 +802,7 @@ fn run() -> Result<ExitCode> {
                 eprintln!("kule: running without the sandbox");
                 let mut child = Command::new(&command[0]);
                 child.args(&command[1..]).current_dir(task.copy());
-                child
+                kule_engine::Start::Command(child)
             } else {
                 caches_first(&task)?;
                 if task.measures_caches()? {
@@ -866,7 +866,7 @@ fn run() -> Result<ExitCode> {
                     Some(proxy) => sandbox.use_proxy(proxy),
                     None => sandbox.set_network(network),
                 }
-                let child = sandbox.command(&command[0], &command[1..])?;
+                let child = sandbox.start(&command[0], &command[1..])?;
                 used = Some(sandbox);
                 child
             };
@@ -1167,6 +1167,15 @@ fn run() -> Result<ExitCode> {
             // As every task's limits have it; a task or group may allow
             // servers on its own, and is told when it runs.
             let servers = kule_engine::limits(&home)?.servers;
+            // No sandbox at all is nothing to accept: said first, and the
+            // gaps after, for when it is closed.
+            let refused = kule_engine::sandbox_refusals();
+            if !refused.is_empty() {
+                println!("sandboxed commands are refused on this computer:");
+                for reason in &refused {
+                    println!("  - {reason}");
+                }
+            }
             let gaps = kule_engine::isolation_gaps(Network::Proxy(0), servers);
             if gaps.is_empty() {
                 println!("this computer gives a sandboxed command all of its isolation");

@@ -9,11 +9,19 @@
 //! macOS uses Seatbelt (`sandbox-exec`), Linux uses Landlock. Both need real
 //! paths: Seatbelt matches resolved paths, and Landlock works on file
 //! descriptors, so a symlink in the copy cannot lead a write outside it.
+//! Windows uses a process container (see the `windows` module here), which
+//! grants paths rather than hiding them; a command is started through
+//! [`Start`] on every platform.
+
+mod start;
+#[cfg(windows)]
+mod windows;
 
 use std::ffi::OsString;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+#[cfg(unix)]
 use std::process::Command;
 use std::time::Duration;
 
@@ -23,6 +31,8 @@ use crate::caches::{self, Sources};
 use crate::error::{Error, IoContext, Result};
 use crate::protect::{Kept, PutBack};
 use crate::task::{CACHES_LOCK, Task};
+
+pub use start::{Io, Process, Start};
 
 /// Credentials and keys that commands in a task never get to read.
 /// Environment variables passed on to everything the sandbox runs: what
@@ -70,7 +80,52 @@ pub const PASSED_ENV: &[&str] = &[
     "HOMEBREW_REPOSITORY",
 ];
 
+/// [`PASSED_ENV`] on Windows, besides: where Windows and the program
+/// folders are, what the shell is, which extensions run, the processor,
+/// the person's name and folders (the sandbox points the writable ones at
+/// the task's own; see `sandbox::windows`). A process container needs
+/// `SystemRoot` and `LOCALAPPDATA` present to start at all.
+pub const PASSED_ENV_WINDOWS: &[&str] = &[
+    "SystemRoot",
+    "windir",
+    "SystemDrive",
+    "COMSPEC",
+    "PATHEXT",
+    "USERPROFILE",
+    "HOMEDRIVE",
+    "HOMEPATH",
+    "APPDATA",
+    "LOCALAPPDATA",
+    "ProgramData",
+    "ALLUSERSPROFILE",
+    "PUBLIC",
+    "ProgramFiles",
+    "ProgramFiles(x86)",
+    "ProgramW6432",
+    "CommonProgramFiles",
+    "CommonProgramFiles(x86)",
+    "CommonProgramW6432",
+    "NUMBER_OF_PROCESSORS",
+    "PROCESSOR_ARCHITECTURE",
+    "PROCESSOR_IDENTIFIER",
+    "PROCESSOR_LEVEL",
+    "PROCESSOR_REVISION",
+    "OS",
+    "USERNAME",
+    "USERDOMAIN",
+    "TEMP",
+    "TMP",
+];
+
 fn passes(name: &str) -> bool {
+    if cfg!(windows) {
+        // Windows reads names without regard to case (`Path`, `PATH`).
+        return PASSED_ENV
+            .iter()
+            .chain(PASSED_ENV_WINDOWS)
+            .any(|p| p.eq_ignore_ascii_case(name))
+            || name.to_ascii_uppercase().starts_with("LC_");
+    }
     PASSED_ENV.contains(&name) || name.starts_with("LC_")
 }
 
@@ -92,6 +147,7 @@ pub(crate) fn personal_folders(workspace: &Path, home: &Path) -> Result<Vec<Path
             let name = name.to_string_lossy();
             if !name.starts_with('.')
                 && name != "Library"
+                && !(cfg!(windows) && name.eq_ignore_ascii_case("AppData"))
                 && entry.file_type().is_ok_and(|t| !t.is_symlink())
                 && !folders.contains(&entry.path())
             {
@@ -103,6 +159,7 @@ pub(crate) fn personal_folders(workspace: &Path, home: &Path) -> Result<Vec<Path
         && let Ok(within) = parent.strip_prefix(&home)
         && let Some(first) = within.components().next()
         && first.as_os_str() != "Library"
+        && !(cfg!(windows) && first.as_os_str().eq_ignore_ascii_case("AppData"))
         && !within
             .components()
             .any(|c| c.as_os_str().to_string_lossy().starts_with('.'))
@@ -187,6 +244,7 @@ fn git_dirs(workspace: &Path) -> Vec<PathBuf> {
 
 /// Credentials under the home directory, hidden from every command: no agent
 /// profile may open them.
+#[cfg(not(windows))]
 pub const HIDDEN_IN_HOME: &[&str] = &[
     ".ssh",
     ".aws",
@@ -285,6 +343,7 @@ pub const HIDDEN_IN_HOME: &[&str] = &[
 /// names and the tools on `PATH` (see [`Sandbox::hide_settings`]): an app's
 /// sign-in, tokens and history lie there beside a toolchain's settings, and
 /// what a new app keeps there stays hidden until it is named.
+#[cfg(not(windows))]
 pub const SETTINGS_IN_HOME: &[&str] = &[
     ".config",
     ".local/share",
@@ -296,6 +355,7 @@ pub const SETTINGS_IN_HOME: &[&str] = &[
 /// readable there, never writable; what is hidden inside stays hidden. A
 /// name ending in `*` stands for every entry beginning so. On macOS many
 /// tools keep their settings in `Library/Application Support` instead.
+#[cfg(not(windows))]
 pub const SETTINGS_READ: &[&str] = &[
     ".config/git",
     ".config/jj",
@@ -337,6 +397,7 @@ pub const SETTINGS_READ: &[&str] = &[
 /// copy. A folder of tools inside one stays readable (see
 /// [`Sandbox::hide_personal`]). Whatever else lies at the top of the home
 /// but its settings is hidden the same way (see `personal_folders`).
+#[cfg(not(windows))]
 pub const PERSONAL_IN_HOME: &[&str] = &[
     "Desktop",
     "Documents",
@@ -347,6 +408,98 @@ pub const PERSONAL_IN_HOME: &[&str] = &[
     "Videos",
     "Library/Mobile Documents",
     "Library/CloudStorage",
+];
+
+/// [`HIDDEN_IN_HOME`] on Windows: the same tools' credentials where they
+/// keep them there, and what Windows itself keeps for the person (the
+/// stores behind the Credential Manager and DPAPI, which a contained
+/// process could otherwise read and unprotect; measured), .NET's user
+/// secrets, package feeds' credentials, shell history, browsers',
+/// messengers' and editors' profiles with their sessions, store apps'
+/// folders and agents' own logins.
+/// Written with `/`, as profiles name their paths and as Windows takes them.
+#[cfg(windows)]
+pub const HIDDEN_IN_HOME: &[&str] = &[
+    ".ssh",
+    ".aws",
+    ".azure",
+    ".gnupg",
+    ".kube",
+    ".docker",
+    "_netrc",
+    ".netrc",
+    ".npmrc",
+    ".pypirc",
+    ".git-credentials",
+    ".config/gh",
+    ".cargo/credentials.toml",
+    ".cargo/credentials",
+    ".nuget/NuGet/NuGet.Config",
+    ".terraform.d/credentials.tfrc.json",
+    ".m2/settings.xml",
+    ".gradle/gradle.properties",
+    ".databrickscfg",
+    "AppData/Roaming/Microsoft/Credentials",
+    "AppData/Local/Microsoft/Credentials",
+    "AppData/Roaming/Microsoft/Protect",
+    "AppData/Roaming/Microsoft/Crypto",
+    "AppData/Local/Microsoft/Vault",
+    "AppData/Roaming/Microsoft/UserSecrets",
+    "AppData/Roaming/NuGet/NuGet.Config",
+    "AppData/Roaming/gcloud",
+    "AppData/Roaming/Microsoft/Windows/PowerShell/PSReadLine",
+    "AppData/Local/Google/Chrome/User Data",
+    "AppData/Local/Microsoft/Edge/User Data",
+    "AppData/Local/BraveSoftware",
+    "AppData/Roaming/Mozilla/Firefox",
+    "AppData/Local/Mozilla/Firefox",
+    "AppData/Roaming/Thunderbird",
+    "AppData/Local/Microsoft/Outlook",
+    "AppData/Roaming/Code/User/globalStorage",
+    "AppData/Roaming/Cursor/User/globalStorage",
+    "AppData/Roaming/Claude",
+    "AppData/Roaming/Slack",
+    "AppData/Roaming/discord",
+    "AppData/Roaming/Microsoft/Teams",
+    "AppData/Roaming/Signal",
+    "AppData/Local/Packages",
+    "AppData/Local/Microsoft/OneDrive",
+    "AppData/Local/Microsoft/Windows/INetCookies",
+    "AppData/Local/Microsoft/Windows/WebCache",
+    "AppData/Local/Microsoft/TokenBroker",
+    "AppData/Local/Microsoft/IdentityCache",
+    ".claude/.credentials.json",
+    ".codex/auth.json",
+    ".gemini/oauth_creds.json",
+];
+
+/// [`SETTINGS_IN_HOME`] on Windows: the application-data folders.
+#[cfg(windows)]
+pub const SETTINGS_IN_HOME: &[&str] = &["AppData/Roaming", "AppData/Local", "AppData/LocalLow"];
+
+/// [`SETTINGS_READ`] on Windows: nothing beyond the tools' own folders,
+/// which the sandbox grants as such (see `sandbox::windows`); an agent's
+/// settings reach it through the task's home layer.
+#[cfg(windows)]
+pub const SETTINGS_READ: &[&str] = &[];
+
+/// [`PERSONAL_IN_HOME`] on Windows: the known folders and what is kept in
+/// step with other computers.
+#[cfg(windows)]
+pub const PERSONAL_IN_HOME: &[&str] = &[
+    "Desktop",
+    "Documents",
+    "Downloads",
+    "Pictures",
+    "Videos",
+    "Music",
+    "Contacts",
+    "Favorites",
+    "Links",
+    "Saved Games",
+    "Searches",
+    "Recent",
+    "OneDrive",
 ];
 
 /// macOS services that act for a caller outside its sandbox: opening apps
@@ -530,6 +683,10 @@ pub struct Sandbox {
     /// The person accepted running with what this computer gives, where it
     /// gives less than Kule means to (see [`crate::isolation_gaps`]).
     accept_weaker: bool,
+    /// A test's stand-in for what this computer lacks for any sandbox at
+    /// all (Windows; see [`Sandbox::refuse_for_test`]).
+    #[cfg_attr(not(windows), allow(dead_code))]
+    refused_for_test: Option<String>,
     /// The terminal Kule made for the command, which it may drive as its
     /// own (macOS; see [`Sandbox::terminal_command`]).
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
@@ -801,6 +958,7 @@ impl Sandbox {
             own,
             // A choice that cannot be read is no choice.
             accept_weaker: crate::isolation::isolation(&task.home()).is_ok_and(|i| i.accept_weaker),
+            refused_for_test: None,
             terminal: None,
             #[cfg(target_os = "macos")]
             watch: Default::default(),
@@ -1703,10 +1861,38 @@ impl Sandbox {
         command
     }
 
-    /// A command that runs `program` inside the sandbox, in the copy, with
-    /// `TMPDIR` pointing at the task's temporary directory.
-    pub fn command(&self, program: &str, args: &[String]) -> Result<Command> {
-        // Less isolated than meant only with the person's say.
+    /// Makes this sandbox refuse every command as a computer that gives no
+    /// sandbox would, with `reason`: for tests of what that refusal does
+    /// and does not bow to. Windows only; elsewhere nothing changes.
+    #[doc(hidden)]
+    pub fn refuse_for_test(&mut self, reason: &str) {
+        self.refused_for_test = Some(reason.to_owned());
+    }
+
+    /// What starts `program` with `args` in the sandbox, in the copy, with
+    /// `TMPDIR` pointing at the task's temporary directory (see [`Start`]).
+    /// Where this computer cannot give a sandbox at all (Windows without
+    /// its process container, or outside a desktop session), the command is
+    /// refused with why, whatever the person accepted of weaker isolation:
+    /// no sandbox is not a weaker one.
+    pub fn start(&self, program: &str, args: &[String]) -> Result<Start> {
+        #[cfg(windows)]
+        {
+            let refusals = self.refusals();
+            if !refusals.is_empty() {
+                return Err(windows::refused(&refusals));
+            }
+            self.refuse_gaps()?;
+            Ok(Start::Container(Box::new(self.contained(program, args)?)))
+        }
+        #[cfg(unix)]
+        {
+            Ok(Start::Command(self.command(program, args)?))
+        }
+    }
+
+    /// Less isolated than meant only with the person's say.
+    fn refuse_gaps(&self) -> Result<()> {
         let gaps = crate::isolation::isolation_gaps(self.network, self.servers);
         if !gaps.is_empty() && !self.accept_weaker {
             return Err(Error::Invalid(format!(
@@ -1716,33 +1902,84 @@ impl Sandbox {
                 gaps.join("; nor ")
             )));
         }
+        Ok(())
+    }
+
+    /// A command that runs `program` inside the sandbox, in the copy, with
+    /// `TMPDIR` pointing at the task's temporary directory. On Windows a
+    /// command is no plain process: see [`Sandbox::start`].
+    #[cfg(unix)]
+    pub fn command(&self, program: &str, args: &[String]) -> Result<Command> {
+        self.refuse_gaps()?;
         let mut command = self.platform_command(program, args)?;
-        // Only what tools need to find themselves and the person's
-        // settings, and what was passed on purpose: tokens and agent sockets
-        // in the environment (GITHUB_TOKEN, AWS_*, SSH_AUTH_SOCK) stay out.
         command.env_clear();
+        command.current_dir(&self.copy);
+        command.envs(self.environment()?);
+        Ok(command)
+    }
+
+    /// The environment a command starts with, in full: only what tools
+    /// need to find themselves and the person's settings, and what was
+    /// passed on purpose (tokens and agent sockets in the environment,
+    /// `GITHUB_TOKEN`, `AWS_*`, `SSH_AUTH_SOCK`, stay out); the task's
+    /// temporary folder as every tool's; what the sandbox sets itself; the
+    /// hooks that hold servers to this computer; and the proxy's variables
+    /// where the network goes through it. A name set again replaces its
+    /// earlier value.
+    fn environment(&self) -> Result<Vec<(String, OsString)>> {
+        let mut set: Vec<(String, OsString)> = Vec::new();
+        fn put(set: &mut Vec<(String, OsString)>, name: &str, value: impl Into<OsString>) {
+            set.retain(|(k, _)| !same_name(k, name));
+            set.push((name.to_owned(), value.into()));
+        }
+        fn same_name(a: &str, b: &str) -> bool {
+            if cfg!(windows) {
+                a.eq_ignore_ascii_case(b)
+            } else {
+                a == b
+            }
+        }
         for (name, value) in std::env::vars_os() {
             let Some(text) = name.to_str() else { continue };
             if passes(text) || self.passed_env.iter().any(|p| p == text) {
-                command.env(&name, value);
+                put(&mut set, text, value);
             }
         }
         // zsh's here-documents and `=(…)` go to TMPPREFIX, and Claude
         // Code's own files to CLAUDE_CODE_TMPDIR: /tmp by default, whatever
         // TMPDIR says.
-        command
-            .current_dir(&self.copy)
-            .env("TMPDIR", &self.tmp)
-            .env("TMPPREFIX", self.tmp.join("zsh"))
-            .env("CLAUDE_CODE_TMPDIR", &self.tmp);
-        command.envs(self.env.iter().map(|(k, v)| (k, v)));
+        put(&mut set, "TMPDIR", &self.tmp);
+        put(&mut set, "TMPPREFIX", self.tmp.join("zsh"));
+        put(&mut set, "CLAUDE_CODE_TMPDIR", &self.tmp);
+        #[cfg(windows)]
+        {
+            // Windows tools take their temporary folder from TEMP and TMP,
+            // and their settings and data from the application-data
+            // folders: the task's own, in its home layer where it has one,
+            // in its temporary folder otherwise, never the person's.
+            put(&mut set, "TEMP", &self.tmp);
+            put(&mut set, "TMP", &self.tmp);
+            let own = self.layer.as_deref().unwrap_or(&self.tmp);
+            put(&mut set, "APPDATA", own.join("AppData").join("Roaming"));
+            if let Some(layer) = &self.layer {
+                put(&mut set, "USERPROFILE", layer);
+                set.retain(|(k, _)| !same_name(k, "HOMEDRIVE") && !same_name(k, "HOMEPATH"));
+            }
+        }
+        for (name, value) in &self.env {
+            put(&mut set, name, value.clone());
+        }
         // Servers listen on this computer only (see `loopback`).
-        let set: Vec<(OsString, OsString)> = command
-            .get_envs()
-            .filter_map(|(k, v)| Some((k.to_owned(), v?.to_owned())))
-            .collect();
-        let current = |name: &str| set.iter().find(|(k, _)| k == name).map(|(_, v)| v.clone());
-        command.envs(crate::loopback::hooks(&self.tmp, current)?);
+        let before = set.clone();
+        let current = move |name: &str| {
+            before
+                .iter()
+                .find(|(k, _)| same_name(k, name))
+                .map(|(_, v)| v.clone())
+        };
+        for (name, value) in crate::loopback::hooks(&self.tmp, &current)? {
+            put(&mut set, &name, value);
+        }
         if let Network::Proxy(port) = self.network {
             let url = format!("http://127.0.0.1:{port}");
             for var in [
@@ -1753,12 +1990,12 @@ impl Sandbox {
                 "https_proxy",
                 "all_proxy",
             ] {
-                command.env(var, &url);
+                put(&mut set, var, url.clone());
             }
-            command.env_remove("NO_PROXY").env_remove("no_proxy");
+            set.retain(|(k, _)| !same_name(k, "NO_PROXY"));
             // Node's built-in fetch ignores the variables above unless told
             // to (Node 24+); without the proxy its connections just fail.
-            command.env("NODE_USE_ENV_PROXY", "1");
+            put(&mut set, "NODE_USE_ENV_PROXY", "1");
             // Go on macOS checks certificates with the system's services,
             // which a command reaches only with the network open; told to,
             // it checks them against the roots `SSL_CERT_FILE` names, as on
@@ -1773,9 +2010,9 @@ impl Sandbox {
                 }
                 _ => "x509sslcertoverrideplatform=1".into(),
             };
-            command.env("GODEBUG", godebug);
+            put(&mut set, "GODEBUG", godebug);
         }
-        Ok(command)
+        Ok(set)
     }
 
     /// [`Sandbox::command`] on `terminal`, a pseudo-terminal Kule made for
@@ -1874,23 +2111,25 @@ fn terminal_path(_terminal: std::os::fd::BorrowedFd<'_>) -> Result<PathBuf> {
 /// every connection off the network but the proxy's. On Linux that takes a
 /// network namespace of its own, which some systems refuse to unprivileged
 /// users; there only the port is checked, any address, and datagrams pass.
+/// On Windows the process container does (measured).
 pub fn isolates_network() -> bool {
     #[cfg(target_os = "linux")]
     return crate::namespace::available();
     #[cfg(not(target_os = "linux"))]
-    return cfg!(target_os = "macos");
+    return cfg!(any(target_os = "macos", windows));
 }
 
 /// Whether a command's processes are its own: it sees and signals no other,
 /// and what it leaves running ends with it. On Linux that takes a PID
-/// namespace, refused where user namespaces are; elsewhere what it leaves
-/// is found by its sandbox and ended with the task (see
+/// namespace, refused where user namespaces are; on Windows the container's
+/// job ends everything with the command (measured); on macOS what it
+/// leaves is found by its sandbox and ended with the task (see
 /// [`Sandbox::end_strays`]).
 pub fn own_processes() -> bool {
     #[cfg(target_os = "linux")]
     return crate::namespace::pids_available();
     #[cfg(not(target_os = "linux"))]
-    return false;
+    return cfg!(windows);
 }
 
 /// Whether a protected path inside a writable directory stays read-only
@@ -1902,7 +2141,7 @@ pub fn protects_in_place() -> bool {
     #[cfg(target_os = "linux")]
     return crate::namespace::mounts_available();
     #[cfg(not(target_os = "linux"))]
-    return cfg!(target_os = "macos");
+    return cfg!(any(target_os = "macos", windows));
 }
 
 /// Appends refusals to the task's `sandbox.jsonl`.
@@ -2860,13 +3099,6 @@ fn carve(roots: Vec<PathBuf>, hidden: &Path) -> Vec<PathBuf> {
 impl Sandbox {
     fn platform_denials(&self, _window: Duration) -> Result<Option<Refusals>> {
         Ok(None)
-    }
-}
-
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
-impl Sandbox {
-    fn platform_command(&self, _program: &str, _args: &[String]) -> Result<Command> {
-        Err(Error::Invalid("no sandbox on this platform yet".into()))
     }
 }
 

@@ -13,6 +13,8 @@ rust-version.workspace = true
 # agent that sends something else is read as sending nothing.
 agent-client-protocol = { version = "3.4.0", features = ["stdio", "unstable_end_turn_token_usage"] }
 async-process = "2.5.0"
+# A contained agent's pipes (Windows) read on the blocking pool.
+blocking = "1.7.0"
 blake3.workspace = true
 futures = "0.3.34"
 kule-engine = { version = "0.2.0-preview.14", path = "../kule-engine" }

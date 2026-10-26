@@ -108,6 +108,10 @@ pub struct SharedBudget {
 pub struct IsolationView {
     pub gaps: Vec<String>,
     pub accept_weaker: bool,
+    /// Why this computer gives no sandbox at all (see
+    /// [`kule_engine::sandbox_refusals`]); nothing to accept here.
+    #[serde(default)]
+    pub refused: Vec<String>,
 }
 
 /// A project beside a folder that its tasks may read, and why it is not
@@ -1813,6 +1817,7 @@ impl Service {
             accept_weaker: kule_engine::isolation(&self.home)
                 .map_err(text)?
                 .accept_weaker,
+            refused: kule_engine::sandbox_refusals(),
         })
     }
 
@@ -4373,9 +4378,10 @@ mod tests {
 
     // On Windows the proxy serves inside an app container, which nothing
     // but a sandboxed command reaches: these two connect to it directly,
-    // so they run where the proxy serves in Kule's own process until the
-    // sandbox on Windows lets them connect from inside it. The pipes and
-    // the container are tested in `kule-proxy`.
+    // so they run where the proxy serves in Kule's own process. The
+    // question's pipe is tested in `kule-proxy` on every platform, and a
+    // sandboxed command's way through the proxy's container end to end in
+    // `kule-proxy`'s container tests, on the Windows test machine.
     #[cfg(unix)]
     #[test]
     fn a_question_shows_on_its_task_and_its_answer_opens_the_connection() {
