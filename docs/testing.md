@@ -1,7 +1,7 @@
 ---
 title: Help test Kule
 sidebar_label: Help test Kule
-description: Scenarios to try Kule on macOS or Linux, what to look for in each, and how to report what you find without sharing secrets.
+description: Scenarios to try Kule on macOS, Linux or Windows, what to look for in each, and how to report what you find without sharing secrets.
 ---
 
 # Help test Kule
@@ -17,8 +17,10 @@ happened that you did not expect?**
 
 ## Before you start
 
-- **Platforms:** macOS 13 or later (Apple silicon or Intel) and Linux
-  x86_64. Windows is not ready for testing yet.
+- **Platforms:** macOS 13 or later (Apple silicon or Intel), Linux x86_64,
+  and Windows 11 24H2 with update 26100.9278 or later (x64 or ARM64).
+  Windows is the newest: reports from there help most, and
+  [Platforms](platforms.md) says what to expect of its sandbox.
 - **Use the latest preview.** Fixes are not backported, so a report on an
   older one may already be fixed. `kule --version` tells you which one you
   have.

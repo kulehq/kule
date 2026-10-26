@@ -49,7 +49,45 @@ derlemesi için soruyu bitirir).
 **Çözüm:** onu `PATH`'inizdeki bir klasöre bağlayın, örneğin
 `ln -sf /Applications/Kule.app/Contents/MacOS/kule ~/.local/bin/kule`;
 kaynak koddan derlediyseniz `target/release/kule`'yi. `kule --version` ile
-kontrol edin.
+kontrol edin. Windows'ta programların klasörünü (kurucu için
+`%LOCALAPPDATA%\Kule`) kullanıcı `PATH`'inize ekleyip yeni bir terminal
+açın; bkz. [Kurulum](getting-started/install.md).
+
+### Windows: SmartScreen yayımcının bilinmediğini söylüyor
+
+**Neden:** Kule'nin Windows kurucusu ve programları kod imzası taşımaz.
+
+**Çözüm:** önce indirdiğinizi doğrulayın (`SHA256SUMS` ve `gh attestation
+verify`; bkz. [Kurulum](getting-started/install.md)), sonra **More info →
+Run anyway**'i seçin.
+
+### Windows: "sandboxed commands are refused on this computer"
+
+**Belirti:** hiçbir komut, terminal ya da ajan çalışmıyor; ileti gerekçeyi
+söylüyor, terminalde ve *Settings → Policy* altında.
+
+**Neden:** Kule'nin Windows sandbox'ı, 26100.9278 ya da sonraki
+güncellemeyle Windows 11 24H2'ye ve bir masaüstü oturumuna ihtiyaç duyar.
+Bir hizmetin ya da uzak bir kabuğun oturumu (SSH, zamanlanmış görev) bir
+görevin çalıştırdığı programları başlatamaz. Windows Server'da bir yolu
+gizleyebilen süreç konteyneri yoktur.
+
+**Çözüm:** güncellemeyi kurun (`winver` yapıyı ve düzeltme numarasını
+gösterir) ve Kule'yi masaüstünüzden çalıştırın. Windows'ta kabul edilecek
+daha zayıf bir mod yoktur: konteyner bir komuta yalıtımının tamamını verir
+ya da hiçbirini.
+
+### Windows: "the command could read …, and with it …, which Kule keeps from every command"
+
+**Neden:** bir komutun okuyabildiği bir klasör Kule'nin ev dizinini
+tutuyor. Bu, `KULE_HOME` Kule'nin programlarının bulunduğu klasörün
+(kurucu için `%LOCALAPPDATA%\Kule`) içini gösterdiğinde ya da `.zip`
+Kule'nin ev dizinine açıldığında olur: bir komut terminal yardımcısının
+klasörünü okur, Kule'nin ev dizinini ise asla okumaz.
+
+**Çözüm:** ikisini ayrı tutun. `KULE_HOME`'u ayarlamayın (varsayılan
+`%USERPROFILE%\.kule`) ya da kendine ait bir klasörü gösterin; `.zip`'i
+başka hiçbir şey tutmayan bir klasöre açın.
 
 ## Ajanlar
 

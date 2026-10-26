@@ -13,10 +13,15 @@ ister bir ajan çalıştırsın, işletim sisteminin sandbox'ı
 
 - **macOS**: sistemin kendi sandbox'ı olan Seatbelt.
 - **Linux**: Landlock, seccomp ve ad alanları (namespaces).
+- **Windows 11**: her komutun çevresinde, Kule'nin verdiği dışında hiçbir
+  şeyi okumayan bir süreç konteyneri (Microsoft'un `mxc-sdk`'sı). Neye
+  ihtiyaç duyduğu ve neyin farklı olduğu için bkz.
+  [Platformlar](../platforms.md).
 
 Sandbox kurulamazsa komut **çalışmaz**. Kule size söylemeden asla daha az
 yalıtıma geri dönmez (bkz.
-[Linux'ta daha zayıf yalıtım](#weaker-isolation-on-linux)).
+[Linux'ta daha zayıf yalıtım](#weaker-isolation-on-linux)); Windows'ta
+daha zayıf bir mod hiç yoktur.
 
 ## Bir komut nereye yazabilir
 

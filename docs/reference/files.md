@@ -6,8 +6,9 @@ description: Every file and folder Kule keeps, where it lives, what it holds, an
 
 # Files and settings
 
-Everything Kule keeps lives in **Kule's home**, `~/.kule` by default. Set
-`KULE_HOME` (or pass `--home`) to use another one; see
+Everything Kule keeps lives in **Kule's home**, `~/.kule` by default
+(`%USERPROFILE%\.kule` on Windows). Set `KULE_HOME` (or pass `--home`) to
+use another one; see
 [Environment variables](environment.md). No sandbox can see Kule's home: a
 task's commands and agents cannot read or write anything on this page except
 their own copy and temporary files.
@@ -43,7 +44,7 @@ can make Kule refuse to work until it is fixed or removed.
 | `beside.json` | Projects beside a folder that its tasks may read (`kule reveal`). | no |
 | `isolation.json` | Whether you accepted weaker isolation (`kule isolation`). | no |
 | `secrets.json` | Kept secrets: names, hosts, folders, and values **sealed** (encrypted). Readable by you alone. | no |
-| `secrets.key` | The key that seals the secrets, **only** when the system does not keep it: a Kule home other than `~/.kule`, or a computer without a keychain or Secret Service. For `~/.kule` the key is in the macOS keychain (item `Kule secrets`) or Secret Service on Linux. | no |
+| `secrets.key` | The key that seals the secrets, **only** when the system does not keep it: a Kule home other than `~/.kule`, a computer without a keychain or Secret Service, and every Windows computer. For `~/.kule` the key is in the macOS keychain (item `Kule secrets`) or Secret Service on Linux. The file is readable by you alone. | no |
 | `kule.key` | The key that signs every task's history (`kule history`). | no |
 | `agents.toml` | Your agent profiles. Each runs only once approved, and again after any change. Format: `kule agents show claude-code`; fields: [Agents](../using-agents.md). | **yes** |
 | `agents-approved.json` | Which profile, exactly as it was, you approved. | no |
@@ -105,17 +106,19 @@ never by removing its folder.
 
 ### Why `~/.kule` looks large
 
-On macOS (APFS), and on Linux with Btrfs or XFS, the copy, `base/` and the
-cached packages are **clones** that share disk blocks with your files.
-Finder and `du` count them at full size anyway; look at the free space
-(`df -h`) to see what is really used.
+On macOS (APFS), on Linux with Btrfs or XFS, and on Windows with ReFS or a
+Dev Drive, the copy, `base/` and the cached packages are **clones** that
+share disk blocks with your files. Finder, Explorer and `du` count them at
+full size anyway; look at the free space (`df -h`) to see what is really
+used.
 
 ## Outside Kule's home
 
 | Path | What it holds |
 | --- | --- |
-| `~/Library/Application Support/Kule/packages` (macOS), `~/.local/share/kule/packages` (Linux) | Agents that Kule installs with npm (Claude Code's and Codex's ACP adapters), one folder per exact version, installed without running install scripts. No sandbox can write here. |
-| `~/Library/Application Support/Kule/agents/<name>` (macOS), `~/.local/share/kule/agents/<name>` (Linux) | A **home of its own** for an agent whose profile sets `own_home`, as Kule's own agents do: its settings, history and transcripts in Kule, kept across tasks. Kule copies your settings and instructions in at every start (`carry`). |
+| `~/Library/Application Support/Kule/packages` (macOS), `~/.local/share/kule/packages` (Linux and Windows, under your profile) | Agents that Kule installs with npm (Claude Code's and Codex's ACP adapters), one folder per exact version, installed without running install scripts. No sandbox can write here. |
+| `~/Library/Application Support/Kule/agents/<name>` (macOS), `~/.local/share/kule/agents/<name>` (Linux and Windows) | A **home of its own** for an agent whose profile sets `own_home`, as Kule's own agents do: its settings, history and transcripts in Kule, kept across tasks. Kule copies your settings and instructions in at every start (`carry`). |
+| `%LOCALAPPDATA%\Kule` (Windows) | Kule's programs, as the installer puts them: the app, `kule.exe`, `kule-proxy.exe` and `kule-pty-helper.exe`. Not Kule's home, and never to be made it. |
 | `<workspace>/.kule/policy.cedar` | A repository's own **forbid** rules. It may only tighten the policy. Kule reads it from your real folder, never from a task's copy, and every change to anything under `.kule/` waits for a person. **Edit: yes.** |
 
 ## Files you move between computers

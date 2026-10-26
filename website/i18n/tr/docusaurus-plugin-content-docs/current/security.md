@@ -53,7 +53,7 @@ Varsayılan olarak hiçbir şeye güvenilmez:
 | Sınır | Onu ne tutuyor |
 |---|---|
 | Ajan ↔ klasörünüz | Copy-on-write (yazınca kopyala) bir kopya; etkiler taranır, Cedar politikasıyla değerlendirilir (hatalar ret demektir) ve yalnızca incelendiği haliyle commit edilir. Bir deponun kendi politikası yalnızca ret ekleyebilir. |
-| Ajan ↔ bilgisayar | Sandbox (yalıtılmış ortam): macOS'ta Seatbelt; Linux'ta Landlock, seccomp ve namespace'ler. Yazma yalnızca kopyada ve görevin geçici klasörlerinde; gizli değerler ve kimlik bilgileri gizli; daha zayıf bir sandbox, bu söylenmeden hiçbir zaman kullanılmaz. |
+| Ajan ↔ bilgisayar | Sandbox (yalıtılmış ortam): macOS'ta Seatbelt; Linux'ta Landlock, seccomp ve namespace'ler; Windows'ta bir süreç konteyneri. Yazma yalnızca kopyada ve görevin geçici klasörlerinde; gizli değerler ve kimlik bilgileri gizli; daha zayıf bir sandbox, bu söylenmeden hiçbir zaman kullanılmaz. |
 | Ajan ↔ ağ | Her bağlantı Kule'nin proxy'sinden geçer; proxy politikanın adlandırdığı host'lara izin verir, bağlandığı adresi denetler ve özel (private) adresleri erişim dışında tutar. |
 | Ajan ↔ gizli değerler | Ajanın ortamında yer tutucular; proxy bunları yalnızca dışarı giderken gizli değerin kendi host'una giden isteklerde doldurur ve geri gelende gizler. |
 | Pencere ↔ daemon | Yalnızca sizin kullanıcınızın açabildiği bir soket, bir token, boyut sınırları. |

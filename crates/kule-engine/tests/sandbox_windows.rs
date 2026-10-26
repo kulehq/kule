@@ -482,6 +482,36 @@ fn a_revealed_folder_is_read_and_not_written() {
     );
 }
 
+/// A folder a command may read that holds Kule's home would open the home
+/// whole: with the task's copy inside, the home above the copy is not
+/// denied, only not granted. The command is refused instead, whether the
+/// home itself or a folder above it is the one revealed. Breaks when a
+/// grant holding a hidden folder that holds a grant is not refused.
+#[test]
+fn a_grant_that_holds_kules_home_is_refused() {
+    if !available() {
+        return;
+    }
+    let s = Setup::new();
+    let home = fs::canonicalize(s.home.path()).unwrap();
+    for granted in [home.clone(), home.parent().unwrap().to_owned()] {
+        let mut sandbox = s.sandbox();
+        sandbox.reveal(&granted).unwrap();
+        let said = match sandbox.start(
+            "cmd.exe",
+            &["/d".to_owned(), "/c".to_owned(), "dir".to_owned()],
+        ) {
+            Err(e) => e.to_string(),
+            Ok(_) => String::from("started"),
+        };
+        assert!(
+            said.contains("starts none"),
+            "a command reading {} was not refused: {said}",
+            granted.display()
+        );
+    }
+}
+
 /// A command gets a home of its own, in the task's folders, and nothing
 /// of the person's profile: `USERPROFILE` and `APPDATA` are the task's and
 /// writable, `HOMEDRIVE` and `HOMEPATH` are not passed, and a file in the

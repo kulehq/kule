@@ -13,8 +13,8 @@ a command inside a task looks like.
 
 | Variable | Read by | Meaning |
 | --- | --- | --- |
-| `KULE_HOME` | `kule`, the daemon, the app | Kule's home. Default `~/.kule`. The same as `--home` on every command. Keep it short: the daemon's socket path inside it must stay under 100 bytes. A home other than `~/.kule` keeps the secrets' key in a file (`secrets.key`) instead of the system keychain. |
-| `HOME` | everything | Your home directory: where `~/.kule` is, and what the sandbox hides your own folders under. |
+| `KULE_HOME` | `kule`, the daemon, the app | Kule's home. Default `~/.kule` (`%USERPROFILE%\.kule` on Windows). The same as `--home` on every command. Keep it short: the daemon's socket path inside it must stay under 100 bytes. A home other than `~/.kule` keeps the secrets' key in a file (`secrets.key`) instead of the system keychain. On Windows it must not be the folder Kule's programs are in. |
+| `HOME` (`USERPROFILE` on Windows) | everything | Your home directory: where `~/.kule` is, and what the sandbox hides your own folders under. |
 | `PATH` | the app, the sandbox | Where commands and agents (`npx`, `node`, `gemini`, …) are found. Opened from the Finder or a launcher, the app reads `PATH` from your login shell, so it finds the same tools as a terminal. |
 | `SHELL` | `kule shell`, the app's terminals | The shell to open in a task's copy. |
 | `NO_COLOR` | `kule` | Set (non-empty) to turn colours off. Colour is also off when the output is not a terminal, or `TERM=dumb`. |

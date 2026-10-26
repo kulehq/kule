@@ -328,6 +328,25 @@ fn a_helper_the_command_could_write_is_refused() {
     assert!(e.contains("starts no terminal from there"), "{e}");
 }
 
+/// A helper in a folder Kule hides from the command is refused too: a
+/// hidden folder holds no program a command runs. Breaks when the helper's
+/// folder is not checked against the hidden paths.
+#[test]
+fn a_helper_in_a_hidden_folder_is_refused() {
+    if !available() {
+        return;
+    }
+    let s = Setup::new();
+    let mut sandbox = s.sandbox();
+    let dir = plain(helper().parent().unwrap());
+    sandbox.hide(&dir).unwrap();
+    let e = sandbox
+        .terminal_start("cmd.exe", &[], 80, 24)
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("starts no terminal from there"), "{e}");
+}
+
 /// Where this computer gives no sandbox, no terminal opens either,
 /// whatever the person accepted.
 #[test]

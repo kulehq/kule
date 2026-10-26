@@ -6,7 +6,7 @@ description: Kule'nin hazır çalıştırdığı ajanlar, sandbox içinde nasıl
 
 # Ajanlar
 
-**Ajan**, bir görevde işi yapan yapay zekâ programıdır: Claude Code, Codex,
+**Ajan**, bir görevde işi yapan yapay zeka programıdır: Claude Code, Codex,
 Gemini ya da [Agent Client Protocol](https://agentclientprotocol.com)
 (ACP) konuşan başka herhangi bir program. Kule ajanı başlatır, ona
 prompt'unuzu verir ve ne yaptığını gösterir. Ajan, görevin kopyasında,

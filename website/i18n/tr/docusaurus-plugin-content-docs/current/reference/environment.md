@@ -13,8 +13,8 @@ bir komutun ortamının neye benzediğini listeler.
 
 | Değişken | Okuyan | Anlamı |
 | --- | --- | --- |
-| `KULE_HOME` | `kule`, daemon, uygulama | Kule'nin ev dizini. Varsayılan `~/.kule`. Her komuttaki `--home` ile aynıdır. Kısa tutun: içindeki daemon soketinin yolu 100 baytın altında kalmalıdır. `~/.kule` dışında bir ev dizini, gizli değerlerin anahtarını sistem anahtar zinciri yerine bir dosyada (`secrets.key`) tutar. |
-| `HOME` | her şey | Ev dizininiz: `~/.kule`'nin bulunduğu yer ve sandbox'ın kendi klasörlerinizi altında gizlediği yer. |
+| `KULE_HOME` | `kule`, daemon, uygulama | Kule'nin ev dizini. Varsayılan `~/.kule` (Windows'ta `%USERPROFILE%\.kule`). Her komuttaki `--home` ile aynıdır. Kısa tutun: içindeki daemon soketinin yolu 100 baytın altında kalmalıdır. `~/.kule` dışında bir ev dizini, gizli değerlerin anahtarını sistem anahtar zinciri yerine bir dosyada (`secrets.key`) tutar. Windows'ta Kule'nin programlarının bulunduğu klasör olmamalıdır. |
+| `HOME` (Windows'ta `USERPROFILE`) | her şey | Ev dizininiz: `~/.kule`'nin bulunduğu yer ve sandbox'ın kendi klasörlerinizi altında gizlediği yer. |
 | `PATH` | uygulama, sandbox | Komutların ve ajanların (`npx`, `node`, `gemini`, …) bulunduğu yerler. Finder'dan ya da bir başlatıcıdan açıldığında uygulama `PATH`'i giriş kabuğunuzdan okur; böylece bir terminalle aynı araçları bulur. |
 | `SHELL` | `kule shell`, uygulamanın terminalleri | Bir görevin kopyasında açılacak kabuk. |
 | `NO_COLOR` | `kule` | Renkleri kapatmak için (boş olmayan bir değerle) ayarlayın. Çıktı bir terminal değilse ya da `TERM=dumb` ise de renk kapalıdır. |

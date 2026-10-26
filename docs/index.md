@@ -23,7 +23,7 @@ a copy, inside a sandbox, and you decide what comes back.
 
 :::note Kule is a preview
 
-Kule runs on **macOS and Linux**. Windows is planned. The latest
+Kule runs on **macOS, Linux and Windows 11**. The latest
 pre-release is
 [`0.2.0-preview.14`](https://github.com/kulehq/kule/releases/tag/v0.2.0-preview.14):
 [download it or build Kule from source](getting-started/install.md).
@@ -39,8 +39,9 @@ command, or you trust the agent.
 
 Kule gives you a third option:
 
-- **The agent works on a copy.** On macOS (APFS) and on Linux with Btrfs or
-  XFS, the copy takes almost no disk space.
+- **The agent works on a copy.** On macOS (APFS), on Linux with Btrfs or
+  XFS, and on Windows with ReFS or a Dev Drive, the copy takes almost no
+  disk space.
 - **The agent runs in a sandbox.** It can write only to its copy and its own
   temporary files. Your `~/.ssh`, `~/.aws`, Documents, Desktop and other
   projects are hidden from it.

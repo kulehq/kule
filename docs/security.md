@@ -52,7 +52,7 @@ Nothing is trusted by default:
 | Boundary | What holds it |
 |---|---|
 | Agent ↔ your folder | A copy-on-write copy; effects are scanned, judged by the Cedar policy (errors refuse), and committed only as reviewed. A repository's own policy can only add refusals. |
-| Agent ↔ the computer | The sandbox: Seatbelt on macOS; Landlock, seccomp and namespaces on Linux. Writes only in the copy and the task's temporary folders; secrets and credentials hidden; a weaker sandbox is never used without saying so. |
+| Agent ↔ the computer | The sandbox: Seatbelt on macOS; Landlock, seccomp and namespaces on Linux; a process container on Windows. Writes only in the copy and the task's temporary folders; secrets and credentials hidden; a weaker sandbox is never used without saying so. |
 | Agent ↔ the network | Every connection goes through Kule's proxy, which allows the hosts the policy names, checks the address it connects to, and keeps private addresses out of reach. |
 | Agent ↔ secrets | Placeholders in the agent's environment; the proxy fills them in on the way out to the secret's own host, and hides them in what comes back. |
 | Window ↔ daemon | A socket only your user can open, a token, size limits. |

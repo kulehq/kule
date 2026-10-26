@@ -172,6 +172,19 @@ tier `base-container`. Dates: 2026-10-26.
   is neither granted nor layered, and `kule home` has nothing to show.
   Cloning or linking the person's files can come later.
 
+## Found before the first Windows release
+
+- **The programs' folder and Kule's home must be two folders.** The
+  installer puts Kule's programs under `%LOCALAPPDATA%\Kule`, and the
+  terminal's helper is read from the folder it is in: a grant. Kule's home
+  is hidden, but a hidden folder above the task's copy is only not granted,
+  never denied, so a grant equal to it would have opened the home whole.
+  Kule's default home on Windows is `%USERPROFILE%\.kule` (`~/.kule`, as on
+  macOS and Linux), and a container whose grants would open a hidden folder
+  that holds a grant is refused with the reason, as is a terminal whose
+  helper lies in a hidden folder. Tests: `a_grant_that_holds_kules_home_is_refused`,
+  `a_helper_in_a_hidden_folder_is_refused`.
+
 ## Where CI can run the container
 
 Measured on GitHub's hosted runners on 2026-10-26, with the container
