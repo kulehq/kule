@@ -122,6 +122,24 @@ impl Shell {
         }
     }
 
+    /// Waits until the shell shows its prompt again (the console's text
+    /// ends with `>`), or panics after `secs`: what is typed while a
+    /// command still runs may go to that command, or be dropped as it ends.
+    fn until_prompt(&self, secs: u64) {
+        let deadline = Instant::now() + Duration::from_secs(secs);
+        loop {
+            let seen = without_escapes(&self.shown.lock().unwrap());
+            if seen.trim_end().ends_with('>') {
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "the prompt never came back; the console showed:\n{seen}"
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+
     /// Waits for a line that starts with `label` and ends with `value`
     /// (as `mode con` shows a size).
     fn until_line(&self, label: &str, value: &str, secs: u64) {
@@ -160,6 +178,10 @@ impl Drop for Shell {
         let _ = self.process.kill();
     }
 }
+
+/// A command that says it waits, waits a minute, then says it woke: each
+/// word made of two, so the console's echo of the command shows neither.
+const WAITS: &str = "powershell -NoProfile -Command \"'wait'+'ing'; Start-Sleep 60; 'wo'+'ke'\"";
 
 /// The console's text with its escape sequences (CSI and OSC) left out.
 fn without_escapes(text: &str) -> String {
@@ -256,12 +278,18 @@ fn ctrl_c_ends_what_the_shell_runs_and_not_the_shell() {
     }
     let s = Setup::new();
     let mut shell = Shell::start(&s.sandbox());
-    // Only Ctrl-C ends it before its minute.
-    shell.typed("timeout /t 60 /nobreak\r");
-    shell.until("press CTRL+C to quit", 30);
+    // Only Ctrl-C ends it before its minute (cmd's own `timeout` reads the
+    // console in a way a pseudo console on a hosted runner did not give it).
+    shell.typed(&format!("{WAITS}\r"));
+    shell.until("waiting", 30);
     shell.typed("\x03");
+    shell.until_prompt(15);
     shell.typed("set /a 600+66\r");
-    shell.until("666", 15);
+    let seen = shell.until("666", 15);
+    assert!(
+        !seen.contains("woke"),
+        "Ctrl-C did not end the wait: {seen}"
+    );
     shell.typed("exit 0\r");
     assert_eq!(shell.ended(10), Some(0));
 }
@@ -275,8 +303,8 @@ fn a_closed_terminal_ends_its_shell() {
     }
     let s = Setup::new();
     let mut shell = Shell::start(&s.sandbox());
-    shell.typed("timeout /t 60 /nobreak\r");
-    shell.until("press CTRL+C to quit", 30);
+    shell.typed(&format!("{WAITS}\r"));
+    shell.until("waiting", 30);
     drop(shell.input.take());
     assert!(shell.ended(15).is_some(), "the shell outlived its terminal");
 }
