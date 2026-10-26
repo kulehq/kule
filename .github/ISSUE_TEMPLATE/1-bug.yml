@@ -51,8 +51,6 @@ body:
         - macOS, Intel
         - Linux x86_64
         - Linux, another architecture (built from source)
-    validations:
-      required: true
   - type: input
     id: os
     attributes:
@@ -71,8 +69,6 @@ body:
         - The .rpm
         - A .tar.gz (the CLI alone)
         - Built from source
-    validations:
-      required: true
   - type: dropdown
     id: surface
     attributes:
@@ -88,17 +84,15 @@ body:
     attributes:
       label: Agent
       options:
-        - None (no agent was running)
+        - No agent was running
         - Claude Code
         - Codex
         - Gemini
         - Another ACP agent
-    validations:
-      required: true
   - type: textarea
     id: isolation
     attributes:
-      label: What `kule isolation` prints
+      label: What kule isolation prints
       render: text
   - type: textarea
     id: logs

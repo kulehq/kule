@@ -32,8 +32,6 @@ body:
         - Everything worked
         - It worked, with rough edges
         - I could not finish
-    validations:
-      required: true
   - type: textarea
     id: unexpected
     attributes:
