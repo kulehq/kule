@@ -1,0 +1,117 @@
+name: Bug report
+description: Something broke or did not do what the docs say.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **A security problem?** Do not file it here. Report it privately, as
+        [SECURITY.md](https://github.com/kulehq/kule/blob/main/SECURITY.md) says.
+
+        Issues are public: leave out API keys, tokens, passwords, private paths,
+        host names and file contents.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you saw. Paste messages as text, not screenshots, where you can.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: The commands you ran or what you clicked, in order.
+      placeholder: |
+        1. kule new ~/demo
+        2. kule run <task> --agent codex "…"
+        3. …
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: What `kule --version` prints.
+      placeholder: kule 0.2.0-preview.14
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options:
+        - macOS, Apple silicon
+        - macOS, Intel
+        - Linux x86_64
+        - Linux, another architecture (built from source)
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Operating system version
+      description: On macOS the version (`sw_vers -productVersion`); on Linux the distribution and the kernel (`uname -r`).
+      placeholder: Ubuntu 24.04, kernel 6.8.0
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: How you installed Kule
+      options:
+        - The .dmg
+        - The .deb
+        - The .rpm
+        - A .tar.gz (the CLI alone)
+        - Built from source
+    validations:
+      required: true
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Where it happened
+      multiple: true
+      options:
+        - The desktop app
+        - The kule command
+    validations:
+      required: true
+  - type: dropdown
+    id: agent
+    attributes:
+      label: Agent
+      options:
+        - None (no agent was running)
+        - Claude Code
+        - Codex
+        - Gemini
+        - Another ACP agent
+    validations:
+      required: true
+  - type: textarea
+    id: isolation
+    attributes:
+      label: What `kule isolation` prints
+      render: text
+  - type: textarea
+    id: logs
+    attributes:
+      label: Log lines
+      description: Only the lines around the problem, from the terminal or from `~/.kule/kuled.log`. Remove anything private first.
+      render: text
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before you send it
+      options:
+        - label: This is not a security problem (those go to the private form in SECURITY.md).
+          required: true
+        - label: I removed keys, tokens, passwords and anything else I would not publish.
+          required: true

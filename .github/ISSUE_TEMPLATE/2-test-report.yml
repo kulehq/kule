@@ -1,0 +1,68 @@
+name: Test report
+description: How a scenario from the testing guide went. "Everything worked" is welcome too.
+labels: [test report]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for trying Kule. The [testing guide](https://kulehq.github.io/kule/docs/testing)
+        has the scenarios. Something broke? A **Bug report** suits it better.
+
+        **A security problem?** Do not file it here. Report it privately, as
+        [SECURITY.md](https://github.com/kulehq/kule/blob/main/SECURITY.md) says.
+  - type: dropdown
+    id: scenarios
+    attributes:
+      label: Scenarios you tried
+      multiple: true
+      options:
+        - 1. Install and check
+        - 2. The loop, without an agent
+        - 3. The app, with an agent
+        - 4. Your own work
+        - 5. Your own setup
+        - Something else
+    validations:
+      required: true
+  - type: dropdown
+    id: outcome
+    attributes:
+      label: How it went
+      options:
+        - Everything worked
+        - It worked, with rough edges
+        - I could not finish
+    validations:
+      required: true
+  - type: textarea
+    id: unexpected
+    attributes:
+      label: What you did not expect
+      description: What was unclear, slow, refused or in the way, and where. A short list is fine.
+  - type: textarea
+    id: wish
+    attributes:
+      label: What would have made it better
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: What `kule --version` prints.
+      placeholder: kule 0.2.0-preview.14
+    validations:
+      required: true
+  - type: input
+    id: setup
+    attributes:
+      label: Your setup
+      description: Platform, OS version, file system, agent, and anything unusual (a monorepo, a large folder).
+      placeholder: macOS 15.5 Apple silicon, APFS, Claude Code
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before you send it
+      options:
+        - label: I removed keys, tokens, passwords and anything else I would not publish.
+          required: true

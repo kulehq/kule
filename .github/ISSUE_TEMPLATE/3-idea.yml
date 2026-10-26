@@ -1,0 +1,31 @@
+name: Idea or change
+description: Something Kule should do, or do differently.
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Not sure yet? [Discussions → Ideas](https://github.com/kulehq/kule/discussions/categories/ideas)
+        is a good place to think it through first.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What you are trying to do
+      description: The work, and where Kule gets in the way or falls short today.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What you would like Kule to do
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What you do instead today
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: What `kule --version` prints, if you have Kule installed.
