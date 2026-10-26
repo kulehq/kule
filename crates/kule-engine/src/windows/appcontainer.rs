@@ -619,9 +619,15 @@ fn command_line(exe: &Path, args: &[&OsStr]) -> std::ffi::OsString {
     line
 }
 
-fn quoted(arg: &OsStr) -> std::ffi::OsString {
-    let mut out = std::ffi::OsString::from("\"");
+/// `arg` as a command-line argument the C runtime reads back as itself:
+/// quoted where it holds a space, a tab, a quote or nothing, and left as
+/// it is otherwise (`cmd.exe` takes its own switches unquoted only).
+pub(crate) fn quoted(arg: &OsStr) -> std::ffi::OsString {
     let text = arg.to_string_lossy();
+    if !text.is_empty() && !text.contains([' ', '\t', '"', '\n']) {
+        return arg.to_owned();
+    }
+    let mut out = std::ffi::OsString::from("\"");
     let mut backslashes = 0;
     for c in text.chars() {
         match c {

@@ -6,7 +6,6 @@
 use std::collections::HashMap;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -168,14 +167,14 @@ impl Terminals {
         };
         let mut command = self
             .sandbox
-            .command(program, args)
+            .start(program, args)
             .map_err(|e| e.to_string())?;
         command
             .current_dir(&cwd)
             .envs(env.iter().map(|(n, v)| (n, v)))
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+            .stdin(kule_engine::Io::Null)
+            .stdout(kule_engine::Io::Piped)
+            .stderr(kule_engine::Io::Piped);
         let mut child = command
             .spawn()
             .map_err(|e| format!("could not start {program}: {e}"))?;
@@ -200,45 +199,36 @@ impl Terminals {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .insert(id.clone(), Arc::clone(&term));
-        let readers: Vec<_> = [
-            child
-                .stdout
-                .take()
-                .map(|s| Box::new(s) as Box<dyn Read + Send>),
-            child
-                .stderr
-                .take()
-                .map(|s| Box::new(s) as Box<dyn Read + Send>),
-        ]
-        .into_iter()
-        .flatten()
-        .map(|mut stream| {
-            let (term, events) = (Arc::clone(&term), self.events.clone());
-            let control = self.control.clone();
-            std::thread::spawn(move || {
-                let mut buf = [0u8; 8192];
-                while let Ok(n) = stream.read(&mut buf) {
-                    if n == 0 {
-                        break;
+        let readers: Vec<_> = [child.stdout.take(), child.stderr.take()]
+            .into_iter()
+            .flatten()
+            .map(|mut stream| {
+                let (term, events) = (Arc::clone(&term), self.events.clone());
+                let control = self.control.clone();
+                std::thread::spawn(move || {
+                    let mut buf = [0u8; 8192];
+                    while let Ok(n) = stream.read(&mut buf) {
+                        if n == 0 {
+                            break;
+                        }
+                        control.touch();
+                        let mut out = term
+                            .output
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        out.bytes.extend_from_slice(&buf[..n]);
+                        if out.bytes.len() > out.limit {
+                            let cut = out.bytes.len() - out.limit;
+                            out.bytes.drain(..cut);
+                            out.truncated = true;
+                        }
+                        if out.sent.is_none_or(|t| t.elapsed() >= EVERY) {
+                            send(&events, &mut out);
+                        }
                     }
-                    control.touch();
-                    let mut out = term
-                        .output
-                        .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner);
-                    out.bytes.extend_from_slice(&buf[..n]);
-                    if out.bytes.len() > out.limit {
-                        let cut = out.bytes.len() - out.limit;
-                        out.bytes.drain(..cut);
-                        out.truncated = true;
-                    }
-                    if out.sent.is_none_or(|t| t.elapsed() >= EVERY) {
-                        send(&events, &mut out);
-                    }
-                }
+                })
             })
-        })
-        .collect();
+            .collect();
         let (term, events) = (Arc::clone(&term), self.events.clone());
         let control = self.control.clone();
         std::thread::spawn(move || {

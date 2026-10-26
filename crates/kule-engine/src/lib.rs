@@ -121,10 +121,23 @@ pub use remembered::{
 #[cfg(target_os = "macos")]
 pub use sandbox::ProcessFinder;
 pub use sandbox::{
-    Denial, Ended, HIDDEN_IN_HOME, INCOMPLETE, Network, PASSED_ENV, PERSONAL_IN_HOME, Refusals,
-    Sandbox, UNREPORTED, denials, isolates_network, own_processes, protects_in_place,
-    record_denials,
+    Denial, Ended, HIDDEN_IN_HOME, INCOMPLETE, Io, Network, PASSED_ENV, PASSED_ENV_WINDOWS,
+    PERSONAL_IN_HOME, Process, Refusals, Sandbox, Start, UNREPORTED, denials, isolates_network,
+    own_processes, protects_in_place, record_denials,
 };
+
+/// Why this computer gives a task's commands no sandbox at all, one
+/// sentence each, or nothing: on Windows, a build before the one Kule
+/// measured, a session that is no desktop session, or a process container
+/// that cannot keep a path from a command (see `windows::preconditions`).
+/// Unlike [`isolation_gaps`], nothing here is accepted: commands are
+/// refused until it is closed.
+pub fn sandbox_refusals() -> Vec<String> {
+    #[cfg(windows)]
+    return windows::preconditions::check().err().unwrap_or_default();
+    #[cfg(not(windows))]
+    Vec::new()
+}
 pub use sealing::KeyHome;
 pub use secrets::{
     AgentKey, SECRETS_FILE, SecretInfo, Vault, add_secret, remove_secret, secrets, secrets_key_home,

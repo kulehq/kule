@@ -551,6 +551,23 @@ pub fn open_to_others(path: &Path) -> io::Result<Option<String>> {
     }
 }
 
+/// `path` as programs take it: on Windows without the `\\?\` prefix that
+/// a resolved path carries, which `cmd.exe` and many tools refuse (a
+/// network path keeps its `\\server` form); elsewhere `path` itself.
+pub fn plain(path: &Path) -> std::path::PathBuf {
+    #[cfg(windows)]
+    {
+        let text = path.as_os_str().to_string_lossy();
+        if let Some(rest) = text.strip_prefix("\\\\?\\UNC\\") {
+            return std::path::PathBuf::from(format!("\\\\{rest}"));
+        }
+        if let Some(rest) = text.strip_prefix("\\\\?\\") {
+            return std::path::PathBuf::from(rest);
+        }
+    }
+    path.to_path_buf()
+}
+
 /// The person's home folder: `HOME` on Unix, `USERPROFILE` on Windows.
 pub fn person_home() -> Option<std::path::PathBuf> {
     #[cfg(unix)]

@@ -10,7 +10,7 @@ use std::process::Command;
 use std::time::{Duration, Instant};
 
 use kule_engine::windows::appcontainer;
-use kule_engine::{DEFAULT_POLICY, Policy, Proxy, Task};
+use kule_engine::{DEFAULT_POLICY, Policy, Proxy, Sandbox, Task};
 use tempfile::TempDir;
 
 const PROXY: &str = env!("CARGO_BIN_EXE_kule-proxy");
@@ -221,4 +221,86 @@ fn a_profile_is_made_once_however_many_ask_at_once() {
         said.iter().all(|s| s.starts_with("asked: code=Some(0)")),
         "{said:#?}"
     );
+}
+
+/// Whether a task's sandbox can be made here (a desktop session and a
+/// measured build); says why not otherwise, or fails where the test
+/// machine requires it.
+fn sandbox_available() -> bool {
+    let refused = kule_engine::sandbox_refusals();
+    if refused.is_empty() {
+        return true;
+    }
+    assert!(
+        std::env::var_os("KULE_TEST_REQUIRE_SANDBOX").is_none(),
+        "the sandbox is required here, but: {}",
+        refused.join("; ")
+    );
+    eprintln!("skipped: {}", refused.join("; "));
+    false
+}
+
+/// End to end: a command in a task's sandbox reaches the network only
+/// through the proxy in its own container, which answers it (here, with
+/// the policy's refusal), and the connection is on the task's record; a
+/// connection past the proxy fails at once. This is the check WP2 could
+/// not make from a plain process, which the proxy's container does not
+/// answer (measured).
+#[test]
+fn a_contained_command_reaches_the_network_only_through_the_proxy() {
+    if !sandbox_available() {
+        return;
+    }
+    let (_home, _ws, task) = setup();
+    let proxy = Proxy::start(&task, Policy::from_texts(DEFAULT_POLICY, None).unwrap()).unwrap();
+    let mut sandbox = Sandbox::new(&task).unwrap();
+    sandbox.use_proxy(&proxy);
+    let curl = |args: &[&str]| {
+        let args: Vec<String> = args.iter().map(|a| a.to_string()).collect();
+        let out = sandbox.start("curl.exe", &args).unwrap().output().unwrap();
+        format!(
+            "{} {}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        )
+    };
+    // Through the proxy: an HTTP answer comes back, whatever the policy
+    // says of the host.
+    let through = curl(&[
+        "-s",
+        "-S",
+        "-m",
+        "15",
+        "-o",
+        "NUL",
+        "-w",
+        "%{http_code}",
+        "http://example.com/",
+    ]);
+    assert!(
+        through.trim_start().starts_with("200") || through.trim_start().starts_with("403"),
+        "no answer through the proxy: {through}"
+    );
+    wait_until("the connection's record", || {
+        kule_engine::connections(&task).is_ok_and(|c| !c.is_empty())
+    });
+    // Past it: nothing.
+    let past = curl(&[
+        "-s",
+        "-S",
+        "-m",
+        "8",
+        "--noproxy",
+        "*",
+        "-o",
+        "NUL",
+        "-w",
+        "%{http_code}",
+        "http://example.com/",
+    ]);
+    assert!(
+        past.trim_start().starts_with("000"),
+        "reached past the proxy: {past}"
+    );
+    drop(proxy);
 }

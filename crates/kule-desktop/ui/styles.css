@@ -5063,6 +5063,16 @@ body.dragging-panel * {
   font-size: calc(14px * var(--text-scale));
 }
 
+/* No sandbox at all: nothing to accept, a refusal in red. */
+.isolation.refused {
+  border-color: var(--deny);
+  background: var(--deny-soft);
+}
+
+.isolation.refused h3 {
+  color: var(--deny);
+}
+
 .isolation ul {
   margin: 0;
   padding-left: 18px;

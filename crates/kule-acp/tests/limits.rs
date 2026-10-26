@@ -53,7 +53,7 @@ impl Setup {
     fn run_with(&self, script: &str, plan: Plan, waiting: bool, control: &RunControl) -> Ran {
         let sandbox = Sandbox::new(&self.task).unwrap();
         let agent = sandbox
-            .command(env!("CARGO_BIN_EXE_kule-test-agent"), &[])
+            .start(env!("CARGO_BIN_EXE_kule-test-agent"), &[])
             .unwrap();
         let measured = Arc::new(Mutex::new(Vec::new()));
         let kept = Arc::clone(&measured);

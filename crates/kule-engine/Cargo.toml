@@ -56,12 +56,19 @@ libc = "0.2.190"
 landlock = "0.4.7"
 
 [target.'cfg(windows)'.dependencies]
+# The sandbox around a task's commands: Microsoft's process container
+# (`docs/windows-measurements.md`). Pinned: what it holds was measured at
+# this version. No features: the micro-VM backend's build step downloads
+# binaries, and the others are not Kule's.
+mxc-sdk = { version = "=1.0.1", default-features = false }
 # Handle-relative file calls (no link followed on the way), access lists,
 # locks and process queries; the proxy's app container, its pipes and the
-# job around it; the certificates the system trusts.
+# job around it; the certificates the system trusts; the Windows build,
+# the session and the window station the sandbox needs.
 windows = { version = "0.62.2", features = [
     "Wdk_Foundation",
     "Wdk_Storage_FileSystem",
+    "Wdk_System_SystemServices",
     "Win32_Foundation",
     "Win32_Security",
     "Win32_Security_Authorization",
@@ -75,6 +82,10 @@ windows = { version = "0.62.2", features = [
     "Win32_System_JobObjects",
     "Win32_System_Pipes",
     "Win32_System_ProcessStatus",
+    "Win32_System_Registry",
+    "Win32_System_RemoteDesktop",
+    "Win32_System_StationsAndDesktops",
+    "Win32_System_SystemInformation",
     "Win32_System_SystemServices",
     "Win32_System_Threading",
 ] }
