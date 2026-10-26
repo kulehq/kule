@@ -1,5 +1,6 @@
 //! The daemon over a real Unix socket: calls, notices, one daemon per home,
 //! the idle exit and the line cap.
+#![cfg(unix)]
 
 use std::fs;
 use std::io::{Read, Write};

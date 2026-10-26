@@ -340,6 +340,7 @@ fn another_version_control_systems_repository_waits_for_a_person() {
     }
 }
 
+#[cfg(unix)]
 /// What runs code, or steers an agent, without anyone running the project
 /// waits: at any depth, however its name is cased, and a link never passes
 /// on its own.
@@ -616,6 +617,7 @@ fn files_in_new_commits_are_judged_like_files() {
     );
 }
 
+#[cfg(unix)]
 /// What a commit does is judged as it is: a link it adds as a link, a file
 /// it only makes executable as a change, another repository's commit (a
 /// submodule) by a person.
@@ -1002,14 +1004,17 @@ fn a_tasks_group_chooses_the_policy_it_is_judged_by() {
 }
 
 /// What the commit would take, read as a commit reads it, judged.
+#[cfg(unix)]
 fn pending_judged(s: &Setup) -> Ruling {
     Policy::builtin().judge(&s.task.pending(false).unwrap())
 }
 
+#[cfg(unix)]
 /// A file anyone may run now, or anything anything may change, waits for a
 /// person, whatever its name; one that was executable already does not.
 #[test]
 fn a_file_made_executable_or_world_writable_waits_for_a_person() {
+    #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
     let (home, ws) = (TempDir::new().unwrap(), TempDir::new().unwrap());
     for (path, text) in [

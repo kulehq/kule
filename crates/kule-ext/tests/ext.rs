@@ -99,6 +99,7 @@ fn the_same_folder_packs_to_the_same_bytes() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn packing_leaves_hidden_files_out_and_refuses_links_and_odd_kinds() {
     let dir = folder(&manifest(json!({})));
@@ -411,6 +412,7 @@ fn a_package_changed_on_disk_is_held() {
     assert!(e.contains("changed on disk"), "{e}");
 }
 
+#[cfg(unix)]
 #[test]
 fn a_folder_under_development_needs_approval_again_when_any_file_changes() {
     let home = TempDir::new().unwrap();
@@ -537,6 +539,7 @@ fn a_file_is_read_through_its_cap() {
     let _ = Path::new("unused");
 }
 
+#[cfg(unix)]
 #[test]
 fn a_folder_agents_can_write_is_not_taken_for_development() {
     let home = TempDir::new_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
@@ -581,6 +584,7 @@ fn a_folder_agents_can_write_is_not_taken_for_development() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn a_folder_already_installed_where_agents_can_write_is_held() {
     let home = TempDir::new_in(env!("CARGO_TARGET_TMPDIR")).unwrap();

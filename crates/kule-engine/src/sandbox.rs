@@ -763,11 +763,8 @@ impl Sandbox {
         let tmp = task.tmp()?;
         // At random, not by the clock: sandboxes made at the same moment
         // must not share the mark their processes and refusals are found by.
-        let random = Path::new("/dev/urandom");
         let mut bytes = [0u8; 8];
-        std::fs::File::open(random)
-            .and_then(|mut f| std::io::Read::read_exact(&mut f, &mut bytes))
-            .at(random)?;
+        crate::osfs::random_bytes(&mut bytes).at(Path::new("random"))?;
         let own: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
         Ok(Sandbox {
             copy: real(&task.copy())?,
@@ -929,6 +926,7 @@ impl Sandbox {
     /// the system's services, and this gives nothing). Never one through
     /// which a command could read or drive what is the person's: a disk,
     /// memory, the keyboard and mouse, a console or another terminal.
+    #[cfg(unix)]
     pub fn allow_device(&mut self, path: &Path) -> Result<()> {
         use std::os::unix::fs::FileTypeExt;
         let refuse = |why: &str| {
@@ -980,6 +978,15 @@ impl Sandbox {
         }
         self.devices.push(path.to_owned());
         Ok(())
+    }
+
+    /// Windows gives a task's commands no devices.
+    #[cfg(not(unix))]
+    pub fn allow_device(&mut self, path: &Path) -> Result<()> {
+        Err(Error::Invalid(format!(
+            "{} cannot be given to a task's commands: Windows gives commands no devices",
+            path.display()
+        )))
     }
 
     /// A command cannot write a file larger than `bytes`: the write fails
@@ -1344,8 +1351,8 @@ impl Sandbox {
             }
             // Its name while it still has one; one on its way out, or of a
             // process group killed just before, was not left running.
-            // SAFETY: getpgid only reads.
-            let of_killed = |pid: i32| killed.is_some_and(|g| unsafe { libc::getpgid(pid) } == g);
+            let of_killed =
+                |pid: i32| killed.is_some_and(|g| crate::osfs::process_group(pid) == Some(g));
             names.processes.extend(
                 found
                     .iter()
@@ -1664,6 +1671,7 @@ impl Sandbox {
     /// can push keystrokes into the person's terminal (TIOCSTI), and its
     /// whole process group can be stopped when it is done. The steps a
     /// platform adds come after, inside that session and group.
+    #[cfg(unix)]
     #[cfg_attr(not(any(target_os = "macos", target_os = "linux")), allow(dead_code))]
     fn session_command(&self, program: impl AsRef<std::ffi::OsStr>) -> Command {
         use std::os::unix::process::CommandExt;
@@ -1776,6 +1784,7 @@ impl Sandbox {
     /// shell there has job control and Ctrl-C reaches what it runs. It is
     /// no terminal of the person's other sessions, and the command still
     /// reaches none of those.
+    #[cfg(unix)]
     pub fn terminal_command(
         &self,
         program: &str,
@@ -1856,7 +1865,7 @@ fn terminal_path(terminal: std::os::fd::BorrowedFd<'_>) -> Result<PathBuf> {
 
 /// Landlock judges a descriptor by how it was opened, before the command
 /// was restricted: the terminal needs no rule of its own.
-#[cfg(not(target_os = "macos"))]
+#[cfg(all(unix, not(target_os = "macos")))]
 fn terminal_path(_terminal: std::os::fd::BorrowedFd<'_>) -> Result<PathBuf> {
     Ok(PathBuf::new())
 }
@@ -2016,6 +2025,7 @@ const ALWAYS_HIDDEN: usize = 2;
 /// [`Sandbox::allow_device`]): memory and the kernel's log, keyboards and
 /// mice (to read or to type), the console, terminals and Kule's own
 /// handling of them, shared memory.
+#[cfg(unix)]
 const NEVER_DEVICES: &[&str] = &[
     "mem", "kmem", "port", "kmsg", "input", "uinput", "console", "pts", "ptmx", "shm", "mqueue",
     "snapshot", "disk", "mapper", "block", "char", "fd", "stdin", "stdout", "stderr", "core",

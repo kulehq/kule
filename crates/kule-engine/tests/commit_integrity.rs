@@ -3,6 +3,7 @@
 //! still running in the copy does meanwhile.
 
 use std::fs;
+#[cfg(unix)]
 use std::os::unix::fs::symlink;
 
 use kule_engine::{Error, Task};
@@ -57,6 +58,7 @@ fn content_rewritten_during_a_commit_is_not_kept() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn a_link_put_on_the_way_during_a_commit_brings_nothing_from_outside() {
     let (_home, ws, task) = task();
@@ -151,6 +153,7 @@ fn a_merge_takes_the_copy_as_it_was_reviewed() {
     );
 }
 
+#[cfg(unix)]
 /// A folder in the person's folder turned into a link while a commit runs
 /// takes nothing out of the folder: the commit does not write through it.
 #[test]
@@ -173,10 +176,12 @@ fn a_link_put_in_the_folder_during_a_commit_takes_nothing_outside() {
     );
 }
 
+#[cfg(unix)]
 /// Permission bits are part of what was reviewed: a file made executable
 /// after the review, or while the commit runs, is not committed.
 #[test]
 fn a_mode_changed_after_the_review_is_not_committed() {
+    #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
     let mode = |p: &std::path::Path| fs::metadata(p).unwrap().permissions().mode() & 0o7777;
     let (_home, ws, task) = task();
@@ -208,10 +213,12 @@ fn a_mode_changed_after_the_review_is_not_committed() {
     );
 }
 
+#[cfg(unix)]
 /// A file that runs as its owner or group never comes into the folder from
 /// a task; one the folder had already keeps its bits.
 #[test]
 fn a_file_set_to_run_as_its_owner_is_not_committed() {
+    #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
     let (_home, ws, task) = task();
     fs::write(task.copy().join("tool"), "#!/bin/sh\n").unwrap();

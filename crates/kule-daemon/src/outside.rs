@@ -84,9 +84,8 @@ pub fn show(path: &Path) -> Result<()> {
 /// `file://` and the path with everything but letters, digits, `-._~` and
 /// `/` escaped: dbus-send splits an array at commas.
 fn file_uri(path: &Path) -> String {
-    use std::os::unix::ffi::OsStrExt;
     let mut uri = String::from("file://");
-    for &b in path.as_os_str().as_bytes() {
+    for &b in path.as_os_str().as_encoded_bytes() {
         if b.is_ascii_alphanumeric() || b"-._~/".contains(&b) {
             uri.push(b as char);
         } else {

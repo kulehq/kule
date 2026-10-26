@@ -321,6 +321,7 @@ fn read_in(dir: &Path, path: &str) -> Result<Vec<u8>> {
 
 /// Opens `path` under `dir` one step at a time, refusing a link at any
 /// step: a link swapped in between a look and the open leads nowhere.
+#[cfg(unix)]
 fn open_without_links(dir: &Path, path: &str) -> std::io::Result<fs::File> {
     use std::ffi::CString;
     use std::os::fd::{AsRawFd, FromRawFd};
@@ -353,6 +354,50 @@ fn open_without_links(dir: &Path, path: &str) -> std::io::Result<fs::File> {
         at = unsafe { fs::File::from_raw_fd(fd) };
     }
     Ok(at)
+}
+
+/// Opens `path` under `dir`, refusing a link at any step. Windows resolves
+/// links on the way as it opens, so the opened file itself is asked where
+/// it is: anywhere but under `dir`, by the same name, and it is refused.
+/// A link as the last step is opened as itself and refused as well.
+#[cfg(windows)]
+fn open_without_links(dir: &Path, path: &str) -> std::io::Result<fs::File> {
+    use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
+    use std::os::windows::io::AsRawHandle;
+    use windows::Win32::Foundation::HANDLE;
+    use windows::Win32::Storage::FileSystem::{
+        FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
+        GetFinalPathNameByHandleW, VOLUME_NAME_DOS,
+    };
+    let final_path = |file: &fs::File| -> std::io::Result<String> {
+        let mut buf = vec![0u16; 1024];
+        // SAFETY: the handle is open and the buffer valid for its length.
+        let n = unsafe {
+            GetFinalPathNameByHandleW(HANDLE(file.as_raw_handle()), &mut buf, VOLUME_NAME_DOS)
+        } as usize;
+        if n == 0 || n > buf.len() {
+            return Err(std::io::Error::other("the file's own path cannot be read"));
+        }
+        Ok(String::from_utf16_lossy(&buf[..n]))
+    };
+    let open = |p: &Path| {
+        fs::OpenOptions::new()
+            .read(true)
+            .custom_flags((FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS).0)
+            .open(p)
+    };
+    let root = open(dir)?;
+    let file = open(&dir.join(path.replace('/', "\\")))?;
+    if file.metadata()?.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT.0 != 0 {
+        return Err(std::io::Error::other(format!("{path} is a link")));
+    }
+    let expected = format!("{}\\{}", final_path(&root)?, path.replace('/', "\\"));
+    if !final_path(&file)?.eq_ignore_ascii_case(&expected) {
+        return Err(std::io::Error::other(format!(
+            "{path} is reached through a link, or is not where it should be"
+        )));
+    }
+    Ok(file)
 }
 
 /// Packs a folder into a `.kulext`. The same folder always gives the same

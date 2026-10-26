@@ -12,9 +12,6 @@
 //! credentials and, when asked, network connections are refused by the
 //! operating system. Policy over the effect set arrives later in M1.
 
-#[cfg(not(unix))]
-compile_error!("Kule M0 supports macOS and Linux only");
-
 mod approvals;
 mod beside;
 #[cfg(target_os = "linux")]
@@ -48,6 +45,7 @@ mod meet;
 #[cfg(target_os = "linux")]
 mod namespace;
 mod network;
+pub mod osfs;
 mod outline;
 mod policy;
 mod ports;
@@ -85,7 +83,7 @@ pub use caches::{
 pub use checkpoint::{Checkpoint, State as CheckpointState};
 pub use effects::{Change, Effect, EffectSet, Move};
 pub use error::{Error, Result};
-pub use fsops::{carry, remove_beneath};
+pub use fsops::{carry, entries_in, open_beneath, remove_beneath};
 pub use git::{Carried, CarriedEntry, GitState, GitSummary, RefChange};
 pub use groups::{
     GROUP_POLICY_DIR, GROUPS_FILE, Group, GroupPolicy, MAX_GROUP_POLICY, MAX_GROUPS, create_group,
@@ -103,7 +101,7 @@ pub use limits::{Limits, TaskLimits, limits, set_limits};
 pub use manifest::Kind;
 pub use meet::{Meeting, Touched, changed_entities, meet, touched};
 pub use network::{Connection, Proxy, connections, public_ip};
-pub use outline::{FileOutline, open_beneath};
+pub use outline::FileOutline;
 pub use policy::{
     CAREFUL_POLICY, DEFAULT_POLICY, Held, Judgement, Policy, PolicyChoice, REPO_POLICY, Ruling,
     USER_POLICY, Verdict, choose_policy, dotted, file_kind, policy_choice, policy_text, reason,

@@ -2,9 +2,6 @@
 //! open for notices.
 
 use std::io::{self, BufReader};
-use std::os::unix::fs::OpenOptionsExt;
-use std::os::unix::net::UnixStream;
-use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -14,6 +11,7 @@ use serde::de::DeserializeOwned;
 use crate::protocol::{Call, Hello, PROTOCOL, Request, Response};
 use crate::server::{read_line, socket_path, token_path, write_line};
 use crate::service::{Notice, Result};
+use crate::transport::Stream;
 
 /// The longest response a client reads; a task's timeline can be long.
 const MAX_RESPONSE: usize = 64 << 20;
@@ -33,7 +31,7 @@ impl Client {
     }
 
     pub fn is_running(&self) -> bool {
-        UnixStream::connect(&self.socket).is_ok()
+        Stream::connect(&self.socket).is_ok()
     }
 
     /// Starts the daemon with `start` unless one that speaks this protocol
@@ -123,16 +121,14 @@ impl Client {
 
     /// A connection to the daemon, once its other end is shown to be this
     /// user's: the token goes to nothing else listening there.
-    fn connect(&self) -> Result<UnixStream> {
-        let stream = UnixStream::connect(&self.socket).map_err(|e| {
+    fn connect(&self) -> Result<Stream> {
+        let stream = Stream::connect(&self.socket).map_err(|e| {
             format!(
                 "cannot reach the Kule daemon at {}: {e}",
                 self.socket.display()
             )
         })?;
-        // SAFETY: geteuid has no preconditions and cannot fail.
-        let me = unsafe { libc::geteuid() };
-        if crate::peer_uid(&stream) != Some(me) {
+        if !stream.peer_is_me() {
             return Err(format!(
                 "what listens at {} is not your own Kule daemon; Kule sends it nothing",
                 self.socket.display()
@@ -146,11 +142,7 @@ impl Client {
 /// caller so it outlives it; its output goes to `kuled.log` in `home`.
 pub fn spawn_daemon(kule: &Path, home: &Path) -> io::Result<()> {
     std::fs::create_dir_all(home)?;
-    let log = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .mode(0o600)
-        .open(home.join("kuled.log"))?;
+    let log = kule_engine::osfs::append_private(&home.join("kuled.log"))?;
     let mut command = Command::new(kule);
     command
         .arg("daemon")
@@ -160,12 +152,28 @@ pub fn spawn_daemon(kule: &Path, home: &Path) -> io::Result<()> {
         .stderr(log);
     // A session of its own: no controlling terminal to be reached through,
     // and no signal meant for the caller's.
-    // SAFETY: setsid is async-signal-safe and touches only the child.
-    unsafe {
-        command.pre_exec(|| {
-            libc::setsid();
-            Ok(())
-        });
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        // SAFETY: setsid is async-signal-safe and touches only the child.
+        unsafe {
+            command.pre_exec(|| {
+                libc::setsid();
+                Ok(())
+            });
+        }
+    }
+    // On Windows: no console of the caller's, its own process group, and
+    // outside any job that would end it with the caller.
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const DETACHED_PROCESS: u32 = 0x8;
+        const CREATE_NEW_PROCESS_GROUP: u32 = 0x200;
+        const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x0100_0000;
+        command.creation_flags(
+            DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_BREAKAWAY_FROM_JOB,
+        );
     }
     command.spawn().map(|_| ())
 }

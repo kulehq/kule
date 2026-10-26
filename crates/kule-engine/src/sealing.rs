@@ -181,13 +181,8 @@ fn file_get(home: &Path) -> Result<Vec<u8>> {
 
 fn file_set(home: &Path, key: &[u8]) -> Result<()> {
     use std::io::Write;
-    use std::os::unix::fs::OpenOptionsExt;
     let path = home.join(KEY_FILE);
-    std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(&path)
+    crate::osfs::create_private(&path)
         .and_then(|mut f| {
             f.write_all(
                 base64::engine::general_purpose::STANDARD
@@ -251,11 +246,14 @@ mod tests {
         let other = tempfile::TempDir::new().unwrap();
         let stranger = Sealer::open(other.path(), None).unwrap();
         assert!(stranger.unseal(&sealed, b"for").is_err());
-        use std::os::unix::fs::PermissionsExt;
-        let mode = std::fs::metadata(home.path().join(KEY_FILE))
-            .unwrap()
-            .permissions()
-            .mode();
-        assert_eq!(mode & 0o077, 0, "{mode:o}");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(home.path().join(KEY_FILE))
+                .unwrap()
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o077, 0, "{mode:o}");
+        }
     }
 }

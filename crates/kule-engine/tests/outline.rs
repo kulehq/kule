@@ -105,6 +105,7 @@ fn a_workspace_changed_since_tells_that_the_before_is_unknown() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn a_link_in_the_copy_is_not_followed() {
     let s = Setup::new();

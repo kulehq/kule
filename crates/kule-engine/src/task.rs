@@ -609,13 +609,8 @@ impl Task {
     /// What the log before the agent's (`agent.log.1`) is as a run starts,
     /// for [`Task::agent_log_hint`] as it ends.
     pub fn agent_log_mark(&self) -> AgentLogMark {
-        use std::os::unix::fs::MetadataExt;
         let older = self.agent_log().with_extension("log.1");
-        AgentLogMark(
-            fs::symlink_metadata(older)
-                .ok()
-                .map(|m| (m.dev(), m.ino(), m.mtime(), m.mtime_nsec())),
-        )
+        AgentLogMark(crate::osfs::mark_of(&older))
     }
 
     /// Where a failed run's agent said why: its log, and the one before it
@@ -1095,7 +1090,7 @@ impl Task {
             Kind::Dir => fs::create_dir_all(to).at(to),
             Kind::Symlink => {
                 let target = entry.copy.link.clone().unwrap_or_default();
-                std::os::unix::fs::symlink(target, to).at(to)
+                crate::osfs::symlink(Path::new(&target), to).at(to)
             }
             Kind::File => {
                 let base = self.base_dir().join(rel);
@@ -2148,13 +2143,7 @@ pub struct OpenedOutside {
 
 /// Whether process `pid` is alive (or alive under another user).
 fn alive(pid: u32) -> bool {
-    let Ok(pid) = i32::try_from(pid) else {
-        return false;
-    };
-    // SAFETY: signal 0 only asks whether the process exists.
-    pid > 0
-        && (unsafe { libc::kill(pid, 0) } == 0
-            || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM))
+    crate::osfs::alive(pid)
 }
 
 impl Drop for AgentAtWork {
@@ -2180,11 +2169,8 @@ fn new_task_dir(tasks: &Path) -> Result<(String, PathBuf)> {
     // At random, not by the clock: an id names the task's processes on the
     // whole computer (its sandbox's mark), and tasks made at the same
     // moment in other Kule homes must not share it.
-    let random = Path::new("/dev/urandom");
     let mut bytes = [0u8; 4];
-    fs::File::open(random)
-        .and_then(|mut f| std::io::Read::read_exact(&mut f, &mut bytes))
-        .at(random)?;
+    crate::osfs::random_bytes(&mut bytes).at(Path::new("random"))?;
     let seed = u32::from_le_bytes(bytes);
     for attempt in 0..64u32 {
         let id = format!("{:08x}", seed.wrapping_add(attempt));

@@ -12,7 +12,6 @@
 
 use std::ffi::OsString;
 use std::fs::File;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use crate::error::{Error, IoContext, Result};
@@ -98,24 +97,7 @@ pub(crate) fn prepare_locked(
 /// Takes `file`'s lock, which goes with the file or its process (flock):
 /// waiting for it when `wait`, otherwise `false` when another holds it.
 pub(crate) fn flock(file: &File, wait: bool) -> std::io::Result<bool> {
-    use std::os::fd::AsRawFd;
-    let how = if wait {
-        libc::LOCK_EX
-    } else {
-        libc::LOCK_EX | libc::LOCK_NB
-    };
-    loop {
-        // SAFETY: `file` is an open descriptor we own for the call.
-        if unsafe { libc::flock(file.as_raw_fd(), how) } == 0 {
-            return Ok(true);
-        }
-        let e = std::io::Error::last_os_error();
-        match e.raw_os_error() {
-            Some(libc::EINTR) => continue,
-            Some(libc::EWOULDBLOCK) if !wait => return Ok(false),
-            _ => return Err(e),
-        }
-    }
+    fsops::lock_file(file, wait)
 }
 
 /// Whether making the caches under `tmp` copies some of the person's:
@@ -149,7 +131,7 @@ pub(crate) fn prepare(tmp: &Path, sources: &Sources) -> Result<Vec<(String, OsSt
         for file in CARGO_SETTINGS {
             let from = sources.cargo_home.join(file);
             if from.is_file() {
-                let mode = std::fs::metadata(&from).at(&from)?.permissions().mode() & 0o777;
+                let mode = crate::osfs::mode_of(&std::fs::metadata(&from).at(&from)?) & 0o777;
                 let bytes = std::fs::read(&from).at(&from)?;
                 fsops::put_at(staging, file, &bytes, mode, &cargo.join(file))?;
             }

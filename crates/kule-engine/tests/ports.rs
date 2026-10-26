@@ -1,5 +1,6 @@
 //! Servers working in a folder are found by their working directory and
 //! their listening port; others are not.
+#![cfg(unix)]
 
 use std::io::{BufRead, BufReader};
 use std::path::Path;

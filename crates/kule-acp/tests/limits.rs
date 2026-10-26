@@ -1,5 +1,6 @@
 //! Runs held to their limits, with a scripted agent in a real task and
 //! sandbox: time, idleness, memory, disk and the processor.
+#![cfg(unix)]
 
 use std::fs;
 use std::sync::{Arc, Mutex};
@@ -314,6 +315,7 @@ fn a_message_past_its_limit_ends_the_run() {
     assert!(ran.took < Duration::from_secs(30), "{:?}", ran.took);
 }
 
+#[cfg(unix)]
 /// What the agent prints for itself goes to its log, which Kule writes
 /// outside the task's limits; it keeps the end of it, not all of it, and
 /// says where it turned the log over and what it let go of.
@@ -391,10 +393,16 @@ impl Drop for Reaped {
             .ok()
             .and_then(|p| p.trim().parse::<i32>().ok())
         {
+            #[cfg(unix)]
+            #[cfg(unix)]
             // SAFETY: kill only sends a signal.
             unsafe {
                 libc::kill(pid, libc::SIGKILL);
             }
+            #[cfg(windows)]
+            kule_engine::resources::kill(&[pid]);
+            #[cfg(windows)]
+            kule_engine::resources::kill(&[pid]);
         }
     }
 }

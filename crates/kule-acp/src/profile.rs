@@ -431,13 +431,13 @@ fn extension_profiles(kule_home: &Path) -> Vec<(String, Profile)> {
 /// The program `command` starts, when it cannot be: a bare name on no
 /// directory of `path`, or a path to no executable file.
 pub fn missing_program(command: &[String], path: Option<&std::ffi::OsStr>) -> Option<String> {
-    use std::os::unix::fs::PermissionsExt;
     let program = command.first()?;
     let runs = |p: &Path| {
-        p.metadata()
-            .is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+        kule_engine::osfs::executable_candidates(p)
+            .iter()
+            .any(|c| kule_engine::osfs::executable_at(c))
     };
-    let found = if program.contains('/') {
+    let found = if program.contains(['/', '\\']) {
         runs(Path::new(program))
     } else {
         path.is_some_and(|path| std::env::split_paths(path).any(|dir| runs(&dir.join(program))))
@@ -973,16 +973,11 @@ impl Profile {
 
     /// Makes its home of its own, when it has one; where it is.
     fn make_own_home(&self, home: &Path) -> Result<Option<std::path::PathBuf>> {
-        use std::os::unix::fs::DirBuilderExt;
         if self.own_home.is_none() {
             return Ok(None);
         }
         let dir = home.join(self.own_home_path());
-        std::fs::DirBuilder::new()
-            .recursive(true)
-            .mode(0o700)
-            .create(&dir)
-            .map_err(|e| io(&dir, e))?;
+        kule_engine::osfs::create_private_dir_all(&dir).map_err(|e| io(&dir, e))?;
         Ok(Some(dir))
     }
 
@@ -1607,12 +1602,14 @@ pub struct Launch {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
     use std::ffi::OsStr;
 
     use tempfile::TempDir;
 
     use super::*;
 
+    #[cfg(unix)]
     #[test]
     fn a_program_not_on_path_is_missing() {
         use std::os::unix::fs::PermissionsExt;
@@ -1662,6 +1659,7 @@ mod tests {
         assert_eq!(agents.names(), ["claude-code", "gemini", "codex"]);
     }
 
+    #[cfg(unix)]
     #[test]
     fn an_agent_starts_with_its_profiles_environment() {
         let (home, ws) = (TempDir::new().unwrap(), TempDir::new().unwrap());
@@ -1684,6 +1682,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     /// Runs `cat` on `path` in the sandbox `profile` gets, for `person`.
     fn reads(task: &Task, person: &Path, profile: &Profile, path: &str) -> bool {
         let mut sandbox = Sandbox::for_task_with(
@@ -1705,6 +1704,7 @@ mod tests {
             .success()
     }
 
+    #[cfg(unix)]
     /// One agent's login and transcripts are none of another's business,
     /// and those it keeps outside Kule none of its own: in Kule it has a
     /// home of its own.
@@ -1798,6 +1798,7 @@ hosts = ["openrouter.ai"]
         assert!(Agents::load(home.path()).unwrap().get("opencode").is_none());
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_persons_profile_hides_from_the_others_and_they_from_it() {
         let home = kule_home(OPENCODE);
@@ -2282,6 +2283,7 @@ hosts = ["openrouter.ai"]
         });
     }
 
+    #[cfg(unix)]
     /// Runs `sh -c script` in the sandbox `profile` gets, for `person`.
     fn runs(task: &Task, person: &Path, profile: &Profile, script: &str) -> bool {
         let mut sandbox = Sandbox::for_task_with(
@@ -2302,6 +2304,7 @@ hosts = ["openrouter.ai"]
             .success()
     }
 
+    #[cfg(unix)]
     /// Nothing Kule's own agents write in Kule lands where they read it
     /// when the person starts them outside Kule: not their settings, not
     /// the shell snapshots Claude Code sources before a command, not their
@@ -2543,6 +2546,7 @@ hosts = ["openrouter.ai"]
         );
     }
 
+    #[cfg(unix)]
     /// An agent Kule installed starts from its package, which lies where
     /// the person's apps keep their data: read there, never written, while
     /// the rest of that place stays hidden.
@@ -2619,6 +2623,7 @@ own_home = "TOOL_HOME"
         assert!(!out.status.success(), "{out:?}");
     }
 
+    #[cfg(unix)]
     /// The person's settings and instructions reach an agent's home of its
     /// own at every start, exactly as they are, and read-only while it
     /// runs: what one task's agent wrote there, or left beside them, is gone
@@ -2707,6 +2712,7 @@ carry = { "settings.json" = ".tool/settings.json", "skills" = ".tool/skills", "T
         assert!(!reads(&task, &person, tool, ".tool/settings.json"));
     }
 
+    #[cfg(unix)]
     /// A sign-in kept in a file outside Kule is Kule's to read: the agent
     /// gets a placeholder, never the file. A profile reads such a file only
     /// in where it keeps its state outside Kule, and never one Kule hides.
@@ -2815,6 +2821,7 @@ carry = { "settings.json" = ".tool/settings.json", "skills" = ".tool/skills", "T
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn an_agent_with_a_home_of_its_own_writes_there_and_nobody_else_reads_it() {
         let (tasks, ws, person) = (

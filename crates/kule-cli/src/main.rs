@@ -1,5 +1,21 @@
 mod paint;
+#[cfg(unix)]
 mod relay;
+
+/// `kule shell` on Windows: the terminal inside the sandbox comes with a
+/// later release; until then it is refused, never opened outside.
+#[cfg(windows)]
+mod relay {
+    pub fn run(
+        _home: &std::path::Path,
+        _task: &str,
+        _shell: &str,
+    ) -> anyhow::Result<(Option<i32>, kule_daemon::shell::ShellEnd)> {
+        anyhow::bail!(
+            "kule shell is not available on Windows yet: the shell inside the task's sandbox comes with a later release"
+        )
+    }
+}
 mod scopes;
 
 use std::collections::HashMap;
@@ -593,9 +609,7 @@ fn run() -> Result<ExitCode> {
     let cli = Cli::parse();
     let home = match cli.home {
         Some(home) => home,
-        None => std::env::var_os("HOME")
-            .map(|h| PathBuf::from(h).join(".kule"))
-            .ok_or_else(|| anyhow!("HOME is not set; pass --home or KULE_HOME"))?,
+        None => kule_daemon::default_home().map_err(|e| anyhow!(e))?,
     };
     if let Some(note) = kule_daemon::check_home(&home).map_err(|e| anyhow!(e))? {
         eprintln!("kule: {note}");
@@ -647,10 +661,9 @@ fn run() -> Result<ExitCode> {
             ..
         } => {
             let task = Task::open(&home, &task)?;
-            let shell = std::env::var("SHELL")
-                .ok()
-                .filter(|s| Path::new(s).is_absolute())
-                .unwrap_or_else(|| "/bin/sh".to_owned());
+            let shell = kule_engine::osfs::default_shell()
+                .to_string_lossy()
+                .into_owned();
             eprintln!(
                 "kule: in task {}'s copy, in its sandbox; exit to come back",
                 task.id()
@@ -713,7 +726,7 @@ fn run() -> Result<ExitCode> {
                     }
                 }
             }
-            let shell = std::env::var_os("SHELL").unwrap_or_else(|| "/bin/sh".into());
+            let shell = kule_engine::osfs::default_shell();
             eprintln!(
                 "kule: in task {}'s copy, outside the sandbox; exit to come back",
                 task.id()
@@ -796,8 +809,8 @@ fn run() -> Result<ExitCode> {
                     eprintln!("kule: {}", kule_engine::MEASURING_CACHES);
                 }
                 let mut sandbox = Sandbox::for_task(&task)?;
-                if let Some(person) = std::env::var_os("HOME") {
-                    let person = Path::new(&person);
+                if let Some(person) = kule_engine::osfs::person_home() {
+                    let person = person.as_path();
                     kule_acp::Agents::load(&home)?.hide_agents(&mut sandbox, person)?;
                     // What the command writes in the home is caught for
                     // review (`kule home`), not refused.
@@ -988,7 +1001,7 @@ fn run() -> Result<ExitCode> {
             let limit = reserved.as_ref().map(|r| r.limit.clone());
             // MCP servers the person approved from extensions, as the app's
             // runs get them; what cannot be read starts no server, and says so.
-            let person = std::env::var_os("HOME").map(PathBuf::from);
+            let person = kule_engine::osfs::person_home();
             let mcp = kule_daemon::extensions::mcp_for_runs(&home, person.as_deref())
                 .unwrap_or_else(|e| {
                     eprintln!(
@@ -2427,9 +2440,7 @@ fn rules_cmd(home: &Path, action: RulesCmd) -> Result<()> {
 
 /// The person's home directory, where Kule hides their own folders.
 fn person_home() -> Result<PathBuf> {
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .ok_or_else(|| anyhow!("HOME is not set"))
+    kule_engine::osfs::person_home().ok_or_else(|| anyhow!("the home folder is not set (HOME)"))
 }
 
 fn reveal_cmd(home: &Path, action: RevealCmd) -> Result<()> {
@@ -2574,8 +2585,10 @@ fn read_secret(name: &str) -> Result<String> {
 }
 
 /// The terminal's echo, turned off until dropped.
+#[cfg(unix)]
 struct Echo(Option<libc::termios>);
 
+#[cfg(unix)]
 impl Echo {
     fn off() -> Echo {
         // SAFETY: tcgetattr/tcsetattr on stdin with a zeroed struct they fill.
@@ -2594,12 +2607,59 @@ impl Echo {
     }
 }
 
+#[cfg(unix)]
 impl Drop for Echo {
     fn drop(&mut self) {
         if let Some(saved) = &self.0 {
             // SAFETY: restores what tcgetattr returned.
             unsafe {
                 libc::tcsetattr(0, libc::TCSANOW, saved);
+            }
+        }
+    }
+}
+
+/// The console's echo, turned off until dropped (Windows).
+#[cfg(windows)]
+struct Echo(
+    Option<(
+        windows::Win32::Foundation::HANDLE,
+        windows::Win32::System::Console::CONSOLE_MODE,
+    )>,
+);
+
+#[cfg(windows)]
+impl Echo {
+    fn off() -> Echo {
+        use windows::Win32::System::Console::{
+            CONSOLE_MODE, ENABLE_ECHO_INPUT, GetConsoleMode, GetStdHandle, STD_INPUT_HANDLE,
+            SetConsoleMode,
+        };
+        // SAFETY: the standard input handle is the process's own; the mode
+        // read is what is put back.
+        unsafe {
+            let Ok(input) = GetStdHandle(STD_INPUT_HANDLE) else {
+                return Echo(None);
+            };
+            let mut mode = CONSOLE_MODE::default();
+            if GetConsoleMode(input, &mut mode).is_err() {
+                return Echo(None);
+            }
+            if SetConsoleMode(input, mode & !ENABLE_ECHO_INPUT).is_err() {
+                return Echo(None);
+            }
+            Echo(Some((input, mode)))
+        }
+    }
+}
+
+#[cfg(windows)]
+impl Drop for Echo {
+    fn drop(&mut self) {
+        if let Some((input, mode)) = self.0 {
+            // SAFETY: puts back the mode read in `off`.
+            unsafe {
+                let _ = windows::Win32::System::Console::SetConsoleMode(input, mode);
             }
         }
     }

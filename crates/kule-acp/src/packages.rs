@@ -246,6 +246,7 @@ mod tests {
         text.split_whitespace().map(str::to_owned).collect()
     }
 
+    #[cfg(unix)]
     /// A package of its own, packed as the registry would serve it, with an
     /// install script that leaves a mark if it ever runs.
     fn packed(dir: &Path, mark: &Path) -> PathBuf {
@@ -277,6 +278,7 @@ mod tests {
         dir.join("kule-fake-agent-1.0.0.tgz")
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_package_is_installed_once_and_its_scripts_never_run() {
         let dir = tempfile::TempDir::new().unwrap();

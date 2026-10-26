@@ -10,10 +10,9 @@
 
 use std::collections::HashMap;
 use std::ffi::OsString;
-use std::fs::{File, OpenOptions};
+use std::fs::File;
 use std::io::{BufRead, BufReader, ErrorKind, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -142,12 +141,7 @@ impl Proxy {
         let addr = Path::new("127.0.0.1:0");
         let listener = lonca_net::bind("127.0.0.1:0").at(addr)?;
         let path = log_path(task);
-        let log = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .mode(0o600)
-            .open(&path)
-            .at(&path)?;
+        let log = crate::osfs::append_private(&path).at(&path)?;
         let mut vault = task.vault()?;
         vault.with_keys(keys)?;
         let mut env: Vec<(String, OsString)> = vault

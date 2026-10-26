@@ -372,16 +372,8 @@ pub async fn run_pictured(
     });
     let mcp_servers: Vec<_> = mcp.iter().map(McpCommand::to_acp).collect();
     let log = task.agent_log();
-    let log = {
-        use std::os::unix::fs::OpenOptionsExt;
-        // For its owner alone: what the agent says may hold anything.
-        std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .mode(0o600)
-            .open(&log)
-            .map_err(error)?
-    };
+    // For its owner alone: what the agent says may hold anything.
+    let log = kule_engine::osfs::append_private(&log).map_err(error)?;
     // Through a pipe, not the file itself: the log sits in Kule's home,
     // which the sandbox hides, and the agent must not hold it open.
     let mut child = async_process::Command::from(agent)
@@ -760,11 +752,16 @@ struct Group(i32, kule_engine::Sandbox, UnboundedSender<Event>);
 impl Drop for Group {
     fn drop(&mut self) {
         if self.0 > 0 {
+            #[cfg(unix)]
             // SAFETY: kill only sends a signal; a negative pid names the
             // group the agent leads.
             unsafe {
                 libc::kill(-self.0, libc::SIGKILL);
             }
+            // Windows has no process groups to signal: the agent and all it
+            // started, as far as they can be found.
+            #[cfg(windows)]
+            kule_engine::resources::kill(&kule_engine::resources::tree(&[self.0]));
         }
         // What it cannot end now, a commit ends or refuses over.
         let text = match self.1.end_strays_after(self.0) {
@@ -843,15 +840,10 @@ impl TurnedLog {
     }
 
     fn turn(&mut self) -> std::io::Result<()> {
-        use std::os::unix::fs::OpenOptionsExt;
         let older = self.path.with_file_name("agent.log.1");
         let let_go = std::fs::symlink_metadata(&older).is_ok();
         std::fs::rename(&self.path, &older)?;
-        let mut file = std::fs::OpenOptions::new()
-            .create_new(true)
-            .append(true)
-            .mode(0o600)
-            .open(&self.path)?;
+        let mut file = kule_engine::osfs::create_private(&self.path)?;
         let marker = format!(
             "--- Kule turned this log over here, at {} MiB: what came before is in agent.log.1{} ---\n",
             MAX_LOG >> 20,

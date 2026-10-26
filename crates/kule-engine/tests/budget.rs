@@ -240,6 +240,7 @@ fn runs_started_together_share_what_is_left() {
     assert_eq!(spent_today(home.path()).unwrap().held, [usd(10.0)]);
 }
 
+#[cfg(unix)]
 /// A run whose share cannot be set aside does not start.
 #[test]
 fn a_reservation_that_cannot_be_written_starts_no_run() {
@@ -247,6 +248,7 @@ fn a_reservation_that_cannot_be_written_starts_no_run() {
     let task = Task::create(home.path(), ws.path()).unwrap();
     task.set_budget(Some(usd(2.0))).unwrap();
     // Read, but not written to.
+    #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
     let path = home
         .path()

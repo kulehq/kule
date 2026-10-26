@@ -62,7 +62,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     # A test that hangs ends the run here, not after GitHub's six hours.
     timeout-minutes: 60
@@ -86,30 +86,39 @@ jobs:
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo test --workspace --locked
+      # The release gate's scripts are bash and run commands in a sandbox:
+      # on Windows the sandbox arrives with a later work package, and the
+      # gate runs on the Windows test machine until then.
       # Go for betterleaks below: the macOS runner image no longer has it.
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        if: runner.os != 'Windows'
         with:
           go-version: "1.26.10"
           cache: false
       - name: Canary secrets stay out of a task (scripts/release-gate.sh)
+        if: runner.os != 'Windows'
         run: |
           go install github.com/betterleaks/betterleaks@v1.9.0
           PATH="$(go env GOPATH)/bin:$PATH"
           cargo build --locked -p kule
           scripts/release-gate.sh canary
       - name: What a command in a task can reach, under sandbox-probe (scripts/release-gate.sh)
+        if: runner.os != 'Windows'
         run: |
           go install github.com/controlplaneio/sandbox-probe/v6@v6.19.1
           PATH="$(go env GOPATH)/bin:$PATH"
           scripts/release-gate.sh probe
       # Node for commander below, which needs 22.12 or later.
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        if: runner.os != 'Windows'
         with:
           node-version: 24
           package-manager-cache: false
       - name: The window's Markdown renderer (node --test, no packages)
+        if: runner.os != 'Windows'
         run: node --test crates/kule-desktop/ui/tests/*.test.js
       - name: Real projects install, build and test in a task (scripts/release-gate.sh)
+        if: runner.os != 'Windows'
         run: scripts/release-gate.sh project
       - name: Weaker isolation runs only once accepted (user namespaces refused)
         if: runner.os == 'Linux'

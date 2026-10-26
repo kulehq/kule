@@ -50,7 +50,6 @@ fn places() -> Vec<PathBuf> {
 /// Where editor `id` is in `places`: an app folder on macOS, an executable
 /// file on Linux.
 fn find_in(id: &str, places: &[PathBuf]) -> Option<PathBuf> {
-    use std::os::unix::fs::PermissionsExt;
     names(id).iter().find_map(|name| {
         places.iter().map(|p| p.join(name)).find(|at| {
             let Ok(meta) = std::fs::metadata(at) else {
@@ -59,7 +58,7 @@ fn find_in(id: &str, places: &[PathBuf]) -> Option<PathBuf> {
             if cfg!(target_os = "macos") {
                 meta.is_dir()
             } else {
-                meta.is_file() && meta.permissions().mode() & 0o111 != 0
+                kule_daemon::osfs::executable_at(at)
             }
         })
     })
@@ -89,7 +88,7 @@ pub fn open_in(id: &str, dir: &Path) -> Result<()> {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 

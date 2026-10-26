@@ -11,8 +11,20 @@ mod extensions;
 mod fonts;
 mod menu;
 mod opener;
+#[cfg(unix)]
 mod pty;
+#[cfg(windows)]
+#[path = "pty_windows.rs"]
+mod pty;
+#[cfg(unix)]
 mod shell_path;
+#[cfg(windows)]
+mod shell_path {
+    /// Windows has no login shell whose `PATH` the app would miss.
+    pub fn for_app() -> Option<std::ffi::OsString> {
+        None
+    }
+}
 mod terminal;
 
 use std::collections::HashMap;
@@ -69,15 +81,9 @@ impl Kule {
 /// Starts this program as the daemon for `home`, detached from the app so it
 /// outlives it; its output goes to `kuled.log` in `home`.
 fn spawn_self(home: &Path) -> std::io::Result<()> {
-    use std::os::unix::fs::OpenOptionsExt;
-    use std::os::unix::process::CommandExt;
     std::fs::create_dir_all(home)?;
     // For its owner alone, as everything in Kule's home.
-    let log = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .mode(0o600)
-        .open(home.join("kuled.log"))?;
+    let log = kule_daemon::osfs::append_private(&home.join("kuled.log"))?;
     let mut command = std::process::Command::new(std::env::current_exe()?);
     command
         .arg("daemon")
@@ -87,12 +93,28 @@ fn spawn_self(home: &Path) -> std::io::Result<()> {
         .stderr(log);
     // A session of its own: no terminal to be reached through, and no signal
     // meant for the app's.
-    // SAFETY: setsid is async-signal-safe and touches only the child.
-    unsafe {
-        command.pre_exec(|| {
-            libc::setsid();
-            Ok(())
-        });
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        // SAFETY: setsid is async-signal-safe and touches only the child.
+        unsafe {
+            command.pre_exec(|| {
+                libc::setsid();
+                Ok(())
+            });
+        }
+    }
+    // On Windows: no console of the app's, its own process group, and
+    // outside any job that would end it with the app.
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const DETACHED_PROCESS: u32 = 0x8;
+        const CREATE_NEW_PROCESS_GROUP: u32 = 0x200;
+        const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x0100_0000;
+        command.creation_flags(
+            DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_BREAKAWAY_FROM_JOB,
+        );
     }
     command.spawn().map(|_| ())
 }

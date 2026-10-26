@@ -102,7 +102,7 @@ pub fn start(files: Arc<dyn Files>) -> io::Result<Server> {
 
 fn random_key() -> io::Result<String> {
     let mut bytes = [0u8; 16];
-    std::fs::File::open("/dev/urandom")?.read_exact(&mut bytes)?;
+    kule_daemon::osfs::random_bytes(&mut bytes)?;
     Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
 }
 
