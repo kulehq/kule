@@ -174,3 +174,51 @@ fn the_proxy_ends_with_the_process_that_started_it() {
         .unwrap();
     wait_until("the proxy's end", || !kule_engine::osfs::alive(pid));
 }
+
+/// A profile that is not there yet is made once, however many processes
+/// ask for it at the same moment: the first runs of a fresh install, from
+/// the daemon and the command line at once, say. Each asker gets a
+/// container that runs.
+#[test]
+fn a_profile_is_made_once_however_many_ask_at_once() {
+    const NAME: &str = "Kule.ProxyTest";
+    if std::env::var_os("KULE_TEST_ASK_AT_ONCE").is_some() {
+        let args = [OsStr::new("--probe"), OsStr::new("C:\\Windows\\win.ini")];
+        match appcontainer::run_in(NAME, Path::new(PROXY), &args, Duration::from_secs(30)) {
+            Ok((code, errors)) => println!("asked: code={code:?} {errors}"),
+            Err(e) => println!("asked: error {e}"),
+        }
+        std::process::exit(0);
+    }
+    appcontainer::remove_profile(NAME).unwrap();
+    let askers: Vec<_> = (0..6)
+        .map(|_| {
+            Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "a_profile_is_made_once_however_many_ask_at_once",
+                    "--nocapture",
+                ])
+                .env("KULE_TEST_ASK_AT_ONCE", "1")
+                .stdout(std::process::Stdio::piped())
+                .spawn()
+                .unwrap()
+        })
+        .collect();
+    let said: Vec<String> = askers
+        .into_iter()
+        .map(|asker| {
+            let out = asker.wait_with_output().unwrap();
+            String::from_utf8_lossy(&out.stdout)
+                .lines()
+                .find(|l| l.starts_with("asked:"))
+                .unwrap_or("asked: nothing")
+                .to_owned()
+        })
+        .collect();
+    let _ = appcontainer::remove_profile(NAME);
+    assert!(
+        said.iter().all(|s| s.starts_with("asked: code=Some(0)")),
+        "{said:#?}"
+    );
+}

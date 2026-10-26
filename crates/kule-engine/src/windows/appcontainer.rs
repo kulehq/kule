@@ -54,7 +54,7 @@ use windows::Win32::System::Threading::{
 };
 use windows::core::{PCWSTR, PWSTR};
 
-use crate::osfs::win::io_error;
+use crate::osfs::win::{io_error, sid_string};
 use crate::proxy_pipe::{ChildProcess, Launched};
 
 /// An error of one Windows call, named: which call failed is what a
@@ -73,6 +73,49 @@ pub const PROFILE: &str = "Kule.Proxy";
 /// The capabilities the proxy gets: to connect to the internet, and to
 /// the local network for what a policy lets a command reach by name.
 const CAPABILITIES: &[&str] = &["S-1-15-3-1", "S-1-15-3-3"];
+
+/// How long making a profile may take, tries and its folder included,
+/// and how long between tries.
+const PROFILE_WAIT: Duration = Duration::from_secs(20);
+const PROFILE_RETRY: Duration = Duration::from_millis(100);
+
+/// A lock across this user's processes around making one profile: a named
+/// mutex of the session, held until dropped.
+struct MakerLock(OwnedHandle);
+
+impl MakerLock {
+    fn take(name: &str) -> io::Result<MakerLock> {
+        use windows::Win32::Foundation::WAIT_ABANDONED;
+        use windows::Win32::System::Threading::CreateMutexW;
+        let mutex_name = wide(OsStr::new(&format!("Local\\{name}.making")));
+        // SAFETY: the name is NUL-terminated; the handle is owned below and
+        // the mutex released in Drop.
+        unsafe {
+            let mutex = CreateMutexW(None, false, PCWSTR(mutex_name.as_ptr()))
+                .map_err(at("CreateMutexW"))?;
+            let mutex = OwnedHandle::from_raw_handle(mutex.0);
+            let ms = u32::try_from(PROFILE_WAIT.as_millis()).unwrap_or(u32::MAX);
+            match WaitForSingleObject(handle(&mutex), ms) {
+                // Abandoned by a process that died holding it: ours now.
+                w if w == WAIT_OBJECT_0 || w == WAIT_ABANDONED => Ok(MakerLock(mutex)),
+                _ => Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    format!("another process has been making the profile {name} for too long"),
+                )),
+            }
+        }
+    }
+}
+
+impl Drop for MakerLock {
+    fn drop(&mut self) {
+        use windows::Win32::System::Threading::ReleaseMutex;
+        // SAFETY: held since take.
+        unsafe {
+            let _ = ReleaseMutex(handle(&self.0));
+        }
+    }
+}
 
 /// Where the `kule-proxy` program is: beside this program, and nowhere
 /// else, except that a test program cargo put in a `deps` folder looks in
@@ -107,7 +150,12 @@ pub(crate) fn launch_proxy() -> io::Result<Launched> {
 /// Starts `exe` with `args` in the proxy's container, with a pipe each
 /// way and one for its errors.
 pub(crate) fn launch(exe: &Path, args: &[&OsStr]) -> io::Result<Launched> {
-    let profile = Profile::ensure()?;
+    launch_in(PROFILE, exe, args)
+}
+
+/// [`launch`] in the container of the profile `name`.
+fn launch_in(name: &str, exe: &Path, args: &[&OsStr]) -> io::Result<Launched> {
+    let profile = Profile::ensure(name)?;
     let (stdin_read, stdin_write) = pipe()?;
     let (stdout_read, stdout_write) = pipe()?;
     let (stderr_read, stderr_write) = pipe()?;
@@ -155,13 +203,25 @@ pub fn start(exe: &Path, args: &[&OsStr]) -> io::Result<Running> {
 /// and what it printed as errors. For the tests that show what the
 /// container can and cannot reach.
 pub fn run(exe: &Path, args: &[&OsStr], timeout: Duration) -> io::Result<(Option<u32>, String)> {
+    run_in(PROFILE, exe, args, timeout)
+}
+
+/// [`run`] in the container of the profile `name`, made when it is not
+/// there: for the tests of making one.
+#[doc(hidden)]
+pub fn run_in(
+    name: &str,
+    exe: &Path,
+    args: &[&OsStr],
+    timeout: Duration,
+) -> io::Result<(Option<u32>, String)> {
     use std::io::Read;
     let Launched {
         stdin,
         stdout,
         stderr,
         mut process,
-    } = launch(exe, args)?;
+    } = launch_in(name, exe, args)?;
     drop(stdin);
     let pid = process.pid();
     let drain = |mut from: Box<dyn Read + Send>| {
@@ -183,37 +243,109 @@ pub fn run(exe: &Path, args: &[&OsStr], timeout: Duration) -> io::Result<(Option
     Ok((code, errors))
 }
 
+/// Removes the profile `name` of this user, for the tests of making one;
+/// one that is not there is nothing to remove.
+#[doc(hidden)]
+pub fn remove_profile(name: &str) -> io::Result<()> {
+    use windows::Win32::Foundation::ERROR_FILE_NOT_FOUND;
+    use windows::Win32::Security::Isolation::DeleteAppContainerProfile;
+    let wide_name = wide(OsStr::new(name));
+    // SAFETY: the string is NUL-terminated and outlives the call.
+    match unsafe { DeleteAppContainerProfile(PCWSTR(wide_name.as_ptr())) } {
+        Ok(()) => Ok(()),
+        Err(e) if e.code() == ERROR_FILE_NOT_FOUND.to_hresult() => Ok(()),
+        Err(e) => Err(at("DeleteAppContainerProfile")(e)),
+    }
+}
+
 /// The proxy's profile: its SID, owned.
 struct Profile {
     sid: PSID,
 }
 
 impl Profile {
-    /// The profile, made for this user when it is not there yet. One
-    /// thread at a time: two makers at once trip over each other.
-    fn ensure() -> io::Result<Profile> {
+    /// The profile `name`, made for this user when it is not there yet.
+    /// One maker at a time, across Kule's processes: two making the same
+    /// profile at once (the daemon and a command of the first run, say)
+    /// trip over each other, one told the environment is wrong, the other
+    /// given a profile no process can start in. A maker that still meets
+    /// another (an older Kule, say) tries again, and nothing is used before
+    /// its folder is there.
+    fn ensure(name: &str) -> io::Result<Profile> {
         static MAKING: std::sync::Mutex<()> = std::sync::Mutex::new(());
         let _making = MAKING.lock().unwrap_or_else(|e| e.into_inner());
-        let name = wide(OsStr::new(PROFILE));
+        let _across = MakerLock::take(name)?;
+        let wide_name = wide(OsStr::new(name));
         let shown = wide(OsStr::new("Kule proxy"));
-        // SAFETY: the strings are NUL-terminated and outlive the calls; the
-        // SID returned is freed in Drop.
-        let sid = unsafe {
-            match CreateAppContainerProfile(
-                PCWSTR(name.as_ptr()),
-                PCWSTR(shown.as_ptr()),
-                PCWSTR(shown.as_ptr()),
-                None,
-            ) {
-                Ok(sid) => sid,
-                Err(e) if e.code() == ERROR_ALREADY_EXISTS.to_hresult() => {
-                    DeriveAppContainerSidFromAppContainerName(PCWSTR(name.as_ptr()))
-                        .map_err(at("DeriveAppContainerSidFromAppContainerName"))?
+        let deadline = std::time::Instant::now() + PROFILE_WAIT;
+        let sid = loop {
+            // SAFETY: the strings are NUL-terminated and outlive the calls;
+            // the SID returned is freed in Drop.
+            let made = unsafe {
+                match CreateAppContainerProfile(
+                    PCWSTR(wide_name.as_ptr()),
+                    PCWSTR(shown.as_ptr()),
+                    PCWSTR(shown.as_ptr()),
+                    None,
+                ) {
+                    Ok(sid) => Ok(sid),
+                    Err(e) if e.code() == ERROR_ALREADY_EXISTS.to_hresult() => {
+                        DeriveAppContainerSidFromAppContainerName(PCWSTR(wide_name.as_ptr()))
+                            .map_err(at("DeriveAppContainerSidFromAppContainerName"))
+                    }
+                    Err(e) => Err(at("CreateAppContainerProfile")(e)),
                 }
-                Err(e) => return Err(at("CreateAppContainerProfile")(e)),
+            };
+            match made {
+                Ok(sid) => break sid,
+                Err(e) if std::time::Instant::now() < deadline => {
+                    let _ = e;
+                    std::thread::sleep(PROFILE_RETRY);
+                }
+                Err(e) => return Err(e),
             }
         };
-        Ok(Profile { sid })
+        let profile = Profile { sid };
+        profile.wait_for_folder(deadline)?;
+        Ok(profile)
+    }
+
+    /// Waits until the profile's folder is there, which is when a process
+    /// can be started in it: a profile another maker has half made has no
+    /// folder yet, or none Windows can name. One whose folder never comes
+    /// is told of.
+    fn wait_for_folder(&self, deadline: std::time::Instant) -> io::Result<()> {
+        loop {
+            let missing = match self.folder() {
+                Ok(folder) if folder.is_dir() => return Ok(()),
+                Ok(folder) => io::Error::new(
+                    io::ErrorKind::NotFound,
+                    format!("the container's folder {} is not there", folder.display()),
+                ),
+                Err(e) => e,
+            };
+            if std::time::Instant::now() >= deadline {
+                return Err(missing);
+            }
+            std::thread::sleep(PROFILE_RETRY);
+        }
+    }
+
+    /// The folder Windows keeps for the profile.
+    fn folder(&self) -> io::Result<PathBuf> {
+        use windows::Win32::Security::Isolation::GetAppContainerFolderPath;
+        use windows::Win32::System::Com::CoTaskMemFree;
+        // SAFETY: a SID the profile calls returned; the path string is
+        // freed here once copied.
+        unsafe {
+            let text = sid_string(self.sid)?;
+            let wide_text = wide(OsStr::new(&text));
+            let path = GetAppContainerFolderPath(PCWSTR(wide_text.as_ptr()))
+                .map_err(at("GetAppContainerFolderPath"))?;
+            let folder = PathBuf::from(path.to_string().unwrap_or_default());
+            CoTaskMemFree(Some(path.0.cast()));
+            Ok(folder)
+        }
     }
 
     /// Starts `exe` with `args` in the container, `stdio` as its standard
