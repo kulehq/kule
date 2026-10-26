@@ -1,5 +1,62 @@
 # Changes
 
+## 0.2.0-preview.15
+
+Kule runs on Windows 11: the app, the `kule` command and a per-user
+installer, for x64 and ARM64. A task's commands and agents run in a process
+container of their own, its proxy in an app container of its own, and the
+terminal opens inside the container. A testing guide and issue forms ask
+for reports from your own computer.
+
+### Windows
+
+- Kule builds and runs on Windows 11 24H2 with update 26100.9278 or later.
+  The daemon listens on a named pipe only the same user can open. The
+  task's copy, commit, rollback and undo work on NTFS, and on ReFS and a
+  Dev Drive, where the copy is a block clone. Kule's home is
+  `%USERPROFILE%\.kule` (`~/.kule`, as on macOS and Linux), its access list
+  read by SID; text files stay LF on every platform.
+- A task's commands and agents run in a process container (Microsoft's
+  `mxc-sdk`, pinned): they write the task's copy and temporary folder, read
+  your tools and nothing else of yours, and reach the network only as the
+  task's policy says. Where the container is not available (an older
+  Windows, Windows Server, a service's or a remote shell's session),
+  sandboxed commands are refused with the reason, in the terminal and
+  under Settings → Policy; there is no weaker mode to accept.
+- A task's proxy runs as a process of its own, `kule-proxy.exe`, in an app
+  container that holds the task's secrets and reaches the network and
+  nothing of yours; a connection past the proxy fails at once. Kule writes
+  no firewall rule.
+- `kule shell` and the app's terminals open the shell on a pseudo console
+  inside the task's container, through `kule-pty-helper.exe`, kept beside
+  Kule's programs. Kule refuses a terminal whose helper lies in a folder a
+  command could write to, in one Kule hides from commands, or in one that
+  holds your profile.
+- A task's commands get a home of their own, empty, in the task's folders
+  (`USERPROFILE`, `APPDATA`, `TEMP`, `TMP`); nothing of your profile is read
+  or layered there. What is beside the way to a folder a command may read
+  is not listed. `kule exec --reveal PATH` grants a read.
+- A command is refused when a folder it may read holds a folder Kule hides
+  that itself holds a grant, such as Kule's home above the task's copy: a
+  hidden folder on the way to a grant is not denied, so that grant would
+  have opened it whole. Kule's programs installed inside Kule's home bring
+  this about, and the refusal says so.
+- The release carries `Kule_<version>_<arch>-setup.exe`, which installs for
+  you alone under `%LOCALAPPDATA%\Kule` and asks for no administrator, and
+  `kule-<version>-windows-<arch>.zip`, the command with its two programs,
+  for x64 and ARM64, unsigned, each with its checksum and attestation.
+- CI requires the Windows sandbox tests on a Windows 11 runner for both
+  targets, and a Windows release is gated on a real Windows 11 machine as a
+  standard user. `docs/windows-measurements.md` records what was measured
+  and what decided the design.
+
+### Testing
+
+- A testing guide, *Help test Kule*, with six scenarios, and issue forms
+  for a bug, a test report and an idea; security problems go to a private
+  advisory. The forms' single-choice fields start empty, so a report says
+  only what its writer chose.
+
 ## 0.2.0-preview.14
 
 On macOS, what a task's sandbox refused is read as the system log streams

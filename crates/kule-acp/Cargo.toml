@@ -17,8 +17,8 @@ async-process = "2.5.0"
 blocking = "1.7.0"
 blake3.workspace = true
 futures = "0.3.34"
-kule-engine = { version = "0.2.0-preview.14", path = "../kule-engine" }
-kule-ext = { version = "0.2.0-preview.14", path = "../kule-ext" }
+kule-engine = { version = "0.2.0-preview.15", path = "../kule-engine" }
+kule-ext = { version = "0.2.0-preview.15", path = "../kule-ext" }
 serde.workspace = true
 serde_json.workspace = true
 toml = "1.1.8"
