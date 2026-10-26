@@ -1,10 +1,7 @@
-# The forms shown at github.com/kulehq/kule/issues/new/choose. A security
-# problem goes to the private advisory form, never to an issue.
+# The forms shown at github.com/kulehq/kule/issues/new/choose. GitHub adds
+# its own link to the private advisory form, where a security problem goes.
 blank_issues_enabled: false
 contact_links:
-  - name: A security problem
-    url: https://github.com/kulehq/kule/security/advisories/new
-    about: Report it privately, as SECURITY.md says. Never in a public issue.
   - name: A question
     url: https://github.com/kulehq/kule/discussions/categories/q-a
     about: Ask in Discussions.
