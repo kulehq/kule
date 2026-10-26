@@ -39,6 +39,13 @@ ulaşabilir ve Kule onu o zaman durdurur. `kule isolation`, her görevin
 sınırları sunuculara izin verdiğinde bunu gösterir; sunuculara kendi başına
 izin veren bir görev ya da gruba bu, çalıştığında söylenir.
 
+Windows'ta kabul edilecek bir şey yoktur: süreç konteyneri bir komuta
+yalıtımının tamamını verir ya da hiçbirini. Kullanılamadığı yerde
+(26100.9278 güncellemeli Windows 11 24H2'den eski bir Windows, ya da bir
+hizmetin veya uzak bir kabuğun oturumu) `kule isolation`, sandbox'lı
+komutların bu bilgisayarda neden reddedildiğini söyler; `--accept-weaker
+on` hiçbir şeyi değiştirmez.
+
 ## Seçenekler {#options}
 
 | Seçenek | Değer | Varsayılan | Anlamı |

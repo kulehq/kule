@@ -1,7 +1,7 @@
 ---
 title: kule run
 sidebar_label: kule run
-description: Bir yapay zekâ ajanına bir prompt verir; ajan görevin kopyasında, sandbox içinde çalışır ve her araç çağrısı bir adım olur.
+description: Bir yapay zeka ajanına bir prompt verir; ajan görevin kopyasında, sandbox içinde çalışır ve her araç çağrısı bir adım olur.
 ---
 
 # kule run

@@ -84,8 +84,10 @@ pub fn check_home(home: &Path) -> Result<Option<String>> {
     )))
 }
 
-/// Kule's home: `KULE_HOME`, else `~/.kule` (Unix) or `%LOCALAPPDATA%\\Kule`
-/// (Windows).
+/// Kule's home: `KULE_HOME`, else `.kule` in the person's home (`~/.kule`;
+/// `%USERPROFILE%\.kule` on Windows). Not `%LOCALAPPDATA%\Kule`, where the
+/// Windows installer puts Kule's programs: a task's commands read the
+/// folder of the terminal's helper, and Kule's home they never read.
 pub fn default_home() -> Result<PathBuf> {
     if let Some(home) = std::env::var_os("KULE_HOME") {
         return Ok(PathBuf::from(home));
@@ -98,9 +100,9 @@ pub fn default_home() -> Result<PathBuf> {
     }
     #[cfg(windows)]
     {
-        std::env::var_os("LOCALAPPDATA")
-            .map(|h| PathBuf::from(h).join("Kule"))
-            .ok_or_else(|| "LOCALAPPDATA is not set; set KULE_HOME".to_owned())
+        std::env::var_os("USERPROFILE")
+            .map(|h| PathBuf::from(h).join(".kule"))
+            .ok_or_else(|| "USERPROFILE is not set; set KULE_HOME".to_owned())
     }
 }
 

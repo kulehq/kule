@@ -1,7 +1,7 @@
 ---
 title: Kule'yi test etmeye yardım edin
 sidebar_label: Test etmeye yardım edin
-description: Kule'yi macOS'ta ya da Linux'ta denemek için senaryolar, her birinde nelere bakılacağı ve bulduklarınızı gizli bilgi paylaşmadan nasıl bildireceğiniz.
+description: Kule'yi macOS, Linux ya da Windows'ta denemek için senaryolar, her birinde nelere bakılacağı ve bulduklarınızı gizli bilgi paylaşmadan nasıl bildireceğiniz.
 ---
 
 # Kule'yi test etmeye yardım edin
@@ -17,8 +17,11 @@ dakika sürer. Her birinin sonunda kendinize tek bir soru sorun:
 
 ## Başlamadan önce
 
-- **Platformlar:** macOS 13 ya da sonrası (Apple silicon ya da Intel) ve
-  Linux x86_64. Windows henüz teste hazır değil.
+- **Platformlar:** macOS 13 ya da sonrası (Apple silicon ya da Intel),
+  Linux x86_64 ve 26100.9278 ya da sonraki güncellemeyle Windows 11 24H2
+  (x64 ya da ARM64). Windows en yenisi: oradan gelen raporlar en çok işe
+  yarar; sandbox'ından ne bekleneceğini [Platformlar](platforms.md)
+  anlatır.
 - **En son önizlemeyi kullanın.** Düzeltmeler eski sürümlere taşınmaz;
   eski bir sürümde bulduğunuz bir sorun düzelmiş olabilir. Hangi sürümde
   olduğunuzu `kule --version` söyler.

@@ -23,8 +23,8 @@ It works on any folder: code, but also notes, documents, photos and data.
 · [CLI reference](https://kulehq.github.io/kule/docs/cli)
 
 > [!NOTE]
-> **Status: preview (`0.2.0-preview.14`).** macOS 13+ and Linux. Windows is
-> not supported yet. The latest preview release is
+> **Status: preview (`0.2.0-preview.14`).** macOS 13+, Linux and Windows 11
+> 24H2 (update 26100.9278 or later). The latest preview release is
 > [0.2.0-preview.14](https://github.com/kulehq/kule/releases/tag/v0.2.0-preview.14); or build it from source (below). Expect changes between previews; see [CHANGELOG.md](CHANGELOG.md).
 
 ## Why Kule
@@ -35,7 +35,7 @@ a boundary between the agent and everything you care about:
 | | What Kule does |
 | --- | --- |
 | **Your folder** | The agent works in a copy. Its changes reach the folder only through a commit, which keeps a checkpoint so `undo` puts the folder back. |
-| **Your computer** | Every command runs in the OS sandbox (Seatbelt on macOS, Landlock and namespaces on Linux). It can write only to the copy; `~/.ssh`, `~/.aws`, your Documents and the projects beside the folder are hidden. |
+| **Your computer** | Every command runs in the OS sandbox (Seatbelt on macOS, Landlock and namespaces on Linux, a process container on Windows). It can write only to the copy; `~/.ssh`, `~/.aws`, your Documents and the projects beside the folder are hidden. |
 | **What reaches the folder** | A [Cedar](https://www.cedarpolicy.com) policy judges the *effects* of the work, not the command text: source, docs and data pass, and so do kinds of file the project already tracks; other kinds, hidden files, manifests, lockfiles, CI files and mass deletes wait for you; git hooks are denied. |
 | **Your network** | Every connection goes through the task's proxy. Package registries pass, the agent reaches its own API, anything else waits for your answer. Every connection is logged. |
 | **Your secrets** | The agent sees a placeholder. The proxy puts your API key into requests to the hosts you named, and nowhere else. |
@@ -131,21 +131,25 @@ Every command takes `--home <DIR>` (or `KULE_HOME`, default `~/.kule`) and
   `target/release/`: `kule` (the CLI) and `kule-desktop` (the app).
 - **Preview releases:** the
   [releases page](https://github.com/kulehq/kule/releases) carries a
-  universal macOS `.dmg` and Linux `.deb`/`.rpm`, each with `SHA256SUMS`
-  and a build provenance attestation. The macOS app is signed ad hoc, not
-  notarized; the [install guide](https://kulehq.github.io/kule/docs/getting-started/install)
+  universal macOS `.dmg`, Linux `.deb`/`.rpm` and a Windows per-user
+  installer (x64 and ARM64), each with `SHA256SUMS` and a build provenance
+  attestation. The macOS app is signed ad hoc, not notarized, and the
+  Windows files carry no signature; the
+  [install guide](https://kulehq.github.io/kule/docs/getting-started/install)
   says how to check and open them.
 
 ## Platform support
 
-| | macOS 13+ | Linux (x86_64) | Windows |
+| | macOS 13+ | Linux (x86_64) | Windows 11 24H2 (x64, ARM64) |
 | --- | --- | --- | --- |
-| Sandbox | Seatbelt | Landlock + user namespaces | not yet |
-| Copy-on-write copies | APFS clones | Btrfs/XFS reflinks; full copy on ext4 | – |
-| Sandbox refusals listed | yes | no (the command still gets `EPERM`) | – |
+| Sandbox | Seatbelt | Landlock + user namespaces | Process container (`mxc-sdk`) |
+| Copy-on-write copies | APFS clones | Btrfs/XFS reflinks; full copy on ext4 | ReFS/Dev Drive block clones; full copy on NTFS |
+| Sandbox refusals listed | yes | no (the command still gets `EPERM`) | no (the command still gets an access error) |
 
 Linux needs unprivileged user namespaces for full isolation (Ubuntu 24.04
-restricts them by default). See
+restricts them by default). Windows needs update 26100.9278 or later and a
+desktop session; without them sandboxed commands are refused, with no
+weaker mode. See
 [Platforms](https://kulehq.github.io/kule/docs/platforms) and
 [Troubleshooting](https://kulehq.github.io/kule/docs/troubleshooting).
 

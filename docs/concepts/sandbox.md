@@ -13,10 +13,14 @@ inside the operating system's sandbox:
 
 - **macOS**: Seatbelt, the system's own sandbox.
 - **Linux**: Landlock, seccomp and namespaces.
+- **Windows 11**: a process container (Microsoft's `mxc-sdk`) around each
+  command, which reads nothing but what Kule grants. See
+  [Platforms](../platforms.md) for what it needs and what differs.
 
 If the sandbox cannot be set up, the command does **not** run. Kule never
 falls back to less isolation without telling you (see
-[Weaker isolation on Linux](#weaker-isolation-on-linux)).
+[Weaker isolation on Linux](#weaker-isolation-on-linux)); on Windows there
+is no weaker mode at all.
 
 ## Where a command may write
 

@@ -37,6 +37,12 @@ that moment could reach one, and Kule stops it then. `kule isolation` shows it w
 allow servers; a task or group that allows them on its own is told when it
 runs.
 
+On Windows there is nothing to accept: the process container gives a
+command all of its isolation or none. Where it is not available (a Windows
+before 11 24H2 with update 26100.9278, or a session that is a service's or
+a remote shell's), `kule isolation` says why sandboxed commands are refused
+on this computer, and `--accept-weaker on` changes nothing.
+
 ## Options
 
 | Option | Value | Default | Meaning |

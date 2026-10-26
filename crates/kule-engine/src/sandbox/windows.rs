@@ -525,7 +525,32 @@ impl Sandbox {
             .collect();
         // Hidden inside a grant is denied by name; hidden on the way to a
         // grant (Kule's home above the copy) is simply not granted, and a
-        // denial there would take the grant away.
+        // denial there would take the grant away. So a grant that holds a
+        // hidden folder with a grant inside it would open the hidden folder
+        // whole: refused instead. Kule's programs installed in Kule's home
+        // bring that about, for the terminal helper's folder.
+        for hidden in &self.hidden {
+            let holds_a_grant = grants
+                .iter()
+                .any(|g| *g != hidden.as_path() && g.starts_with(hidden));
+            if !holds_a_grant {
+                continue;
+            }
+            if let Some(holder) = grants.iter().find(|g| hidden.starts_with(g)) {
+                let how = if self.hidden.first() == Some(hidden) {
+                    " Kule's programs installed inside Kule's home bring this about: set \
+                     KULE_HOME to a folder of its own"
+                } else {
+                    ""
+                };
+                return Err(Error::Invalid(format!(
+                    "the command could read {}, and with it {}, which Kule keeps from every \
+                     command: Kule starts none so.{how}",
+                    plain(holder).display(),
+                    plain(hidden).display()
+                )));
+            }
+        }
         let mut denied: Vec<PathBuf> = self
             .hidden
             .iter()
@@ -592,7 +617,8 @@ impl Sandbox {
     /// helper, which opens the console inside and starts `program` on it
     /// (see `kule_pty_helper`). The helper is the one beside Kule's own
     /// program, and its folder is read, never written: one a command could
-    /// write to, or that holds the person's home, is refused.
+    /// write to, one Kule hides from commands (Kule's home, the workspace),
+    /// or one that holds the person's home, is refused.
     pub(super) fn on_terminal(
         &self,
         program: &str,
@@ -610,11 +636,12 @@ impl Sandbox {
         let (dir, helper) = (plain(dir), plain(&helper));
         let overlaps = |p: &Path| p.starts_with(&dir) || dir.starts_with(p);
         if container.readwrite.iter().any(|w| overlaps(w))
+            || self.hidden.iter().any(|h| overlaps(&plain(h)))
             || crate::osfs::person_home().is_some_and(|h| plain(&h).starts_with(&dir))
         {
             return Err(Error::Invalid(format!(
-                "the terminal helper's folder {} is one a command could write to or that holds your \
-                 home; Kule starts no terminal from there",
+                "the terminal helper's folder {} is one a command could write to, one Kule hides \
+                 from commands, or one that holds your home; Kule starts no terminal from there",
                 dir.display()
             )));
         }
