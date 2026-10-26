@@ -149,6 +149,14 @@ restricts them by default). See
 [Platforms](https://kulehq.github.io/kule/docs/platforms) and
 [Troubleshooting](https://kulehq.github.io/kule/docs/troubleshooting).
 
+## Help test Kule
+
+Kule is a preview, and reports from your own computer and your own work
+help most: a bug, an unclear step, a refusal in your way, or a run where
+everything worked. [Help test Kule](https://kulehq.github.io/kule/docs/testing)
+has scenarios to try and the issue forms to report with. Security problems
+go privately, as [SECURITY.md](SECURITY.md) says.
+
 ## Developing Kule
 
 The workspace is plain Cargo:

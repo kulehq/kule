@@ -1,0 +1,13 @@
+# The forms shown at github.com/kulehq/kule/issues/new/choose. A security
+# problem goes to the private advisory form, never to an issue.
+blank_issues_enabled: false
+contact_links:
+  - name: A security problem
+    url: https://github.com/kulehq/kule/security/advisories/new
+    about: Report it privately, as SECURITY.md says. Never in a public issue.
+  - name: A question
+    url: https://github.com/kulehq/kule/discussions/categories/q-a
+    about: Ask in Discussions.
+  - name: How to test Kule
+    url: https://kulehq.github.io/kule/docs/testing
+    about: Scenarios to try, and what to look for in each.

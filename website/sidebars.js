@@ -17,6 +17,7 @@ const sidebars = {
         'getting-started/first-task-in-the-app',
       ],
     },
+    'testing',
     {
       type: 'category',
       label: 'Concepts',
