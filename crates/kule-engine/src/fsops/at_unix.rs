@@ -124,17 +124,15 @@ pub(crate) fn stat_at(dir: &File, name: &Name) -> io::Result<Option<(Kind, u32)>
             _ => Err(e),
         };
     }
+    let kind = match st.st_mode & libc::S_IFMT {
+        libc::S_IFDIR => Kind::Dir,
+        libc::S_IFLNK => Kind::Symlink,
+        _ => Kind::File,
+    };
     // mode_t is u16 on macOS, u32 on Linux.
     #[allow(clippy::useless_conversion)]
-    let mode = u32::from(st.st_mode);
-    Ok(Some((
-        match mode & u32::from(libc::S_IFMT) {
-            m if m == u32::from(libc::S_IFDIR) => Kind::Dir,
-            m if m == u32::from(libc::S_IFLNK) => Kind::Symlink,
-            _ => Kind::File,
-        },
-        mode & 0o7777,
-    )))
+    let mode = u32::from(st.st_mode) & 0o7777;
+    Ok(Some((kind, mode)))
 }
 
 /// What the entry `name` in `dir` is and how large, not following a link;
@@ -158,16 +156,11 @@ pub(crate) fn entry_facts(dir: &File, name: &Name) -> io::Result<Option<(Kind, u
             _ => Err(e),
         };
     }
-    #[allow(clippy::useless_conversion)]
-    let kind = u32::from(st.st_mode) & u32::from(libc::S_IFMT);
-    let kind = if kind == u32::from(libc::S_IFDIR) {
-        Kind::Dir
-    } else if kind == u32::from(libc::S_IFLNK) {
-        Kind::Symlink
-    } else if kind == u32::from(libc::S_IFREG) {
-        Kind::File
-    } else {
-        return Ok(None);
+    let kind = match st.st_mode & libc::S_IFMT {
+        libc::S_IFDIR => Kind::Dir,
+        libc::S_IFLNK => Kind::Symlink,
+        libc::S_IFREG => Kind::File,
+        _ => return Ok(None),
     };
     Ok(Some((kind, st.st_size as u64)))
 }
@@ -189,11 +182,8 @@ pub(crate) fn is_tracked_kind(dir: &File, name: &Name) -> io::Result<bool> {
     if found == -1 {
         return Err(io::Error::last_os_error());
     }
-    #[allow(clippy::useless_conversion)]
-    let kind = u32::from(st.st_mode) & u32::from(libc::S_IFMT);
-    Ok([libc::S_IFDIR, libc::S_IFLNK, libc::S_IFREG]
-        .iter()
-        .any(|k| u32::from(*k) == kind))
+    let kind = st.st_mode & libc::S_IFMT;
+    Ok([libc::S_IFDIR, libc::S_IFLNK, libc::S_IFREG].contains(&kind))
 }
 
 /// Where the link `name` in `dir` points.

@@ -76,7 +76,11 @@ fn a_request_without_the_token_is_refused() {
 }
 
 /// Kule's home is a folder of the person's own, closed to others: one that
-/// lets another account in is closed, and the note says so.
+/// lets another account in is closed, and the note says so. A fresh home
+/// is quiet twice over, whoever runs this: the entries of an access list
+/// are compared by SID, so an account SDDL text would show under an alias
+/// (the built-in administrator as `LA`, as on a hosted CI runner) is still
+/// this user and not "others".
 #[test]
 fn kule_s_home_is_closed_to_others() {
     let base = TempDir::new().unwrap();

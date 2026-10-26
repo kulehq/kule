@@ -547,7 +547,7 @@ pub fn open_to_others(path: &Path) -> io::Result<Option<String>> {
     }
     #[cfg(windows)]
     {
-        Ok(win::others_allowed(path)?.then(|| "an access list naming others".to_owned()))
+        win::others_allowed(path)
     }
 }
 
@@ -624,6 +624,7 @@ pub mod win {
     use std::path::Path;
 
     use windows::Win32::Foundation::{ERROR_ACCESS_DENIED, HANDLE, STILL_ACTIVE};
+    use windows::Win32::Security::PSID;
     use windows::Win32::Storage::FileSystem::{
         FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_NORMAL, FILE_ATTRIBUTE_READONLY,
         FILE_ATTRIBUTE_REPARSE_POINT, FILE_ATTRIBUTE_TAG_INFO, FILE_BASIC_INFO,
@@ -943,25 +944,101 @@ pub mod win {
         Ok(flag != 0)
     }
 
-    /// The owner of `path` (no link followed) and its access list as SDDL
-    /// text.
-    fn owner_and_dacl(path: &Path) -> io::Result<(String, String)> {
-        use windows::Win32::Security::Authorization::{
-            ConvertSecurityDescriptorToStringSecurityDescriptorW, ConvertSidToStringSidW,
-            GetSecurityInfo, SDDL_REVISION_1, SE_FILE_OBJECT,
-        };
-        use windows::Win32::Security::{
-            DACL_SECURITY_INFORMATION, OWNER_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID,
-        };
+    /// `sid` as text in its S-1-... form, never an alias.
+    unsafe fn sid_string(sid: PSID) -> io::Result<String> {
+        use windows::Win32::Security::Authorization::ConvertSidToStringSidW;
         use windows::core::PWSTR;
+        // SAFETY: the caller passes a valid SID; the string is freed here.
+        unsafe {
+            let mut text = PWSTR::null();
+            ConvertSidToStringSidW(sid, &mut text).map_err(io_error)?;
+            let shown = text
+                .to_string()
+                .map_err(|e| io::Error::other(e.to_string()));
+            let _ = windows::Win32::Foundation::LocalFree(Some(
+                windows::Win32::Foundation::HLOCAL(text.0.cast()),
+            ));
+            shown
+        }
+    }
+
+    /// The account behind `sid` as the system names it (`DOMAIN\name`),
+    /// else the SID itself.
+    unsafe fn sid_text(sid: PSID) -> String {
+        use windows::Win32::Security::{LookupAccountSidW, SID_NAME_USE};
+        use windows::core::{PCWSTR, PWSTR};
+        // SAFETY: the caller passes a valid SID; sizes are asked first and
+        // the buffers are at least that large.
+        unsafe {
+            let (mut name_len, mut domain_len) = (0u32, 0u32);
+            let mut kind = SID_NAME_USE::default();
+            let _ = LookupAccountSidW(
+                PCWSTR::null(),
+                sid,
+                None,
+                &mut name_len,
+                None,
+                &mut domain_len,
+                &mut kind,
+            );
+            let mut name = vec![0u16; name_len.max(1) as usize];
+            let mut domain = vec![0u16; domain_len.max(1) as usize];
+            if name_len > 0
+                && LookupAccountSidW(
+                    PCWSTR::null(),
+                    sid,
+                    Some(PWSTR(name.as_mut_ptr())),
+                    &mut name_len,
+                    Some(PWSTR(domain.as_mut_ptr())),
+                    &mut domain_len,
+                    &mut kind,
+                )
+                .is_ok()
+            {
+                let name = String::from_utf16_lossy(&name[..name_len as usize]);
+                let domain = String::from_utf16_lossy(&domain[..domain_len as usize]);
+                return if domain.is_empty() {
+                    name
+                } else {
+                    format!("{domain}\\{name}")
+                };
+            }
+            sid_string(sid).unwrap_or_else(|_| "an account the system cannot name".to_owned())
+        }
+    }
+
+    /// An entry of an access list that lets someone in: whom, as a SID in
+    /// text, and as the system names them.
+    struct Allow {
+        sid: String,
+        shown: String,
+    }
+
+    /// The owner of `path` (no link followed) as a SID in text, and the
+    /// entries of its access list that let someone in; `None` for the
+    /// entries when there is no list at all, which lets everyone in. SIDs
+    /// are compared in their S-1-... form, never through SDDL text, whose
+    /// aliases (`LA` for the built-in administrator, `BA`, `SY`, ...)
+    /// would hide a match.
+    fn owner_and_allows(path: &Path) -> io::Result<(String, Option<Vec<Allow>>)> {
+        use windows::Win32::Security::Authorization::{GetSecurityInfo, SE_FILE_OBJECT};
+        use windows::Win32::Security::{
+            ACCESS_ALLOWED_ACE, ACE_HEADER, ACL, DACL_SECURITY_INFORMATION, GetAce,
+            OWNER_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR,
+        };
+        use windows::Win32::System::SystemServices::{
+            ACCESS_ALLOWED_ACE_TYPE, ACCESS_ALLOWED_CALLBACK_ACE_TYPE, ACCESS_DENIED_ACE_TYPE,
+            ACCESS_DENIED_CALLBACK_ACE_TYPE,
+        };
         let file = fs::OpenOptions::new()
             .access_mode(FILE_READ_ATTRIBUTES.0 | READ_CONTROL.0)
             .custom_flags((FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS).0)
             .open(path)?;
-        // SAFETY: the descriptor and strings are allocated by the calls and
-        // freed below.
+        // SAFETY: the descriptor is allocated by the call and freed below;
+        // the owner and the list point into it and are read before that.
         unsafe {
             let mut owner = PSID::default();
+            let mut dacl: *mut ACL = std::ptr::null_mut();
             let mut descriptor = PSECURITY_DESCRIPTOR::default();
             let err = GetSecurityInfo(
                 handle(&file),
@@ -969,45 +1046,53 @@ pub mod win {
                 OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
                 Some(&mut owner),
                 None,
-                None,
+                Some(&mut dacl),
                 None,
                 Some(&mut descriptor),
             );
             if err.is_err() {
                 return Err(io::Error::from_raw_os_error(err.0 as i32));
             }
-            let mut owner_text = PWSTR::null();
-            let owner_sid = ConvertSidToStringSidW(owner, &mut owner_text)
-                .map_err(io_error)
-                .and_then(|()| {
-                    owner_text
-                        .to_string()
-                        .map_err(|e| io::Error::other(e.to_string()))
-                });
-            let _ = windows::Win32::Foundation::LocalFree(Some(
-                windows::Win32::Foundation::HLOCAL(owner_text.0.cast()),
-            ));
-            let mut dacl_text = PWSTR::null();
-            let dacl = ConvertSecurityDescriptorToStringSecurityDescriptorW(
-                descriptor,
-                SDDL_REVISION_1,
-                DACL_SECURITY_INFORMATION,
-                &mut dacl_text,
-                None,
-            )
-            .map_err(io_error)
-            .and_then(|()| {
-                dacl_text
-                    .to_string()
-                    .map_err(|e| io::Error::other(e.to_string()))
-            });
-            let _ = windows::Win32::Foundation::LocalFree(Some(
-                windows::Win32::Foundation::HLOCAL(dacl_text.0.cast()),
-            ));
+            let read = (|| {
+                let owner = sid_string(owner)?;
+                if dacl.is_null() {
+                    return Ok((owner, None));
+                }
+                let mut allows = Vec::new();
+                for i in 0..u32::from((*dacl).AceCount) {
+                    let mut ace: *mut core::ffi::c_void = std::ptr::null_mut();
+                    GetAce(dacl, i, &mut ace).map_err(io_error)?;
+                    let kind = u32::from((*ace.cast::<ACE_HEADER>()).AceType);
+                    match kind {
+                        // Both begin as ACCESS_ALLOWED_ACE: the header, the
+                        // mask, then the SID in place.
+                        ACCESS_ALLOWED_ACE_TYPE | ACCESS_ALLOWED_CALLBACK_ACE_TYPE => {
+                            let sid = PSID(
+                                std::ptr::addr_of_mut!(
+                                    (*ace.cast::<ACCESS_ALLOWED_ACE>()).SidStart
+                                )
+                                .cast(),
+                            );
+                            allows.push(Allow {
+                                sid: sid_string(sid)?,
+                                shown: sid_text(sid),
+                            });
+                        }
+                        ACCESS_DENIED_ACE_TYPE | ACCESS_DENIED_CALLBACK_ACE_TYPE => {}
+                        // An entry Kule cannot read may let in whom it
+                        // cannot tell: it counts as someone else.
+                        other => allows.push(Allow {
+                            sid: String::new(),
+                            shown: format!("an access entry of kind {other}"),
+                        }),
+                    }
+                }
+                Ok((owner, Some(allows)))
+            })();
             let _ = windows::Win32::Foundation::LocalFree(Some(
                 windows::Win32::Foundation::HLOCAL(descriptor.0),
             ));
-            Ok((owner_sid?, dacl?))
+            read
         }
     }
 
@@ -1016,7 +1101,7 @@ pub mod win {
     /// theirs when their token carries that group.
     pub fn owned_by_me(path: &Path) -> io::Result<bool> {
         const ADMINISTRATORS: &str = "S-1-5-32-544";
-        let owner = owner_and_dacl(path)?.0;
+        let owner = owner_and_allows(path)?.0;
         Ok(owner == current_user_sid()?
             || (owner == ADMINISTRATORS && token_has_group(ADMINISTRATORS)?))
     }
@@ -1074,27 +1159,34 @@ pub mod win {
         }
     }
 
-    /// Whether `path`'s access list lets anyone in besides its owner, the
-    /// system and administrators.
-    pub fn others_allowed(path: &Path) -> io::Result<bool> {
-        let (owner, dacl) = owner_and_dacl(path)?;
+    /// Whom `path`'s access list lets in besides its owner, this user, the
+    /// system and administrators, named for a note; `None` when nobody.
+    pub fn others_allowed(path: &Path) -> io::Result<Option<String>> {
+        const SYSTEM: &str = "S-1-5-18";
+        const ADMINISTRATORS: &str = "S-1-5-32-544";
+        const CREATOR_OWNER: &str = "S-1-3-0";
+        const OWNER_RIGHTS: &str = "S-1-3-4";
+        let (owner, allows) = owner_and_allows(path)?;
+        let Some(allows) = allows else {
+            return Ok(Some("no access list, which lets everyone in".to_owned()));
+        };
         let me = current_user_sid()?;
-        // "(A;flags;rights;object;inherit;sid)": an allow entry for a SID.
-        for ace in dacl.split('(').skip(1) {
-            let ace = ace.trim_end_matches(')');
-            let fields: Vec<&str> = ace.split(';').collect();
-            if fields.first() != Some(&"A") {
-                continue;
-            }
-            let Some(sid) = fields.get(5) else { continue };
-            if ![owner.as_str(), me.as_str(), "SY", "BA", "OW", "CO"].contains(sid)
-                && *sid != "S-1-5-18"
-                && *sid != "S-1-5-32-544"
-            {
-                return Ok(true);
-            }
-        }
-        Ok(false)
+        let own = [
+            owner.as_str(),
+            me.as_str(),
+            SYSTEM,
+            ADMINISTRATORS,
+            CREATOR_OWNER,
+            OWNER_RIGHTS,
+        ];
+        let mut others: Vec<String> = allows
+            .into_iter()
+            .filter(|allow| !own.contains(&allow.sid.as_str()))
+            .map(|allow| allow.shown)
+            .collect();
+        others.sort();
+        others.dedup();
+        Ok((!others.is_empty()).then(|| format!("an access list naming {}", others.join(", "))))
     }
 
     /// Makes `link` a junction to the folder `target` (an absolute path):
