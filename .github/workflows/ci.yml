@@ -4,15 +4,22 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Weekly, on main, with nothing changed: the sandbox rests on what each
+  # operating system provides, and a runner image that moves to a new
+  # macOS, kernel or Windows build would otherwise show at the next
+  # commit, after people met it on their own computers. A failure opens
+  # an issue (the `report` job).
+  schedule:
+    - cron: "17 5 * * 1"
   # By hand, for one platform: to look into a failure on one of them
-  # without running the other two. A pull request still runs them all.
+  # without running the others. A pull request still runs them all.
   workflow_dispatch:
     inputs:
       os:
         description: Which platform's tests to run
         type: choice
         default: windows-latest
-        options: [ubuntu-latest, macos-latest, windows-latest, all]
+        options: [ubuntu-latest, macos-latest, windows-latest, ubuntu-26.04, all]
 
 permissions:
   contents: read
@@ -70,11 +77,16 @@ jobs:
           PATH="$(go env GOPATH)/bin:$PATH"
           scripts/release-gate.sh workflows
 
+  # The three `-latest` images are the required checks. The newest image
+  # GitHub offers beside them runs too, so a change shows before the
+  # label moves to it; it is not required (MAINTAINING.md says what to do
+  # when it fails). Today that is Ubuntu 26.04: macos-latest is already
+  # macOS 26 and windows-latest Windows Server 2025, the newest of each.
   test:
     strategy:
       fail-fast: false
       matrix:
-        os: ${{ (github.event_name == 'workflow_dispatch' && inputs.os != 'all') && fromJSON(format('["{0}"]', inputs.os)) || fromJSON('["ubuntu-latest", "macos-latest", "windows-latest"]') }}
+        os: ${{ (github.event_name == 'workflow_dispatch' && inputs.os != 'all') && fromJSON(format('["{0}"]', inputs.os)) || fromJSON('["ubuntu-latest", "macos-latest", "windows-latest", "ubuntu-26.04"]') }}
     runs-on: ${{ matrix.os }}
     # A test that hangs ends the run here, not after GitHub's six hours.
     timeout-minutes: 60
@@ -183,3 +195,32 @@ jobs:
           cargo test --locked --target "$TARGET" -p kule-engine --test sandbox_windows --test terminal_windows
           cargo test --locked --target "$TARGET" -p kule-proxy --test container
           cargo test --locked --target "$TARGET" -p kule-desktop pty
+
+  # A scheduled run that failed is told where the maintainer looks: an
+  # issue labelled `scheduled-ci`, one open at a time, with a comment per
+  # later failure. Nothing of the event is templated into the script.
+  report:
+    needs: [deny, workflows, test, windows-sandbox]
+    if: always() && github.event_name == 'schedule' && contains(needs.*.result, 'failure')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Open the issue, or add to the one already open
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          FAILED: ${{ toJSON(needs) }}
+        run: |
+          set -eu
+          jobs=$(printf '%s' "$FAILED" | jq -r 'to_entries[] | select(.value.result == "failure") | .key' | paste -sd ', ' -)
+          body=$(printf 'The weekly run of ci.yml on main failed, with nothing committed: %s\n\nFailed: %s\n\nMAINTAINING.md says what to look at: a runner image that moved to a new OS release, a dependency that no longer builds, or a check whose tool changed.' "$RUN_URL" "$jobs")
+          open=$(gh issue list --repo "$REPO" --label scheduled-ci --state open --limit 1 --json number --jq '.[0].number // empty')
+          if [ -n "$open" ]; then
+            gh issue comment "$open" --repo "$REPO" --body "$body"
+          else
+            gh issue create --repo "$REPO" --label scheduled-ci --title "Scheduled CI failed on main" --body "$body"
+          fi

@@ -190,6 +190,9 @@ Two rules hold for every change: Kule is built on **Zero Trust** (nothing
 the agent produces is trusted, every boundary is denied by default and has
 a test that fails without it), and the repository is public, so security
 problems are reported privately (below), never in an issue.
+[MAINTAINING.md](MAINTAINING.md) says how a release is made, what is
+checked when an operating system ships a new version, and what the weekly
+CI run does.
 
 ## Security
 
