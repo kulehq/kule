@@ -28,7 +28,7 @@
 //! ([`Refusals::incomplete`]).
 
 use std::collections::{HashMap, HashSet};
-use std::io::{BufRead, BufReader, Read};
+use std::io::{BufRead, BufReader};
 use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
@@ -759,9 +759,7 @@ pub(crate) fn stored(tag: &str, window: Duration) -> Vec<Denial> {
 /// another sandbox cannot make one that would read as it.
 fn own_word(tag: &str, what: &str) -> Option<String> {
     let mut bytes = [0u8; 16];
-    std::fs::File::open("/dev/urandom")
-        .and_then(|mut f| f.read_exact(&mut bytes))
-        .ok()?;
+    crate::osfs::random_bytes(&mut bytes).ok()?;
     let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
     Some(format!("{tag}-{what}-{hex}"))
 }

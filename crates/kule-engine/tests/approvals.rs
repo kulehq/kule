@@ -1,6 +1,7 @@
 //! M3: a connection the policy puts to a person waits for an answer, for as
 //! long as the task allows. Real sockets, a local upstream, a sandboxed
 //! client; the test plays the person.
+#![cfg(unix)]
 
 use std::fs;
 use std::io::Write;

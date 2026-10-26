@@ -271,6 +271,7 @@ fn the_agent_hears_once_what_came_in() {
     assert_eq!(s.task.take_sync_note().unwrap(), None);
 }
 
+#[cfg(unix)]
 #[test]
 fn a_path_in_the_note_cannot_end_its_code_span_or_line() {
     let s = Setup::new();

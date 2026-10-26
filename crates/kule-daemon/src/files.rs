@@ -86,7 +86,8 @@ fn open(root: &Path, rel: &str) -> Result<std::fs::File> {
     inside(root, rel)?;
     if rel.is_empty() {
         // Named as the copy's top, not where the copy is on disk.
-        return std::fs::File::open(root).map_err(|e| format!("the task's top folder: {e}"));
+        return kule_engine::osfs::open_dir(root)
+            .map_err(|e| format!("the task's top folder: {e}"));
     }
     let rel_slash = rel.trim_end_matches('/');
     kule_engine::open_beneath(root, rel_slash)
@@ -95,67 +96,26 @@ fn open(root: &Path, rel: &str) -> Result<std::fs::File> {
 }
 
 /// The entries of the open directory `dir`: name, kind and size, each read
-/// beside it without following a link (`fstatat`), never through a path.
+/// beside it without following a link, never through a path.
 fn entries_of(dir: std::fs::File, rel: &str) -> Result<(Vec<DirEntry>, bool)> {
-    use std::ffi::CStr;
-    use std::os::fd::IntoRawFd;
-    let fd = dir.into_raw_fd();
-    // SAFETY: fdopendir takes the descriptor, which closedir closes below.
-    let dirp = unsafe { libc::fdopendir(fd) };
-    if dirp.is_null() {
-        let e = std::io::Error::last_os_error();
-        // SAFETY: the descriptor was not taken; it is closed once here.
-        unsafe { libc::close(fd) };
-        return Err(format!("{rel}: {e}"));
-    }
     let mut entries = Vec::new();
     let mut cut = false;
-    loop {
-        // SAFETY: dirp is open; readdir returns an entry or null at the end.
-        let ent = unsafe { libc::readdir(dirp) };
-        if ent.is_null() {
-            break;
-        }
-        // SAFETY: d_name is a NUL-terminated name inside the entry.
-        let name = unsafe { CStr::from_ptr((*ent).d_name.as_ptr()) };
-        if name.to_bytes() == b"." || name.to_bytes() == b".." {
-            continue;
-        }
+    for (name, kind, size) in kule_engine::entries_in(&dir).map_err(|e| format!("{rel}: {e}"))? {
         if entries.len() == MAX_ENTRIES {
             cut = true;
             break;
         }
-        // SAFETY: an all-zero stat is valid; fstatat fills it in.
-        let mut st: libc::stat = unsafe { std::mem::zeroed() };
-        // SAFETY: dirfd(dirp) is open and name is NUL-terminated.
-        let ok = unsafe {
-            libc::fstatat(
-                libc::dirfd(dirp),
-                name.as_ptr(),
-                &mut st,
-                libc::AT_SYMLINK_NOFOLLOW,
-            )
-        };
-        if ok != 0 {
-            continue;
-        }
-        let kind = match st.st_mode & libc::S_IFMT {
-            libc::S_IFLNK => EntryKind::Link,
-            libc::S_IFDIR => EntryKind::Dir,
-            _ => EntryKind::File,
+        let kind = match kind {
+            kule_engine::Kind::Symlink => EntryKind::Link,
+            kule_engine::Kind::Dir => EntryKind::Dir,
+            kule_engine::Kind::File => EntryKind::File,
         };
         entries.push(DirEntry {
-            name: name.to_string_lossy().into_owned(),
+            name,
             kind,
-            size: if kind == EntryKind::File {
-                st.st_size as u64
-            } else {
-                0
-            },
+            size: if kind == EntryKind::File { size } else { 0 },
         });
     }
-    // SAFETY: dirp is open and closed once, with its descriptor.
-    unsafe { libc::closedir(dirp) };
     Ok((entries, cut))
 }
 
@@ -181,7 +141,6 @@ pub fn list(root: &Path, rel: &str) -> Result<Listing> {
 /// File `rel` in the copy at `root`, opened (see [`open`]), and its size:
 /// a regular file with one name.
 fn open_file(root: &Path, rel: &str) -> Result<(std::fs::File, u64)> {
-    use std::os::unix::fs::MetadataExt;
     let file = open(root, rel)?;
     // What was opened, not what the path names now.
     let meta = file.metadata().map_err(|e| format!("{rel}: {e}"))?;
@@ -190,7 +149,7 @@ fn open_file(root: &Path, rel: &str) -> Result<(std::fs::File, u64)> {
     }
     // A second name for a file outside the copy (a hard link) would read
     // what the copy does not hold.
-    if meta.nlink() > 1 {
+    if kule_engine::osfs::links_of(&file).map_err(|e| format!("{rel}: {e}"))? > 1 {
         return Err(format!(
             "{rel}: a file with more than one name, which the explorer does not read"
         ));
@@ -369,22 +328,20 @@ pub fn openable(root: &Path, rel: &str, opened: &Path) -> Result<PathBuf> {
 /// read, when missing) for one copy, the ones there from more than
 /// [`OPENED_FOR`] ago removed.
 fn fresh_dir(opened: &Path) -> Result<PathBuf> {
-    use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
     let shown = |e: std::io::Error| format!("{}: {e}", opened.display());
-    match std::fs::DirBuilder::new().mode(0o700).create(opened) {
+    match kule_engine::osfs::create_private_dir(opened) {
         Ok(()) => {}
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
         Err(e) => return Err(shown(e)),
     }
     let meta = std::fs::symlink_metadata(opened).map_err(shown)?;
-    // SAFETY: geteuid only reads the process's user.
-    if !meta.is_dir() || meta.uid() != unsafe { libc::geteuid() } {
+    if !meta.is_dir() || !kule_engine::osfs::owned_by_me(opened).map_err(shown)? {
         return Err(format!(
             "{}: not a folder of Kule's own, so nothing is opened from it",
             opened.display()
         ));
     }
-    std::fs::set_permissions(opened, std::fs::Permissions::from_mode(0o700)).map_err(shown)?;
+    kule_engine::osfs::make_private(opened).map_err(shown)?;
     let now = std::time::SystemTime::now();
     for entry in std::fs::read_dir(opened).map_err(shown)?.flatten() {
         let old = entry
@@ -402,7 +359,7 @@ fn fresh_dir(opened: &Path) -> Result<PathBuf> {
             .map_or(0, |d| d.as_nanos());
         let n = MADE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let dir = opened.join(format!("{nanos:x}-{}-{n}", std::process::id()));
-        match std::fs::DirBuilder::new().mode(0o700).create(&dir) {
+        match kule_engine::osfs::create_private_dir(&dir) {
             Ok(()) => return Ok(dir),
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
             Err(e) => return Err(shown(e)),
@@ -414,6 +371,7 @@ fn fresh_dir(opened: &Path) -> Result<PathBuf> {
 /// filesystem makes one, only Kule's to read, without the extended
 /// attributes it had, and on macOS marked as come from elsewhere, so the
 /// app opens it as it would a download.
+#[cfg(unix)]
 fn copy_out(file: &std::fs::File, to: &Path) -> std::io::Result<()> {
     use std::os::fd::AsRawFd;
     use std::os::unix::ffi::OsStrExt;
@@ -491,6 +449,21 @@ fn copy_out(file: &std::fs::File, to: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
+/// The open `file` copied to `to`, which must not exist, only Kule's to
+/// read, and marked as come from the web (a `Zone.Identifier` stream), so
+/// the app opens it as it would a download.
+#[cfg(windows)]
+fn copy_out(file: &std::fs::File, to: &Path) -> std::io::Result<()> {
+    let mut out = kule_engine::osfs::create_private(to)?;
+    let mut from = file;
+    std::io::copy(&mut from, &mut out)?;
+    drop(out);
+    let mut zone = to.as_os_str().to_owned();
+    zone.push(":Zone.Identifier");
+    std::fs::write(zone, "[ZoneTransfer]\r\nZoneId=3\r\nReferrerUrl=Kule\r\n")?;
+    Ok(())
+}
+
 /// File or directory `rel` of the copy at `root` (the copy itself when
 /// empty), reached without a link: its path on disk, to show where it is.
 pub fn located(root: &Path, rel: &str) -> Result<PathBuf> {
@@ -504,6 +477,7 @@ pub fn located(root: &Path, rel: &str) -> Result<PathBuf> {
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
     #[test]
     fn the_explorer_reads_the_copy_and_nothing_outside_it() {
         let (copy, outside) = (
@@ -572,6 +546,7 @@ mod tests {
         std::fs::remove_file(&beside).unwrap();
     }
 
+    #[cfg(unix)]
     #[test]
     fn only_documents_pictures_sound_and_video_are_opened_with_their_app() {
         let (copy, outside) = (
@@ -749,6 +724,7 @@ mod tests {
         assert_eq!(left, 0);
     }
 
+    #[cfg(unix)]
     #[test]
     fn what_opens_is_kules_own_copy_and_never_the_agents_file() {
         use std::os::unix::fs::PermissionsExt;
@@ -807,6 +783,7 @@ mod tests {
         assert_ne!(picture.parent(), at.parent());
     }
 
+    #[cfg(unix)]
     #[test]
     fn copies_opened_long_ago_are_cleared() {
         let (copy, kule) = (
@@ -860,6 +837,7 @@ mod tests {
             .collect()
     }
 
+    #[cfg(unix)]
     #[test]
     fn what_is_shown_where_it_is_stays_in_the_copy() {
         let (copy, outside) = (
@@ -881,6 +859,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     /// A second name for a file outside the copy, and a FIFO left where a
     /// file was: neither is read, and the FIFO does not hang the daemon.
     #[test]
@@ -909,6 +888,7 @@ mod tests {
         assert!(list(root, "key.txt").is_err());
     }
 
+    #[cfg(unix)]
     /// The Preview reads what the explorer reads, by the same rules, and as
     /// much of a file as its view needs.
     #[test]
@@ -952,6 +932,7 @@ mod tests {
         assert!(view(root, "../x.png").is_err());
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_large_file_is_cut_on_a_whole_character() {
         let copy = tempfile::TempDir::new().unwrap();

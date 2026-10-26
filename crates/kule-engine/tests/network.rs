@@ -1,6 +1,7 @@
 //! M1, step 4: the network goes through the task's proxy, which asks the
 //! policy about every connection and logs it. Real sockets, a local upstream,
 //! no outside network.
+#![cfg(unix)]
 
 use std::fs;
 use std::io::Write;
@@ -614,6 +615,7 @@ func main() {
 /// there, leads none of Kule's own writes outside.
 #[test]
 fn links_left_in_the_tasks_tmp_lead_kules_writes_nowhere() {
+    #[cfg(unix)]
     use std::os::unix::fs::symlink;
     let home = TempDir::new().unwrap();
     let ws = TempDir::new().unwrap();

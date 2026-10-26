@@ -5,7 +5,6 @@
 
 use std::collections::HashMap;
 use std::io::Read;
-use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -402,18 +401,23 @@ fn send(events: &UnboundedSender<Event>, out: &mut Output) {
 }
 
 fn stop(group: i32) {
+    #[cfg(unix)]
     // SAFETY: kill only sends a signal; a negative pid names the session's
     // process group, which the command leads.
     unsafe {
         libc::kill(-group, libc::SIGKILL);
     }
+    // Windows has no process groups to signal: the command and all it
+    // started, as far as they can be found.
+    #[cfg(windows)]
+    kule_engine::resources::kill(&kule_engine::resources::tree(&[group]));
 }
 
 fn exit_of(status: std::io::Result<std::process::ExitStatus>) -> Exit {
     match status {
         Ok(s) => Exit {
             code: s.code().map(|c| c as u32),
-            signal: s.signal().map(signal_name),
+            signal: signal_of(&s).map(signal_name),
         },
         Err(_) => Exit {
             code: None,
@@ -422,6 +426,21 @@ fn exit_of(status: std::io::Result<std::process::ExitStatus>) -> Exit {
     }
 }
 
+/// The signal that ended a command, where commands end by signals (Unix).
+fn signal_of(status: &std::process::ExitStatus) -> Option<i32> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        status.signal()
+    }
+    #[cfg(windows)]
+    {
+        let _ = status;
+        None
+    }
+}
+
+#[cfg(unix)]
 fn signal_name(n: i32) -> String {
     match n {
         libc::SIGKILL => "SIGKILL".into(),
@@ -433,6 +452,11 @@ fn signal_name(n: i32) -> String {
         libc::SIGHUP => "SIGHUP".into(),
         n => format!("signal {n}"),
     }
+}
+
+#[cfg(windows)]
+fn signal_name(n: i32) -> String {
+    format!("signal {n}")
 }
 
 #[cfg(test)]

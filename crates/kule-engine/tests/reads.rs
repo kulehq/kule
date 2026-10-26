@@ -1,6 +1,7 @@
 //! What a task's commands may read beyond the copy: canaries planted where
 //! a project, a sign-in or an app's data lies, each found by a read outside
 //! the sandbox first, then refused inside it.
+#![cfg(unix)]
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -100,6 +101,7 @@ fn projects_kule_opened_are_hidden_from_every_other_task() {
     assert!(sh(&sandbox, "cat a.txt").status.success());
 }
 
+#[cfg(unix)]
 /// Whatever lies at the top of the home but its settings is the person's
 /// own: a project Kule never opened, a file. The settings and toolchains
 /// there stay readable, the tools on `PATH` in such a folder too, and a
@@ -231,6 +233,7 @@ fn settings_and_app_data_are_hidden_but_for_what_toolchains_read() {
     }
 }
 
+#[cfg(unix)]
 /// A tool on `PATH` whose program is a link into where apps keep their
 /// data (Claude Code's native install, uv's tools) still runs: what the
 /// link leads to is read, and nothing beside it.
@@ -240,6 +243,7 @@ fn a_tool_linked_from_path_into_app_data_runs() {
     let tool = home.join(".local/share/a-tool/versions/1.0/a-tool");
     fs::create_dir_all(tool.parent().unwrap()).unwrap();
     fs::write(&tool, "#!/bin/sh\necho ran\n").unwrap();
+    #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
     fs::set_permissions(&tool, fs::Permissions::from_mode(0o755)).unwrap();
     let bin = home.join(".local/bin");

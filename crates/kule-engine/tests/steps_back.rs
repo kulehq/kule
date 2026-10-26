@@ -155,6 +155,7 @@ fn a_step_that_kept_no_copy_of_a_path_cannot_be_gone_back_to() {
     assert!(s.task.back_to_step(9).is_err());
 }
 
+#[cfg(unix)]
 /// A file swapped for a link to a secret outside the copy is kept as the
 /// link it is, never as what it points to.
 #[test]

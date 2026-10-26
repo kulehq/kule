@@ -41,6 +41,7 @@ fn task(home: &Path, ws: &Path) -> (String, PathBuf) {
     (id, copy)
 }
 
+#[cfg(unix)]
 #[test]
 fn path_names_the_copy_or_a_file_in_it_and_nothing_outside() {
     let (home, ws, outside) = (
@@ -92,6 +93,7 @@ fn path_warns_when_git_in_the_copy_would_run_what_the_task_changed() {
     assert!(said.contains("careful") && said.contains(".git"), "{said}");
 }
 
+#[cfg(unix)]
 #[test]
 fn open_lets_through_documents_that_are_what_their_name_says() {
     let (home, ws, outside) = (

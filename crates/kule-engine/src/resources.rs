@@ -50,12 +50,20 @@ pub fn usage(pids: &[i32]) -> Vec<Usage> {
 }
 
 /// Stops `pids` where they are until [`resume`]; they hold their memory.
+/// Windows has no stop signal: there this does nothing, and a processor
+/// limit is reported as not enforced rather than enforced by stops.
 pub fn pause(pids: &[i32]) {
+    #[cfg(unix)]
     signal(pids, libc::SIGSTOP);
+    #[cfg(windows)]
+    let _ = pids;
 }
 
 pub fn resume(pids: &[i32]) {
+    #[cfg(unix)]
     signal(pids, libc::SIGCONT);
+    #[cfg(windows)]
+    let _ = pids;
 }
 
 /// The name `pid` runs under, as the person is told it: a process picks
@@ -67,7 +75,9 @@ pub(crate) fn name_of(pid: i32) -> String {
     let raw = crate::ports::macos::name_of(pid);
     #[cfg(target_os = "linux")]
     let raw = std::fs::read_to_string(format!("/proc/{pid}/comm")).unwrap_or_default();
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    #[cfg(windows)]
+    let raw = windows_processes::name_of(pid).unwrap_or_default();
+    #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
     let raw = String::new();
     let name = shown_name(&raw);
     if name.is_empty() {
@@ -80,6 +90,7 @@ pub(crate) fn name_of(pid: i32) -> String {
 /// Whether `pid` is on its way out (a zombie, or past where its state can
 /// be read): ended already, not something left running.
 pub(crate) fn exiting(pid: i32) -> bool {
+    let _ = &pid;
     #[cfg(target_os = "macos")]
     return crate::ports::macos::exiting(pid);
     #[cfg(target_os = "linux")]
@@ -108,9 +119,13 @@ const NAME_CHARS: usize = 32;
 
 /// Kills `pids` at once.
 pub fn kill(pids: &[i32]) {
+    #[cfg(unix)]
     signal(pids, libc::SIGKILL);
+    #[cfg(windows)]
+    windows_processes::kill(pids);
 }
 
+#[cfg(unix)]
 fn signal(pids: &[i32], signal: libc::c_int) {
     let me = std::process::id() as i32;
     for &pid in pids {
@@ -127,7 +142,6 @@ fn signal(pids: &[i32], signal: libc::c_int) {
 /// a file linked from several places counts once. What cannot be read is
 /// left out.
 pub fn disk_used(dirs: &[PathBuf]) -> u64 {
-    use std::os::unix::fs::MetadataExt;
     let mut seen: HashSet<(u64, u64)> = HashSet::new();
     let mut total = 0u64;
     for dir in dirs {
@@ -139,10 +153,14 @@ pub fn disk_used(dirs: &[PathBuf]) -> u64 {
             let Ok(meta) = entry.metadata() else {
                 continue;
             };
-            if meta.nlink() > 1 && !meta.is_dir() && !seen.insert((meta.dev(), meta.ino())) {
+            let Some((links, dev, ino, allocated)) = crate::osfs::disk_facts(entry.path(), &meta)
+            else {
+                continue;
+            };
+            if links > 1 && !meta.is_dir() && !seen.insert((dev, ino)) {
                 continue;
             }
-            total = total.saturating_add(meta.blocks().saturating_mul(512));
+            total = total.saturating_add(allocated);
         }
     }
     total
@@ -280,7 +298,154 @@ fn memory_of(pid: i32) -> Option<u64> {
     Some(pages * page)
 }
 
-#[cfg(test)]
+#[cfg(windows)]
+fn parents() -> BTreeMap<i32, i32> {
+    windows_processes::parents()
+}
+
+#[cfg(windows)]
+fn usage_of(pid: i32) -> Option<Usage> {
+    windows_processes::usage_of(pid)
+}
+
+/// Processes on Windows: the system's snapshot of them for parents and
+/// names, each one's own handle for its times, memory and end.
+#[cfg(windows)]
+mod windows_processes {
+    use std::collections::BTreeMap;
+    use std::time::Duration;
+
+    use windows::Win32::Foundation::{CloseHandle, FILETIME, HANDLE};
+    use windows::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW,
+        TH32CS_SNAPPROCESS,
+    };
+    use windows::Win32::System::ProcessStatus::{
+        K32GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS, PROCESS_MEMORY_COUNTERS_EX,
+    };
+    use windows::Win32::System::Threading::{
+        GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE,
+        TerminateProcess,
+    };
+
+    use super::Usage;
+
+    /// Every process with its parent, and its image name.
+    fn snapshot() -> Vec<(i32, i32, String)> {
+        let mut out = Vec::new();
+        // SAFETY: the snapshot handle is closed below; the entry is sized.
+        unsafe {
+            let Ok(snap) = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) else {
+                return out;
+            };
+            let mut entry = PROCESSENTRY32W {
+                dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32,
+                ..Default::default()
+            };
+            if Process32FirstW(snap, &mut entry).is_ok() {
+                loop {
+                    let name_len = entry
+                        .szExeFile
+                        .iter()
+                        .position(|&c| c == 0)
+                        .unwrap_or(entry.szExeFile.len());
+                    let name = String::from_utf16_lossy(&entry.szExeFile[..name_len]);
+                    out.push((
+                        entry.th32ProcessID as i32,
+                        entry.th32ParentProcessID as i32,
+                        name,
+                    ));
+                    if Process32NextW(snap, &mut entry).is_err() {
+                        break;
+                    }
+                }
+            }
+            let _ = CloseHandle(snap);
+        }
+        out
+    }
+
+    pub(super) fn parents() -> BTreeMap<i32, i32> {
+        snapshot()
+            .into_iter()
+            .filter(|(pid, _, _)| *pid > 0)
+            .map(|(pid, ppid, _)| (pid, ppid))
+            .collect()
+    }
+
+    pub(super) fn name_of(pid: i32) -> Option<String> {
+        snapshot()
+            .into_iter()
+            .find(|(p, _, _)| *p == pid)
+            .map(|(_, _, name)| name)
+    }
+
+    fn open(
+        pid: i32,
+        access: windows::Win32::System::Threading::PROCESS_ACCESS_RIGHTS,
+    ) -> Option<HANDLE> {
+        let pid = u32::try_from(pid).ok()?;
+        // SAFETY: a handle the caller closes.
+        unsafe { OpenProcess(access, false, pid) }.ok()
+    }
+
+    fn hundreds_of_ns(t: FILETIME) -> u64 {
+        (u64::from(t.dwHighDateTime) << 32) | u64::from(t.dwLowDateTime)
+    }
+
+    pub(super) fn usage_of(pid: i32) -> Option<Usage> {
+        let process = open(pid, PROCESS_QUERY_LIMITED_INFORMATION)?;
+        let mut times = [FILETIME::default(); 4];
+        let mut counters = PROCESS_MEMORY_COUNTERS_EX::default();
+        // SAFETY: the handle is open; the buffers are the sizes the calls take.
+        let (timed, measured) = unsafe {
+            let [creation, exit, kernel, user] = &mut times;
+            let timed = GetProcessTimes(process, creation, exit, kernel, user).is_ok();
+            let measured = K32GetProcessMemoryInfo(
+                process,
+                (&mut counters as *mut PROCESS_MEMORY_COUNTERS_EX)
+                    .cast::<PROCESS_MEMORY_COUNTERS>(),
+                std::mem::size_of::<PROCESS_MEMORY_COUNTERS_EX>() as u32,
+            )
+            .as_bool();
+            let _ = CloseHandle(process);
+            (timed, measured)
+        };
+        if !timed {
+            return None;
+        }
+        let cpu = hundreds_of_ns(times[2]).saturating_add(hundreds_of_ns(times[3]));
+        Some(Usage {
+            pid,
+            cpu: Duration::from_nanos(cpu.saturating_mul(100)),
+            // Windows keeps no account of children that ended.
+            reaped: Duration::ZERO,
+            memory: if measured {
+                counters.PrivateUsage as u64
+            } else {
+                0
+            },
+        })
+    }
+
+    pub(super) fn kill(pids: &[i32]) {
+        let me = std::process::id() as i32;
+        for &pid in pids {
+            if pid <= 4 || pid == me {
+                continue;
+            }
+            if let Some(process) = open(pid, PROCESS_TERMINATE) {
+                // SAFETY: the handle is open and closed right after.
+                unsafe {
+                    let _ = TerminateProcess(process, 137);
+                    let _ = CloseHandle(process);
+                }
+            }
+        }
+    }
+}
+
+#[cfg(all(test, unix))]
 mod tests {
     use std::process::{Command, Stdio};
     use std::time::Instant;

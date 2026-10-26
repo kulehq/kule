@@ -33,6 +33,7 @@ fn refused(home: &Path, person: &Path, args: &[&str]) -> String {
     String::from_utf8(out.stderr).unwrap()
 }
 
+#[cfg(unix)]
 #[test]
 fn a_home_path_is_found_however_it_is_typed_and_only_inside_the_home() {
     let (home, person, ws) = (

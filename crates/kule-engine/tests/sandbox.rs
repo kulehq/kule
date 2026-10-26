@@ -1,6 +1,7 @@
 //! M1, step 2: the operating system's sandbox (Seatbelt on macOS, Landlock
 //! on Linux). Every test runs real commands through `sh` and checks what
 //! actually reached the disk.
+#![cfg(unix)]
 
 use std::fs;
 use std::net::TcpListener;

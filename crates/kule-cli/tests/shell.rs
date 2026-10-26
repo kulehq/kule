@@ -1,6 +1,7 @@
 //! `kule shell`: the person's shell in a task's copy, in the task's sandbox
 //! on a terminal of its own; outside it only when asked for, and then only
 //! once the changes not committed were seen.
+#![cfg(unix)]
 
 use std::fs;
 use std::io::Write;
@@ -160,6 +161,7 @@ fn closed_lets_work_start_again() {
     s.ok(&["exec", &s.id, "--", "true"], "");
 }
 
+#[cfg(unix)]
 /// What a command leaves running ends with `kule exec`, however it left
 /// the command's process group and parent.
 #[test]
@@ -299,8 +301,13 @@ fn what_cannot_be_shown_after_the_shell_hides_nothing_else() {
     struct Unlock(PathBuf);
     impl Drop for Unlock {
         fn drop(&mut self) {
-            use std::os::unix::fs::PermissionsExt;
-            let _ = fs::set_permissions(&self.0, fs::Permissions::from_mode(0o755));
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = fs::set_permissions(&self.0, fs::Permissions::from_mode(0o755));
+            }
+            #[cfg(windows)]
+            let _ = &self.0;
         }
     }
     let s = Setup::new();

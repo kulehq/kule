@@ -93,6 +93,7 @@ fn a_profile_that_opens_too_much_cannot_be_approved() {
 /// A run that fails still says what it changed, what the sandbox refused
 /// it, and how long it took; the error comes last, with where the
 /// agent said why.
+#[cfg(unix)]
 #[test]
 fn a_failed_run_still_tells_what_its_sandbox_did() {
     // The folder standing for the rest of the computer is outside /tmp,
@@ -149,6 +150,7 @@ fn a_failed_run_still_tells_what_its_sandbox_did() {
 /// run under the same daily budget is refused, saying why. A run that did
 /// not end (its `kule run` was killed) keeps its share counted until the
 /// person lets go of it, which is refused while it is at work.
+#[cfg(unix)]
 #[test]
 fn releasing_an_unfinished_reservation_is_said_and_kept() {
     let (home, ws) = (TempDir::new().unwrap(), TempDir::new().unwrap());
@@ -229,6 +231,7 @@ fn releasing_an_unfinished_reservation_is_said_and_kept() {
 /// unreadable) hides nothing else: what the sandbox refused is still told
 /// and recorded, why the changes cannot be shown is said, and the run's own
 /// error comes back.
+#[cfg(unix)]
 #[test]
 fn what_cannot_be_shown_after_a_run_hides_nothing_else() {
     let (home, ws, outside) = (
@@ -255,8 +258,13 @@ fn what_cannot_be_shown_after_a_run_hides_nothing_else() {
     struct Unlock(std::path::PathBuf);
     impl Drop for Unlock {
         fn drop(&mut self) {
-            use std::os::unix::fs::PermissionsExt;
-            let _ = fs::set_permissions(&self.0, fs::Permissions::from_mode(0o755));
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = fs::set_permissions(&self.0, fs::Permissions::from_mode(0o755));
+            }
+            #[cfg(windows)]
+            let _ = &self.0;
         }
     }
     let _unlock = Unlock(Path::new(&copy).join("locked"));

@@ -782,11 +782,8 @@ fn read_records<T: serde::de::DeserializeOwned>(path: &Path) -> Result<(Vec<T>, 
 
 /// A share's id: at random, as a task's is.
 fn random_id() -> Result<String> {
-    let random = Path::new("/dev/urandom");
     let mut bytes = [0u8; 8];
-    std::fs::File::open(random)
-        .and_then(|mut f| std::io::Read::read_exact(&mut f, &mut bytes))
-        .at(random)?;
+    crate::osfs::random_bytes(&mut bytes).at(Path::new("random"))?;
     Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
 }
 

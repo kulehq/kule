@@ -641,12 +641,29 @@ async fn perform(
         // Leaves a process that left the agent's process group, as one
         // started with `setsid` or `nohup ... &` from another session would.
         "stray" => {
-            use std::os::unix::process::CommandExt;
-            let _ = std::process::Command::new("sleep")
-                .arg("30")
-                .current_dir(dir)
-                .process_group(0)
-                .spawn();
+            #[cfg(unix)]
+            {
+                use std::os::unix::process::CommandExt;
+                let _ = std::process::Command::new("sleep")
+                    .arg("30")
+                    .current_dir(dir)
+                    .process_group(0)
+                    .spawn();
+            }
+            #[cfg(windows)]
+            {
+                use std::os::windows::process::CommandExt;
+                const DETACHED_PROCESS: u32 = 0x8;
+                const CREATE_NEW_PROCESS_GROUP: u32 = 0x200;
+                const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x0100_0000;
+                let _ = std::process::Command::new("cmd")
+                    .args(["/d", "/c", "ping -n 31 127.0.0.1 >nul"])
+                    .current_dir(dir)
+                    .creation_flags(
+                        DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_BREAKAWAY_FROM_JOB,
+                    )
+                    .spawn();
+            }
             tokio::time::sleep(std::time::Duration::from_millis(200)).await;
             Ok(())
         }

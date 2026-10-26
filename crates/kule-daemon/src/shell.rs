@@ -3,8 +3,10 @@
 //! agent wrote there runs only as sandboxed as the agent ran, whatever the
 //! shell's prompt or the person reads or runs.
 
+#[cfg(unix)]
 use std::os::fd::BorrowedFd;
 use std::path::Path;
+#[cfg(unix)]
 use std::process::Command;
 use std::time::Instant;
 
@@ -169,6 +171,7 @@ impl Sandboxed {
 
     /// `program` on `terminal` (a pseudo-terminal's follower end), in the
     /// sandbox, with the terminal as its own (see `Sandbox::terminal_command`).
+    #[cfg(unix)]
     pub fn command(
         &self,
         program: &str,

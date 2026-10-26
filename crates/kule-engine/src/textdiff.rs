@@ -61,20 +61,9 @@ pub enum LineKind {
 /// file (a link is not followed), and only as much as a side may hold.
 pub(crate) fn side(path: &std::path::Path) -> std::io::Result<Option<Vec<u8>>> {
     use std::io::Read;
-    use std::os::unix::fs::OpenOptionsExt;
-    let file = match std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-        .open(path)
-    {
-        Ok(f) => f,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(e) if e.raw_os_error() == Some(libc::ELOOP) => return Ok(None),
-        Err(e) => return Err(e),
-    };
-    if !file.metadata()?.is_file() {
+    let Some(file) = crate::osfs::open_regular(path)? else {
         return Ok(None);
-    }
+    };
     let mut bytes = Vec::new();
     file.take(MAX_SIDE as u64 + 1).read_to_end(&mut bytes)?;
     Ok(Some(bytes))

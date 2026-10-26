@@ -8,6 +8,7 @@ use tempfile::TempDir;
 
 const ENV: &str = "PORT=3000\nSTRIPE_KEY=sk_live_51Hreal\nDB_PASSWORD='hunter2'\n";
 
+#[cfg_attr(windows, allow(dead_code))]
 struct Setup {
     home: TempDir,
     ws: TempDir,
@@ -123,8 +124,10 @@ fn a_kept_secret_in_the_folder_gets_its_own_placeholder() {
     assert_eq!(copy, format!("PAYMENTS={}\n", env[0].1));
 }
 
+#[cfg(unix)]
 #[test]
 fn the_values_are_kept_where_no_sandbox_reads_them() {
+    #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
     let s = Setup::new();
     let dir = s.home.path().join("tasks").join(s.task.id());

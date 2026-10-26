@@ -415,6 +415,7 @@ fn a_change_from_the_cli_reaches_a_running_app() {
 
 /// `kule run` gives the agent the MCP servers approved from extensions, and
 /// only those, as the app's runs do.
+#[cfg(unix)]
 #[test]
 fn kule_run_gives_the_agent_only_the_mcp_servers_approved() {
     let target = env!("CARGO_TARGET_TMPDIR");

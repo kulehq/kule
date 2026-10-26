@@ -3,7 +3,6 @@
 use std::collections::BTreeMap;
 use std::fs::Metadata;
 use std::io::ErrorKind;
-use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
@@ -38,7 +37,15 @@ pub struct Stamp {
     /// (see `clock`).
     pub ctime: (i64, i64),
     pub ino: u64,
+    /// The upper half of a 128-bit file identity (ReFS on Windows); zero
+    /// elsewhere, and in stamps from before Kule kept it.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub ino_hi: u64,
     pub link: Option<String>,
+}
+
+fn is_zero(n: &u64) -> bool {
+    *n == 0
 }
 
 impl PartialEq for Stamp {
@@ -53,6 +60,7 @@ impl PartialEq for Stamp {
             && self.mtime == other.mtime
             && self.ctime == other.ctime
             && self.ino == other.ino
+            && self.ino_hi == other.ino_hi
             && self.link == other.link
     }
 }
@@ -72,7 +80,7 @@ impl Stamp {
     /// a parent is no longer a directory. Sockets, FIFOs and devices count as
     /// nothing: Kule does not track them.
     pub fn of(path: &Path) -> Result<Option<Stamp>> {
-        match std::fs::symlink_metadata(path) {
+        match lstat(path) {
             Ok(meta) => Self::from_meta(path, &meta),
             Err(e) if matches!(e.kind(), ErrorKind::NotFound | ErrorKind::NotADirectory) => {
                 Ok(None)
@@ -102,15 +110,19 @@ impl Stamp {
             },
             _ => None,
         };
+        let Some(facts) = Facts::of(path, meta).at(path)? else {
+            return Ok(None);
+        };
         Ok(Some(Stamp {
             kind,
-            size: if kind == Kind::Dir { 0 } else { meta.size() },
-            mode: meta.mode() & 0o7777,
-            mtime: (meta.mtime(), meta.mtime_nsec()),
-            ctime: (meta.ctime(), meta.ctime_nsec()),
-            ino: meta.ino(),
+            size: if kind == Kind::Dir { 0 } else { facts.size },
+            mode: facts.mode,
+            mtime: facts.mtime,
+            ctime: facts.ctime,
+            ino: facts.ino,
+            ino_hi: facts.ino_hi,
             link,
-            born: born(meta),
+            born: facts.born,
         }))
     }
 
@@ -137,8 +149,80 @@ impl Stamp {
     }
 }
 
+/// What the filesystem keeps about an entry, read as each system gives it.
+struct Facts {
+    size: u64,
+    mode: u32,
+    mtime: (i64, i64),
+    ctime: (i64, i64),
+    ino: u64,
+    ino_hi: u64,
+    born: Option<(i64, i64)>,
+}
+
+impl Facts {
+    /// From `lstat` on Unix. `None` when the entry is gone.
+    #[cfg(unix)]
+    fn of(_path: &Path, meta: &Metadata) -> std::io::Result<Option<Facts>> {
+        use std::os::unix::fs::MetadataExt;
+        Ok(Some(Facts {
+            size: meta.size(),
+            mode: meta.mode() & 0o7777,
+            mtime: (meta.mtime(), meta.mtime_nsec()),
+            ctime: (meta.ctime(), meta.ctime_nsec()),
+            ino: meta.ino(),
+            ino_hi: 0,
+            born: born(meta),
+        }))
+    }
+
+    /// From the entry's own handle on Windows, opened without following a
+    /// link: the change time and the file identity are not in what a
+    /// directory listing gives. `None` when the entry is gone.
+    #[cfg(windows)]
+    fn of(path: &Path, meta: &Metadata) -> std::io::Result<Option<Facts>> {
+        use crate::osfs::win;
+        let file = match win::open_attributes(path, false) {
+            Ok(file) => file,
+            Err(e) if matches!(e.kind(), ErrorKind::NotFound | ErrorKind::NotADirectory) => {
+                return Ok(None);
+            }
+            // A file another process is removing just then, or one Kule may
+            // not open: what the listing said, with an identity no entry
+            // has, so it counts as changed once it can be read.
+            Err(e) if e.kind() == ErrorKind::PermissionDenied => {
+                use std::os::windows::fs::MetadataExt;
+                let mtime = win::unix_time(meta.last_write_time() as i64);
+                return Ok(Some(Facts {
+                    size: meta.file_size(),
+                    mode: crate::osfs::synthesized_mode(meta.file_attributes()),
+                    mtime,
+                    ctime: mtime,
+                    ino: 0,
+                    ino_hi: 0,
+                    born: None,
+                }));
+            }
+            Err(e) => return Err(e),
+        };
+        let basic = win::basic_info(&file)?;
+        let standard = win::standard_info(&file)?;
+        let (_, id) = win::identity(&file)?;
+        Ok(Some(Facts {
+            size: standard.EndOfFile as u64,
+            mode: crate::osfs::synthesized_mode(basic.FileAttributes),
+            mtime: win::unix_time(basic.LastWriteTime),
+            ctime: win::unix_time(basic.ChangeTime),
+            ino: u64::from_le_bytes(id[..8].try_into().expect("8 bytes")),
+            ino_hi: u64::from_le_bytes(id[8..].try_into().expect("8 bytes")),
+            born: None,
+        }))
+    }
+}
+
 /// When the entry `meta` describes was made, on Linux (statx, where the
 /// filesystem keeps it); `None` elsewhere.
+#[cfg(unix)]
 fn born(meta: &Metadata) -> Option<(i64, i64)> {
     if !cfg!(target_os = "linux") {
         return None;
@@ -203,13 +287,29 @@ fn scan_at_most(root: &Path, most: usize) -> Result<Tree> {
                 });
             }
         };
-        let meta = match entry.metadata() {
+        let meta = match entry.metadata().map_err(std::io::Error::from) {
             Ok(meta) => meta,
-            Err(e) if vanished(&e) => continue,
+            // Windows refuses to look at a file another process is removing
+            // just then: asked again, it is gone or readable.
+            Err(e) if e.kind() == ErrorKind::PermissionDenied => match lstat(entry.path()) {
+                Ok(meta) => meta,
+                Err(e) if matches!(e.kind(), ErrorKind::NotFound | ErrorKind::NotADirectory) => {
+                    continue;
+                }
+                Err(e) => {
+                    return Err(Error::Io {
+                        path: entry.path().to_path_buf(),
+                        source: e,
+                    });
+                }
+            },
+            Err(e) if matches!(e.kind(), ErrorKind::NotFound | ErrorKind::NotADirectory) => {
+                continue;
+            }
             Err(e) => {
                 return Err(Error::Io {
                     path: entry.path().to_path_buf(),
-                    source: e.into(),
+                    source: e,
                 });
             }
         };
@@ -220,11 +320,29 @@ fn scan_at_most(root: &Path, most: usize) -> Result<Tree> {
     Ok(tree)
 }
 
+/// `symlink_metadata`, asked again a few times on Windows when it is
+/// refused: a file another process is removing just then is refused until
+/// it is gone.
+fn lstat(path: &Path) -> std::io::Result<Metadata> {
+    let mut tries = 0;
+    loop {
+        match std::fs::symlink_metadata(path) {
+            Err(e) if cfg!(windows) && e.kind() == ErrorKind::PermissionDenied && tries < 5 => {
+                tries += 1;
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            other => return other,
+        }
+    }
+}
+
 pub fn vanished(e: &walkdir::Error) -> bool {
     e.io_error()
         .is_some_and(|io| matches!(io.kind(), ErrorKind::NotFound | ErrorKind::NotADirectory))
 }
 
+/// `path` under `root` as Kule names it everywhere: its components joined
+/// with `/`, whatever separator the system writes.
 pub fn relative(root: &Path, path: &Path) -> Result<String> {
     let rel = path.strip_prefix(root).map_err(|_| {
         Error::Invalid(format!(
@@ -233,7 +351,18 @@ pub fn relative(root: &Path, path: &Path) -> Result<String> {
             root.display()
         ))
     })?;
-    utf8(rel)
+    let mut text = String::new();
+    for component in rel.components() {
+        let part = component.as_os_str();
+        let part = part
+            .to_str()
+            .ok_or_else(|| Error::NonUtf8Path(path.to_path_buf()))?;
+        if !text.is_empty() {
+            text.push('/');
+        }
+        text.push_str(part);
+    }
+    Ok(text)
 }
 
 pub fn utf8(path: &Path) -> Result<String> {

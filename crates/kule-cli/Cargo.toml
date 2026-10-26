@@ -25,7 +25,13 @@ futures = "0.3.34"
 kule-acp = { version = "0.2.0-preview.14", path = "../kule-acp" }
 kule-daemon = { version = "0.2.0-preview.14", path = "../kule-daemon" }
 tokio = { version = "1.53.3", features = ["rt-multi-thread"] }
-libc = "0.2.190"
 
 [dev-dependencies]
 tempfile.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2.190"
+
+[target.'cfg(windows)'.dependencies]
+# Turns the console's echo off while a secret is typed.
+windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_System_Console"] }

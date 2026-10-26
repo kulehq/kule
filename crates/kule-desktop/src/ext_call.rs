@@ -8,7 +8,6 @@
 
 use std::collections::HashMap;
 use std::io::Write;
-use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 use std::sync::Mutex;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -118,7 +117,7 @@ impl Grants {
         {
             return Ok(g.clone());
         }
-        let person = std::env::var_os("HOME").map(std::path::PathBuf::from);
+        let person = kule_daemon::osfs::person_home();
         let g = granted(home, ext, person.as_deref())?;
         self.0
             .lock()
@@ -373,12 +372,7 @@ fn log_fetch(home: &Path, ext: &str, method: &str, host: &str, outcome: Option<(
         "status": outcome.map(|o| o.0),
         "bytes": outcome.map(|o| o.1),
     });
-    if let Ok(mut file) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .mode(0o600)
-        .open(dir.join("network.jsonl"))
-    {
+    if let Ok(mut file) = kule_daemon::osfs::append_private(&dir.join("network.jsonl")) {
         let _ = writeln!(file, "{line}");
     }
 }

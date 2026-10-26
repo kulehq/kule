@@ -16,27 +16,28 @@ pub mod settings_profile;
 pub mod shell;
 pub mod shortcuts;
 pub mod themes;
+mod transport;
 
-use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
 pub use alerts::{Alert, Alerts};
 pub use client::{Client, spawn_daemon};
 pub use kule_acp::Profile as AgentProfile;
+pub use kule_engine::osfs;
 pub use kule_engine::{
     BudgetLeft, BudgetScope, Group, GroupPolicy, GroupSpent, Limits, Money, PolicyChoice, Question,
     Spent, TaskColor, TaskLimits, public_ip,
 };
 pub use kule_view::refs::Reference;
 pub use protocol::{Call, Hello, PROTOCOL, Redacted, Request, Response};
-pub use server::{
-    MAX_REQUEST, bind, dispatch, new_token, peer_uid, run, serve, socket_path, token_path,
-};
+pub use server::{MAX_REQUEST, bind, dispatch, new_token, run, serve, socket_path, token_path};
 pub use service::{
     Behind, Commit, DailyBudget, GroupImpact, GroupPolicyText, IsolationView, Notice, Outside,
     Overlap, Result, Review, RunEvent, Sequenced, Service, SharedBudget, TaskChange, TaskView,
     Timeline,
 };
+#[cfg(unix)]
+pub use transport::peer_uid;
 
 /// Kule's `home` as it must be: a folder of this user's, open to nobody
 /// else, never a link; it holds the daemon's token, every task's copy and
@@ -44,15 +45,11 @@ pub use service::{
 /// others is closed, and the returned note says so; anything else is
 /// refused.
 pub fn check_home(home: &Path) -> Result<Option<String>> {
-    use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
     let shown = home.display();
     let meta = match std::fs::symlink_metadata(home) {
         Ok(meta) => meta,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            std::fs::DirBuilder::new()
-                .recursive(true)
-                .mode(0o700)
-                .create(home)
+            kule_engine::osfs::create_private_dir_all(home)
                 .map_err(|e| format!("cannot make Kule's home {shown}: {e}"))?;
             return Ok(None);
         }
@@ -66,42 +63,48 @@ pub fn check_home(home: &Path) -> Result<Option<String>> {
     if !meta.is_dir() {
         return Err(format!("Kule's home {shown} is not a folder"));
     }
-    // SAFETY: geteuid has no preconditions and cannot fail.
-    let me = unsafe { libc::geteuid() };
-    if meta.uid() != me {
+    let mine = kule_engine::osfs::owned_by_me(home)
+        .map_err(|e| format!("cannot read who owns Kule's home {shown}: {e}"))?;
+    if !mine {
         return Err(format!(
             "Kule's home {shown} belongs to another user; Kule uses only a home of yours"
         ));
     }
-    let mode = meta.mode() & 0o7777;
-    if mode & 0o077 == 0 {
+    let open = kule_engine::osfs::open_to_others(home)
+        .map_err(|e| format!("cannot read who may open Kule's home {shown}: {e}"))?;
+    let Some(found) = open else {
         return Ok(None);
-    }
+    };
     // Through the folder itself: no link put in its place meanwhile is
     // followed.
-    let dir = std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW)
-        .open(home)
-        .map_err(|e| format!("cannot open Kule's home {shown}: {e}"))?;
-    dir.set_permissions(std::fs::Permissions::from_mode(0o700))
+    kule_engine::osfs::make_private(home)
         .map_err(|e| format!("cannot close Kule's home {shown} to others: {e}"))?;
     Ok(Some(format!(
-        "Kule's home {shown} was open to others ({mode:o}); it is 0700 now"
+        "Kule's home {shown} was open to others ({found}); it is private now"
     )))
 }
 
-/// Kule's home: `KULE_HOME`, else `~/.kule`.
+/// Kule's home: `KULE_HOME`, else `~/.kule` (Unix) or `%LOCALAPPDATA%\\Kule`
+/// (Windows).
 pub fn default_home() -> Result<PathBuf> {
     if let Some(home) = std::env::var_os("KULE_HOME") {
         return Ok(PathBuf::from(home));
     }
-    std::env::var_os("HOME")
-        .map(|h| PathBuf::from(h).join(".kule"))
-        .ok_or_else(|| "HOME is not set; set KULE_HOME".to_owned())
+    #[cfg(unix)]
+    {
+        std::env::var_os("HOME")
+            .map(|h| PathBuf::from(h).join(".kule"))
+            .ok_or_else(|| "HOME is not set; set KULE_HOME".to_owned())
+    }
+    #[cfg(windows)]
+    {
+        std::env::var_os("LOCALAPPDATA")
+            .map(|h| PathBuf::from(h).join("Kule"))
+            .ok_or_else(|| "LOCALAPPDATA is not set; set KULE_HOME".to_owned())
+    }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use std::fs;
     use std::os::unix::fs::PermissionsExt;

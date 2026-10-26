@@ -442,6 +442,7 @@ mod tests {
 
     fn stamp(ino: u64, born: Option<(i64, i64)>) -> Stamp {
         Stamp {
+            ino_hi: 0,
             kind: Kind::File,
             size: 2,
             mode: 0o644,

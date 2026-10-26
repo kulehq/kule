@@ -15,7 +15,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
 use std::io;
-use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -97,7 +96,7 @@ fn keep_path(copy: &Path, rel: &str, to: &Path, kept: &mut u64) -> Result<Left> 
     }
     if meta.file_type().is_symlink() {
         let target = fs::read_link(copy.join(rel)).at(&copy.join(rel))?;
-        std::os::unix::fs::symlink(&target, to).at(to)?;
+        crate::osfs::symlink(&target, to).at(to)?;
         return Ok(Left::Kept);
     }
     // A file, opened without following a link anywhere on its way, so one
@@ -106,7 +105,7 @@ fn keep_path(copy: &Path, rel: &str, to: &Path, kept: &mut u64) -> Result<Left> 
         return Ok(Left::Absent);
     };
     let meta = file.metadata().at(&copy.join(rel))?;
-    if !meta.is_file() || meta.nlink() > 1 {
+    if !meta.is_file() || crate::osfs::links_of(&file).at(&copy.join(rel))? > 1 {
         return Ok(Left::Unkept);
     }
     if meta.len() > MAX_KEPT_FILE || *kept + meta.len() > MAX_KEPT_TOTAL {
@@ -121,9 +120,9 @@ fn keep_path(copy: &Path, rel: &str, to: &Path, kept: &mut u64) -> Result<Left> 
 /// Clones the open file to `to`, which must not exist: a clone where the
 /// filesystem makes one, a copy otherwise.
 fn clone_from(file: &File, to: &Path) -> io::Result<()> {
-    use std::os::fd::AsRawFd;
     #[cfg(target_os = "macos")]
     {
+        use std::os::fd::AsRawFd;
         use std::os::unix::ffi::OsStrExt;
         let name = std::ffi::CString::new(to.as_os_str().as_bytes())?;
         // SAFETY: the descriptor is open and the path NUL-terminated.
@@ -137,6 +136,7 @@ fn clone_from(file: &File, to: &Path) -> io::Result<()> {
         .open(to)?;
     #[cfg(target_os = "linux")]
     {
+        use std::os::fd::AsRawFd;
         // SAFETY: both descriptors are open; FICLONE only shares extents.
         if unsafe { libc::ioctl(out.as_raw_fd(), libc::FICLONE, file.as_raw_fd()) } == 0 {
             return Ok(());
@@ -276,7 +276,7 @@ impl Task {
                     if meta.is_dir() {
                         fs::create_dir_all(&to).at(&to)?;
                     } else if meta.file_type().is_symlink() {
-                        std::os::unix::fs::symlink(fs::read_link(&kept).at(&kept)?, &to).at(&to)?;
+                        crate::osfs::symlink(&fs::read_link(&kept).at(&kept)?, &to).at(&to)?;
                     } else {
                         reflink_copy::reflink_or_copy(&kept, &to).at(&kept)?;
                     }

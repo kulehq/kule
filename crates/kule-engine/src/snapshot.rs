@@ -9,11 +9,9 @@
 
 use std::collections::BTreeSet;
 use std::fs;
-use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use filetime::FileTime;
 use lonca_core::store::CommitSpec;
 use lonca_core::{FileEntry, FileMap, FileMode, GitId, Store};
 use serde::{Deserialize, Serialize};
@@ -247,7 +245,10 @@ impl Snapshots {
             let to = dst.join(&entry.path);
             match entry.kind {
                 Kind::Dir => fs::create_dir_all(&to).at(&to)?,
-                Kind::Symlink => symlink(entry.link.as_deref().unwrap_or_default(), &to).at(&to)?,
+                Kind::Symlink => {
+                    crate::osfs::symlink(Path::new(entry.link.as_deref().unwrap_or_default()), &to)
+                        .at(&to)?
+                }
                 Kind::File => {
                     let n = entry.blob.ok_or_else(|| {
                         Error::Invalid(format!("snapshot {commit}: no bytes for {}", entry.path))
@@ -264,8 +265,7 @@ impl Snapshots {
         for parent in &meta.parents {
             if let Some((secs, nanos)) = parent.mtime {
                 let dir = dst.join(&parent.path);
-                let time = FileTime::from_unix_time(secs, nanos as u32);
-                filetime::set_file_mtime(&dir, time).at(&dir)?;
+                crate::osfs::set_mtime(&dir, (secs, nanos)).at(&dir)?;
             }
         }
         Ok(())
@@ -273,8 +273,8 @@ impl Snapshots {
 }
 
 fn finish(path: &Path, mode: u32, (secs, nanos): (i64, i64)) -> Result<()> {
-    filetime::set_file_mtime(path, FileTime::from_unix_time(secs, nanos as u32)).at(path)?;
-    fs::set_permissions(path, fs::Permissions::from_mode(mode)).at(path)
+    crate::osfs::set_mtime(path, (secs, nanos)).at(path)?;
+    crate::osfs::set_mode(path, mode).at(path)
 }
 
 pub(crate) fn lonca(path: &Path, e: lonca_core::Error) -> Error {

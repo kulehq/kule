@@ -2,7 +2,8 @@
 
 use std::collections::BTreeMap;
 use std::fs;
-use std::os::unix::fs::{MetadataExt, PermissionsExt, symlink};
+#[cfg(unix)]
+use std::os::unix::fs::symlink;
 use std::path::Path;
 
 use kule_engine::{Change, Error, Kind, Task};
@@ -34,13 +35,9 @@ fn snapshot(root: &Path) -> Snapshot {
                 target.to_str().unwrap().as_bytes().to_vec(),
             )
         } else if ft.is_dir() {
-            (Kind::Dir, meta.mode() & 0o7777, Vec::new())
+            (Kind::Dir, mode_of(&meta), Vec::new())
         } else {
-            (
-                Kind::File,
-                meta.mode() & 0o7777,
-                fs::read(entry.path()).unwrap(),
-            )
+            (Kind::File, mode_of(&meta), fs::read(entry.path()).unwrap())
         };
         snap.insert(rel, value);
     }
@@ -54,8 +51,79 @@ fn write(path: &Path, bytes: impl AsRef<[u8]>) {
     fs::write(path, bytes).unwrap();
 }
 
+/// The permission bits of `meta` as the test compares them: Unix modes;
+/// on Windows, where there are none, nothing.
+fn mode_of(meta: &fs::Metadata) -> u32 {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        meta.permissions().mode() & 0o7777
+    }
+    #[cfg(windows)]
+    {
+        let _ = meta;
+        0
+    }
+}
+
+/// The modification time of `meta`, as the filesystem keeps it.
+fn mtime_of(meta: &fs::Metadata) -> (i64, i64) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        (meta.mtime(), meta.mtime_nsec())
+    }
+    #[cfg(windows)]
+    {
+        let since = meta
+            .modified()
+            .unwrap()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap();
+        (since.as_secs() as i64, i64::from(since.subsec_nanos()))
+    }
+}
+
+/// When `meta`'s entry last changed: its change time on Unix, its
+/// modification time on Windows, where a content write moves both.
+fn changed_at(meta: &fs::Metadata) -> (i64, i64) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        (meta.ctime(), meta.ctime_nsec())
+    }
+    #[cfg(windows)]
+    {
+        mtime_of(meta)
+    }
+}
+
+/// `chmod`: on Windows only the owner's write bit exists, as the
+/// read-only attribute of a file.
 fn chmod(path: &Path, mode: u32) {
-    fs::set_permissions(path, fs::Permissions::from_mode(mode)).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(mode)).unwrap();
+    }
+    #[cfg(windows)]
+    {
+        if fs::metadata(path).unwrap().is_dir() {
+            return;
+        }
+        let mut perms = fs::metadata(path).unwrap().permissions();
+        perms.set_readonly(mode & 0o200 == 0);
+        fs::set_permissions(path, perms).unwrap();
+    }
+}
+
+/// A link in the fixture, where the system lets tests make one: Windows
+/// asks for Developer Mode or a privilege, and the fixture goes without.
+fn link(target: &str, at: std::path::PathBuf) {
+    #[cfg(unix)]
+    symlink(target, at).unwrap();
+    #[cfg(windows)]
+    let _ = (target, at);
 }
 
 /// A small repository with the shapes that tend to break copies: nested
@@ -74,7 +142,7 @@ fn fixture(root: &Path) {
     fs::create_dir_all(root.join("src/empty-dir")).unwrap();
     write(&root.join("run.sh"), "#!/bin/sh\necho hi\n");
     chmod(&root.join("run.sh"), 0o755);
-    symlink("src/main.rs", root.join("main-link")).unwrap();
+    link("src/main.rs", root.join("main-link"));
 }
 
 struct Setup {
@@ -114,8 +182,10 @@ fn edit(copy: &Path) {
     );
     fs::remove_file(copy.join("README.md")).unwrap();
     chmod(&copy.join("run.sh"), 0o644);
-    fs::remove_file(copy.join("main-link")).unwrap();
-    symlink("src/lib.rs", copy.join("main-link")).unwrap();
+    if fs::symlink_metadata(copy.join("main-link")).is_ok() {
+        fs::remove_file(copy.join("main-link")).unwrap();
+    }
+    link("src/lib.rs", copy.join("main-link"));
     fs::create_dir(copy.join("docs")).unwrap();
 }
 
@@ -172,21 +242,27 @@ fn rm_rf_src_then_rollback_restores_every_byte() {
     assert!(s.task.effects().unwrap().is_empty());
 }
 
+/// What [`edit`] changes: six entries on Unix; on Windows, where the
+/// fixture has no link and modes have no execute bit, four.
+const EDITS: usize = if cfg!(unix) { 6 } else { 4 };
+
 #[test]
 fn effects_report_each_kind_of_change() {
     let s = Setup::new();
     edit(&s.copy());
-    assert_eq!(
-        changes(&s.task),
-        [
-            ("README.md".into(), Change::Deleted),
-            ("docs".into(), Change::Created),
-            ("main-link".into(), Change::Modified),
-            ("run.sh".into(), Change::Modified),
-            ("src/main.rs".into(), Change::Modified),
-            ("src/new.rs".into(), Change::Created),
-        ]
-    );
+    let expected = [
+        ("README.md", Change::Deleted),
+        ("docs", Change::Created),
+        ("main-link", Change::Modified),
+        ("run.sh", Change::Modified),
+        ("src/main.rs", Change::Modified),
+        ("src/new.rs", Change::Created),
+    ]
+    .into_iter()
+    .filter(|(path, _)| cfg!(unix) || !matches!(*path, "main-link" | "run.sh"))
+    .map(|(path, change)| (path.to_owned(), change))
+    .collect::<Vec<_>>();
+    assert_eq!(changes(&s.task), expected);
 }
 
 #[test]
@@ -201,10 +277,7 @@ fn rewriting_the_same_bytes_is_not_a_change() {
     );
     // The stamp moved, so the byte comparison is what decides.
     let after = fs::metadata(&main).unwrap();
-    assert_ne!(
-        (before.ctime(), before.ctime_nsec()),
-        (after.ctime(), after.ctime_nsec())
-    );
+    assert_ne!(changed_at(&before), changed_at(&after));
     assert_eq!(changes(&s.task), [("src/lib.rs".into(), Change::Modified)]);
 }
 
@@ -213,7 +286,7 @@ fn commit_makes_the_workspace_match_the_copy() {
     let s = Setup::new();
     edit(&s.copy());
     let cp = s.task.commit().unwrap().expect("a checkpoint");
-    assert_eq!(cp.effects.len(), 6);
+    assert_eq!(cp.effects.len(), EDITS);
     assert_eq!(snapshot(&s.work()), snapshot(&s.copy()));
     assert!(s.task.effects().unwrap().is_empty());
     assert!(s.task.commit().unwrap().is_none());
@@ -236,11 +309,7 @@ fn the_copy_keeps_modification_times() {
             fs::symlink_metadata(s.work().join(rel)).unwrap(),
             fs::symlink_metadata(s.copy().join(rel)).unwrap(),
         );
-        assert_eq!(
-            (w.mtime(), w.mtime_nsec()),
-            (c.mtime(), c.mtime_nsec()),
-            "{rel}"
-        );
+        assert_eq!(mtime_of(&w), mtime_of(&c), "{rel}");
     }
 }
 
@@ -258,11 +327,7 @@ fn rollback_restores_parent_directory_times() {
             fs::metadata(s.work().join(rel)).unwrap(),
             fs::metadata(s.copy().join(rel)).unwrap(),
         );
-        assert_eq!(
-            (w.mtime(), w.mtime_nsec()),
-            (c.mtime(), c.mtime_nsec()),
-            "{rel:?}"
-        );
+        assert_eq!(mtime_of(&w), mtime_of(&c), "{rel:?}");
     }
 }
 
@@ -274,7 +339,7 @@ fn undo_restores_parent_directory_times() {
             .iter()
             .map(|rel| {
                 let m = fs::metadata(root.join(rel)).unwrap();
-                (m.mtime(), m.mtime_nsec())
+                mtime_of(&m)
             })
             .collect()
     };
@@ -298,11 +363,7 @@ fn commit_keeps_modification_times() {
             fs::metadata(s.work().join(rel)).unwrap(),
             fs::metadata(s.copy().join(rel)).unwrap(),
         );
-        assert_eq!(
-            (w.mtime(), w.mtime_nsec()),
-            (c.mtime(), c.mtime_nsec()),
-            "{rel}"
-        );
+        assert_eq!(mtime_of(&w), mtime_of(&c), "{rel}");
     }
 }
 
@@ -312,7 +373,7 @@ fn rollback_after_every_kind_of_change() {
     let pristine = snapshot(&s.work());
     edit(&s.copy());
     let set = s.task.rollback().unwrap();
-    assert_eq!(set.effects.len(), 6);
+    assert_eq!(set.effects.len(), EDITS);
     assert_eq!(snapshot(&s.copy()), pristine);
     assert_eq!(snapshot(&s.work()), pristine);
     assert!(s.task.effects().unwrap().is_empty());
@@ -477,6 +538,7 @@ fn type_changes_commit_and_roll_back() {
     assert_eq!(snapshot(&s.copy()), pristine);
 }
 
+#[cfg(unix)]
 #[test]
 fn read_only_directories_survive_the_round_trip() {
     let s = Setup::new();
@@ -490,7 +552,7 @@ fn read_only_directories_survive_the_round_trip() {
     chmod(&s.copy().join("src/empty-dir"), 0o555);
     s.task.commit().unwrap();
     assert_eq!(
-        fs::metadata(s.work().join("src/empty-dir")).unwrap().mode() & 0o777,
+        mode_of(&fs::metadata(s.work().join("src/empty-dir")).unwrap()) & 0o777,
         0o555
     );
 }
@@ -665,8 +727,23 @@ fn a_same_size_write_during_creation_is_not_overwritten() {
                         .flatten()
                         .any(|t| t.path().join("w").join(&name).join("a.txt").exists());
                     if cloned {
-                        fs::write(&a, "2\n").unwrap();
-                        return;
+                        // Windows refuses a write while Kule's copy still
+                        // reads the file; an editor would try again, as this
+                        // does.
+                        loop {
+                            match fs::write(&a, "2\n") {
+                                Ok(()) => return,
+                                Err(e)
+                                    if cfg!(windows)
+                                        && e.raw_os_error() == Some(32)
+                                        && started.elapsed()
+                                            < std::time::Duration::from_secs(30) =>
+                                {
+                                    std::thread::yield_now();
+                                }
+                                Err(e) => panic!("{e}"),
+                            }
+                        }
                     }
                     std::thread::yield_now();
                 }
@@ -824,10 +901,11 @@ fn steps_record_what_each_tool_call_changed() {
 
 /// Module caches and build directories are often read-only (`chmod 555`);
 /// rollback, commit and undo still get through them.
+#[cfg(unix)]
 #[test]
 fn read_only_directories_do_not_stop_rollback_commit_or_undo() {
     let s = Setup::new();
-    let ro = |p: &Path, mode| fs::set_permissions(p, fs::Permissions::from_mode(mode)).unwrap();
+    let ro = |p: &Path, mode| chmod(p, mode);
 
     // The agent fills a cache and makes it read-only: rollback still works.
     write(&s.copy().join("cache/x"), "x\n");
@@ -850,7 +928,7 @@ fn read_only_directories_do_not_stop_rollback_commit_or_undo() {
         fs::read_to_string(s.work().join("vendor/lib.txt")).unwrap(),
         "lib\n"
     );
-    let mode = fs::metadata(s.work().join("vendor")).unwrap().mode() & 0o777;
+    let mode = mode_of(&fs::metadata(s.work().join("vendor")).unwrap()) & 0o777;
     assert_eq!(mode, 0o555);
     ro(&s.work().join("vendor"), 0o755);
     ro(&task.copy().join("vendor"), 0o755);
@@ -858,6 +936,7 @@ fn read_only_directories_do_not_stop_rollback_commit_or_undo() {
 
 /// A commit that fails halfway puts the workspace back and leaves no
 /// interrupted checkpoint in undo's way.
+#[cfg(unix)]
 #[test]
 fn a_commit_that_fails_halfway_leaves_nothing_behind() {
     let s = Setup::new();
@@ -868,13 +947,13 @@ fn a_commit_that_fails_halfway_leaves_nothing_behind() {
     // a.txt goes in first; then zz.txt cannot be read from the copy.
     write(&s.copy().join("a.txt"), "two\n");
     write(&s.copy().join("zz.txt"), "secret\n");
-    fs::set_permissions(s.copy().join("zz.txt"), fs::Permissions::from_mode(0o000)).unwrap();
+    chmod(&s.copy().join("zz.txt"), 0o000);
     let result = s.task.commit();
     assert!(result.is_err(), "{result:?}");
     assert_eq!(snapshot(&s.work()), before);
 
     // Undo still reaches the commit before.
-    fs::set_permissions(s.copy().join("zz.txt"), fs::Permissions::from_mode(0o644)).unwrap();
+    chmod(&s.copy().join("zz.txt"), 0o644);
     s.task.rollback().unwrap();
     assert_eq!(s.task.undo().unwrap().unwrap().id, first.id);
 }
@@ -960,8 +1039,11 @@ fn a_task_opens_only_by_the_id_it_was_made_with() {
     let file = tasks.join(task.id()).join("task.json");
     for id in ["x\")(allow default", "..", "a.b", "a-b"] {
         let dir = tasks.join(id);
-        fs::create_dir_all(&dir).unwrap();
-        fs::copy(&file, dir.join("task.json")).unwrap();
+        // Windows refuses some of these names on disk; the id is refused
+        // either way.
+        if fs::create_dir_all(&dir).is_ok() {
+            fs::copy(&file, dir.join("task.json")).unwrap();
+        }
         assert!(Task::open(home.path(), id).is_err(), "{id}");
     }
     let other = tasks.join("abc123");

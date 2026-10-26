@@ -1,12 +1,8 @@
 //! The daemon's side of the socket: only the user who runs it may connect,
 //! and each line is capped, so a client cannot make it read without end.
 
-use std::fs::{self, File, OpenOptions};
+use std::fs::{File, OpenOptions};
 use std::io::{self, BufRead, BufReader, Read, Write};
-use std::os::fd::AsRawFd;
-use std::os::unix::fs::OpenOptionsExt;
-use std::os::unix::fs::PermissionsExt;
-use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -18,6 +14,7 @@ use serde_json::Value;
 use crate::extensions as ext;
 use crate::protocol::{Call, Hello, PROTOCOL, Request, Response};
 use crate::service::Service;
+use crate::transport::{Listener, Stream};
 
 /// The longest request line the daemon reads.
 pub const MAX_REQUEST: usize = 1 << 20;
@@ -31,10 +28,13 @@ const MAX_UNPROVEN: usize = 8;
 /// How long a connection may take, in all, to show the token.
 const UNPROVEN_FOR: std::time::Duration = std::time::Duration::from_secs(5);
 /// Unix socket paths are limited to about this many bytes.
+#[cfg(unix)]
 const MAX_SOCKET_PATH: usize = 100;
 
+/// Where the daemon for `home` listens: a socket file in the home on Unix,
+/// a named pipe named after the home on Windows.
 pub fn socket_path(home: &Path) -> PathBuf {
-    home.join("kuled.sock")
+    crate::transport::endpoint(home)
 }
 
 /// Runs the daemon for `home` until it has been idle for `idle_after`: no
@@ -73,15 +73,11 @@ pub fn token_path(home: &Path) -> PathBuf {
 /// socket (Linux has no rule against that) but not speak to the daemon.
 pub fn new_token(home: &Path) -> io::Result<String> {
     let mut bytes = [0u8; 32];
-    File::open("/dev/urandom")?.read_exact(&mut bytes)?;
+    kule_engine::osfs::random_bytes(&mut bytes)?;
     let token: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
     let path = token_path(home);
-    let _ = fs::remove_file(&path);
-    let mut file = OpenOptions::new()
-        .create_new(true)
-        .write(true)
-        .mode(0o600)
-        .open(&path)?;
+    let _ = std::fs::remove_file(&path);
+    let mut file = kule_engine::osfs::create_private(&path)?;
     file.write_all(token.as_bytes())?;
     Ok(token)
 }
@@ -90,7 +86,7 @@ pub fn new_token(home: &Path) -> io::Result<String> {
 /// idle for `idle_after`, then removes the socket. Requests without
 /// `token` are refused.
 pub fn serve(
-    listener: UnixListener,
+    listener: Listener,
     service: Arc<Service>,
     socket: &Path,
     idle_after: Duration,
@@ -125,14 +121,17 @@ pub fn serve(
             }
         });
     }
-    // SAFETY: geteuid has no preconditions and cannot fail.
-    let me = unsafe { libc::geteuid() };
-    for conn in listener.incoming() {
+    loop {
         if control.stopping.load(Ordering::SeqCst) {
             break;
         }
-        let Ok(stream) = conn else { continue };
-        if peer_uid(&stream) != Some(me) {
+        let Ok(stream) = listener.accept() else {
+            continue;
+        };
+        if control.stopping.load(Ordering::SeqCst) {
+            break;
+        }
+        if !stream.peer_is_me() {
             continue; // dropped: closes the connection
         }
         let Some(place) = unproven.take(&stream) else {
@@ -149,7 +148,7 @@ pub fn serve(
             clients.fetch_sub(1, Ordering::SeqCst);
         });
     }
-    let _ = fs::remove_file(socket);
+    Listener::remove(socket);
 }
 
 /// Lets the idle watch and a shutdown call stop the accept loop.
@@ -173,7 +172,7 @@ impl Control {
     fn stop(&self) {
         self.stopping.store(true, Ordering::SeqCst);
         // Wakes the accept loop, which sees the flag.
-        let _ = UnixStream::connect(&self.socket);
+        let _ = Stream::connect(&self.socket);
     }
 }
 
@@ -184,8 +183,7 @@ fn lock(path: &Path) -> io::Result<File> {
         .truncate(false)
         .write(true)
         .open(path)?;
-    // SAFETY: the descriptor is valid for the lifetime of `file`.
-    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+    if !kule_engine::osfs::try_lock(&file)? {
         return Err(io::Error::new(
             io::ErrorKind::AddrInUse,
             "a Kule daemon is already running for this home",
@@ -194,8 +192,10 @@ fn lock(path: &Path) -> io::Result<File> {
     Ok(file)
 }
 
-/// Binds the socket, replacing a stale one, readable by its owner only.
-pub fn bind(path: &Path) -> io::Result<UnixListener> {
+/// Listens at `path` (see [`socket_path`]): a stale socket is replaced,
+/// and only this user may open what listens there.
+pub fn bind(path: &Path) -> io::Result<Listener> {
+    #[cfg(unix)]
     if path.as_os_str().len() > MAX_SOCKET_PATH {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -205,64 +205,20 @@ pub fn bind(path: &Path) -> io::Result<UnixListener> {
             ),
         ));
     }
-    if path.exists() {
-        if UnixStream::connect(path).is_ok() {
-            return Err(io::Error::new(
-                io::ErrorKind::AddrInUse,
-                "a Kule daemon is already running",
-            ));
-        }
-        fs::remove_file(path)?;
-    }
-    let listener = UnixListener::bind(path)?;
-    fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
-    Ok(listener)
-}
-
-/// The uid of the process on the other end of a Unix socket.
-pub fn peer_uid(stream: &UnixStream) -> Option<u32> {
-    let fd = stream.as_raw_fd();
-    #[cfg(target_os = "macos")]
-    {
-        let (mut uid, mut gid): (libc::uid_t, libc::gid_t) = (0, 0);
-        // SAFETY: fd is a valid socket for the lifetime of `stream`; the out
-        // pointers point to live stack variables.
-        let rc = unsafe { libc::getpeereid(fd, &mut uid, &mut gid) };
-        (rc == 0).then_some(uid)
-    }
-    #[cfg(target_os = "linux")]
-    {
-        let mut cred = libc::ucred {
-            pid: 0,
-            uid: 0,
-            gid: 0,
-        };
-        let mut len = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
-        // SAFETY: fd is a valid socket; cred and len are live and sized right.
-        let rc = unsafe {
-            libc::getsockopt(
-                fd,
-                libc::SOL_SOCKET,
-                libc::SO_PEERCRED,
-                &mut cred as *mut _ as *mut libc::c_void,
-                &mut len,
-            )
-        };
-        (rc == 0).then_some(cred.uid)
-    }
+    Listener::bind(path)
 }
 
 /// The connections that have not shown the token yet, oldest first.
 #[derive(Default)]
 struct Unproven {
-    waiting: std::sync::Mutex<std::collections::VecDeque<(u64, UnixStream)>>,
+    waiting: std::sync::Mutex<std::collections::VecDeque<(u64, Stream)>>,
     next: std::sync::atomic::AtomicU64,
 }
 
 impl Unproven {
     /// A place for `stream`, ending the connection waiting longest when
     /// none is left.
-    fn take(self: &Arc<Self>, stream: &UnixStream) -> Option<Place> {
+    fn take(self: &Arc<Self>, stream: &Stream) -> Option<Place> {
         let kept = stream.try_clone().ok()?;
         let id = self.next.fetch_add(1, Ordering::SeqCst);
         let mut waiting = self
@@ -272,7 +228,7 @@ impl Unproven {
         if waiting.len() >= MAX_UNPROVEN
             && let Some((_, oldest)) = waiting.pop_front()
         {
-            let _ = oldest.shutdown(std::net::Shutdown::Both);
+            let _ = oldest.shutdown();
         }
         waiting.push_back((id, kept));
         Some(Place {
@@ -310,7 +266,7 @@ impl Drop for Place {
 /// The connection, read with one deadline for all that comes before the
 /// token: a line given a byte at a time does not stretch it.
 struct Deadlined {
-    stream: UnixStream,
+    stream: Stream,
     until: Option<Instant>,
 }
 
@@ -328,7 +284,7 @@ impl Read for Deadlined {
 }
 
 fn handle(
-    stream: UnixStream,
+    stream: Stream,
     service: &Arc<Service>,
     control: &Control,
     mut place: Place,

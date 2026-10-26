@@ -23,8 +23,6 @@ use std::collections::HashMap;
 use std::ffi::OsString;
 use std::fs::{self, File};
 use std::io::Write;
-use std::os::unix::ffi::OsStrExt;
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -155,17 +153,13 @@ fn set_aside(path: &Path, aside: &Path) -> Result<Option<PathBuf>> {
     }
     let target = aside.join(path.strip_prefix("/").unwrap_or(path));
     if let Some(parent) = target.parent() {
-        fs::DirBuilder::new()
-            .recursive(true)
-            .mode(0o700)
-            .create(parent)
-            .at(parent)?;
+        crate::osfs::create_private_dir_all(parent).at(parent)?;
     }
     match fs::rename(path, &target) {
         Ok(()) => Ok(Some(target)),
         // Kule's home on another file system: copied instead, as far as
         // Kule keeps anything; put_back removes the original.
-        Err(e) if e.raw_os_error() == Some(libc::EXDEV) => match note(path) {
+        Err(e) if crate::osfs::is_cross_device(&e) => match note(path) {
             Ok(node) => write(&target, &node).map(|()| Some(target)),
             Err(_) => Ok(None),
         },
@@ -210,9 +204,7 @@ impl Holder {
     /// Whether its process still runs: a run whose process is gone will
     /// never put back.
     fn alive(&self) -> bool {
-        // SAFETY: signal 0 only asks whether the process exists.
-        let exists = unsafe { libc::kill(self.pid, 0) } == 0
-            || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM);
+        let exists = u32::try_from(self.pid).is_ok_and(crate::osfs::alive);
         exists && started(self.pid).unwrap_or(0) == self.started
     }
 }
@@ -237,11 +229,7 @@ struct Lock {
 
 impl Lock {
     fn take(dir: &Path) -> Result<Lock> {
-        fs::DirBuilder::new()
-            .recursive(true)
-            .mode(0o700)
-            .create(dir)
-            .at(dir)?;
+        crate::osfs::create_private_dir_all(dir).at(dir)?;
         Ok(Lock {
             _held: crate::fsops::Flock::take(&dir.join("lock"))?,
         })
@@ -250,7 +238,7 @@ impl Lock {
 
 /// Where the note for `path` is kept.
 fn entry(dir: &Path, path: &Path) -> PathBuf {
-    let hash = blake3::hash(path.as_os_str().as_bytes()).to_hex();
+    let hash = blake3::hash(path.as_os_str().as_encoded_bytes()).to_hex();
     dir.join(&hash[..32])
 }
 
@@ -267,11 +255,8 @@ fn join(dir: &Path, path: &Path, holder: &Holder) -> Result<()> {
     // Made whole beside it, then moved in place: a note is never half there.
     let staging = entry.with_extension("partial");
     remove_tree(&staging)?;
-    fs::DirBuilder::new()
-        .mode(0o700)
-        .create(&staging)
-        .at(&staging)?;
-    fs::write(staging.join("path"), path.as_os_str().as_bytes()).at(&staging)?;
+    crate::osfs::create_private_dir(&staging).at(&staging)?;
+    fs::write(staging.join("path"), path.as_os_str().as_encoded_bytes()).at(&staging)?;
     match &node {
         Node::Absent => File::create(staging.join("absent"))
             .map(drop)
@@ -365,7 +350,7 @@ fn remove_tree(path: &Path) -> Result<()> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(e) => Err(e).at(path),
         Ok(meta) if meta.is_dir() => {
-            fs::set_permissions(path, fs::Permissions::from_mode(0o700)).at(path)?;
+            crate::osfs::set_mode(path, 0o700).at(path)?;
             for child in fs::read_dir(path).at(path)? {
                 remove_tree(&child.at(path)?.path())?;
             }
@@ -413,7 +398,7 @@ fn read(path: &Path, budget: &mut usize) -> Result<Node> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Node::Absent),
         Err(e) => return Err(e).at(path),
     };
-    let mode = meta.permissions().mode() & 0o7777;
+    let mode = crate::osfs::mode_of(&meta);
     let kind = meta.file_type();
     if kind.is_symlink() {
         return Ok(Node::Link(fs::read_link(path).at(path)?));
@@ -476,34 +461,28 @@ fn put_back(path: &Path, node: &Node) -> Result<()> {
 fn write(path: &Path, node: &Node) -> Result<()> {
     match node {
         Node::Absent => Ok(()),
-        Node::Link(target) => std::os::unix::fs::symlink(target, path).at(path),
+        Node::Link(target) => crate::osfs::symlink(target, path).at(path),
         Node::File { data, mode } => {
-            let mut file = fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .mode(0o600)
-                .custom_flags(libc::O_NOFOLLOW)
-                .open(path)
-                .at(path)?;
+            let mut file = crate::osfs::create_private(path).at(path)?;
             file.write_all(data).at(path)?;
-            file.set_permissions(fs::Permissions::from_mode(*mode))
-                .at(path)
+            crate::osfs::set_file_mode(&file, *mode).at(path)
         }
         Node::Dir { mode, entries } => {
             fs::create_dir(path).at(path)?;
-            fs::set_permissions(path, fs::Permissions::from_mode(0o700)).at(path)?;
+            crate::osfs::set_mode(path, 0o700).at(path)?;
             for (name, entry) in entries {
                 write(&path.join(name), entry)?;
             }
-            fs::set_permissions(path, fs::Permissions::from_mode(*mode)).at(path)
+            crate::osfs::set_mode(path, *mode).at(path)
         }
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use std::fs;
     use std::os::unix::ffi::OsStringExt;
+    use std::os::unix::fs::PermissionsExt;
     use std::process::Command;
 
     use tempfile::TempDir;

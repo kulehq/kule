@@ -181,7 +181,7 @@ pub(crate) fn place_links(
     let mut made = Vec::new();
     for (link, target) in wanted {
         if std::fs::symlink_metadata(&link).is_err() {
-            match std::os::unix::fs::symlink(target, &link) {
+            match crate::osfs::symlink(target, &link) {
                 Ok(()) => {}
                 Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
                 Err(e) => return Err(e).at(&link),

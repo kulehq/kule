@@ -7,6 +7,7 @@ use tempfile::TempDir;
 
 /// `--allow-write`, `--reveal` and `--pass-env` each say what they open,
 /// as `--no-sandbox` does.
+#[cfg(unix)]
 #[test]
 fn what_opens_the_sandbox_wider_is_said() {
     let (home, ws) = (TempDir::new().unwrap(), TempDir::new().unwrap());
@@ -104,6 +105,7 @@ fn an_unrecorded_refusal_is_said_and_the_exit_code_kept() {
 /// made unreadable) hides nothing else: what the sandbox refused is still
 /// told and recorded, why the changes cannot be shown is said, and the
 /// command's own exit code comes back; a command that succeeded fails.
+#[cfg(unix)]
 #[test]
 fn what_cannot_be_shown_after_a_command_hides_nothing_else() {
     let (home, ws) = (TempDir::new().unwrap(), TempDir::new().unwrap());
@@ -128,8 +130,13 @@ fn what_cannot_be_shown_after_a_command_hides_nothing_else() {
     struct Unlock(std::path::PathBuf);
     impl Drop for Unlock {
         fn drop(&mut self) {
-            use std::os::unix::fs::PermissionsExt;
-            let _ = fs::set_permissions(&self.0, fs::Permissions::from_mode(0o755));
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = fs::set_permissions(&self.0, fs::Permissions::from_mode(0o755));
+            }
+            #[cfg(windows)]
+            let _ = &self.0;
         }
     }
     let _unlock = Unlock(std::path::Path::new(&copy).join("locked"));
@@ -173,6 +180,7 @@ fn what_cannot_be_shown_after_a_command_hides_nothing_else() {
 
 /// `kule list` lists every task it can read, and names one whose record
 /// cannot be read, with why, rather than failing whole.
+#[cfg(unix)]
 #[test]
 fn a_task_whose_record_cannot_be_read_does_not_hide_the_others() {
     let (home, ws) = (TempDir::new().unwrap(), TempDir::new().unwrap());
@@ -270,6 +278,7 @@ fn terminal_probes_are_one_line_after_a_command() {
 
 /// The first command in a task says it copies the person's package caches
 /// (macOS, where it clones them), once; the next says nothing of them.
+#[cfg(unix)]
 #[test]
 fn the_first_command_says_it_makes_the_caches() {
     let (home, ws, person) = (

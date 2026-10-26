@@ -15,8 +15,7 @@
 //! keeps the agent (and the model behind it) from reading it.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::io::{Read, Write};
-use std::os::unix::fs::OpenOptionsExt;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -199,11 +198,7 @@ pub(crate) fn write_private<T: Serialize>(path: &Path, value: &T) -> Result<()> 
     })?;
     let tmp = path.with_extension(format!("tmp-{}", std::process::id()));
     let _ = std::fs::remove_file(&tmp);
-    std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(&tmp)
+    crate::osfs::create_private(&tmp)
         .and_then(|mut f| f.write_all(&text).and_then(|()| f.sync_all()))
         .at(&tmp)?;
     std::fs::rename(&tmp, path).at(path)
@@ -325,11 +320,8 @@ fn check_value(name: &str, value: &str) -> Result<()> {
 /// A placeholder no one can guess: what a task's commands see instead of a
 /// secret.
 fn new_placeholder() -> Result<String> {
-    let path = Path::new("/dev/urandom");
     let mut bytes = [0u8; 16];
-    std::fs::File::open(path)
-        .and_then(|mut f| f.read_exact(&mut bytes))
-        .at(path)?;
+    crate::osfs::random_bytes(&mut bytes).at(Path::new("random"))?;
     let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
     Ok(format!("{PLACEHOLDER_PREFIX}{hex}"))
 }
@@ -1743,11 +1735,8 @@ fn mask_settings(path: &str, text: &str, task: &mut TaskSecrets, vault: &Vault) 
 /// A key for [`shown`]: new for each view, so its marks say nothing about
 /// a value beyond that view.
 pub(crate) fn view_key() -> Result<[u8; 32]> {
-    let path = Path::new("/dev/urandom");
     let mut key = [0u8; 32];
-    std::fs::File::open(path)
-        .and_then(|mut f| f.read_exact(&mut key))
-        .at(path)?;
+    crate::osfs::random_bytes(&mut key).at(Path::new("random"))?;
     Ok(key)
 }
 
@@ -2373,14 +2362,17 @@ mod tests {
 
     #[test]
     fn secrets_are_kept_for_their_owner_alone() {
-        use std::os::unix::fs::PermissionsExt;
         let home = TempDir::new().unwrap();
         add_secret(home.path(), "A_KEY", "v", &["api.example.com".into()], None).unwrap();
-        let mode = std::fs::metadata(home.path().join(SECRETS_FILE))
-            .unwrap()
-            .permissions()
-            .mode();
-        assert_eq!(mode & 0o777, 0o600);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(home.path().join(SECRETS_FILE))
+                .unwrap()
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o777, 0o600);
+        }
         let refused = [
             ("lower", "v", vec!["api.example.com".to_owned()]),
             ("A_KEY", "", vec!["api.example.com".to_owned()]),

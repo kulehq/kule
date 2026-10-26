@@ -340,6 +340,7 @@ fn another_version_control_systems_repository_waits_for_a_person() {
     }
 }
 
+#[cfg(unix)]
 /// What runs code, or steers an agent, without anyone running the project
 /// waits: at any depth, however its name is cased, and a link never passes
 /// on its own.
@@ -616,6 +617,7 @@ fn files_in_new_commits_are_judged_like_files() {
     );
 }
 
+#[cfg(unix)]
 /// What a commit does is judged as it is: a link it adds as a link, a file
 /// it only makes executable as a change, another repository's commit (a
 /// submodule) by a person.
@@ -890,6 +892,32 @@ fn a_person_chooses_between_kules_policies_but_keeps_their_own() {
     assert_eq!(fs::read_to_string(&user).unwrap(), own);
 }
 
+/// Kule's own policy text with Windows line endings, as an editor there or
+/// a checkout with autocrlf leaves it, is still that choice: line endings
+/// change no rule.
+#[test]
+fn kules_policy_text_with_windows_line_endings_stays_that_choice() {
+    use kule_engine::{CAREFUL_POLICY, DEFAULT_POLICY, PolicyChoice, USER_POLICY, policy_choice};
+    let home = TempDir::new().unwrap();
+    let user = home.path().join(USER_POLICY);
+    let earlier = include_str!("fixtures/careful-0.2.0-preview.10.cedar");
+    for (text, choice) in [
+        (earlier, PolicyChoice::Careful),
+        (CAREFUL_POLICY, PolicyChoice::Careful),
+        (DEFAULT_POLICY, PolicyChoice::Balanced),
+    ] {
+        assert!(!text.contains('\r'), "the source is LF");
+        write(&user, &text.replace('\n', "\r\n"));
+        assert_eq!(policy_choice(home.path()).unwrap(), choice);
+    }
+    // A word changed is still the person's own, whatever the line endings.
+    write(
+        &user,
+        &earlier.replace("careful", "carefull").replace('\n', "\r\n"),
+    );
+    assert_eq!(policy_choice(home.path()).unwrap(), PolicyChoice::Own);
+}
+
 /// The careful policy an earlier version wrote out whole is still the
 /// careful choice, judged by this version's rules, and never a policy of
 /// the person's own that Kule may not replace.
@@ -1002,14 +1030,17 @@ fn a_tasks_group_chooses_the_policy_it_is_judged_by() {
 }
 
 /// What the commit would take, read as a commit reads it, judged.
+#[cfg(unix)]
 fn pending_judged(s: &Setup) -> Ruling {
     Policy::builtin().judge(&s.task.pending(false).unwrap())
 }
 
+#[cfg(unix)]
 /// A file anyone may run now, or anything anything may change, waits for a
 /// person, whatever its name; one that was executable already does not.
 #[test]
 fn a_file_made_executable_or_world_writable_waits_for_a_person() {
+    #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
     let (home, ws) = (TempDir::new().unwrap(), TempDir::new().unwrap());
     for (path, text) in [

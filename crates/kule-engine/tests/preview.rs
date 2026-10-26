@@ -44,6 +44,7 @@ fn a_changed_picture_shows_what_it_was_and_is() {
     ));
 }
 
+#[cfg(unix)]
 #[test]
 fn only_pictures_inside_the_task_are_shown() {
     let (home, ws) = (TempDir::new().unwrap(), TempDir::new().unwrap());

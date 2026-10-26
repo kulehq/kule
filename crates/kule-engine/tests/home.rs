@@ -1,5 +1,6 @@
 //! The home layer: what a command writes in the home directory is caught
 //! for review, in a real sandbox, over a home made for the test.
+#![cfg(unix)]
 
 use std::fs;
 use std::path::Path;

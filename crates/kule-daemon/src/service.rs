@@ -3,7 +3,6 @@
 //! the socket, so its tests run on real tasks without one.
 
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
-use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
@@ -265,8 +264,9 @@ struct Outlined {
     entities: Option<BTreeSet<String>>,
 }
 
-/// Size, modification and change times, inode: any write moves one.
-type FileStamp = (u64, i64, i64, u64, i64, i64);
+/// Size, device, identity, modification and change times: any write moves
+/// one (see `kule_engine::osfs::version_mark`).
+type FileStamp = kule_engine::osfs::VersionMark;
 
 /// A task's last scan, and whether a newer one is under way.
 struct Cached {
@@ -2174,18 +2174,7 @@ impl Service {
     /// A file is outlined again only when either side of it changed since
     /// the last time.
     fn touched(&self, task: &Task, set: &EffectSet) -> Touched {
-        let stamp = |root: &Path, path: &str| {
-            std::fs::symlink_metadata(root.join(path)).ok().map(|m| {
-                (
-                    m.len(),
-                    m.mtime(),
-                    m.mtime_nsec(),
-                    m.ino(),
-                    m.ctime(),
-                    m.ctime_nsec(),
-                )
-            })
-        };
+        let stamp = |root: &Path, path: &str| kule_engine::osfs::version_mark(&root.join(path));
         let (copy, work) = (task.copy(), task.workspace().to_owned());
         let mut known = self
             .outlined
@@ -3526,6 +3515,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     /// A place a prompt names is a file the copy holds, reached without a
     /// link; one that is not refuses the run before anything starts.
     #[test]
@@ -3939,6 +3929,7 @@ mod tests {
         assert!(s.app.stop_run(&id).is_err() || !s.app.busy());
     }
 
+    #[cfg(unix)]
     /// An approved agent of the person's own that runs `script` in `sh`.
     fn own_agent(s: &Setup, name: &str, script: &str) {
         let profile = kule_acp::Profile::bare(
@@ -3958,6 +3949,7 @@ mod tests {
         s.app.approve_agent(name, &digest).unwrap();
     }
 
+    #[cfg(unix)]
     /// How the run in `id` finished, waiting a while for it, never forever:
     /// its error, what its sandbox refused, whether the platform does not
     /// tell (Linux), and whether Kule said the list may not hold all of it
@@ -4007,6 +3999,7 @@ mod tests {
 
     /// A run that fails still says what its sandbox refused it, where the
     /// platform tells (macOS), or that the platform does not (Linux).
+    #[cfg(unix)]
     #[test]
     fn a_failed_run_says_what_the_sandbox_refused() {
         let s = Setup::new();
@@ -4043,6 +4036,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     /// A run sets aside what it may spend before its agent starts: while it
     /// is at work, another task's run under the same daily budget is
     /// refused, saying why; once it ends, only what it spent counts.
@@ -4068,6 +4062,7 @@ mod tests {
 
     /// A run whose agent reports no cost, in a task with a budget, says
     /// in the app that the budget does not count it, as the CLI does.
+    #[cfg(unix)]
     #[test]
     fn a_run_without_a_cost_says_the_budget_does_not_count_it() {
         let s = Setup::new();
@@ -4093,6 +4088,7 @@ mod tests {
         assert!(finished_notes(&s, &other).is_empty());
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_run_reserves_before_its_agent_starts() {
         let s = Setup::new();
@@ -4129,6 +4125,7 @@ mod tests {
 
     /// A run the person stopped says so, as it is: no log to see, no
     /// failure.
+    #[cfg(unix)]
     #[test]
     fn a_person_s_stop_is_said_as_it_is() {
         let s = Setup::new();
@@ -4621,6 +4618,7 @@ mod tests {
         made(&fork.id);
     }
 
+    #[cfg(unix)]
     /// A run that comes while its task's caches are still being made
     /// waits for them, and its Live says so.
     #[test]

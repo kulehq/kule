@@ -7,11 +7,7 @@
 //! goes down from the root one component at a time and follows no link,
 //! opens nothing but regular files, and stops at the size Kule outlines.
 
-use std::ffi::CString;
-use std::fs::File;
-use std::io::{self, Read};
-use std::os::fd::{AsRawFd, FromRawFd};
-use std::os::unix::ffi::OsStrExt;
+use std::io::Read;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -140,42 +136,13 @@ pub(crate) fn read_file(root: &Path, rel: &str) -> Result<Option<Vec<u8>>> {
     })
 }
 
-/// Opens `rel` under `root`, each component with `O_NOFOLLOW`; `None` when
-/// a component is missing, is a link, or is not what it must be.
-pub fn open_beneath(root: &Path, rel: &str) -> io::Result<Option<File>> {
-    let mut dir = File::open(root)?;
-    let parts: Vec<&str> = rel.split('/').collect();
-    for (i, part) in parts.iter().enumerate() {
-        if matches!(*part, "" | "." | "..") {
-            return Ok(None);
-        }
-        let last = i + 1 == parts.len();
-        let name = CString::new(std::ffi::OsStr::new(part).as_bytes())?;
-        let mut flags = libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC;
-        // A FIFO put where a file was must not block the read.
-        flags |= if last {
-            libc::O_NONBLOCK
-        } else {
-            libc::O_DIRECTORY
-        };
-        // SAFETY: openat reads the name and returns a new descriptor or -1.
-        let fd = unsafe { libc::openat(dir.as_raw_fd(), name.as_ptr(), flags) };
-        if fd == -1 {
-            let e = io::Error::last_os_error();
-            return match e.raw_os_error() {
-                Some(libc::ENOENT | libc::ELOOP | libc::ENOTDIR | libc::ENXIO) => Ok(None),
-                _ => Err(e),
-            };
-        }
-        // SAFETY: fd was just opened and is owned by nothing else.
-        dir = unsafe { File::from_raw_fd(fd) };
-    }
-    Ok(Some(dir))
-}
+pub(crate) use crate::fsops::open_beneath;
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
+    use std::ffi::CString;
     use std::fs;
+    use std::os::unix::ffi::OsStrExt;
     use std::os::unix::fs::symlink;
 
     use tempfile::TempDir;

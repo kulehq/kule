@@ -19,7 +19,6 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -264,7 +263,7 @@ fn capture_state(
                         from.clone()
                     };
                     let to = to.join(&child);
-                    std::os::unix::fs::symlink(target, &to).at(&to)?;
+                    crate::osfs::symlink(&target, &to).at(&to)?;
                     layer.links.insert(format!("{on}/{name}"));
                 }
             }
@@ -299,7 +298,7 @@ fn capture_state(
         } else {
             from
         };
-        std::os::unix::fs::symlink(target, &to).at(&to)?;
+        crate::osfs::symlink(&target, &to).at(&to)?;
         layer.links.insert(rel.to_owned());
     }
     Ok(())
@@ -423,7 +422,7 @@ impl Task {
                 Kind::Symlink => {
                     // As the person has it: the target is reached the same way.
                     let target = fs::read_link(&from).at(&from)?;
-                    std::os::unix::fs::symlink(&target, &to).at(&to)?;
+                    crate::osfs::symlink(&target, &to).at(&to)?;
                     layer.links.insert(text);
                 }
                 Kind::File if stamp.size <= MAX_FILE => {
@@ -529,7 +528,7 @@ impl Task {
                             } else {
                                 from.clone()
                             };
-                            std::os::unix::fs::symlink(target, &to).at(&to)?;
+                            crate::osfs::symlink(&target, &to).at(&to)?;
                             layer.links.insert(rel);
                         }
                     }
@@ -547,7 +546,7 @@ impl Task {
                     }
                 }
                 _ => {
-                    std::os::unix::fs::symlink(&from, &to).at(&to)?;
+                    crate::osfs::symlink(&from, &to).at(&to)?;
                     layer.links.insert(text);
                 }
             }
@@ -577,7 +576,7 @@ impl Task {
                     layer.entries.remove(&rel);
                     fsops::remove(&to)?;
                     if taken.is_some() {
-                        std::os::unix::fs::symlink(&from, &to).at(&to)?;
+                        crate::osfs::symlink(&from, &to).at(&to)?;
                         layer.links.insert(rel);
                     }
                 }
@@ -836,11 +835,11 @@ impl Task {
                         else {
                             return Err(changed(&c.path));
                         };
-                        let mode = file.metadata().at(&from)?.permissions();
+                        let mode = crate::osfs::mode_of(&file.metadata().at(&from)?);
                         let mut bytes = Vec::new();
                         std::io::Read::read_to_end(&mut file, &mut bytes).at(&from)?;
                         let bytes = self.unmasked(&layer.real, &c.path, bytes)?;
-                        fsops::put_at(&home_dir, name, &bytes, mode.mode(), &to)?;
+                        fsops::put_at(&home_dir, name, &bytes, mode, &to)?;
                     }
                 },
             }
@@ -1097,12 +1096,12 @@ fn keep(real: &Path, rel: &str, to: &Path) -> Result<()> {
     }
     let from = real.join(rel);
     match fsops::beneath(real, rel).at(&from)? {
-        fsops::Beneath::Link(target) => std::os::unix::fs::symlink(target, to).at(to)?,
+        fsops::Beneath::Link(target) => crate::osfs::symlink(&target, to).at(to)?,
         fsops::Beneath::File(mut file) => {
-            let mode = file.metadata().at(&from)?.permissions();
+            let mode = crate::osfs::mode_of(&file.metadata().at(&from)?);
             let mut out = fs::File::create(to).at(to)?;
             std::io::copy(&mut file, &mut out).at(to)?;
-            out.set_permissions(mode).at(to)?;
+            crate::osfs::set_file_mode(&out, mode).at(to)?;
         }
         _ => return Err(changed(rel)),
     }
@@ -1255,7 +1254,7 @@ impl Task {
                         if there == Some(Kind::Dir) {
                             clear(there)?;
                         }
-                        fsops::put_at(&home_dir, name, &bytes, meta.permissions().mode(), &to)?;
+                        fsops::put_at(&home_dir, name, &bytes, crate::osfs::mode_of(&meta), &to)?;
                     }
                 }
                 Some(Kind::Dir) => {

@@ -9,7 +9,6 @@
 //! checked by content.
 
 use std::fs::{self, File};
-use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -34,7 +33,8 @@ impl Clock {
     /// another device the clock goes by wall time, a [`FOREIGN_TICK`] behind.
     pub fn new(dir: &Path, watched: &Path) -> Result<Clock> {
         static NEXT: AtomicU64 = AtomicU64::new(0);
-        let same = fs::metadata(dir).at(dir)?.dev() == fs::metadata(watched).at(watched)?.dev();
+        let same =
+            crate::osfs::device_of(dir).at(dir)? == crate::osfs::device_of(watched).at(watched)?;
         let n = NEXT.fetch_add(1, Ordering::Relaxed);
         Ok(Clock {
             probe: same.then(|| dir.join(format!(".kule-clock-{}-{n}", std::process::id()))),
@@ -53,9 +53,11 @@ impl Clock {
         };
         // A new file each time: rewriting an empty one may not move its time.
         let _ = fs::remove_file(probe);
-        let meta = File::create(probe).at(probe)?.metadata().at(probe)?;
+        let file = File::create(probe).at(probe)?;
+        let changed = crate::osfs::change_time(&file).at(probe);
+        drop(file);
         let _ = fs::remove_file(probe);
-        Ok((meta.ctime(), meta.ctime_nsec()))
+        changed
     }
 
     /// Waits until every write from now on gets a change time later than

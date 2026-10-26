@@ -1,7 +1,9 @@
 //! M3: what a commit replaced lives in the task's Lonca store, and every
 //! commit and undo is an entry in a signed chain.
+#![cfg(unix)]
 
 use std::fs;
+#[cfg(unix)]
 use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::Path;
 use std::process::Command;
@@ -9,6 +11,7 @@ use std::process::Command;
 use kule_engine::{HistoryEvent, Sandbox, Task};
 use tempfile::TempDir;
 
+#[cfg(unix)]
 fn write(path: &Path, text: &str) {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).unwrap();
@@ -23,6 +26,7 @@ struct Setup {
 }
 
 impl Setup {
+    #[cfg(unix)]
     fn new() -> Setup {
         let (home, ws) = (TempDir::new().unwrap(), TempDir::new().unwrap());
         write(&ws.path().join("a.txt"), "a\n");
@@ -56,6 +60,7 @@ impl Setup {
     }
 }
 
+#[cfg(unix)]
 #[test]
 fn undo_brings_back_modes_symlinks_and_odd_paths_from_the_store() {
     let s = Setup::new();

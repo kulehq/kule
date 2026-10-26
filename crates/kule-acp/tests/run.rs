@@ -1,4 +1,5 @@
 //! The ACP client against a scripted agent, in a real task and sandbox.
+#![cfg(unix)]
 
 use std::fs;
 
@@ -213,10 +214,13 @@ fn the_agent_runs_inside_the_sandbox() {
     );
     assert!(!evil.exists());
     // What the agent printed is its owner's alone to read.
-    use std::os::unix::fs::PermissionsExt;
-    let log = s.task.agent_log();
-    let mode = std::fs::metadata(&log).unwrap().permissions().mode();
-    assert_eq!(mode & 0o077, 0, "{mode:o}");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let log = s.task.agent_log();
+        let mode = std::fs::metadata(&log).unwrap().permissions().mode();
+        assert_eq!(mode & 0o077, 0, "{mode:o}");
+    }
 }
 
 #[test]
