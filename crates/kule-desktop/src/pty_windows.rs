@@ -402,9 +402,14 @@ mod tests {
         }
         let s = Setup::new();
         let terms = Terminals::default();
-        let (id, rx) = s.start(&terms, "timeout /t 60 /nobreak");
+        // Says it waits, then waits a minute; the word is made of two, so
+        // the console's echo of the command does not show it.
+        let (id, rx) = s.start(
+            &terms,
+            "powershell -NoProfile -Command \"'wait'+'ing'; Start-Sleep 60\"",
+        );
         let mut seen = String::new();
-        assert!(until(&rx, &mut seen, "press CTRL+C to quit"), "{seen}");
+        assert!(until(&rx, &mut seen, "waiting"), "{seen}");
         let task = kule_daemon::shell::Task::open(s.home.path(), &s.task).unwrap();
         assert!(!task.terminals_open().is_empty());
         let started = Instant::now();
