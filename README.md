@@ -23,9 +23,9 @@ It works on any folder: code, but also notes, documents, photos and data.
 · [CLI reference](https://kulehq.github.io/kule/docs/cli)
 
 > [!NOTE]
-> **Status: preview (`0.2.0-preview.14`).** macOS 13+, Linux and Windows 11
+> **Status: preview (`0.2.0-preview.15`).** macOS 13+, Linux and Windows 11
 > 24H2 (update 26100.9278 or later). The latest preview release is
-> [0.2.0-preview.14](https://github.com/kulehq/kule/releases/tag/v0.2.0-preview.14); or build it from source (below). Expect changes between previews; see [CHANGELOG.md](CHANGELOG.md).
+> [0.2.0-preview.15](https://github.com/kulehq/kule/releases/tag/v0.2.0-preview.15); or build it from source (below). Expect changes between previews; see [CHANGELOG.md](CHANGELOG.md).
 
 ## Why Kule
 
@@ -194,6 +194,9 @@ Two rules hold for every change: Kule is built on **Zero Trust** (nothing
 the agent produces is trusted, every boundary is denied by default and has
 a test that fails without it), and the repository is public, so security
 problems are reported privately (below), never in an issue.
+[MAINTAINING.md](MAINTAINING.md) says how a release is made, what is
+checked when an operating system ships a new version, and what the weekly
+CI run does.
 
 ## Security
 
