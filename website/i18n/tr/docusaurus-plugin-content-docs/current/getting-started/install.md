@@ -1,7 +1,7 @@
 ---
 title: Kule'yi kurun
 sidebar_label: Kurulum
-description: Kule'yi macOS ya da Linux'ta kaynak koddan derleyin veya bir önizleme sürümü indirin; ardından ajanları kurup her şeyin çalıştığını doğrulayın.
+description: Kule'yi macOS, Linux ya da Windows'ta kaynak koddan derleyin veya bir önizleme sürümü indirin; ardından ajanları kurup her şeyin çalıştığını doğrulayın.
 ---
 
 # Kule'yi kurun
@@ -19,7 +19,8 @@ yalnızca uygulamayı ya da ikisini birden kullanabilirsiniz.
 | macOS 13 (Ventura) ya da sonrası, Apple silicon ve Intel | Destekleniyor |
 | Linux x86_64 (Ubuntu 22.04 ya da sonrası, Fedora, …) | Destekleniyor |
 | Diğer mimarilerde Linux | Kaynak koddan derleyin; hazır sürüm dosyası yok |
-| Windows | Henüz değil (planlanıyor) |
+| Windows 11 24H2, 26100.9278 ya da sonraki güncellemeyle; x64 ve ARM64 | Destekleniyor; sandbox'ın ihtiyaç duydukları için [Platformlar](../platforms.md) |
+| Windows 10, Windows Server | Desteklenmiyor: süreç konteyneri yok |
 
 :::note Bir önizleme
 
@@ -62,6 +63,11 @@ bir C derleyicisi ve `pkgconf` gerekir. Yalnızca komut satırını
 istiyorsanız WebKitGTK kütüphanelerini atlayıp yalnızca `-p kule`'yi
 derleyebilirsiniz (aşağıda).
 
+**Windows'ta:** *Desktop development with C++* iş yüküyle Visual Studio
+Build Tools (MSVC derleyicisi ve Windows 11 SDK) ve Git. Uygulama,
+Windows 11'de hazır bulunan WebView2'yi kullanır. `rustup`,
+`-pc-windows-msvc` araç zincirini kendisi seçer.
+
 ### 2. Derleyin
 
 ```sh
@@ -83,6 +89,16 @@ Uygulama olmadan, yalnızca komut satırı:
 cargo build --release -p kule
 ```
 
+Windows'ta dosyalar `.exe` ile biter ve `kule`'nin yanında, her görev için
+başlattığı iki program daha gerekir: `kule-proxy.exe` (görevin proxy'si,
+kendi uygulama konteynerinde) ve `kule-pty-helper.exe` (terminalin sahte
+konsolu, görevin konteynerinin içinde). Üçünü birlikte derleyin ve birlikte
+tutun:
+
+```powershell
+cargo build --release -p kule -p kule-proxy -p kule-pty-helper
+```
+
 ### 3. `kule`'yi `PATH`'inize ekleyin
 
 Zaten `PATH`'inizde olan bir klasör seçin, örneğin `~/.local/bin`:
@@ -93,11 +109,24 @@ ln -sf "$PWD/target/release/kule" ~/.local/bin/kule
 kule --version
 ```
 
+Windows'ta üç programı tutan klasörü kullanıcı `PATH`'inize ekleyin
+(*Settings → System → About → Advanced system settings → Environment
+Variables*) ya da PowerShell'de:
+
+```powershell
+$user = [Environment]::GetEnvironmentVariable('Path', 'User')
+[Environment]::SetEnvironmentVariable('Path', "$user;$PWD\target\release", 'User')
+```
+
+Yeni bir terminal açın, sonra `kule --version`.
+
 ### 4. Uygulamayı başlatın
 
 ```sh
 ./target/release/kule-desktop
 ```
+
+(Windows'ta `.\target\release\kule-desktop.exe`.)
 
 Geliştirme sırasında `cargo run -p kule-desktop` de kullanabilirsiniz.
 
@@ -117,6 +146,8 @@ Her sürüm şu dosyaları içerir:
 | `Kule-<version>.x86_64.rpm` | Fedora: aynısı, RPM olarak. |
 | `kule-<version>-macos-universal.tar.gz` | macOS 13 ya da sonrası için yalnızca `kule` komutu. |
 | `kule-<version>-linux-x86_64.tar.gz` | Linux x86_64 için yalnızca `kule` komutu. |
+| `Kule_<version>_x64-setup.exe`, `Kule_<version>_arm64-setup.exe` | Windows 11: uygulamayı ve `kule` komutunu yalnızca sizin için, `%LOCALAPPDATA%\Kule` altına kurar; yönetici istemez. |
+| `kule-<version>-windows-x64.zip`, `kule-<version>-windows-arm64.zip` | Windows 11 için yalnızca `kule` komutu, başlattığı iki programla (`kule-proxy.exe`, `kule-pty-helper.exe`); birlikte tutulur. |
 | `kule-<version>.cdx.json`, `kule-desktop-<version>.cdx.json` | CLI'ın ve uygulamanın CycloneDX SBOM'u: derlendikleri her crate. |
 | `SHA256SUMS` | Yukarıdaki her dosyanın sağlama toplamı. |
 
@@ -135,8 +166,10 @@ gh attestation verify Kule_<version>_universal.dmg --repo kulehq/kule \
   --source-ref refs/tags/v<version>
 ```
 
-(`gh`, [GitHub CLI](https://cli.github.com)'dır. `.deb`, `.rpm` ya da
-`.tar.gz`'yi kontrol etmek için dosya adını değiştirin.)
+(`gh`, [GitHub CLI](https://cli.github.com)'dır. `.deb`, `.rpm`,
+`.tar.gz`, `-setup.exe` ya da `.zip`'i kontrol etmek için dosya adını
+değiştirin. Windows'ta PowerShell'deki `Get-FileHash`, bir dosyanın
+`SHA256SUMS` ile karşılaştırılacak SHA-256'sını verir.)
 
 ### macOS
 
@@ -187,6 +220,41 @@ start*) bakın.
 
 :::
 
+### Windows
+
+1. İndirdiğinizi doğrulayın (yukarıda). Kurucu ve programlar **kod imzası
+   taşımaz**; bu yüzden SmartScreen yayımcının bilinmediğini söyler:
+   doğruladıktan sonra **More info → Run anyway**'i seçin.
+2. `Kule_<version>_x64-setup.exe`'yi (ARM64 bir bilgisayarda `_arm64-`)
+   çalıştırın. Yalnızca sizin için, `%LOCALAPPDATA%\Kule` altına kurar ve
+   yönetici istemez.
+3. Komutu `PATH`'inize ekleyin: `%LOCALAPPDATA%\Kule`'yi kullanıcı
+   `PATH`'inize ekleyin (*Settings → System → About → Advanced system
+   settings → Environment Variables*) ya da PowerShell'de:
+
+   ```powershell
+   $user = [Environment]::GetEnvironmentVariable('Path', 'User')
+   [Environment]::SetEnvironmentVariable('Path', "$user;$env:LOCALAPPDATA\Kule", 'User')
+   ```
+
+4. Kule'yi Başlat menüsünden açın.
+
+Yalnızca komut satırı için `kule-<version>-windows-<arch>.zip`'i kendine
+ait bir klasöre açın ve o klasörü `PATH`'inize ekleyin. İçindeki üç program
+birlikte kalır ve klasör Kule'nin ev dizini (`%USERPROFILE%\.kule`)
+değildir: bir görevin komutları Kule'nin terminal yardımcısının klasörünü
+okuyabilir, Kule'nin ev dizinini ise asla okumaz; bu yüzden ikisi aynı
+olduğunda Kule komutları reddeder.
+
+:::warning Windows 11 24H2 ve masaüstü oturumu
+
+Kule'nin Windows sandbox'ı, 26100.9278 ya da sonraki güncellemeyle Windows
+11 24H2'ye ve bir masaüstü oturumuna ihtiyaç duyar. İkisinden biri eksikse
+sandbox'lı her komut gerekçesiyle reddedilir; kabul edilecek daha zayıf bir
+mod yoktur. Bkz. [Platformlar](../platforms.md).
+
+:::
+
 ## Ajanları kurma
 
 Kule ajanlarla birlikte gelmez. Her birini **Kule olmadan nasıl yapıyorsanız
@@ -207,7 +275,7 @@ Notlar:
 - Kule, `npx`'in indireceği her ajan adaptörünü **sürüm başına bir kez**,
   sandbox'ın dışında ve paketin kurulum betiklerini çalıştırmadan kurar:
   macOS'ta `~/Library/Application Support/Kule/packages` altına (Linux'ta
-  `~/.local/share/kule/packages`).
+  ve Windows'ta profilinizin altında `~/.local/share/kule/packages`).
 - Kule'ye verdiğiniz bir API anahtarını (*Settings → Secrets*'ta ya da
   `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `GEMINI_API_KEY` olarak) ajan
   asla görmez: ajan bir yer tutucu alır, anahtarı proxy doldurur. Bkz.
@@ -251,13 +319,16 @@ kule isolation
 this computer gives a sandboxed command all of its isolation
 ```
 
-Linux'ta `kule isolation` bunun yerine eksik olan her şeyi listeler. Bkz.
+Linux'ta `kule isolation` bunun yerine eksik olan her şeyi listeler.
+Windows'ta ya aynı satırı söyler ya da sandbox'lı komutların bu
+bilgisayarda neden reddedildiğini. Bkz.
 [`kule isolation`](../cli/isolation.md).
 
 ## Kule verilerini nerede tutar
 
-Her şey **Kule'nin ev klasöründe** durur, varsayılan olarak `~/.kule`:
-görevler ve kopyaları, ayarlar, politika, gizli değerler. Başka bir klasör
+Her şey **Kule'nin ev klasöründe** durur, varsayılan olarak `~/.kule`
+(Windows'ta `%USERPROFILE%\.kule`): görevler ve kopyaları, ayarlar,
+politika, gizli değerler. Başka bir klasör
 kullanmak için `KULE_HOME`'u ayarlayın (ya da `--home` verin). Hiçbir
 sandbox Kule'nin ev klasörünü göremez. Bkz.
 [Dosyalar ve ayarlar](../reference/files.md).

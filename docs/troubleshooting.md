@@ -46,6 +46,43 @@ question for this build of Kule).
 **Fix:** link it into a folder on your `PATH`, for example
 `ln -sf /Applications/Kule.app/Contents/MacOS/kule ~/.local/bin/kule`, or
 `target/release/kule` for a source build. Check with `kule --version`.
+On Windows, add the programs' folder (`%LOCALAPPDATA%\Kule` for the
+installer) to your user `PATH` and open a new terminal; see
+[Install](getting-started/install.md).
+
+### Windows: SmartScreen says the publisher is unknown
+
+**Cause:** Kule's Windows installer and programs carry no code signature.
+
+**Fix:** check the download first (`SHA256SUMS` and `gh attestation
+verify`, see [Install](getting-started/install.md)), then choose **More
+info → Run anyway**.
+
+### Windows: "sandboxed commands are refused on this computer"
+
+**Symptom:** no command, terminal or agent runs; the message names the
+reason, in the terminal and under *Settings → Policy*.
+
+**Cause:** Kule's Windows sandbox needs Windows 11 24H2 with update
+26100.9278 or later, and a desktop session. A service's or a remote shell's
+session (SSH, a scheduled task) cannot start the programs a task runs.
+Windows Server has no process container that can hide a path.
+
+**Fix:** install the update (`winver` shows the build and revision) and
+run Kule from your desktop. There is no weaker mode to accept on Windows:
+the container gives a command all of its isolation or none.
+
+### Windows: "the command could read …, and with it …, which Kule keeps from every command"
+
+**Cause:** a folder a command may read holds Kule's home. That happens when
+`KULE_HOME` points inside the folder Kule's programs are in
+(`%LOCALAPPDATA%\Kule` for the installer), or the `.zip` was unpacked into
+Kule's home: a command reads the folder of the terminal's helper, and
+Kule's home it never reads.
+
+**Fix:** keep the two apart. Leave `KULE_HOME` unset (the default is
+`%USERPROFILE%\.kule`), or point it at a folder of its own; unpack the
+`.zip` into a folder that holds nothing else.
 
 ## Agents
 

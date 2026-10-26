@@ -1,7 +1,7 @@
 ---
 title: Install Kule
 sidebar_label: Install
-description: Build Kule from source on macOS or Linux, or download a preview release, then install the agents and check that everything works.
+description: Build Kule from source on macOS, Linux or Windows, or download a preview release, then install the agents and check that everything works.
 ---
 
 # Install Kule
@@ -19,7 +19,8 @@ line, only the app, or both.
 | macOS 13 (Ventura) or later, Apple silicon and Intel | Supported |
 | Linux x86_64 (Ubuntu 22.04 or later, Fedora, …) | Supported |
 | Linux on other architectures | Build from source; no release files |
-| Windows | Not yet (planned) |
+| Windows 11 24H2 with update 26100.9278 or later, x64 and ARM64 | Supported; see [Platforms](../platforms.md) for what the sandbox needs |
+| Windows 10, Windows Server | Not supported: no process container |
 
 :::note A preview
 
@@ -61,6 +62,11 @@ On Fedora, Tauri's list of equivalents is `webkit2gtk4.1-devel`,
 compiler and `pkgconf`. If you only want the command line, you can skip the
 WebKitGTK libraries and build `-p kule` alone (below).
 
+**On Windows:** the Visual Studio Build Tools with the *Desktop development
+with C++* workload (the MSVC compiler and the Windows 11 SDK), and Git. The
+app uses WebView2, which Windows 11 has. `rustup` picks the
+`-pc-windows-msvc` toolchain by itself.
+
 ### 2. Build
 
 ```sh
@@ -82,6 +88,16 @@ Only the command line, without the app:
 cargo build --release -p kule
 ```
 
+On Windows the files end in `.exe`, and `kule` needs two more programs
+beside it, which it starts for each task: `kule-proxy.exe` (the task's
+proxy, in its own app container) and `kule-pty-helper.exe` (the terminal's
+pseudo console, inside the task's container). Build and keep the three
+together:
+
+```powershell
+cargo build --release -p kule -p kule-proxy -p kule-pty-helper
+```
+
 ### 3. Put `kule` on your `PATH`
 
 Pick a folder that is already on your `PATH`, for example `~/.local/bin`:
@@ -92,11 +108,24 @@ ln -sf "$PWD/target/release/kule" ~/.local/bin/kule
 kule --version
 ```
 
+On Windows, add the folder that holds the three programs to your user
+`PATH` (*Settings → System → About → Advanced system settings → Environment
+Variables*), or in PowerShell:
+
+```powershell
+$user = [Environment]::GetEnvironmentVariable('Path', 'User')
+[Environment]::SetEnvironmentVariable('Path', "$user;$PWD\target\release", 'User')
+```
+
+Open a new terminal, then `kule --version`.
+
 ### 4. Start the app
 
 ```sh
 ./target/release/kule-desktop
 ```
+
+(`.\target\release\kule-desktop.exe` on Windows.)
 
 During development you can also run `cargo run -p kule-desktop`.
 
@@ -115,6 +144,8 @@ Each release carries these files:
 | `Kule-<version>.x86_64.rpm` | Fedora: the same, as an RPM. |
 | `kule-<version>-macos-universal.tar.gz` | The `kule` command alone, for macOS 13 or later. |
 | `kule-<version>-linux-x86_64.tar.gz` | The `kule` command alone, for Linux x86_64. |
+| `Kule_<version>_x64-setup.exe`, `Kule_<version>_arm64-setup.exe` | Windows 11: installs the app and the `kule` command for you alone, under `%LOCALAPPDATA%\Kule`, and asks for no administrator. |
+| `kule-<version>-windows-x64.zip`, `kule-<version>-windows-arm64.zip` | The `kule` command alone, for Windows 11, with the two programs it starts (`kule-proxy.exe`, `kule-pty-helper.exe`), to be kept together. |
 | `kule-<version>.cdx.json`, `kule-desktop-<version>.cdx.json` | A CycloneDX SBOM of the CLI and of the app: every crate they are built from. |
 | `SHA256SUMS` | The checksum of every file above. |
 
@@ -133,7 +164,9 @@ gh attestation verify Kule_<version>_universal.dmg --repo kulehq/kule \
 ```
 
 (`gh` is the [GitHub CLI](https://cli.github.com). Replace the file name to
-check the `.deb`, `.rpm` or `.tar.gz`.)
+check the `.deb`, `.rpm`, `.tar.gz`, `-setup.exe` or `.zip`. On Windows,
+`Get-FileHash` in PowerShell gives a file's SHA-256 to compare with
+`SHA256SUMS`.)
 
 ### macOS
 
@@ -183,6 +216,40 @@ before your first agent run.
 
 :::
 
+### Windows
+
+1. Check the download (above). The installer and the programs carry **no
+   code signature**, so SmartScreen says the publisher is unknown: choose
+   **More info → Run anyway** once you have checked it.
+2. Run `Kule_<version>_x64-setup.exe` (or `_arm64-` on an ARM64 computer).
+   It installs for you alone, under `%LOCALAPPDATA%\Kule`, and asks for no
+   administrator.
+3. Put the command on your `PATH`: add `%LOCALAPPDATA%\Kule` to your user
+   `PATH` (*Settings → System → About → Advanced system settings →
+   Environment Variables*), or in PowerShell:
+
+   ```powershell
+   $user = [Environment]::GetEnvironmentVariable('Path', 'User')
+   [Environment]::SetEnvironmentVariable('Path', "$user;$env:LOCALAPPDATA\Kule", 'User')
+   ```
+
+4. Open Kule from the Start menu.
+
+For the command line alone, unpack `kule-<version>-windows-<arch>.zip` into
+a folder of its own and add that folder to your `PATH`. The three programs
+in it stay together, and the folder is not Kule's home (`%USERPROFILE%\.kule`):
+a task's commands may read the folder of Kule's terminal helper, and Kule's
+home they never read, so Kule refuses commands while the two are one.
+
+:::warning Windows 11 24H2 and a desktop session
+
+Kule's Windows sandbox needs Windows 11 24H2 with update 26100.9278 or
+later, and a desktop session. Where either is missing, every sandboxed
+command is refused with the reason; there is no weaker mode to accept. See
+[Platforms](../platforms.md).
+
+:::
+
 ## Install the agents
 
 Kule does not ship agents. You install and sign in to each one **the way
@@ -202,7 +269,8 @@ Notes:
 - Kule installs each agent adapter that `npx` would fetch **once per
   version**, outside the sandbox and without running the package's install
   scripts, under `~/Library/Application Support/Kule/packages` on macOS
-  (`~/.local/share/kule/packages` on Linux).
+  (`~/.local/share/kule/packages` on Linux and Windows, under your
+  profile).
 - An API key you give Kule (in *Settings → Secrets*, or as
   `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `GEMINI_API_KEY`) is never seen
   by the agent: it gets a placeholder, and the proxy fills in the key. See
@@ -246,14 +314,16 @@ kule isolation
 this computer gives a sandboxed command all of its isolation
 ```
 
-On Linux, `kule isolation` lists anything that is missing instead. See
-[`kule isolation`](../cli/isolation.md).
+On Linux, `kule isolation` lists anything that is missing instead. On
+Windows it says the same line, or why sandboxed commands are refused on
+this computer. See [`kule isolation`](../cli/isolation.md).
 
 ## Where Kule keeps its data
 
-Everything lives in **Kule's home**, `~/.kule` by default: tasks and their
-copies, settings, the policy, secrets. Set `KULE_HOME` (or pass `--home`)
-to use another folder. No sandbox can see Kule's home. See
+Everything lives in **Kule's home**, `~/.kule` by default
+(`%USERPROFILE%\.kule` on Windows): tasks and their copies, settings, the
+policy, secrets. Set `KULE_HOME` (or pass `--home`) to use another folder.
+No sandbox can see Kule's home. See
 [Files and settings](../reference/files.md).
 
 ## Next

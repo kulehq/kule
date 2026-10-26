@@ -2,12 +2,12 @@
 slug: /
 title: Kule nedir?
 sidebar_label: Giriş
-description: Kule, yapay zekâ ajanlarının klasörünüzün bir kopyasında, bir sandbox içinde çalışmasını sağlar; siz inceleyip commit etmeden gerçek klasöre hiçbir şey ulaşmaz.
+description: Kule, yapay zeka ajanlarının klasörünüzün bir kopyasında, bir sandbox içinde çalışmasını sağlar; siz inceleyip commit etmeden gerçek klasöre hiçbir şey ulaşmaz.
 ---
 
 # Kule nedir?
 
-Kule, dosyalarınız üzerinde çalışan **yapay zekâ ajanları için bir kontrol
+Kule, dosyalarınız üzerinde çalışan **yapay zeka ajanları için bir kontrol
 odasıdır**. Bu dosyalar kod olabilir; ama notlar, belgeler, fotoğraflar ya
 da veriler de olabilir. İşi ajanlar yapar; siz izler, onaylar ve yön
 verirsiniz.
@@ -25,7 +25,7 @@ karar verirsiniz.
 
 :::note Kule bir önizleme (preview) sürümüdür
 
-Kule **macOS ve Linux**'ta çalışır. Windows desteği planlanıyor. En son
+Kule **macOS, Linux ve Windows 11**'de çalışır. En son
 ön sürüm
 [`0.2.0-preview.14`](https://github.com/kulehq/kule/releases/tag/v0.2.0-preview.14):
 [indirin ya da Kule'yi kaynak koddan derleyin](getting-started/install.md).
@@ -42,8 +42,9 @@ ajana güvenirsiniz.
 
 Kule size üçüncü bir yol sunar:
 
-- **Ajan bir kopya üzerinde çalışır.** macOS'ta (APFS) ve Btrfs ya da XFS
-  kullanan Linux'ta kopya neredeyse hiç disk alanı kaplamaz.
+- **Ajan bir kopya üzerinde çalışır.** macOS'ta (APFS), Btrfs ya da XFS
+  kullanan Linux'ta ve ReFS ya da Dev Drive kullanan Windows'ta kopya
+  neredeyse hiç disk alanı kaplamaz.
 - **Ajan bir sandbox içinde çalışır.** Yalnızca kendi kopyasına ve kendi
   geçici dosyalarına yazabilir. `~/.ssh`, `~/.aws`, Documents, Desktop ve
   diğer projeleriniz ondan gizlenir.

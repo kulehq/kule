@@ -6,9 +6,10 @@ description: Kule'nin sakladığı her dosya ve klasör; nerede durduğu, ne tut
 
 # Dosyalar ve ayarlar
 
-Kule'nin sakladığı her şey, varsayılan olarak `~/.kule` olan **Kule'nin ev
-dizininde** durur. Başka bir dizin kullanmak için `KULE_HOME` ayarlayın (ya
-da `--home` verin); bkz. [Ortam değişkenleri](environment.md). Hiçbir
+Kule'nin sakladığı her şey, varsayılan olarak `~/.kule` (Windows'ta
+`%USERPROFILE%\.kule`) olan **Kule'nin ev dizininde** durur. Başka bir
+dizin kullanmak için `KULE_HOME` ayarlayın (ya da `--home` verin); bkz.
+[Ortam değişkenleri](environment.md). Hiçbir
 sandbox Kule'nin ev dizinini göremez: bir görevin komutları ve ajanları, kendi
 kopyaları ve geçici dosyaları dışında bu sayfadaki hiçbir şeyi okuyamaz ya da
 yazamaz.
@@ -47,7 +48,7 @@ açabilir.
 | `beside.json` | Bir klasörün yanındaki, görevlerinin okuyabildiği projeler (`kule reveal`). | hayır |
 | `isolation.json` | Daha zayıf yalıtımı kabul edip etmediğiniz (`kule isolation`). | hayır |
 | `secrets.json` | Saklanan gizli değerler: adlar, host'lar, klasörler ve **mühürlenmiş** (şifrelenmiş) değerler. Yalnızca siz okuyabilirsiniz. | hayır |
-| `secrets.key` | Gizli değerleri mühürleyen anahtar; **yalnızca** sistem onu saklamadığında: `~/.kule` dışında bir Kule ev dizini ya da anahtar zinciri veya Secret Service olmayan bir bilgisayar. `~/.kule` için anahtar macOS anahtar zincirinde (`Kule secrets` öğesi) ya da Linux'ta Secret Service'tedir. | hayır |
+| `secrets.key` | Gizli değerleri mühürleyen anahtar; **yalnızca** sistem onu saklamadığında: `~/.kule` dışında bir Kule ev dizini, anahtar zinciri veya Secret Service olmayan bir bilgisayar ve her Windows bilgisayar. `~/.kule` için anahtar macOS anahtar zincirinde (`Kule secrets` öğesi) ya da Linux'ta Secret Service'tedir. Dosyayı yalnızca siz okuyabilirsiniz. | hayır |
 | `kule.key` | Her görevin geçmişini imzalayan anahtar (`kule history`). | hayır |
 | `agents.toml` | Ajan profilleriniz. Her biri ancak onaylandıktan sonra, ve her değişiklikten sonra yeniden onaylanınca çalışır. Biçim: `kule agents show claude-code`; alanlar: [Ajanlar](../using-agents.md). | **evet** |
 | `agents-approved.json` | Hangi profili, tam olarak hangi hâliyle onayladığınız. | hayır |
@@ -109,18 +110,19 @@ kaldırarak değil, her zaman `kule rm TASK` ile silin.
 
 ### `~/.kule` neden büyük görünüyor {#why-kule-looks-large}
 
-macOS'ta (APFS) ve Linux'ta Btrfs ya da XFS ile kopya, `base/` ve
-önbelleğe alınmış paketler, dosyalarınızla disk bloklarını paylaşan
-**klonlardır** (clone). Finder ve `du` yine de onları tam boyutlarıyla
-sayar; gerçekte ne kadar yer kullanıldığını görmek için boş alana bakın
-(`df -h`).
+macOS'ta (APFS), Linux'ta Btrfs ya da XFS ile ve Windows'ta ReFS ya da
+Dev Drive ile kopya, `base/` ve önbelleğe alınmış paketler, dosyalarınızla
+disk bloklarını paylaşan **klonlardır** (clone). Finder, Explorer ve `du`
+yine de onları tam boyutlarıyla sayar; gerçekte ne kadar yer kullanıldığını
+görmek için boş alana bakın (`df -h`).
 
 ## Kule'nin ev dizini dışında {#outside-kules-home}
 
 | Yol | Ne tutar |
 | --- | --- |
-| `~/Library/Application Support/Kule/packages` (macOS), `~/.local/share/kule/packages` (Linux) | Kule'nin npm ile kurduğu ajanlar (Claude Code'un ve Codex'in ACP bağdaştırıcıları); her tam sürüm için bir klasör, kurulum betikleri çalıştırılmadan kurulur. Hiçbir sandbox buraya yazamaz. |
-| `~/Library/Application Support/Kule/agents/<name>` (macOS), `~/.local/share/kule/agents/<name>` (Linux) | Kule'nin kendi ajanları gibi profili `own_home` ayarlayan bir ajan için **ona ait bir ev dizini**: Kule'deki ayarları, geçmişi ve konuşma kayıtları, görevler boyunca. Kule ayarlarınızı ve talimatlarınızı her başlangıçta buraya kopyalar (`carry`). |
+| `~/Library/Application Support/Kule/packages` (macOS), `~/.local/share/kule/packages` (Linux ve Windows, profilinizin altında) | Kule'nin npm ile kurduğu ajanlar (Claude Code'un ve Codex'in ACP bağdaştırıcıları); her tam sürüm için bir klasör, kurulum betikleri çalıştırılmadan kurulur. Hiçbir sandbox buraya yazamaz. |
+| `~/Library/Application Support/Kule/agents/<name>` (macOS), `~/.local/share/kule/agents/<name>` (Linux ve Windows) | Kule'nin kendi ajanları gibi profili `own_home` ayarlayan bir ajan için **ona ait bir ev dizini**: Kule'deki ayarları, geçmişi ve konuşma kayıtları, görevler boyunca. Kule ayarlarınızı ve talimatlarınızı her başlangıçta buraya kopyalar (`carry`). |
+| `%LOCALAPPDATA%\Kule` (Windows) | Kule'nin programları, kurucunun koyduğu yerde: uygulama, `kule.exe`, `kule-proxy.exe` ve `kule-pty-helper.exe`. Kule'nin ev dizini değildir ve asla ev dizini yapılmamalıdır. |
 | `<workspace>/.kule/policy.cedar` | Bir deponun kendi **forbid** kuralları. Politikayı yalnızca sıkılaştırabilir. Kule onu bir görevin kopyasından değil, her zaman gerçek klasörünüzden okur; `.kule/` altındaki herhangi bir şeye yapılan her değişiklik bir insanın onayını bekler. **Düzenleme: evet.** |
 
 ## Bilgisayarlar arasında taşıdığınız dosyalar {#files-you-move-between-computers}
