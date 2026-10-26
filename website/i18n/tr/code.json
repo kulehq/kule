@@ -51,13 +51,13 @@
     "message": "Notlar, belgeler, fotoğraflar ve veriler de aynı şekilde çalışır. Kule git gerektirmez; .git varsa onu bir depo olarak okur."
   },
   "home.title": {
-    "message": "Yapay zekâ ajanları için bir kontrol odası"
+    "message": "Yapay zeka ajanları için bir kontrol odası"
   },
   "home.description": {
-    "message": "Kule, yapay zekâ ajanlarını klasörünüzün sandbox içindeki bir kopyasında çalıştırır ve klasörünüze bir şey ulaşmadan önce ne yaptıklarını incelemenizi sağlar."
+    "message": "Kule, yapay zeka ajanlarını klasörünüzün sandbox içindeki bir kopyasında çalıştırır ve klasörünüze bir şey ulaşmadan önce ne yaptıklarını incelemenizi sağlar."
   },
   "home.hero": {
-    "message": "Klasörlerinizde çalışan yapay zekâ ajanları için bir kontrol odası. Ajanlar işi sandbox içindeki bir kopyada yapar; siz izler, onaylar ve gerçek klasöre neyin ulaşacağına karar verirsiniz."
+    "message": "Klasörlerinizde çalışan yapay zeka ajanları için bir kontrol odası. Ajanlar işi sandbox içindeki bir kopyada yapar; siz izler, onaylar ve gerçek klasöre neyin ulaşacağına karar verirsiniz."
   },
   "home.cta.install": {
     "message": "Kurulum"
