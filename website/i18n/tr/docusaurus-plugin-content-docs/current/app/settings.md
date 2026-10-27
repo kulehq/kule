@@ -107,10 +107,10 @@ yere koymaz. Bir klasörün `.env` dosyalarında gizli değere benzeyen değerle
 de aynı şekilde kopyanın dışında tutulur.
 
 Bölüm, değerlerin nerede mühürlendiğini söyler: sisteminizin anahtar
-zincirinin (macOS keychain) ya da Secret Service'in (Linux) tuttuğu bir
-anahtarla; bunlardan biri olmayan ya da Kule ev dizini `~/.kule` dışında
-olan bir bilgisayarda ise Kule'nin ev dizinindeki bir dosyada tutulan bir
-anahtarla. Her gizli değerin bir **Forget** düğmesi vardır (onaylamak için
+zincirinin (macOS keychain), Secret Service'in (Linux) ya da Credential
+Manager'ın (Windows) tuttuğu bir anahtarla; sistemin anahtar saklamadığı
+yerde ya da Kule ev dizini varsayılan dışında olduğunda ise Kule'nin ev
+dizinindeki bir dosyada tutulan bir anahtarla. Her gizli değerin bir **Forget** düğmesi vardır (onaylamak için
 yeniden tıklayın).
 
 ## Budget {#budget}

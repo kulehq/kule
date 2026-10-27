@@ -84,6 +84,18 @@ Kule's home it never reads.
 `%USERPROFILE%\.kule`), or point it at a folder of its own; unpack the
 `.zip` into a folder that holds nothing else.
 
+### Windows: "the key to your secrets is in the Credential Manager and could not be read"
+
+**Cause:** Kule keeps the key that seals your secrets in the Credential
+Manager, and Windows gives a session over SSH signed in with a key no
+Credential Manager. A home from 0.2.0-preview.15 or earlier kept the key in
+a file; it moved to the Credential Manager the first time the secrets were
+opened in your desktop session.
+
+**Fix:** run the command in your desktop session. For work over SSH, give
+it a Kule home of its own with `KULE_HOME`: a home other than the default
+keeps its key in a file, readable by you alone.
+
 ## Agents
 
 ### An agent shows as missing or cannot start

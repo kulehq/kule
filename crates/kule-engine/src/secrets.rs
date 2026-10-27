@@ -121,8 +121,9 @@ fn read_store(home: &Path) -> Result<Store> {
     } else {
         None
     };
-    // Written again, sealed and bound, when anything was not.
-    let mut rewrite = false;
+    // Written again, sealed and bound, when anything was not, or the key
+    // moved (see [`crate::sealing`]).
+    let mut rewrite = sealer.as_ref().is_some_and(|s| Some(s.home) != disk.key);
     let secrets = disk
         .secrets
         .into_iter()
@@ -186,7 +187,16 @@ fn write_store(home: &Path, store: &Store) -> Result<()> {
 /// Where the key to the secrets in `home` is kept; `None` before the first
 /// secret is kept.
 pub fn secrets_key_home(home: &Path) -> Result<Option<KeyHome>> {
-    Ok(read_disk(home)?.key)
+    let key = read_disk(home)?.key;
+    // Windows: a key a file keeps moves to the Credential Manager when the
+    // secrets are opened (see [`crate::sealing`]), so they are opened first
+    // and the key said where it is after. Elsewhere the key stays shut: a
+    // keychain may ask the person.
+    if cfg!(windows) && key == Some(KeyHome::File) {
+        read_store(home)?;
+        return Ok(read_disk(home)?.key);
+    }
+    Ok(key)
 }
 
 /// Writes `value` as JSON readable by its owner alone, replacing what was

@@ -4209,12 +4209,12 @@ async function renderSecrets() {
   // Where the key that seals the values is: said plainly when it is a file.
   const sealed =
     keyHome === "system"
-      ? h("p", { class: "muted" }, "The values are sealed with a key your system's keychain keeps.")
+      ? h("p", { class: "muted" }, "The values are sealed with a key your system keeps (the keychain, Secret Service or the Credential Manager).")
       : keyHome === "file"
         ? h(
             "p",
             { class: "secrets-key-file" },
-            "The values are sealed with a key kept in a file in Kule's home: this computer offers no keychain, or Kule's home is not ~/.kule. Anyone who can read your files can open them."
+            "The values are sealed with a key kept in a file in Kule's home: the system keeps none here (no keychain, or a Windows session over SSH), or Kule's home is not the default one. Anyone who can read your files can open them."
           )
         : null;
   const folders = [...new Set(state.tasks.map((t) => t.workspace))].sort();

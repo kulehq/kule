@@ -44,7 +44,7 @@ can make Kule refuse to work until it is fixed or removed.
 | `beside.json` | Projects beside a folder that its tasks may read (`kule reveal`). | no |
 | `isolation.json` | Whether you accepted weaker isolation (`kule isolation`). | no |
 | `secrets.json` | Kept secrets: names, hosts, folders, and values **sealed** (encrypted). Readable by you alone. | no |
-| `secrets.key` | The key that seals the secrets, **only** when the system does not keep it: a Kule home other than `~/.kule`, a computer without a keychain or Secret Service, and every Windows computer. For `~/.kule` the key is in the macOS keychain (item `Kule secrets`) or Secret Service on Linux. The file is readable by you alone. | no |
+| `secrets.key` | The key that seals the secrets, **only** when the system does not keep it: a Kule home other than the default, a computer without a keychain or Secret Service, or a Windows session over SSH. For the default home the key is in the macOS keychain (item `Kule secrets`), Secret Service on Linux, or the Windows Credential Manager (an entry ending in `Kule secrets`). On Windows a file from 0.2.0-preview.15 or earlier moves to the Credential Manager the first time the secrets are opened. The file is readable by you alone. | no |
 | `kule.key` | The key that signs every task's history (`kule history`). | no |
 | `agents.toml` | Your agent profiles. Each runs only once approved, and again after any change. Format: `kule agents show claude-code`; fields: [Agents](../using-agents.md). | **yes** |
 | `agents-approved.json` | Which profile, exactly as it was, you approved. | no |

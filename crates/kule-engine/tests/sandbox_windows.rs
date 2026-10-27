@@ -416,6 +416,94 @@ fn the_windows_credential_stores_are_hidden() {
     }
 }
 
+/// Where [`credential_reader`] finds the account it reads, in its folder.
+const READER_ACCOUNT: &str = "kule-reader-account.txt";
+const READER_SERVICE: &str = "Kule test credential";
+
+/// What the Credential Manager keeps for the person (the key to Kule's
+/// secrets among it) no command reads: this test's own program, copied
+/// into the task, reads a credential of the test's outside the container
+/// and nothing of it inside.
+#[test]
+fn the_credential_manager_cannot_be_read() {
+    if !available() {
+        return;
+    }
+    let s = Setup::new();
+    let copy = s.task.copy();
+    let account = format!(
+        "kule-test-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    );
+    let secret = format!("kule-credential-{account}");
+    let entry = keyring::Entry::new(READER_SERVICE, &account).unwrap();
+    // Windows gives an SSH session signed in with a key no store.
+    if let Err(e) = entry.set_password(&secret) {
+        assert!(
+            std::env::var_os("KULE_TEST_REQUIRE_SANDBOX").is_none(),
+            "the Credential Manager is required here, but: {e}"
+        );
+        eprintln!("skipped: the Credential Manager keeps nothing here: {e}");
+        return;
+    }
+    struct Forget(keyring::Entry);
+    impl Drop for Forget {
+        fn drop(&mut self) {
+            let _ = self.0.delete_credential();
+        }
+    }
+    let _forget = Forget(entry);
+    fs::write(copy.join(READER_ACCOUNT), &account).unwrap();
+    fs::copy(std::env::current_exe().unwrap(), copy.join("reader.exe")).unwrap();
+    let args: Vec<String> = ["--ignored", "--exact", "credential_reader", "--nocapture"]
+        .map(str::to_owned)
+        .into();
+
+    // Outside the container it is read: the check below can fail.
+    let out = std::process::Command::new(copy.join("reader.exe"))
+        .args(&args)
+        .current_dir(&copy)
+        .output()
+        .unwrap();
+    assert!(
+        text(&out).contains(&format!("read: {secret}")),
+        "{}",
+        text(&out)
+    );
+
+    let out = s
+        .sandbox()
+        .start(".\\reader.exe", &args)
+        .unwrap()
+        .output()
+        .unwrap();
+    let said = text(&out);
+    assert!(
+        !said.contains(&secret),
+        "a command read the credential: {said}"
+    );
+    assert!(said.contains("not read:"), "the reader did not run: {said}");
+}
+
+/// Run by [`the_credential_manager_cannot_be_read`], in and out of the
+/// container: says what the Credential Manager gives for the account in
+/// [`READER_ACCOUNT`].
+#[test]
+#[ignore = "run by the_credential_manager_cannot_be_read"]
+fn credential_reader() {
+    let Ok(account) = fs::read_to_string(READER_ACCOUNT) else {
+        println!("no account to read");
+        return;
+    };
+    match keyring::Entry::new(READER_SERVICE, account.trim()).and_then(|e| e.get_password()) {
+        Ok(found) => println!("read: {found}"),
+        Err(e) => println!("not read: {e}"),
+    }
+}
+
 /// The folders on the way to what the sandbox grants are listed, so that
 /// paths resolve, and nothing beside them: a folder next to the way, in
 /// the temporary folder or the person's profile, cannot be listed, while

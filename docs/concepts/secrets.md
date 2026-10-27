@@ -134,9 +134,11 @@ output of `kule run`, `exec` and `shell`, and the terminal).
 ## Where secrets are stored
 
 Secrets live in Kule's home, hidden from every sandbox. Their values are
-**sealed** with a key that your system's keychain (macOS) or Secret
-Service (Linux) keeps. A computer without one, or a Kule home other than
-`~/.kule`, keeps the key in a file beside; *Settings → Secrets* says so.
+**sealed** with a key that your system's keychain (macOS), Secret
+Service (Linux) or the Credential Manager (Windows) keeps. Where the system
+keeps none (a computer without one, a Windows session over SSH), or with a
+Kule home other than the default, the key is kept in a file beside;
+*Settings → Secrets* says so.
 
 ## What it does not do yet
 
