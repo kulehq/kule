@@ -25,29 +25,66 @@ permissions:
   contents: read
 
 jobs:
-  # What Kule depends on: advisories, licences, duplicate and wildcard
-  # versions, and where crates come from (deny.toml); and osv-scanner over
-  # every lockfile, the docs site's included (the release gate's `deps`).
-  deny:
-    # Not for a one-platform look: it checks what Kule depends on, not a platform.
-    if: github.event_name != 'workflow_dispatch'
+  # Whether the change touches anything but documentation
+  # (scripts/ci-changes.sh holds the list, deny by default). For a pull
+  # request or a push that is documentation only, the required jobs below
+  # still run under their own names, with their steps skipped; anything
+  # else, a scheduled run and one started by hand run everything. Those
+  # jobs run even when this one fails (`!cancelled()`), and their steps
+  # are skipped only on an explicit `false`, so a failure here runs them
+  # all. Kept in step with MAINTAINING.md.
+  changes:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 5
+    outputs:
+      code: ${{ steps.diff.outputs.code }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 0
+      - id: diff
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          if [ "$EVENT" = pull_request ] || [ "$EVENT" = push ]; then
+            scripts/ci-changes.sh "$BASE" "$HEAD"
+          else
+            echo "code=true" | tee -a "$GITHUB_OUTPUT"
+          fi
+
+  # What Kule depends on: advisories, licences, duplicate and wildcard
+  # versions, and where crates come from (deny.toml); and osv-scanner over
+  # every lockfile, the docs site's included (the release gate's `deps`).
+  deny:
+    needs: changes
+    # Not for a one-platform look: it checks what Kule depends on, not a platform.
+    if: ${{ !cancelled() && (github.event_name != 'workflow_dispatch') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: needs.changes.outputs.code != 'false'
+        with:
+          persist-credentials: false
       - name: Rust toolchain (rust-toolchain.toml)
+        if: needs.changes.outputs.code != 'false'
         run: rustup toolchain install
       - name: cargo-deny, at a pinned version
+        if: needs.changes.outputs.code != 'false'
         run: cargo install --locked cargo-deny --version 0.20.2
       - run: cargo deny --locked check
+        if: needs.changes.outputs.code != 'false'
       # osv-scanner 2.6.0 needs Go 1.27 or later.
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        if: needs.changes.outputs.code != 'false'
         with:
           go-version: "1.27.3"
           cache: false
       - name: osv-scanner over the lockfiles (scripts/release-gate.sh)
+        if: needs.changes.outputs.code != 'false'
         run: |
           go install github.com/google/osv-scanner/v2/cmd/osv-scanner@v2.6.0
           PATH="$(go env GOPATH)/bin:$PATH"
@@ -83,6 +120,8 @@ jobs:
   # when it fails). Today that is Ubuntu 26.04: macos-latest is already
   # macOS 26 and windows-latest Windows Server 2025, the newest of each.
   test:
+    needs: changes
+    if: ${{ !cancelled() }}
     strategy:
       fail-fast: false
       matrix:
@@ -92,60 +131,65 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: needs.changes.outputs.code != 'false'
         with:
           persist-credentials: false
       - name: Rust toolchain (rust-toolchain.toml)
+        if: needs.changes.outputs.code != 'false'
         run: rustup toolchain install
       - name: Desktop app dependencies (WebKitGTK)
-        if: runner.os == 'Linux'
+        if: needs.changes.outputs.code != 'false' && (runner.os == 'Linux')
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev
       - name: Unprivileged user namespaces (the sandbox's own network)
-        if: runner.os == 'Linux'
+        if: needs.changes.outputs.code != 'false' && (runner.os == 'Linux')
         run: |
           if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
             sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           fi
       - run: cargo fmt --all --check
+        if: needs.changes.outputs.code != 'false'
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+        if: needs.changes.outputs.code != 'false'
       - run: cargo test --workspace --locked
+        if: needs.changes.outputs.code != 'false'
       # The release gate's scripts are bash and run commands in a sandbox:
       # on Windows the sandbox arrives with a later work package, and the
       # gate runs on the Windows test machine until then.
       # Go for betterleaks below: the macOS runner image no longer has it.
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        if: runner.os != 'Windows'
+        if: needs.changes.outputs.code != 'false' && (runner.os != 'Windows')
         with:
           go-version: "1.26.10"
           cache: false
       - name: Canary secrets stay out of a task (scripts/release-gate.sh)
-        if: runner.os != 'Windows'
+        if: needs.changes.outputs.code != 'false' && (runner.os != 'Windows')
         run: |
           go install github.com/betterleaks/betterleaks@v1.9.0
           PATH="$(go env GOPATH)/bin:$PATH"
           cargo build --locked -p kule
           scripts/release-gate.sh canary
       - name: What a command in a task can reach, under sandbox-probe (scripts/release-gate.sh)
-        if: runner.os != 'Windows'
+        if: needs.changes.outputs.code != 'false' && (runner.os != 'Windows')
         run: |
           go install github.com/controlplaneio/sandbox-probe/v6@v6.19.1
           PATH="$(go env GOPATH)/bin:$PATH"
           scripts/release-gate.sh probe
       # Node for commander below, which needs 22.12 or later.
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        if: runner.os != 'Windows'
+        if: needs.changes.outputs.code != 'false' && (runner.os != 'Windows')
         with:
           node-version: 24
           package-manager-cache: false
       - name: The window's Markdown renderer (node --test, no packages)
-        if: runner.os != 'Windows'
+        if: needs.changes.outputs.code != 'false' && (runner.os != 'Windows')
         run: node --test crates/kule-desktop/ui/tests/*.test.js
       - name: Real projects install, build and test in a task (scripts/release-gate.sh)
-        if: runner.os != 'Windows'
+        if: needs.changes.outputs.code != 'false' && (runner.os != 'Windows')
         run: scripts/release-gate.sh project
       - name: Weaker isolation runs only once accepted (user namespaces refused)
-        if: runner.os == 'Linux'
+        if: needs.changes.outputs.code != 'false' && (runner.os == 'Linux')
         env:
           KULE_TEST_EXPECT_GAPS: "1"
         run: |
@@ -164,7 +208,8 @@ jobs:
   # runner's account is an administrator; the standard-user runs stay on
   # the Windows test machine.
   windows-sandbox:
-    if: github.event_name != 'workflow_dispatch' || inputs.os == 'windows-latest' || inputs.os == 'all'
+    needs: changes
+    if: ${{ !cancelled() && (github.event_name != 'workflow_dispatch' || inputs.os == 'windows-latest' || inputs.os == 'all') }}
     strategy:
       fail-fast: false
       matrix:
@@ -173,9 +218,11 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: needs.changes.outputs.code != 'false'
         with:
           persist-credentials: false
       - name: Rust toolchain (rust-toolchain.toml) and the target
+        if: needs.changes.outputs.code != 'false'
         shell: bash
         env:
           TARGET: ${{ matrix.target }}
@@ -186,6 +233,7 @@ jobs:
       # in its app container, the terminal's pseudo console in the command's;
       # the key to the secrets in the Credential Manager, required as well.
       - name: Commands, the proxy and the terminal run in their containers (the sandbox required)
+        if: needs.changes.outputs.code != 'false'
         shell: bash
         env:
           KULE_TEST_REQUIRE_SANDBOX: "1"
@@ -202,7 +250,7 @@ jobs:
   # issue labelled `scheduled-ci`, one open at a time, with a comment per
   # later failure. Nothing of the event is templated into the script.
   report:
-    needs: [deny, workflows, test, windows-sandbox]
+    needs: [changes, deny, workflows, test, windows-sandbox]
     if: always() && github.event_name == 'schedule' && contains(needs.*.result, 'failure')
     runs-on: ubuntu-latest
     timeout-minutes: 10

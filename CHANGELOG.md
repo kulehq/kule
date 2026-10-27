@@ -1,5 +1,22 @@
 # Changes
 
+## Unreleased
+
+### Testing
+
+- Kule's own escape attempts (#46): tests named `escape_*`, beside the
+  tests of the boundary each one attempts, run on macOS, Linux and
+  Windows. Each first gets through outside Kule, then must not in a task:
+  a file the command may only read hard-linked into the copy and written
+  through; a hidden file reached by another spelling of its path (letter
+  case, `.` and `..`, doubled slashes, a link; on Windows its short name,
+  `\\?\` and `\\.\` forms, a trailing dot, its data stream); and on Windows
+  a hidden folder moved, renamed, copied, or reached through a junction or
+  a hard link. `cargo test escape_` runs them (docs/testing.md).
+- CI runs only what a documentation change needs: when every changed file
+  is documentation (`scripts/ci-changes.sh` holds the list, deny by
+  default), the required jobs report with their steps skipped.
+
 ## 0.2.0-preview.16
 
 On Windows, the key that seals your secrets moves into the Credential

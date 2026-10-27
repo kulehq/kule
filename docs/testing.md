@@ -101,6 +101,20 @@ as [SECURITY.md](https://github.com/kulehq/kule/blob/main/SECURITY.md)
 says. The fix is made in private and released first, and the advisory
 credits you unless you prefer not.
 
+Kule's own attempts to get past its boundaries run from a clone of the
+repository, on your computer:
+
+```sh
+cargo test escape_
+```
+
+Each one first does its thing outside Kule, where it must get through,
+and then in a task, where it must not. On Windows the attempts need a
+Windows 11 24H2 desktop session; set `KULE_TEST_REQUIRE_SANDBOX=1` so one
+that cannot run there fails rather than skips. One that fails is a private
+report too, not an issue. They stand beside the external tools the release
+gate runs, never in their place.
+
 ## Reporting what you found
 
 Open an issue at
