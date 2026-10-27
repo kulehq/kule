@@ -24,10 +24,10 @@ lonca-net = { version = "0.1.2", git = "https://github.com/selcukgural/lonca", r
 # crates.io yet, so for now this keeps kule-engine from being published.
 lonca-core = { git = "https://github.com/selcukgural/lonca", rev = "bf7a03962d16601e07727819d5c80dc085a093b0" }
 reflink-copy.workspace = true
-# Seals the secrets' values; the key lives in the system's keychain (macOS)
-# or Secret Service (Linux, through zbus).
+# Seals the secrets' values; the key lives in the system's keychain (macOS),
+# Secret Service (Linux, through zbus) or the Credential Manager (Windows).
 ring = "0.17.14"
-keyring = { version = "3.6.3", default-features = false, features = ["apple-native", "async-secret-service", "async-io", "crypto-rust"] }
+keyring = { version = "3.6.3", default-features = false, features = ["apple-native", "windows-native", "async-secret-service", "async-io", "crypto-rust"] }
 serde.workspace = true
 serde_json.workspace = true
 similar = "2.7.0"

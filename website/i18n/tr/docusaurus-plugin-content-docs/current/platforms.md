@@ -29,7 +29,7 @@ klasörünüze neyin ulaştığı üçünde de aynıdır.
 | Kendine ait ağ ad alanı | – | Evet, erişebildiği tek şey proxy | Konteynerin kendi ağı: kapalı, açık ya da yalnızca proxy |
 | Sunucular bu bilgisayarla sınırlı | Görevin `servers` sınırı izin vermedikçe hiçbiri dinlemez (kabul ettiğiniz daha zayıf yalıtım); izin verildiğinde Node, Python ve Ruby loopback'e yönlendirilir, diğer programların portları korunur (shield) | Dinlenen her adres loopback'e çevrilir | İçerideki bir sunucu yalnızca görevindir: bu bilgisayardan ya da ağdan hiçbir şey ona ulaşmaz |
 | GPU kapalıyken | Metal (ve OpenCL) hiçbir aygıt alamaz | `/dev/dri` ve NVIDIA aygıtları salt okunur | – |
-| Gizli değer deposunun anahtarı | Keychain | Secret Service | Kule'nin ev dizininde bir dosya (`secrets.key`), yalnızca sizin okuyabildiğiniz |
+| Gizli değer deposunun anahtarı | Keychain | Secret Service | Credential Manager |
 | Dosya yöneticisinde göster | Finder | Files (D-Bus `FileManager1`) | – |
 
 ## Windows: sandbox'ın ihtiyaç duydukları

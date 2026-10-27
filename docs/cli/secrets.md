@@ -39,10 +39,12 @@ The connection log names the secrets that went out:
 `net: api.stripe.com:443 · tunneled · with STRIPE_KEY`.
 
 Where the value lives: in Kule's home (`secrets.json`), hidden from every
-sandbox, sealed with a key that your system keeps (the macOS keychain, or
-Secret Service on Linux). On a computer without a keyring, or with a Kule
-home other than `~/.kule`, the key is kept in a file beside it
-(`secrets.key`, readable by you alone), and *Settings → Secrets* says so.
+sandbox, sealed with a key that your system keeps (the macOS keychain,
+Secret Service on Linux, the Credential Manager on Windows). Where the
+system keeps none (a computer without a keyring, a Windows session over
+SSH), or with a Kule home other than the default, the key is kept in a file
+beside it (`secrets.key`, readable by you alone), and *Settings → Secrets*
+says so.
 
 Values in the copy's `.env` files that look like secrets are masked the same
 way, without you adding them. See [Secrets](../concepts/secrets.md) for the

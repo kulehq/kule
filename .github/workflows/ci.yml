@@ -183,7 +183,8 @@ jobs:
           rustup toolchain install
           rustup target add "$TARGET"
       # The helper programs the tests start beside themselves: the proxy
-      # in its app container, the terminal's pseudo console in the command's.
+      # in its app container, the terminal's pseudo console in the command's;
+      # the key to the secrets in the Credential Manager, required as well.
       - name: Commands, the proxy and the terminal run in their containers (the sandbox required)
         shell: bash
         env:
@@ -193,6 +194,7 @@ jobs:
           set -e
           cargo build --locked --target "$TARGET" -p kule-proxy -p kule-pty-helper
           cargo test --locked --target "$TARGET" -p kule-engine --test sandbox_windows --test terminal_windows
+          cargo test --locked --target "$TARGET" -p kule-engine --lib sealing
           cargo test --locked --target "$TARGET" -p kule-proxy --test container
           cargo test --locked --target "$TARGET" -p kule-desktop pty
 

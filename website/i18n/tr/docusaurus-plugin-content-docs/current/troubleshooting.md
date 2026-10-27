@@ -89,6 +89,19 @@ klasörünü okur, Kule'nin ev dizinini ise asla okumaz.
 `%USERPROFILE%\.kule`) ya da kendine ait bir klasörü gösterin; `.zip`'i
 başka hiçbir şey tutmayan bir klasöre açın.
 
+### Windows: "the key to your secrets is in the Credential Manager and could not be read"
+
+**Neden:** Kule gizli değerlerinizi mühürleyen anahtarı Credential
+Manager'da tutar ve Windows, anahtarla oturum açılmış bir SSH oturumuna
+Credential Manager vermez. 0.2.0-preview.15 veya öncesinden kalan bir ev
+dizini anahtarı bir dosyada tutuyordu; anahtar, gizli değerler masaüstü
+oturumunuzda ilk açıldığında Credential Manager'a taşındı.
+
+**Çözüm:** komutu masaüstü oturumunuzda çalıştırın. SSH üzerinden
+çalışmak için ona `KULE_HOME` ile kendine ait bir Kule ev dizini verin:
+varsayılan dışındaki bir ev dizini anahtarını yalnızca sizin
+okuyabileceğiniz bir dosyada tutar.
+
 ## Ajanlar
 
 ### Bir ajan eksik görünüyor ya da başlayamıyor

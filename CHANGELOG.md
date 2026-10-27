@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Windows
+
+- The key that seals your secrets is kept in the Credential Manager for
+  Kule's default home, as the keychain and Secret Service keep it on macOS
+  and Linux; a command in a task cannot read it. A key in `secrets.key`
+  from 0.2.0-preview.15 moves there the first time the secrets are opened,
+  and the file goes. Where Windows gives no Credential Manager, as in a
+  session over SSH signed in with a key, the key stays in a file and
+  *Settings → Secrets* says so (#71).
+
 ### Testing
 
 - On macOS, when the log's stream dropped a sandbox's refusals and Kule

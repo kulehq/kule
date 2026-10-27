@@ -96,9 +96,9 @@ over HTTPS, and nowhere else. Values in a folder's `.env` files that look
 like secrets are kept out of the copy the same way.
 
 The section says where the values are sealed: with a key your system's
-keychain (macOS) or Secret Service (Linux) keeps, or, on a computer without
-one or with a Kule home other than `~/.kule`, with a key kept in a file in
-Kule's home. Each secret has **Forget** (click again to confirm).
+keychain (macOS), Secret Service (Linux) or the Credential Manager
+(Windows) keeps, or, where the system keeps none or with a Kule home other
+than the default, with a key kept in a file in Kule's home. Each secret has **Forget** (click again to confirm).
 
 ## Budget
 

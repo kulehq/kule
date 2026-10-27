@@ -136,10 +136,12 @@ terminal).
 ## Gizli değerler nerede saklanır
 
 Gizli değerler Kule'nin ev dizininde durur ve her sandbox'tan gizlenir.
-Değerleri, sisteminizin anahtar zincirinin (macOS keychain) ya da Secret
-Service'in (Linux) tuttuğu bir anahtarla **mühürlenir**. Bunlardan biri
-olmayan bir bilgisayar ya da `~/.kule` dışında bir Kule ev dizini, anahtarı
-yanındaki bir dosyada tutar; *Settings → Secrets* bunu söyler.
+Değerleri, sisteminizin anahtar zincirinin (macOS keychain), Secret
+Service'in (Linux) ya da Credential Manager'ın (Windows) tuttuğu bir
+anahtarla **mühürlenir**. Sistemin anahtar saklamadığı yerde (bunlardan
+biri olmayan bir bilgisayar, SSH üzerinden açılmış bir Windows oturumu) ya
+da varsayılan dışında bir Kule ev dizininde anahtar yanındaki bir dosyada
+tutulur; *Settings → Secrets* bunu söyler.
 
 ## Henüz yapmadıkları
 

@@ -29,7 +29,7 @@ folder are the same on all three.
 | Network namespace of its own | – | Yes, with only the proxy in reach | The container's own: shut, open, or the proxy alone |
 | Servers held to this computer | None listen unless the task's `servers` limit allows them (weaker isolation you accept); then Node, Python and Ruby are pointed at loopback and other programs' ports shielded | Every listening address turned into loopback | A server inside is the task's alone: nothing from this computer or the network reaches it |
 | GPU off | Metal (and OpenCL) gets no device | `/dev/dri` and NVIDIA's devices read-only | – |
-| Secret store key | Keychain | Secret Service | A file in Kule's home (`secrets.key`), readable by you alone |
+| Secret store key | Keychain | Secret Service | Credential Manager |
 | Show in file manager | Finder | Files (D-Bus `FileManager1`) | – |
 
 ## Windows: what the sandbox needs

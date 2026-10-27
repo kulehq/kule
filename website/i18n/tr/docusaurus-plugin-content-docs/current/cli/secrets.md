@@ -40,11 +40,12 @@ Bağlantı kaydı, dışarı çıkan gizli değerlerin adını yazar:
 `net: api.stripe.com:443 · tunneled · with STRIPE_KEY`.
 
 Değerin durduğu yer: Kule'nin ev dizininde (`secrets.json`), her sandbox'tan
-gizli, sisteminizin sakladığı bir anahtarla (macOS anahtar zinciri ya da
-Linux'ta Secret Service) mühürlenmiş olarak. Anahtar halkası olmayan bir
-bilgisayarda ya da `~/.kule` dışında bir Kule ev dizininde, anahtar onun
-yanında bir dosyada (`secrets.key`, yalnızca sizin okuyabileceğiniz)
-saklanır ve *Settings → Secrets* bunu belirtir.
+gizli, sisteminizin sakladığı bir anahtarla (macOS anahtar zinciri,
+Linux'ta Secret Service, Windows'ta Credential Manager) mühürlenmiş olarak.
+Sistemin anahtar saklamadığı yerde (anahtar halkası olmayan bir bilgisayar,
+SSH üzerinden açılmış bir Windows oturumu) ya da varsayılan dışında bir Kule
+ev dizininde, anahtar onun yanında bir dosyada (`secrets.key`, yalnızca
+sizin okuyabileceğiniz) saklanır ve *Settings → Secrets* bunu belirtir.
 
 Kopyadaki `.env` dosyalarında gizli değere benzeyen değerler, sizin
 eklemenize gerek kalmadan aynı şekilde maskelenir. Tüm resim ve henüz
