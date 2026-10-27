@@ -1,5 +1,17 @@
 # Changes
 
+## Unreleased
+
+### Testing
+
+- On macOS, when the log's stream dropped a sandbox's refusals and Kule
+  reads its store instead, Kule reads it as settled only after two reads
+  in a row show no more: the store lands a burst in bursts of its own,
+  with a quiet second between. The test of that list compares it with
+  what the store showed before Kule was asked, which is all shown when
+  Kule read it, rather than with a read taken after, which on a busy
+  runner is further along than Kule could have seen (#72).
+
 ## 0.2.0-preview.15
 
 Kule runs on Windows 11: the app, the `kule` command and a per-user

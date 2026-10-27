@@ -704,11 +704,26 @@ fn unix(at: SystemTime) -> f64 {
 
 /// How long the store is given to stop growing, read once a second, where
 /// what it shows is read as the list: a busy Mac fills it seconds late.
+///
+/// Measured on 2026-10-27 (M-series Mac, 16 cores, a burst of 4000
+/// refusals the stream was held up for; each read of the store takes
+/// about a second, so reads come two seconds apart): on a quiet Mac the
+/// store showed all it would keep at the first read, or grew once more
+/// after a quiet read (3157, 3157, 3225). With every core busy it grew at
+/// every read until this cap (1468, 1771, 1771, 2041, 2290 at nine
+/// seconds; 1855 … 2228), and kept growing for some ten seconds after.
+/// So under load the list is what the store showed at the cap, and it is
+/// told as incomplete either way.
 const SETTLE: Duration = Duration::from_secs(8);
 
+/// How many reads in a row must show no more than the one before for the
+/// store to be read as settled: the store fills in bursts, with a quiet
+/// second between (see [`SETTLE`]), and one quiet read is not the end.
+const QUIET: u32 = 2;
+
 /// What the log's store shows refused under `tag` within `window`, once it
-/// stops growing or [`SETTLE`] has passed: never all there was (see the
-/// note at the top), and nothing where it cannot be read.
+/// stops growing ([`QUIET`]) or [`SETTLE`] has passed: never all there was
+/// (see the note at the top), and nothing where it cannot be read.
 pub(crate) fn stored(tag: &str, window: Duration) -> Vec<Denial> {
     let predicate = format!("sender == \"Sandbox\" AND eventMessage CONTAINS \"{tag}\"");
     let seconds = window.as_secs() + SETTLE.as_secs() + 2;
@@ -744,12 +759,15 @@ pub(crate) fn stored(tag: &str, window: Duration) -> Vec<Denial> {
     };
     let started = Instant::now();
     let mut denials = read();
-    while started.elapsed() < SETTLE {
+    let mut quiet = 0;
+    while quiet < QUIET && started.elapsed() < SETTLE {
         std::thread::sleep(Duration::from_secs(1));
         let again = read();
-        if again.len() == denials.len() {
-            break;
-        }
+        quiet = if again.len() == denials.len() {
+            quiet + 1
+        } else {
+            0
+        };
         denials = again;
     }
     denials

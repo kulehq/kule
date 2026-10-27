@@ -1806,10 +1806,13 @@ impl Drop for Paused {
     }
 }
 
-/// The paths the log's store shows refused under `dir`, read once it stops
-/// growing (macOS).
+/// The paths the log's store shows refused under `dir` now, read once:
+/// what it has yet to land is not in it (macOS).
 #[cfg(target_os = "macos")]
-fn stored_under(since: std::time::SystemTime, dir: &Path) -> std::collections::BTreeSet<String> {
+fn stored_under_now(
+    since: std::time::SystemTime,
+    dir: &Path,
+) -> std::collections::BTreeSet<String> {
     let start = format!(
         "@{}",
         since
@@ -1822,30 +1825,34 @@ fn stored_under(since: std::time::SystemTime, dir: &Path) -> std::collections::B
         "sender == \"Sandbox\" AND eventMessage CONTAINS \"{}/\"",
         dir.display()
     );
-    let read = || {
-        let out = Command::new("/usr/bin/log")
-            .args(["show", "--start", &start, "--style", "ndjson"])
-            .args(["--predicate", &predicate])
-            .output()
-            .unwrap();
-        String::from_utf8_lossy(&out.stdout)
-            .lines()
-            .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
-            .filter_map(|entry| entry["eventMessage"].as_str().map(str::to_owned))
-            .filter_map(|message| {
-                // `… deny(1) file-write-create /the/path` and the tag after.
-                message
-                    .lines()
-                    .next()?
-                    .rsplit_once(' ')
-                    .map(|(_, p)| p.to_owned())
-            })
-            .collect::<std::collections::BTreeSet<_>>()
-    };
-    let mut last = read();
+    let out = Command::new("/usr/bin/log")
+        .args(["show", "--start", &start, "--style", "ndjson"])
+        .args(["--predicate", &predicate])
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .filter_map(|entry| entry["eventMessage"].as_str().map(str::to_owned))
+        .filter_map(|message| {
+            // `… deny(1) file-write-create /the/path` and the tag after.
+            message
+                .lines()
+                .next()?
+                .rsplit_once(' ')
+                .map(|(_, p)| p.to_owned())
+        })
+        .collect()
+}
+
+/// The paths the log's store shows refused under `dir`, read once it stops
+/// growing (macOS).
+#[cfg(target_os = "macos")]
+fn stored_under(since: std::time::SystemTime, dir: &Path) -> std::collections::BTreeSet<String> {
+    let mut last = stored_under_now(since, dir);
     for _ in 0..20 {
         std::thread::sleep(std::time::Duration::from_secs(2));
-        let now = read();
+        let now = stored_under_now(since, dir);
         if now == last {
             return now;
         }
@@ -1897,10 +1904,23 @@ fn refusals_the_stream_dropped_are_read_from_the_store() {
         "the shell saw {refused} refused: {:?}",
         out.status
     );
+    // What the store shows before Kule is asked, once it shows a good
+    // part of the burst: the store only grows, so all of it was shown when
+    // Kule read it. A read taken after Kule returns is no bound: on a
+    // busy Mac the store lands a burst for longer than Kule waits for it.
+    let mut before = stored_under_now(since, &dir);
+    for _ in 0..10 {
+        if before.len() >= 1000 {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_secs(2));
+        before = stored_under_now(since, &dir);
+    }
     let refusals = sandbox
         .denials(std::time::Duration::from_secs(60))
         .unwrap()
         .unwrap();
+    let after = stored_under_now(since, &dir);
     let stored = stored_under(since, &dir);
     if stored.len() <= 2000 {
         inconclusive(
@@ -1909,13 +1929,17 @@ fn refusals_the_stream_dropped_are_read_from_the_store() {
         );
         return;
     }
-    let missing: Vec<_> = stored
-        .iter()
-        .filter(|path| !refusals.denials.iter().any(|d| &d.path == *path))
-        .collect();
+    let listed = |path: &String| refusals.denials.iter().any(|d| &d.path == path);
+    let missing: Vec<_> = before.iter().filter(|path| !listed(path)).collect();
+    let missing_after = after.iter().filter(|path| !listed(path)).count();
+    let missing_settled = stored.iter().filter(|path| !listed(path)).count();
     let what = format!(
-        "{} of the {} refusals the store shows are not listed; {} listed, incomplete {}, lost {:?}; first missing {:?}",
+        "{} of the {} refusals the store showed before Kule was asked are not listed ({} of the {} it showed as Kule returned, {} of the {} once settled); {} listed, incomplete {}, lost {:?}; first missing {:?}",
         missing.len(),
+        before.len(),
+        missing_after,
+        after.len(),
+        missing_settled,
         stored.len(),
         refusals.denials.len(),
         refusals.incomplete,
@@ -1923,12 +1947,12 @@ fn refusals_the_stream_dropped_are_read_from_the_store() {
         missing.first()
     );
     assert!(
-        refusals.incomplete || missing.is_empty(),
+        refusals.incomplete || missing_settled == 0,
         "told as all there was: {what}"
     );
-    // What the store had shown when Kule stopped reading it is listed; a
-    // few it showed only later may not be.
-    assert!(missing.len() * 10 < stored.len(), "{what}");
+    // What the store had shown when Kule read it is listed: without the
+    // store, the list would hold what the stream brought alone.
+    assert!(missing.len() * 10 < before.len(), "{what}");
 }
 
 /// One stream of refusals serves every sandbox of a process, so Kule adds
