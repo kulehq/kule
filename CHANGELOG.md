@@ -1,6 +1,11 @@
 # Changes
 
-## Unreleased
+## 0.2.0-preview.16
+
+On Windows, the key that seals your secrets moves into the Credential
+Manager, and after an agent's run the window says that Windows, not Linux,
+does not report what the sandbox refused. On macOS, a list of refusals read
+from the log's store waits until the store has settled.
 
 ### Windows
 
