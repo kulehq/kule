@@ -106,6 +106,21 @@ Bunlardan birini aşmanın bir yolunu bulursanız **issue açmayın**:
 dediği gibi gizlice bildirin. Düzeltme gizli yapılır ve önce yayımlanır;
 güvenlik bildirisi, istemezseniz dışında, sizin adınızı anar.
 
+Kule'nin kendi sınırlarını aşma denemeleri, deponun bir klonundan, kendi
+bilgisayarınızda çalışır:
+
+```sh
+cargo test escape_
+```
+
+Her deneme önce Kule'nin dışında yapılır ve orada geçmesi gerekir; sonra
+bir görevin içinde yapılır ve orada geçmemesi gerekir. Windows'ta
+denemeler bir Windows 11 24H2 masaüstü oturumu ister; orada çalışamayan
+bir denemenin atlanmak yerine başarısız olması için
+`KULE_TEST_REQUIRE_SANDBOX=1` verin. Başarısız olan bir deneme de issue
+değil, gizli bir bildirimdir. Bu denemeler sürüm kapısının çalıştırdığı
+dış araçların yanında durur, asla yerlerine geçmez.
+
 ## Bulduklarınızı bildirmek
 
 [github.com/kulehq/kule/issues/new/choose](https://github.com/kulehq/kule/issues/new/choose)
