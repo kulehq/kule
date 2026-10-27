@@ -25,7 +25,7 @@ a copy, inside a sandbox, and you decide what comes back.
 
 Kule runs on **macOS, Linux and Windows 11**. The latest
 pre-release is
-[`0.2.0-preview.16`](https://github.com/kulehq/kule/releases/tag/v0.2.0-preview.16):
+[`0.2.0-preview.17`](https://github.com/kulehq/kule/releases/tag/v0.2.0-preview.17):
 [download it or build Kule from source](getting-started/install.md).
 
 :::
