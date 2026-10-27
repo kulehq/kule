@@ -43,8 +43,8 @@ Writes to your **home directory** (`~/.zshrc`, `~/.config`, `git config
 
 A command cannot read:
 
-- **credentials**: `~/.ssh`, `~/.aws`, `~/.npmrc`, cargo's registry token
-  and the like;
+- **credentials**: `~/.ssh`, `~/.aws`, `~/.npmrc`, cargo's registry tokens
+  (in `~/.cargo`, and in the folder `CARGO_HOME` names) and the like;
 - **your own files**: Documents, Desktop, Downloads, Pictures, Movies,
   Music, iCloud Drive and cloud storage folders, and everything else at the
   top of your home but its settings (a name starting with `.`, and

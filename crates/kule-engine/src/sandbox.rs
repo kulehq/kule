@@ -258,6 +258,10 @@ pub const HIDDEN_IN_HOME: &[&str] = &[
     ".npmrc",
     ".pypirc",
     ".git-credentials",
+    // Cargo's registry tokens in the home, whatever `CARGO_HOME` names:
+    // the folder it names is hidden besides (`Sandbox::use_task_caches`).
+    ".cargo/credentials.toml",
+    ".cargo/credentials",
     ".config/gh",
     ".config/gcloud",
     ".config/git/credentials",
