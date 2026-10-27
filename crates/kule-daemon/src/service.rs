@@ -2078,6 +2078,14 @@ impl Service {
         // ended: a failed or stopped run did things too.
         let after = kule_acp::after_run(task, &launch.sandbox, launch.kept, started.elapsed());
         failed.extend(after.failed);
+        // What the list of refusals cannot hold, in this platform's own
+        // words: the window tells it as it is sent.
+        if after.unreported {
+            notes.push(kule_engine::UNREPORTED.to_owned());
+        }
+        if after.incomplete {
+            notes.push(kule_engine::INCOMPLETE.to_owned());
+        }
         let error = match outcome {
             Ok(_) => None,
             // A stop says why as it is; the agent's log has nothing to add.
@@ -4042,6 +4050,13 @@ mod tests {
             }
         } else {
             assert!(unreported);
+            // In the engine's words for this platform, which the window
+            // shows as they come.
+            let notes = finished_notes(&s, &id);
+            assert!(
+                notes.iter().any(|n| n == kule_engine::UNREPORTED),
+                "{notes:?}"
+            );
         }
     }
 

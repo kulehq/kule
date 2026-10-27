@@ -11,6 +11,11 @@
   and the file goes. Where Windows gives no Credential Manager, as in a
   session over SSH signed in with a key, the key stays in a file and
   *Settings → Secrets* says so (#71).
+- After an agent's run on Windows, the window says that Windows does not
+  tell Kule what the sandbox refused, where it said Linux. Measured:
+  Windows records only some refused files, none of those in the folders
+  Kule denies by name, and each command would end 1.5 seconds later, so
+  Kule lists none and says so (#66).
 
 ### Testing
 

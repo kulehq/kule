@@ -185,6 +185,37 @@ tier `base-container`. Dates: 2026-10-26.
   helper lies in a hidden folder. Tests: `a_grant_that_holds_kules_home_is_refused`,
   `a_helper_in_a_hidden_folder_is_refused`.
 
+## What the container tells of what it refused
+
+Measured on 2026-10-27 as a standard user, with `mxc-sdk`'s denial capture
+(`captureDenials`, mode `block`: the access stays refused and is recorded),
+first with the measurement tool and then in Kule's own containers. The
+probe reports it as `nativeCaptureAvailable`; it needs no administrator
+step. A container asked to capture where the probe does not report it is
+refused, never run less isolated.
+
+- **Recorded:** a file read, written or run that lies directly in a folder
+  on the way to a grant (the home folder's own files, the task's folder,
+  a drive's root), by the command or any process it started, with the
+  process id and the time. The record names no program.
+- **Not recorded:** anything in a folder denied by name, which in Kule's
+  containers is every folder beside the way to a grant (the home folder's
+  `.ssh`, `.aws`, `Documents`, `AppData`, other folders on the drive), what
+  Kule hides inside a grant, a write to a read-only grant, and a refused
+  network connection. Each still reaches the command as an access error.
+- **Cost:** about 1.4 to 1.7 seconds at each container's end, whatever the
+  command's length (`echo`: 75 ms without, 1.5 s with; a 20-second command
+  1.7 s longer).
+- **A container dropped without being waited for writes nothing.**
+
+What decides it: the refusals a person would look for are the ones not
+recorded, and denying the folders beside the way by name cannot be given
+up (Windows lets a command list everything below a folder it may list).
+So Kule does not capture. Where a command, a shell or a run failed, and in
+Live after every run, it says that Windows does not tell it what the
+sandbox refused. To look at again when
+Windows records what it denies by name.
+
 ## Where CI can run the container
 
 Measured on GitHub's hosted runners on 2026-10-26, with the container
