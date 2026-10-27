@@ -135,6 +135,104 @@ fn kule_state_next_to_the_copy_cannot_be_touched() {
     assert!(!ok(&out) && fs::symlink_metadata(beside.join("elsewhere")).is_err());
 }
 
+/// Escape attempt (#46): a file a command may read but not write, hard-linked
+/// into the copy and written through the link. A hard link is a second name
+/// for the same file, so a write through it would land outside the copy.
+/// Outside Kule the same script gets through, so the attempt is not broken;
+/// in a task the file is read and the link refused. The file sits beside
+/// Kule's home, on the copy's file system, as a link needs.
+#[test]
+fn escape_copy_hard_link_to_a_readable_file() {
+    let s = Setup::new();
+    let readable = TempDir::new_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
+    let readable = fs::canonicalize(readable.path()).unwrap();
+    let attempt = |file: &Path| {
+        format!(
+            "cat '{0}' && ln '{0}' linked && echo changed >> linked",
+            file.display()
+        )
+    };
+    let plain = TempDir::new_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
+    let target = readable.join("plain.txt");
+    fs::write(&target, "original\n").unwrap();
+    let out = Command::new("sh")
+        .arg("-c")
+        .arg(attempt(&target))
+        .current_dir(plain.path())
+        .output()
+        .unwrap();
+    assert!(ok(&out), "the attempt fails even outside Kule: {out:?}");
+    assert_eq!(fs::read_to_string(&target).unwrap(), "original\nchanged\n");
+
+    let target = readable.join("readable.txt");
+    fs::write(&target, "original\n").unwrap();
+    let out = sh(&s.sandbox(), &attempt(&target));
+    assert_eq!(
+        text(&out),
+        "original",
+        "the file must be readable for the attempt to mean anything: {out:?}"
+    );
+    assert!(!ok(&out), "the link was made: {out:?}");
+    assert_eq!(fs::read_to_string(&target).unwrap(), "original\n");
+    assert!(fs::symlink_metadata(s.task.copy().join("linked")).is_err());
+}
+
+/// Escape attempt (#46): a hidden file in the home reached by another
+/// spelling of its path: other letter cases (the same file on macOS's file
+/// system), `.` and `..` steps and doubled slashes, read directly and
+/// through a link made in the copy. Each spelling tried reaches the file
+/// outside Kule; one this file system does not resolve (letter case on
+/// Linux) is not tried, and the test says so.
+#[test]
+fn escape_home_other_names_for_a_hidden_file() {
+    let s = Setup::new();
+    let home = TempDir::new_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
+    for path in [".ssh/id_ed25519", ".aws/credentials", "Documents/taxes.txt"] {
+        let full = home.path().join(path);
+        fs::create_dir_all(full.parent().unwrap()).unwrap();
+        fs::write(&full, "s3cret\n").unwrap();
+    }
+    let sources = CacheSources {
+        home: fs::canonicalize(home.path()).unwrap(),
+        cargo_home: home.path().join(".cargo"),
+    };
+    let h = sources.home.display();
+    let spellings = [
+        format!("{h}/./.ssh/../.ssh/id_ed25519"),
+        format!("{h}//.ssh//id_ed25519"),
+        format!("{h}/Documents/./taxes.txt"),
+        format!("{h}/.SSH/id_ed25519"),
+        format!("{h}/.Ssh/ID_ED25519"),
+        format!("{h}/.AWS/credentials"),
+        format!("{h}/DOCUMENTS/taxes.txt"),
+    ];
+    let sandbox = Sandbox::for_task_with(&s.task, Some(sources.clone())).unwrap();
+    let mut tried = 0;
+    for path in &spellings {
+        if !fs::read_to_string(path).is_ok_and(|t| t.contains("s3cret")) {
+            eprintln!("not tried: {path} does not name the file on this file system");
+            continue;
+        }
+        tried += 1;
+        for script in [
+            format!("cat '{path}'"),
+            format!("ln -s '{path}' linked; cat linked; rm -f linked"),
+        ] {
+            let out = sh(&sandbox, &script);
+            let said = format!(
+                "{}{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            );
+            assert!(!said.contains("s3cret"), "`{script}` read the hidden file");
+        }
+    }
+    assert!(
+        tried >= 3,
+        "the spellings every file system resolves were not tried"
+    );
+}
+
 /// What the person typed, their browsers' and mail's stores, and the
 /// credentials tools keep in the home directory are out of a command's
 /// sight; the rest of the home stays readable.

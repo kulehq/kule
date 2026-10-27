@@ -91,6 +91,38 @@ fn q(path: &Path) -> String {
     format!("\"{}\"", path.display())
 }
 
+/// `script` run by `cmd.exe` in `dir` outside any container: what an
+/// escape attempt must get through, for the attempt to mean anything.
+fn outside_kule(dir: &Path, script: &str) -> Output {
+    use std::os::windows::process::CommandExt;
+    std::process::Command::new("cmd.exe")
+        .args(["/d", "/c"])
+        .raw_arg(script)
+        .current_dir(dir)
+        .output()
+        .unwrap()
+}
+
+/// A folder with a long name holding a file with a long name, both of
+/// which get short (8.3) names where the volume makes them.
+fn plant_secret(dir: &Path) -> PathBuf {
+    let secret = dir.join("secretfolder-long");
+    fs::create_dir_all(&secret).unwrap();
+    fs::write(secret.join("keyfile-long.txt"), "s3cret\n").unwrap();
+    secret
+}
+
+/// The short (8.3) name of `path`, if the volume made one.
+fn short_name(path: &Path) -> Option<String> {
+    let out = outside_kule(
+        path.parent().unwrap(),
+        &format!("for %I in ({}) do @echo %~sI", q(path)),
+    );
+    let short = String::from_utf8_lossy(&out.stdout).trim().to_owned();
+    (ok(&out) && !short.is_empty() && !short.eq_ignore_ascii_case(&path.display().to_string()))
+        .then_some(short)
+}
+
 /// Writes land in the copy and the task's temporary folder, and nowhere
 /// else; a write outside fails and leaves nothing.
 #[test]
@@ -119,6 +151,51 @@ fn writes_land_only_in_the_copy_and_the_tmp() {
     );
 }
 
+/// Escape attempt (#46): a file a command may read but not write, hard-linked
+/// into the copy and written through the link. A hard link is a second name
+/// for the same file, so a write through it would land outside the copy.
+/// Outside Kule the same script gets through, so the attempt is not broken;
+/// in a task, with the file's folder granted to read, the file is read and
+/// the link refused.
+#[test]
+fn escape_copy_hard_link_to_a_readable_file() {
+    if !available() {
+        return;
+    }
+    let s = Setup::new();
+    let outside = s.outside();
+    let attempt = |file: &Path| {
+        format!(
+            "type {0} && mklink /h linked.txt {0} && echo changed>> linked.txt",
+            q(file)
+        )
+    };
+    let plain = TempDir::new().unwrap();
+    let target = outside.join("plain.txt");
+    fs::write(&target, "original\n").unwrap();
+    let out = outside_kule(plain.path(), &attempt(&target));
+    assert!(
+        ok(&out),
+        "the attempt fails even outside Kule: {}",
+        text(&out)
+    );
+    assert!(fs::read_to_string(&target).unwrap().contains("changed"));
+
+    let target = outside.join("readable.txt");
+    fs::write(&target, "original\n").unwrap();
+    let mut sandbox = s.sandbox();
+    sandbox.reveal(&outside).unwrap();
+    let out = cmd(&sandbox, &attempt(&target));
+    assert!(
+        text(&out).contains("original"),
+        "the file must be readable for the attempt to mean anything: {}",
+        text(&out)
+    );
+    assert!(!ok(&out), "the link was made: {}", text(&out));
+    assert_eq!(fs::read_to_string(&target).unwrap(), "original\n");
+    assert!(fs::symlink_metadata(s.task.copy().join("linked.txt")).is_err());
+}
+
 /// A folder opened to writing is written; a path hidden inside it cannot
 /// be read, while its neighbours can. Breaks when the hidden paths inside
 /// a grant are not denied.
@@ -145,6 +222,130 @@ fn hidden_paths_inside_a_grant_cannot_be_read() {
     assert!(!text(&out).contains("s3cret"), "{}", text(&out));
     let out = cmd(&sandbox, &format!("echo w> {}", q(&outside.join("w.txt"))));
     assert!(ok(&out), "{}", text(&out));
+}
+
+/// Escape attempt (#46): a path hidden inside a grant reached by another
+/// name for it: its short (8.3) names, the `\\?\` and `\\.\` forms, other
+/// letter cases, a trailing dot, and its data stream named. Each name
+/// reaches the file outside Kule; short names a volume does not make are
+/// not tried, and the test says so.
+#[test]
+fn escape_home_other_names_for_a_hidden_path() {
+    if !available() {
+        return;
+    }
+    let s = Setup::new();
+    let outside = s.outside();
+    let secret = plant_secret(&outside);
+    let o = outside.display();
+    let mut names = vec![
+        format!(r"\\?\{o}\secretfolder-long\keyfile-long.txt"),
+        format!(r"\\.\{o}\secretfolder-long\keyfile-long.txt"),
+        format!(r"{o}\SECRETFOLDER-LONG\KEYFILE-LONG.TXT"),
+        format!(r"{o}\secretfolder-long.\keyfile-long.txt"),
+    ];
+    match short_name(&secret.join("keyfile-long.txt")) {
+        Some(short) => names.push(short),
+        None => eprintln!("not tried: {} makes no short names", o),
+    }
+    let attempts = names
+        .iter()
+        .map(|name| format!("type \"{name}\""))
+        .chain([format!(
+            r#"more < "{o}\secretfolder-long\keyfile-long.txt::$DATA""#
+        )])
+        .collect::<Vec<_>>();
+    let mut sandbox = s.sandbox();
+    sandbox.allow_write(&outside).unwrap();
+    sandbox.hide(&secret).unwrap();
+    let plain = TempDir::new().unwrap();
+    for attempt in &attempts {
+        let out = outside_kule(plain.path(), attempt);
+        assert!(
+            text(&out).contains("s3cret"),
+            "`{attempt}` does not reach the file even outside Kule: {}",
+            text(&out)
+        );
+        let out = cmd(&sandbox, attempt);
+        assert!(
+            !text(&out).contains("s3cret"),
+            "`{attempt}` read the hidden file"
+        );
+    }
+}
+
+/// Escape attempt (#46): a path hidden inside a writable grant taken out
+/// from under its name: a junction to its folder, a hard link to its file,
+/// the folder moved or renamed, the file copied. Outside Kule each one
+/// reads the file; in a task none does, and the folder stays as it was.
+#[test]
+fn escape_home_a_hidden_path_moved_or_linked() {
+    if !available() {
+        return;
+    }
+    let attempts: [fn(&Path) -> String; 5] = [
+        |d| {
+            format!(
+                r#"mklink /j "{0}\j" "{0}\secretfolder-long" && type "{0}\j\keyfile-long.txt""#,
+                d.display()
+            )
+        },
+        |d| {
+            format!(
+                r#"mklink /h "{0}\h.txt" "{0}\secretfolder-long\keyfile-long.txt" && type "{0}\h.txt""#,
+                d.display()
+            )
+        },
+        |d| {
+            format!(
+                r#"move "{0}\secretfolder-long" "{0}\moved" && type "{0}\moved\keyfile-long.txt""#,
+                d.display()
+            )
+        },
+        |d| {
+            format!(
+                r#"ren "{0}\secretfolder-long" renamed && type "{0}\renamed\keyfile-long.txt""#,
+                d.display()
+            )
+        },
+        |d| {
+            format!(
+                r#"copy "{0}\secretfolder-long\keyfile-long.txt" c.txt && type c.txt"#,
+                d.display()
+            )
+        },
+    ];
+    for attempt in attempts {
+        let plain = TempDir::new().unwrap();
+        let dir = kule_engine::osfs::plain(&fs::canonicalize(plain.path()).unwrap());
+        plant_secret(&dir);
+        let out = outside_kule(&dir, &attempt(&dir));
+        assert!(
+            text(&out).contains("s3cret"),
+            "`{}` does not reach the file even outside Kule: {}",
+            attempt(&dir),
+            text(&out)
+        );
+
+        let s = Setup::new();
+        let outside = s.outside();
+        let secret = plant_secret(&outside);
+        let mut sandbox = s.sandbox();
+        sandbox.allow_write(&outside).unwrap();
+        sandbox.hide(&secret).unwrap();
+        let out = cmd(&sandbox, &attempt(&outside));
+        assert!(
+            !text(&out).contains("s3cret"),
+            "`{}` read the hidden file",
+            attempt(&outside)
+        );
+        assert_eq!(
+            fs::read_to_string(secret.join("keyfile-long.txt")).unwrap(),
+            "s3cret\n",
+            "the hidden folder was moved: {}",
+            text(&out)
+        );
+    }
 }
 
 /// From the copy, the way up leads to Kule's home, where the daemon's
