@@ -322,3 +322,87 @@ fn the_first_command_says_it_makes_the_caches() {
     );
     assert_eq!(told(&next), 0);
 }
+
+/// A value Kule masks that the folder's git repository holds: `kule exec`
+/// runs nothing until `kule secrets history --accept`, then says so each
+/// time, until `--forget` takes it back.
+#[cfg(unix)]
+#[test]
+fn a_masked_value_git_holds_runs_nothing_until_accepted() {
+    let (home, ws) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+    let git = |args: &[&str]| {
+        let out = Command::new("git")
+            .args(["-c", "user.name=T", "-c", "user.email=t@example.com"])
+            .args([
+                "-c",
+                "commit.gpgsign=false",
+                "-c",
+                "init.defaultBranch=main",
+            ])
+            .args(args)
+            .current_dir(ws.path())
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    };
+    git(&["init", "-q"]);
+    fs::write(
+        ws.path().join(".env"),
+        "API_TOKEN=ghp_K1x9cQ7mTz4Lr2Wv8Nb5Hy3Ds6Fp0Ja1Ue\n",
+    )
+    .unwrap();
+    git(&["add", ".env"]);
+    git(&["commit", "-qm", "env"]);
+    let kule = |args: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_kule"))
+            .args(args)
+            .env("KULE_HOME", home.path())
+            .output()
+            .unwrap()
+    };
+    let out = kule(&["new", ws.path().to_str().unwrap()]);
+    let id = String::from_utf8_lossy(&out.stdout)
+        .split_whitespace()
+        .nth(1)
+        .unwrap()
+        .to_owned();
+    let marker = "ran-in-the-task";
+    let exec = || kule(&["exec", &id, "--", "echo", marker]);
+
+    let out = exec();
+    let said = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "{said}");
+    assert!(!String::from_utf8_lossy(&out.stdout).contains(marker));
+    assert!(said.contains(".env") && said.contains("--accept"), "{said}");
+
+    let out = kule(&["secrets", "history", &id, "--accept"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let out = exec();
+    let said = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains(marker),
+        "{said}"
+    );
+    assert!(
+        said.contains("kule: the values Kule masks are in this folder's git repository"),
+        "{said}"
+    );
+
+    let out = kule(&["secrets", "history", &id, "--forget"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(!exec().status.success());
+}

@@ -935,6 +935,12 @@ impl Vault {
         forms
     }
 
+    /// Every real value the vault holds, as it is.
+    pub(crate) fn plain(&self) -> Vec<String> {
+        let values: BTreeSet<&String> = self.held.iter().map(|h| &h.value).collect();
+        values.into_iter().cloned().collect()
+    }
+
     /// Every real value the vault holds in the forms a response that
     /// repeats it may hold (see [`forms_of`]).
     pub(crate) fn values(&self) -> Vec<String> {

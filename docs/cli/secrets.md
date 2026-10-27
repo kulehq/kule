@@ -20,6 +20,7 @@ kule secrets [OPTIONS] [COMMAND]
 | [`list`](#kule-secrets-list) | List the kept secrets, without their values (the default). |
 | [`add`](#kule-secrets-add) | Keep a secret for one or more hosts. |
 | [`remove`](#kule-secrets-remove) | Forget a secret. |
+| [`history`](#kule-secrets-history) | Whether a task's git repository holds the values Kule masks, and accept or take that back for its folder. |
 
 ## Description
 
@@ -128,6 +129,37 @@ forgot GH_TOKEN
 
 Removing from the wrong place says `no secret STRIPE_KEY kept there`.
 
+## kule secrets history
+
+```sh
+kule secrets history [OPTIONS] [TASK]
+```
+
+Whether the task's git repository holds the values Kule masks in it, or the
+secrets kept for its folder, where a command in the task could read them
+with git. While it does, nothing runs in the task until you accept that for
+its folder. See [When git holds the values](../concepts/secrets.md#when-git-holds-the-values).
+
+| Argument / option | Meaning |
+| --- | --- |
+| `TASK` | The task to look in. Without it, the folders it was accepted for. |
+| `--accept` | Accept what was found for the task's folder: commands run in its tasks again, and are told so each time. |
+| `--forget` | Take back what was accepted for the task's folder, or for `--folder`. |
+| `--folder FOLDER` | With `--forget` and no task: the folder (default: the current directory). |
+
+```console
+$ kule secrets history 3f9c2a1b
+.env  · commit 1a2b3c4d5e6f
+a command in the task could read these values with git; nothing runs in it until you accept that (`kule secrets history 3f9c2a1b --accept`)
+$ kule secrets history 3f9c2a1b --accept
+.env  · commit 1a2b3c4d5e6f
+accepted for /home/me/code/app: its tasks' commands can read these values with git, and are told so each time
+$ kule secrets history
+/home/me/code/app  · 1 value(s)
+```
+
+A task whose repository holds none says so.
+
 ## Errors and fixes
 
 | Message | What to do |
@@ -136,11 +168,14 @@ Removing from the wrong place says `no secret STRIPE_KEY kept there`.
 | `kule: *.stripe.com: a lowercase host name, without a wildcard or a port` | Name each exact host with its own `--host`. |
 | `kule: no value given` | Type the value, or pipe it in; an empty line is not a value. |
 | `error: the following required arguments were not provided` … `--host <HOSTS>` | Add at least one `--host`. |
+| `kule: the values Kule masks in this task are in its git repository: …` | Take the values out of the repository's history and change them, or accept it: `kule secrets history TASK --accept`. |
 
 ## In the app
 
 *Settings → Secrets* adds, lists and removes secrets, and says where the key
-that seals them is kept.
+that seals them is kept. It lists the folders where you accepted that git
+holds the values Kule masks, and takes that back. Before a run or a
+terminal in a task whose repository holds them, the app asks.
 
 ## See also
 

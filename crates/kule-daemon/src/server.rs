@@ -412,6 +412,10 @@ pub fn dispatch(service: &Arc<Service>, call: Call) -> Result<Value, String> {
         } => json(service.open_outside(&task, &what, confirmed)?),
         Call::OutsideOpened { task } => json(service.outside_opened(&task)?),
         Call::ForgetOutside { task } => json(service.forget_outside(&task)?),
+        Call::Committed { task } => json(service.committed(&task)?),
+        Call::AcceptCommitted { task } => json(service.accept_committed(&task)?),
+        Call::ForgetCommitted { folder } => json(service.forget_committed(&folder)?),
+        Call::CommittedAccepted => json(service.committed_accepted()?),
         Call::StartRun {
             task,
             agent,

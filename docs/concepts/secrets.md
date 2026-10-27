@@ -131,6 +131,36 @@ withheld instead: the commands see it neither in the layer nor at its real
 path, and Kule says so where they run (the run's notes in the app, the
 output of `kule run`, `exec` and `shell`, and the terminal).
 
+## When git holds the values
+
+A task's copy carries the folder's git repository. A value Kule masks that
+is in it reaches a command in the task through git (`git show HEAD:.env`,
+`git log -p`), whatever the copy's file says. That is so when a `.env` file
+was ever committed, even after it was taken out of the repository: the
+commit that added it, a reference's log (a commit amended or reset away),
+a stash, and an object git keeps outside the history all still hold it.
+
+So before an agent run, `kule exec`, `kule shell` or a terminal starts,
+Kule looks for the values it masks, and the secrets kept for the folder,
+in the repository: its index, every branch, tag and stash, the whole
+history of the `.env`-style files, the references' logs, and every object
+git keeps outside the history. If one is there, nothing starts. Kule names
+the files and where git holds them, and you choose:
+
+- **Keep them from the task:** take them out of the repository's history,
+  and change them, since every clone holds the old ones.
+- **Accept it for the folder:** `kule secrets history TASK --accept`, or
+  the app's question. Commands start in the folder's tasks again, and each
+  time they do Kule says the values are in git: in the run's notes, in the
+  output of `kule run`, `exec` and `shell`, and in the terminal. A value
+  found later asks again. `kule secrets history TASK --forget`, or
+  *Settings → Secrets*, takes it back.
+
+A look that does not finish in a few seconds (a very long history) decides
+nothing: Kule says how far it got, and asks the same way. Each look is kept
+in the task, and made again when the repository's references, its index or
+the values change.
+
 ## Where secrets are stored
 
 Secrets live in Kule's home, hidden from every sandbox. Their values are

@@ -161,10 +161,10 @@ impl Sandboxed {
         })
     }
 
-    /// What Kule withheld from this shell, to tell the person before it
-    /// starts (see `Task::home_withheld_notes`).
+    /// What to tell the person before this shell starts: what Kule
+    /// withheld from it, and what git hands it (see `Task::start_notes`).
     pub fn notes(&self) -> Vec<String> {
-        self.task.home_withheld_notes().unwrap_or_default()
+        self.task.start_notes().unwrap_or_default()
     }
 
     pub fn task(&self) -> &Task {

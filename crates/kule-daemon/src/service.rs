@@ -50,6 +50,21 @@ fn text(e: Error) -> String {
 
 /// What putting a task in another group would change: whether its policy
 /// would, and the verdicts on its pending changes that would.
+/// Whether a task's git repository holds the values Kule masks in it
+/// (see `Service::committed`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Committed {
+    /// Nothing found, and the look decided.
+    pub clean: bool,
+    /// The person accepted it for the task's folder.
+    pub accepted: bool,
+    pub folder: PathBuf,
+    /// Each file a value is in, with where git holds it.
+    pub files: Vec<String>,
+    /// Why the look decided nothing, if it did not.
+    pub undecided: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct GroupImpact {
     /// The group's policy is the one that judges the task now.
@@ -1629,6 +1644,38 @@ impl Service {
         self.open(id)?.forget_outside().map_err(text)
     }
 
+    /// Whether the task's git repository holds the values Kule masks in it
+    /// (see `Task::committed`), whether that is accepted for its folder,
+    /// and where, in words.
+    pub fn committed(&self, id: &str) -> Result<Committed> {
+        let task = self.open(id)?;
+        let look = task.committed().map_err(text)?;
+        let accepted = !look.clean() && task.committed_accepted(&look).map_err(text)?;
+        Ok(Committed {
+            clean: look.clean(),
+            accepted,
+            folder: task.workspace().to_path_buf(),
+            files: look.files(),
+            undecided: look.undecided,
+        })
+    }
+
+    /// Accepts what the task's git repository holds for its folder.
+    pub fn accept_committed(&self, id: &str) -> Result<()> {
+        self.open(id)?.accept_committed().map_err(text)?;
+        Ok(())
+    }
+
+    /// Takes back what was accepted for `folder`; whether there was any.
+    pub fn forget_committed(&self, folder: &Path) -> Result<bool> {
+        kule_engine::forget_committed(&self.home, folder).map_err(text)
+    }
+
+    /// The folders it was accepted for.
+    pub fn committed_accepted(&self) -> Result<Vec<kule_engine::CommittedFolder>> {
+        kule_engine::committed_accepted(&self.home).map_err(text)
+    }
+
     /// Deletes the task and its copy; the workspace is not touched.
     pub fn remove(&self, id: &str) -> Result<()> {
         // One whose record cannot be read can be removed too: while it is
@@ -2245,10 +2292,10 @@ impl Service {
     }
 
     /// Tells the run's notes what Kule withheld from its commands in the
-    /// home (see `Task::home_withheld_notes`): said where the run is
-    /// watched, not left for a log.
+    /// home, and what git hands them (see `Task::start_notes`): said where
+    /// the run is watched, not left for a log.
     fn tell_withheld(&self, task: &Task) -> Result<()> {
-        for note in task.home_withheld_notes().map_err(text)? {
+        for note in task.start_notes().map_err(text)? {
             self.emit(task.id(), RunEvent::Preparing { text: note });
         }
         Ok(())

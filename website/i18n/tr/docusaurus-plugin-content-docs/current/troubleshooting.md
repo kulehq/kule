@@ -164,6 +164,19 @@ Kule'nin sırasında durdurulduğu ya da kullanımı kaydedilemeyen bir
 çalıştırmanın payını, adı verilen görevde bırakın: `kule budget TASK
 --release`. Bkz. [`kule budget`](cli/budget.md).
 
+### Bir çalıştırma ya da terminal reddediliyor: Kule'nin maskelediği değerler git'te
+
+**Neden:** görevin git deposu, Kule'nin ayar dosyalarında maskelediği bir
+değeri tutuyor (bir kez commit edilmiş bir `.env`, sonradan çıkarılmış olsa
+bile); görevdeki bir komut onu git ile okuyabilir. Ret iletisi dosyaları ve
+git'in onları nerede tuttuğunu söyler:
+`the values Kule masks in this task are in its git repository: .env (commit 1a2b3c4d5e6f), …`.
+
+**Çözüm:** değerleri deponun geçmişinden çıkarın ve değiştirin; her klon
+eskilerini tutar. Ya da klasör için kabul edin: `kule secrets history TASK
+--accept` ya da uygulamanın sorusu; sonra her çalıştırma bunu söyler. Bkz.
+[Değerler git'te olduğunda](concepts/secrets.md#when-git-holds-the-values).
+
 ### Bir çalıştırma kendiliğinden durdu
 
 **Neden:** bir [sınır](concepts/budgets-and-limits.md) onu durdurdu. Live

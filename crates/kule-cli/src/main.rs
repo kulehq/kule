@@ -190,6 +190,25 @@ enum SecretsCmd {
         #[arg(long)]
         everywhere: bool,
     },
+    /// Whether a task's git repository holds the values Kule masks in the
+    /// task, where its commands could read them with git; nothing runs in
+    /// the task until that is accepted for its folder. Without a task, the
+    /// folders it was accepted for.
+    History {
+        /// The task to look in.
+        task: Option<String>,
+        /// Accept what was found for the task's folder: commands run in it
+        /// again, and are told so each time.
+        #[arg(long, requires = "task", conflicts_with = "forget")]
+        accept: bool,
+        /// Take back what was accepted for the task's folder, or for
+        /// --folder.
+        #[arg(long)]
+        forget: bool,
+        /// The folder to take it back for.
+        #[arg(long, requires = "forget", conflicts_with = "task")]
+        folder: Option<PathBuf>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -804,7 +823,7 @@ fn run() -> Result<ExitCode> {
                     // review (`kule home`), not refused.
                     task.prepare_home(person, &[], sandbox.hidden(), sandbox.shown(), &[])?;
                     sandbox.use_home(&task, person)?;
-                    for note in task.home_withheld_notes()? {
+                    for note in task.start_notes()? {
                         eprintln!("kule: {note}");
                     }
                 }
@@ -972,7 +991,7 @@ fn run() -> Result<ExitCode> {
                 kept,
                 mode,
             } = profile.launch(&task, &proxy)?;
-            for note in task.home_withheld_notes()? {
+            for note in task.start_notes()? {
                 eprintln!("kule: {note}");
             }
             // What the run may spend, set aside as it starts: runs at once
@@ -2553,6 +2572,93 @@ fn secrets_cmd(home: &Path, action: SecretsCmd) -> Result<()> {
                 println!("no secret {name} kept there");
             }
         }
+        SecretsCmd::History {
+            task,
+            accept,
+            forget,
+            folder,
+        } => history_cmd(home, task, accept, forget, folder)?,
+    }
+    Ok(())
+}
+
+fn history_cmd(
+    home: &Path,
+    task: Option<String>,
+    accept: bool,
+    forget: bool,
+    folder: Option<PathBuf>,
+) -> Result<()> {
+    let task = task.map(|id| Task::open(home, &id)).transpose()?;
+    if forget {
+        let folder = match (&task, folder) {
+            (Some(task), _) => task.workspace().to_path_buf(),
+            (None, Some(folder)) => folder,
+            (None, None) => std::env::current_dir()?,
+        };
+        if kule_engine::forget_committed(home, &folder)? {
+            println!(
+                "taken back for {}: nothing runs in its tasks while git holds the values Kule masks",
+                folder.display()
+            );
+        } else {
+            println!("nothing was accepted for {}", folder.display());
+        }
+        return Ok(());
+    }
+    let Some(task) = task else {
+        let folders = kule_engine::committed_accepted(home)?;
+        if folders.is_empty() {
+            println!("accepted for no folder");
+        }
+        for f in folders {
+            println!(
+                "{}  · {} value(s){}",
+                f.workspace.display(),
+                f.values.len(),
+                if f.undecided {
+                    ", and a look that decided nothing"
+                } else {
+                    ""
+                }
+            );
+        }
+        return Ok(());
+    };
+    let look = if accept {
+        task.accept_committed()?
+    } else {
+        task.committed()?
+    };
+    if look.clean() {
+        println!(
+            "the git repository of task {} holds none of the values Kule masks in it",
+            task.id()
+        );
+        return Ok(());
+    }
+    for f in &look.found {
+        let file = match (f.repo.is_empty(), f.path.is_empty()) {
+            (_, true) => "(no name)".to_owned(),
+            (true, false) => f.path.clone(),
+            (false, false) => format!("{}/{}", f.repo, f.path),
+        };
+        println!("{file}  · {}", f.at);
+    }
+    if let Some(why) = &look.undecided {
+        println!("{why}");
+    }
+    if accept || task.committed_accepted(&look)? {
+        println!(
+            "accepted for {}: its tasks' commands can read these values with git, and are told so each time",
+            task.workspace().display()
+        );
+    } else {
+        println!(
+            "a command in the task could read these values with git; nothing runs in it until you accept that \
+             (`kule secrets history {} --accept`)",
+            task.id()
+        );
     }
     Ok(())
 }

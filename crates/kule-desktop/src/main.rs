@@ -288,6 +288,33 @@ fn forget_outside(kule: K<'_>, task: String) -> Result<()> {
     kule.call(Call::ForgetOutside { task })
 }
 
+/// Whether the task's git repository holds the values Kule masks in it,
+/// and whether that is accepted for its folder: asked before a run and a
+/// terminal.
+#[tauri::command(async)]
+fn committed(kule: K<'_>, task: String) -> Result<serde_json::Value> {
+    kule.call(Call::Committed { task })
+}
+
+/// The person accepts, for the task's folder, that git hands its commands
+/// the values Kule masks.
+#[tauri::command(async)]
+fn accept_committed(kule: K<'_>, task: String) -> Result<()> {
+    kule.call(Call::AcceptCommitted { task })
+}
+
+/// Takes back what was accepted for a folder.
+#[tauri::command(async)]
+fn forget_committed(kule: K<'_>, folder: PathBuf) -> Result<bool> {
+    kule.call(Call::ForgetCommitted { folder })
+}
+
+/// The folders it was accepted for.
+#[tauri::command(async)]
+fn committed_accepted(kule: K<'_>) -> Result<serde_json::Value> {
+    kule.call(Call::CommittedAccepted)
+}
+
 /// A shell in the task's copy, inside the window and the task's sandbox;
 /// its id. Refused while an agent is at work in the task, and while it is
 /// open no run starts there.
@@ -1154,6 +1181,10 @@ fn main() {
             open_terminal,
             outside_opened,
             forget_outside,
+            committed,
+            accept_committed,
+            forget_committed,
+            committed_accepted,
             questions,
             answer,
             rules,

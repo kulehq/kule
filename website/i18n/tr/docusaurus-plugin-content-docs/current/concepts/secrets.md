@@ -133,6 +133,38 @@ gerçek yolunda görür; Kule de bunu komutların çalıştığı yerde söyler
 (uygulamada çalıştırmanın notları, `kule run`, `exec` ve `shell` çıktısı ve
 terminal).
 
+## Değerler git'te olduğunda {#when-git-holds-the-values}
+
+Görevin kopyası klasörün git deposunu da taşır. Kule'nin maskelediği bir
+değer depoda varsa, görevdeki bir komut ona git ile ulaşır (`git show
+HEAD:.env`, `git log -p`); kopyadaki dosyanın ne dediği fark etmez. Bir
+`.env` dosyası bir kez commit edildiyse, sonradan depodan çıkarılmış olsa
+bile durum budur: onu ekleyen commit, bir referansın günlüğü (amend ya da
+reset ile atılmış bir commit), bir stash ve git'in geçmiş dışında tuttuğu
+bir nesne hâlâ onu tutar.
+
+Bu yüzden bir ajan çalıştırması, `kule exec`, `kule shell` ya da bir
+terminal başlamadan önce Kule, maskelediği değerleri ve klasör için
+saklanan gizli değerleri depoda arar: index'te, her dalda, tag'de ve
+stash'te, `.env` türü dosyaların bütün geçmişinde, referansların
+günlüklerinde ve git'in geçmiş dışında tuttuğu her nesnede. Biri oradaysa
+hiçbir şey başlamaz. Kule dosyaları ve git'in onları nerede tuttuğunu
+söyler, seçim sizindir:
+
+- **Görevden uzak tutun:** değerleri deponun geçmişinden çıkarın ve
+  değiştirin; her klon eskilerini tutar.
+- **Klasör için kabul edin:** `kule secrets history TASK --accept` ya da
+  uygulamanın sorusu. Klasörün görevlerinde komutlar yeniden başlar ve her
+  başladıklarında Kule değerlerin git'te olduğunu söyler: çalıştırmanın
+  notlarında, `kule run`, `exec` ve `shell` çıktısında ve terminalde.
+  Sonradan bulunan bir değer yeniden sorulur. `kule secrets history TASK
+  --forget` ya da *Settings → Secrets* kabulü geri alır.
+
+Birkaç saniyede bitmeyen bir arama (çok uzun bir geçmiş) karar vermez: Kule
+ne kadarına baktığını söyler ve aynı şekilde sorar. Her arama görevde
+saklanır; deponun referansları, index'i ya da değerler değişince yeniden
+yapılır.
+
 ## Gizli değerler nerede saklanır
 
 Gizli değerler Kule'nin ev dizininde durur ve her sandbox'tan gizlenir.

@@ -41,6 +41,7 @@ can make Kule refuse to work until it is fixed or removed.
 | `budget.json` | The daily budget for every task (`kule daily-budget`). | no |
 | `budget.lock` | Held while Kule sets aside a run's share or records what a run spent, so its processes do it one at a time. | no |
 | `remembered.json` | What you told Kule not to ask about again (`kule rules`). | no |
+| `committed.json` | The folders where you accepted that git holds the values Kule masks (`kule secrets history`), each value as a digest keyed by this file's key, never the value. | no |
 | `beside.json` | Projects beside a folder that its tasks may read (`kule reveal`). | no |
 | `isolation.json` | Whether you accepted weaker isolation (`kule isolation`). | no |
 | `secrets.json` | Kept secrets: names, hosts, folders, and values **sealed** (encrypted). Readable by you alone. | no |
@@ -98,6 +99,7 @@ Each task lives in `tasks/<id>/`, where `<id>` is the 8-character id
 | `usage.jsonl` | What each agent run used, as the agent reported it: tokens, context, cost; and the share it closes (`reservation`). A line with `released: true` is a share you let go of with `kule budget TASK --release`, not a run. |
 | `reserved.jsonl` | What each run set aside of the budgets before its agent started. A share counts as spent until a line in `usage.jsonl` closes it. |
 | `secrets.json` | The values Kule masked in the copy's `.env` files, sealed like kept secrets. |
+| `committed.json` | The last look for those values in the copy's git repository: where they were found (digests, not values), and the state it was made for. |
 | `synced.json` | What the last `kule sync` brought in, for the agent to hear at its next turn. |
 | `refused-hints.json` | Which "why a tool failed" notes the agent was already told. |
 

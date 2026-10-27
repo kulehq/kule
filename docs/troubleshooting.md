@@ -156,6 +156,19 @@ usage could not be recorded, keeps its share counted.
 go of its share in the task named: `kule budget TASK --release`. See
 [`kule budget`](cli/budget.md).
 
+### A run or a terminal is refused: the values Kule masks are in git
+
+**Cause:** the task's git repository holds a value Kule masks in its
+settings files (a `.env` that was committed, even if it was taken out
+since), where a command in the task could read it with git. The refusal
+names the files and where git holds them:
+`the values Kule masks in this task are in its git repository: .env (commit 1a2b3c4d5e6f), …`.
+
+**Fix:** take the values out of the repository's history and change them,
+since every clone holds the old ones. Or accept it for the folder:
+`kule secrets history TASK --accept`, or the app's question; each run then
+says so. See [When git holds the values](concepts/secrets.md#when-git-holds-the-values).
+
 ### A run stopped by itself
 
 **Cause:** a [limit](concepts/budgets-and-limits.md) stopped it. Live says
