@@ -25,5 +25,9 @@ id = "RUSTSEC-2026-0372"
 reason = "zvariant_derive: macros of zvariant, through keyring's Secret Service and notify-rust on Linux"
 
 [[IgnoredVulns]]
+id = "GHSA-qwgh-2vcv-g2f7"
+reason = "block-buffer 0.10.4: a caught panic can leave the buffer cursor invalid; only at build time, in tauri-codegen (Tauri's proc-macro) and lalrpop (cedar-policy-core's build dependency) through digest 0.10, where no code catches panics; nothing of it ships in Kule's binaries, which hash through digest 0.11 and block-buffer 0.12.1, the fixed line"
+
+[[IgnoredVulns]]
 id = "GHSA-vfj7-8cjw-p6xm"
 reason = "braces 3.0.3: stack exhaustion on deeply nested glob patterns, no patched version; only in the docs site's build (Docusaurus, webpack), whose patterns come from its own config; nothing of it ships in Kule or the published pages"
