@@ -150,3 +150,4 @@ A shorter report without them is still a good report.
 Every report is read. A fix ships in the next preview, and its issue says
 which one. The [CHANGELOG](https://github.com/kulehq/kule/blob/main/CHANGELOG.md)
 lists what each preview changed.
+
