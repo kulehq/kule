@@ -756,9 +756,11 @@ const LISTED: usize = 8;
 /// (Linux): not that nothing was refused.
 #[cfg(not(windows))]
 pub const UNREPORTED: &str = "Linux does not tell Kule what the sandbox refused; each refusal reached the command as an error";
-/// On Windows, what the container refused is not read back yet.
+/// On Windows: the process container records only some of what it
+/// refuses, and none of what Kule denies by name (measured,
+/// `docs/windows-measurements.md`), so Kule lists none of it.
 #[cfg(windows)]
-pub const UNREPORTED: &str = "Windows does not tell Kule what the sandbox refused yet; each refusal reached the command as an error";
+pub const UNREPORTED: &str = "Windows does not tell Kule what the sandbox refused; each refusal reached the command as an error";
 
 /// What the person is told where [`Refusals::incomplete`] holds: the list
 /// they see may not be all.

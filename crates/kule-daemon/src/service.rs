@@ -2078,6 +2078,14 @@ impl Service {
         // ended: a failed or stopped run did things too.
         let after = kule_acp::after_run(task, &launch.sandbox, launch.kept, started.elapsed());
         failed.extend(after.failed);
+        // What the list of refusals cannot hold, in this platform's own
+        // words: the window tells it as it is sent.
+        if after.unreported {
+            notes.push(kule_engine::UNREPORTED.to_owned());
+        }
+        if after.incomplete {
+            notes.push(kule_engine::INCOMPLETE.to_owned());
+        }
         let error = match outcome {
             Ok(_) => None,
             // A stop says why as it is; the agent's log has nothing to add.
@@ -4042,6 +4050,13 @@ mod tests {
             }
         } else {
             assert!(unreported);
+            // In the engine's words for this platform, which the window
+            // shows as they come.
+            let notes = finished_notes(&s, &id);
+            assert!(
+                notes.iter().any(|n| n == kule_engine::UNREPORTED),
+                "{notes:?}"
+            );
         }
     }
 
@@ -4083,18 +4098,15 @@ mod tests {
         s.app.set_budget(&id, Some(usd(1.0))).unwrap();
         own_agent(&s, "silent", "exit 3");
         s.app.start_run(&id, "silent", "hi", Vec::new()).unwrap();
+        let said = "silent reported no cost, so the task's budget does not count this run";
         let notes = finished_notes(&s, &id);
-        assert!(
-            notes
-                .iter()
-                .any(|n| n
-                    == "silent reported no cost, so the task's budget does not count this run"),
-            "{notes:?}"
-        );
-        // Without a budget, nothing to say.
+        assert!(notes.iter().any(|n| n == said), "{notes:?}");
+        // Without a budget, nothing to say about it. Other notes may come,
+        // such as what the sandbox's list of refusals cannot hold.
         let (other, _) = s.task();
         s.app.start_run(&other, "silent", "hi", Vec::new()).unwrap();
-        assert!(finished_notes(&s, &other).is_empty());
+        let notes = finished_notes(&s, &other);
+        assert!(!notes.iter().any(|n| n == said), "{notes:?}");
     }
 
     #[cfg(unix)]

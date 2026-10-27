@@ -232,6 +232,11 @@ Kule hiç ret yokmuş gibi göstermek yerine bunu söyler: başarısız olan bir
 ajan çalıştırmasından ya da kabuktan sonra, Live'da ise her çalıştırmadan
 sonra
 `Linux does not tell Kule what the sandbox refused; each refusal reached the command as an error`
+yazar. Windows, process container'ının reddettiklerinin yalnızca bir kısmını
+kaydeder; Kule'nin adıyla reddettiği klasörlerdekilerin hiçbirini kaydetmez
+([ölçüm](https://github.com/kulehq/kule/blob/main/docs/windows-measurements.md)).
+Bu yüzden Kule orada da ret listelemez ve aynı yerlerde
+`Windows does not tell Kule what the sandbox refused; each refusal reached the command as an error`
 yazar.
 
 ## Linux'ta daha zayıf yalıtım {#weaker-isolation-on-linux}

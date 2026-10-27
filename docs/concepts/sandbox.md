@@ -222,6 +222,11 @@ command still gets a permission error. Kule says so rather than show no
 refusals: after an agent's run or a shell that failed, and in Live after
 every run, it reads
 `Linux does not tell Kule what the sandbox refused; each refusal reached the command as an error`.
+Windows records only some of what its process container refuses, none of
+it in the folders Kule denies by name ([measured](https://github.com/kulehq/kule/blob/main/docs/windows-measurements.md)),
+so Kule lists no refusals there either, and says
+`Windows does not tell Kule what the sandbox refused; each refusal reached the command as an error`
+in the same places.
 
 ## Weaker isolation on Linux
 

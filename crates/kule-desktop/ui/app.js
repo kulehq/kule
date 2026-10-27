@@ -3300,9 +3300,9 @@ function fold(task, event) {
       // Why a refusal keeps a tool from working, in Kule's words, once each.
       hints: [
         ...new Set(event.denials.map((d) => d.hint).filter(Boolean)),
-        ...(event.unreported ? [UNREPORTED] : []),
-        ...(event.incomplete ? [INCOMPLETE] : []),
-        // Kule's own notes on the end: a budget that does not count the run.
+        // Kule's own notes on the end, in the engine's words for this
+        // platform: that refusals are not reported or not all listed, a
+        // budget that does not count the run.
         ...(event.notes || []),
       ],
       // When the system log dropped the kernel's messages: quietly, apart

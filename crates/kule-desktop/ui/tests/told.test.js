@@ -77,12 +77,6 @@ test("a file opened with its app is said to be Kule's copy, kept 24 hours", () =
   assert.match(note, /24 hours/);
 });
 
-test("the Linux note is the engine's own words", () => {
-  const engine = fs.readFileSync(path.join(__dirname, "..", "..", "..", "kule-engine", "src", "sandbox.rs"), "utf8");
-  assert.ok(engine.includes(`pub const UNREPORTED: &str = "${told.UNREPORTED}";`));
-  assert.ok(engine.includes(`pub const INCOMPLETE: &str = "${told.INCOMPLETE}";`));
-});
-
 // --- Connections and their questions ------------------------------------------
 
 const connection = (fields) => ({ host: "api.example", port: 443, verdict: "allow", rules: [], outcome: "tunneled", secrets: [], ...fields });
