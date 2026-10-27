@@ -24,6 +24,20 @@ Windows 11 runner, required to run and not skip. Besides that:
 - **The docs site builds** in both locales (`cd website && npm run build`),
   with broken links set to throw.
 
+**Documentation-only changes.** A pull request or a push whose every
+changed file is documentation runs CI's required jobs with their steps
+skipped: they report under their own names in a minute. `ci.yml`'s
+`changes` job decides it with `scripts/ci-changes.sh`, whose
+`documentation` list holds `docs/`, `website/` but its `package.json` and
+lockfile, and the root `README.md`, `CHANGELOG.md`, `MAINTAINING.md`,
+`SECURITY.md` and `CLAUDE.md`; anything else, a scheduled run and one
+started by hand run everything. Keep the list true:
+
+- a new place for documentation goes on it;
+- a file on it that code, a test, a build script or a workflow starts to
+  read comes off it, and so does a dependency manifest or lockfile under a
+  folder on it.
+
 ## Releasing
 
 1. One pull request carries the batch: the changes, the CHANGELOG section
