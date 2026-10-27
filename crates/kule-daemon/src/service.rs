@@ -4098,18 +4098,15 @@ mod tests {
         s.app.set_budget(&id, Some(usd(1.0))).unwrap();
         own_agent(&s, "silent", "exit 3");
         s.app.start_run(&id, "silent", "hi", Vec::new()).unwrap();
+        let said = "silent reported no cost, so the task's budget does not count this run";
         let notes = finished_notes(&s, &id);
-        assert!(
-            notes
-                .iter()
-                .any(|n| n
-                    == "silent reported no cost, so the task's budget does not count this run"),
-            "{notes:?}"
-        );
-        // Without a budget, nothing to say.
+        assert!(notes.iter().any(|n| n == said), "{notes:?}");
+        // Without a budget, nothing to say about it. Other notes may come,
+        // such as what the sandbox's list of refusals cannot hold.
         let (other, _) = s.task();
         s.app.start_run(&other, "silent", "hi", Vec::new()).unwrap();
-        assert!(finished_notes(&s, &other).is_empty());
+        let notes = finished_notes(&s, &other);
+        assert!(!notes.iter().any(|n| n == said), "{notes:?}");
     }
 
     #[cfg(unix)]
