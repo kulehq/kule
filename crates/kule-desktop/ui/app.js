@@ -3415,6 +3415,51 @@ async function onDaemon() {
   await refresh();
 }
 
+/**
+ * Whether what reads the task's copy may start as far as git goes: the
+ * values Kule masks in its settings files may be in its git repository,
+ * where a command reads them with git whatever the copy's file says. Then
+ * the person is told where, and asked; `then` goes on once they accept it
+ * for the folder. Whether to go on now.
+ */
+async function gitHoldsNothing(taskId, then) {
+  let c;
+  try {
+    c = await call("committed", { task: taskId });
+  } catch {
+    // An agent at work, say: what starts next says why itself.
+    return true;
+  }
+  if (c.clean || c.accepted) return true;
+  const body = [];
+  if (c.files.length) {
+    body.push(
+      h("p", {}, "The values Kule masks in this task's settings files are in its git repository. A command in the task can read them there with git (git show, git log -p), whatever the copy's file says:"),
+      h("ul", {}, ...c.files.map((f) => h("li", {}, h("code", {}, f))))
+    );
+  }
+  if (c.undecided) body.push(h("p", {}, `${c.undecided}, so Kule cannot tell whether they are there.`));
+  body.push(
+    h("p", {}, "To keep them from the task, take them out of the repository's history and change them."),
+    h("p", {}, `Or accept it for ${c.folder}: commands start in its tasks, and each time they do Kule says so. Settings → Secrets takes it back.`)
+  );
+  note({
+    id: "committed-note",
+    title: "Git holds the values Kule masks",
+    body,
+    action: "Accept it for this folder",
+    go: async () => {
+      try {
+        await call("accept_committed", { task: taskId });
+        await then();
+      } catch (err) {
+        fail(err);
+      }
+    },
+  });
+  return false;
+}
+
 async function submitPrompt(e) {
   e.preventDefault();
   const task = currentTask();
@@ -3422,6 +3467,15 @@ async function submitPrompt(e) {
   if (!task || !prompt) return;
   // The places picked in the Preview go with it, and leave the prompt with it.
   const refs = (promptRefs.get(task.id) || []).map((c) => c.ref);
+  try {
+    if (await gitHoldsNothing(task.id, () => startChecked(task, prompt, refs))) await startChecked(task, prompt, refs);
+  } catch (err) {
+    fail(err);
+  }
+}
+
+/** Starts the run once what Kule opened outside the sandbox is closed. */
+async function startChecked(task, prompt, refs) {
   try {
     // What Kule opened the copy in outside the sandbox may still be open,
     // and run what the agent writes next: the person closes it first.
@@ -4201,8 +4255,9 @@ async function renderSecrets() {
   if (state.view !== "secrets") return;
   let kept = [];
   let keyHome = null;
+  let accepted = [];
   try {
-    [kept, keyHome] = await Promise.all([call("secrets"), call("secrets_key")]);
+    [kept, keyHome, accepted] = await Promise.all([call("secrets"), call("secrets_key"), call("committed_accepted")]);
   } catch (err) {
     fail(err);
   }
@@ -4275,6 +4330,35 @@ async function renderSecrets() {
               remove
             );
           })
+        ),
+    // Where git hands a task's commands the values Kule masks, as the
+    // person accepted: said here for as long as it holds, and taken back.
+    accepted.length === 0
+      ? null
+      : h(
+          "section",
+          {},
+          h("h3", {}, "Where git holds the values Kule masks"),
+          h("p", { class: "muted" }, "In these folders' repositories, git holds values Kule masks in their settings files, and you accepted that their tasks' commands can read them there."),
+          h(
+            "ul",
+            { class: "rule-list" },
+            ...accepted.map((f) => {
+              const back = armed("Take back", "Click again to take it back", false, async () => {
+                await call("forget_committed", { folder: f.workspace }).catch(fail);
+                await renderSecrets();
+              });
+              back.dataset.key = `forget-committed:${f.workspace}`;
+              const values = `${f.values.length} ${f.values.length === 1 ? "value" : "values"}`;
+              return h(
+                "li",
+                { class: "agent-card" },
+                h("div", {}, h("strong", {}, f.workspace)),
+                h("div", { class: "muted" }, f.undecided ? `${values}, and a look that could not finish` : values, ` · since ${when(f.added_unix)}`),
+                back
+              );
+            })
+          )
         ),
     h(
       "div",
@@ -5088,7 +5172,8 @@ async function newTask() {
 
 async function openTerminal(task = currentTask()) {
   if (!task) return;
-  await openOutside("your terminal app", null, (confirmed) => call("open_terminal", { task: task.id, confirmed }));
+  const open = () => openOutside("your terminal app", null, (confirmed) => call("open_terminal", { task: task.id, confirmed }));
+  if (await gitHoldsNothing(task.id, open)) await open();
 }
 
 /** The task the delete shortcut was pressed for once, and when that ends. */
@@ -6171,7 +6256,10 @@ function terminalLink(event, uri, named = false) {
   call("open_url", { url: uri }).catch(fail);
 }
 
-async function newTerminal(taskId = state.current) {
+/** A new terminal in the task's sandbox; `ask` first asks about what git
+ * holds (see `gitHoldsNothing`), where the person opened it. */
+async function newTerminal(taskId = state.current, ask = true) {
+  if (ask && !(await gitHoldsNothing(taskId, () => newTerminal(taskId, false)))) return;
   const tabs = tabsOf(taskId);
   const el = h("div", { class: "terminal-view", "data-task": taskId });
   $("terminal-host").append(el);
@@ -6310,7 +6398,8 @@ async function showTerminal(taskId) {
     if (tabs.starting) return;
     tabs.starting = true;
     try {
-      await newTerminal(taskId);
+      // Not asked here: a refusal shows in the tab, and Enter there asks.
+      await newTerminal(taskId, false);
     } finally {
       tabs.starting = false;
     }

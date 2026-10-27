@@ -45,6 +45,7 @@ açabilir.
 | `budget.json` | Her görev için günlük bütçe (`kule daily-budget`). | hayır |
 | `budget.lock` | Kule bir çalıştırmanın payını ayırırken ya da bir çalıştırmanın harcadığını kaydederken tutulur; böylece süreçleri bunu birer birer yapar. | hayır |
 | `remembered.json` | Kule'ye bir daha sormamasını söyledikleriniz (`kule rules`). | hayır |
+| `committed.json` | Git'in, Kule'nin maskelediği değerleri tuttuğunu kabul ettiğiniz klasörler (`kule secrets history`); her değer, bu dosyanın anahtarıyla alınmış bir özet olarak tutulur, değerin kendisi asla. | hayır |
 | `beside.json` | Bir klasörün yanındaki, görevlerinin okuyabildiği projeler (`kule reveal`). | hayır |
 | `isolation.json` | Daha zayıf yalıtımı kabul edip etmediğiniz (`kule isolation`). | hayır |
 | `secrets.json` | Saklanan gizli değerler: adlar, host'lar, klasörler ve **mühürlenmiş** (şifrelenmiş) değerler. Yalnızca siz okuyabilirsiniz. | hayır |
@@ -102,6 +103,7 @@ karakterlik kimliktir.
 | `usage.jsonl` | Her ajan çalıştırmasının, ajanın bildirdiği şekliyle kullandıkları: token'lar, bağlam, maliyet; ve kapattığı pay (`reservation`). `released: true` olan bir satır bir çalıştırma değil, `kule budget TASK --release` ile bıraktığınız bir paydır. |
 | `reserved.jsonl` | Her çalıştırmanın, ajanı başlamadan önce bütçelerden ayırdığı. Bir pay, `usage.jsonl` dosyasındaki bir satır onu kapatana kadar harcanmış sayılır. |
 | `secrets.json` | Kule'nin kopyadaki `.env` dosyalarında maskelediği değerler; saklanan gizli değerler gibi mühürlenmiş. |
+| `committed.json` | Bu değerler için kopyanın git deposunda yapılan son arama: nerede bulundukları (değerler değil, özetleri) ve aramanın hangi durum için yapıldığı. |
 | `synced.json` | Son `kule sync`'in getirdikleri; ajanın bir sonraki turunda duyması için. |
 | `refused-hints.json` | "Bir araç neden başarısız oldu" notlarından hangilerinin ajana zaten söylendiği. |
 

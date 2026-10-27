@@ -233,6 +233,40 @@ fn escape_home_other_names_for_a_hidden_file() {
     );
 }
 
+/// Escape attempt (#46): cargo's registry tokens left in `~/.cargo` while
+/// `CARGO_HOME` names another folder, which cargo reads instead. They are
+/// readable outside Kule, and hidden in a task, in the home as in the
+/// folder `CARGO_HOME` names. Breaks when only cargo's home is hidden.
+#[test]
+fn escape_home_cargo_credentials_beside_another_cargo_home() {
+    let s = Setup::new();
+    let home = TempDir::new_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
+    let elsewhere = TempDir::new_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
+    let sources = CacheSources {
+        home: fs::canonicalize(home.path()).unwrap(),
+        cargo_home: fs::canonicalize(elsewhere.path()).unwrap(),
+    };
+    let mut files = Vec::new();
+    for dir in [sources.home.join(".cargo"), sources.cargo_home.clone()] {
+        fs::create_dir_all(&dir).unwrap();
+        for name in ["credentials.toml", "credentials"] {
+            fs::write(dir.join(name), "token = \"s3cret\"\n").unwrap();
+            files.push(dir.join(name));
+        }
+    }
+    let sandbox = Sandbox::for_task_with(&s.task, Some(sources)).unwrap();
+    for file in files {
+        assert!(fs::read_to_string(&file).unwrap().contains("s3cret"));
+        let out = sh(&sandbox, &format!("cat '{}'", file.display()));
+        let said = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(!said.contains("s3cret"), "{} was read", file.display());
+    }
+}
+
 /// What the person typed, their browsers' and mail's stores, and the
 /// credentials tools keep in the home directory are out of a command's
 /// sight; the rest of the home stays readable.

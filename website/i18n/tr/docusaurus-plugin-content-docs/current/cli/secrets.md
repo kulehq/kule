@@ -20,6 +20,7 @@ kule secrets [OPTIONS] [COMMAND]
 | [`list`](#kule-secrets-list) | Saklanan gizli değerleri, değerleri olmadan listeler (varsayılan). |
 | [`add`](#kule-secrets-add) | Bir ya da daha çok host için bir gizli değer saklar. |
 | [`remove`](#kule-secrets-remove) | Bir gizli değeri unutur. |
+| [`history`](#kule-secrets-history) | Bir görevin git deposunun Kule'nin maskelediği değerleri tutup tutmadığını söyler; klasörü için bunu kabul eder ya da geri alır. |
 
 ## Açıklama {#description}
 
@@ -130,6 +131,38 @@ forgot GH_TOKEN
 Yanlış yerden kaldırmaya çalışırsanız `no secret STRIPE_KEY kept there`
 yazar.
 
+## kule secrets history
+
+```sh
+kule secrets history [OPTIONS] [TASK]
+```
+
+Görevin git deposunun, Kule'nin görevde maskelediği değerleri ya da klasörü
+için saklanan gizli değerleri tutup tutmadığını söyler; tutuyorsa görevdeki
+bir komut onları git ile okuyabilir. Durum böyleyken, klasörü için bunu
+kabul edene kadar görevde hiçbir şey çalışmaz. Bkz. [Değerler git'te
+olduğunda](../concepts/secrets.md#when-git-holds-the-values).
+
+| Argüman / seçenek | Anlamı |
+| --- | --- |
+| `TASK` | Bakılacak görev. Verilmezse kabul edilen klasörler listelenir. |
+| `--accept` | Bulunanı görevin klasörü için kabul eder: klasörün görevlerinde komutlar yeniden çalışır ve her seferinde bu söylenir. |
+| `--forget` | Görevin klasörü ya da `--folder` için verilen kabulü geri alır. |
+| `--folder FOLDER` | `--forget` ile ve görev olmadan: klasör (varsayılan: içinde bulunduğunuz dizin). |
+
+```console
+$ kule secrets history 3f9c2a1b
+.env  · commit 1a2b3c4d5e6f
+a command in the task could read these values with git; nothing runs in it until you accept that (`kule secrets history 3f9c2a1b --accept`)
+$ kule secrets history 3f9c2a1b --accept
+.env  · commit 1a2b3c4d5e6f
+accepted for /home/me/code/app: its tasks' commands can read these values with git, and are told so each time
+$ kule secrets history
+/home/me/code/app  · 1 value(s)
+```
+
+Deposu hiçbirini tutmayan bir görev bunu söyler.
+
 ## Hatalar ve çözümleri {#errors-and-fixes}
 
 | Mesaj | Ne yapmalı |
@@ -138,11 +171,15 @@ yazar.
 | `kule: *.stripe.com: a lowercase host name, without a wildcard or a port` | Her host'u tam adıyla, kendi `--host`'uyla verin. |
 | `kule: no value given` | Değeri yazın ya da boruyla verin; boş bir satır değer sayılmaz. |
 | `error: the following required arguments were not provided` … `--host <HOSTS>` | En az bir `--host` ekleyin. |
+| `kule: the values Kule masks in this task are in its git repository: …` | Değerleri deponun geçmişinden çıkarıp değiştirin ya da kabul edin: `kule secrets history TASK --accept`. |
 
 ## Uygulamada {#in-the-app}
 
 *Settings → Secrets* gizli değerleri ekler, listeler ve kaldırır; onları
-mühürleyen anahtarın nerede saklandığını da gösterir.
+mühürleyen anahtarın nerede saklandığını da gösterir. Git'in, Kule'nin
+maskelediği değerleri tuttuğunu kabul ettiğiniz klasörleri listeler ve bu
+kabulü geri alır. Deposu bu değerleri tutan bir görevde çalıştırma ya da
+terminal başlamadan önce uygulama sorar.
 
 ## Ayrıca bakın {#see-also}
 

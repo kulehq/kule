@@ -45,7 +45,8 @@ incelemenizi bekler.
 Bir komut şunları okuyamaz:
 
 - **kimlik bilgileri**: `~/.ssh`, `~/.aws`, `~/.npmrc`, cargo'nun depo
-  token'ı ve benzerleri;
+  token'ları (`~/.cargo`'da ve `CARGO_HOME`'un gösterdiği klasörde) ve
+  benzerleri;
 - **kendi dosyalarınız**: Documents, Desktop, Downloads, Pictures, Movies,
   Music, iCloud Drive ve bulut depolama klasörleri ile ev dizininizin en
   üstündeki, ayarları dışında kalan her şey (`.` ile başlayan adlar ve

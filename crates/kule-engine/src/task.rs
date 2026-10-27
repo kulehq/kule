@@ -12,6 +12,7 @@ use walkdir::WalkDir;
 use crate::approvals;
 use crate::checkpoint::{Checkpoint, State, Store};
 use crate::clock::Clock;
+use crate::committed::{self, Look};
 use crate::effects::{self, Change, Effect, EffectSet};
 use crate::error::{Error, IoContext, Result};
 use crate::fsops::{self, read_json, write_json};
@@ -368,7 +369,151 @@ impl Task {
                  save it as UTF-8 under 1 MB, or move it out of the folder, then try again"
             )));
         }
+        // Values masked in the files that git holds anyway reach a command
+        // through git: nothing starts until the person accepts that.
+        let look = self.committed_with(&baseline)?;
+        if !look.clean() && !committed::accepted(&self.home(), self.workspace(), &look)? {
+            return Err(Error::Invalid(self.committed_refusal(&look)));
+        }
         Ok(())
+    }
+
+    /// The values Kule masks in the copy, and the secrets kept for its
+    /// folder, that the copy's git repository holds anyway, where a command
+    /// in the task reads them with git (see [`crate::committed`]). Looked
+    /// for once per state of the repository and of the values, and kept in
+    /// the task.
+    pub fn committed(&self) -> Result<Look> {
+        let _lock = self.lock()?;
+        let baseline = self.load_baseline()?;
+        self.committed_with(&baseline)
+    }
+
+    fn committed_with(&self, baseline: &Baseline) -> Result<Look> {
+        let values = self.vault()?.plain();
+        if values.is_empty() {
+            return Ok(Look::default());
+        }
+        let values = committed::digests(&self.home(), &values)?;
+        let copy = self.copy();
+        let masked_in: std::collections::BTreeSet<String> = baseline
+            .entries
+            .iter()
+            .filter(|(path, e)| e.copy.kind == Kind::File && secrets::is_env_file(path))
+            .map(|(path, _)| path.clone())
+            .collect();
+        // The repository's state (its index and references) and the values
+        // looked for: either changed, and the look is made again.
+        let state = git::read(&copy).ok().flatten();
+        let digests: Vec<&String> = values.iter().map(|(d, _)| d).collect();
+        let key = blake3::hash(
+            serde_json::to_string(&(&state, &digests, &masked_in))
+                .unwrap_or_default()
+                .as_bytes(),
+        )
+        .to_hex()
+        .to_string();
+        let kept_at = self.dir.join(COMMITTED_FILE);
+        if let Ok(kept) = read_json::<KeptLook>(&kept_at)
+            && kept.key == key
+            && state.is_some()
+        {
+            return Ok(kept.look);
+        }
+        let look = committed::look(&copy, &masked_in, &values, committed::BUDGET);
+        write_json(
+            &kept_at,
+            &KeptLook {
+                key,
+                look: look.clone(),
+            },
+        )?;
+        Ok(look)
+    }
+
+    /// Why nothing reads the copy while `look` is not accepted.
+    fn committed_refusal(&self, look: &Look) -> String {
+        let accept = format!(
+            "nothing runs in this task until you accept that for its folder (`kule secrets history {} --accept`)",
+            self.info.id
+        );
+        match (&look.undecided, look.found.is_empty()) {
+            (None, _) => format!(
+                "the values Kule masks in this task are in its git repository: {}, where a command in the task \
+                 could read them with git; {accept}, or take them out of the repository and change them",
+                committed::described(look)
+            ),
+            (Some(why), true) => format!(
+                "{why}, so it cannot tell whether the values Kule masks in this task are in its git repository, \
+                 where a command in the task could read them with git; {accept}"
+            ),
+            (Some(why), false) => format!(
+                "the values Kule masks in this task are in its git repository: {}, where a command in the task \
+                 could read them with git, and {why}; {accept}, or take them out of the repository and change them",
+                committed::described(look)
+            ),
+        }
+    }
+
+    /// Keeps what [`Task::committed`] finds as accepted for the task's
+    /// folder, and returns it: commands start in the task again, and are
+    /// told so (see [`Task::committed_notes`]).
+    pub fn accept_committed(&self) -> Result<Look> {
+        let look = self.committed()?;
+        if !look.clean() {
+            committed::accept(&self.home(), self.workspace(), &look)?;
+        }
+        Ok(look)
+    }
+
+    /// What to tell the person wherever the task's commands run, as they
+    /// start: the home's files withheld from them
+    /// ([`Task::home_withheld_notes`]) and the masked values git hands them,
+    /// as accepted ([`Task::committed_notes`]).
+    pub fn start_notes(&self) -> Result<Vec<String>> {
+        let mut notes = self.home_withheld_notes()?;
+        notes.extend(self.committed_notes());
+        Ok(notes)
+    }
+
+    /// Whether the person accepted `look` for the task's folder.
+    pub fn committed_accepted(&self, look: &Look) -> Result<bool> {
+        committed::accepted(&self.home(), self.workspace(), look)
+    }
+
+    /// What is said wherever the task's commands run while the person's
+    /// acceptance holds: that git hands them the values Kule masks.
+    /// Read from the last look, which [`Task::protect_secrets`] made as the
+    /// commands were let start: no lock, so it is told while they run.
+    pub fn committed_notes(&self) -> Vec<String> {
+        let Ok(KeptLook { look, .. }) = read_json::<KeptLook>(&self.dir.join(COMMITTED_FILE))
+        else {
+            return Vec::new();
+        };
+        if look.clean()
+            || !committed::accepted(&self.home(), self.workspace(), &look).unwrap_or(false)
+        {
+            return Vec::new();
+        }
+        let forget = format!(
+            "`kule secrets history {} --forget` takes it back",
+            self.info.id
+        );
+        let mut notes = Vec::new();
+        if !look.found.is_empty() {
+            notes.push(format!(
+                "the values Kule masks are in this folder's git repository: {}, where this task's commands \
+                 can read them with git, as you accepted for this folder ({forget})",
+                committed::described(&look)
+            ));
+        }
+        if let Some(why) = &look.undecided {
+            notes.push(format!(
+                "{why}, so the values Kule masks may be in this folder's git repository, where this task's \
+                 commands can read them with git, as you accepted for this folder ({forget})"
+            ));
+        }
+        notes
     }
 
     /// The copy's settings files [`Task::mask_copy`] cannot mask, each with
@@ -2131,6 +2276,16 @@ impl Drop for OpenTerminal {
 
 /// Where Kule notes what it opened a task's copy in outside the sandbox.
 const OUTSIDE_FILE: &str = "outside.json";
+
+/// The last look for the masked values in the copy's git repository, and
+/// what it was made for (see [`Task::committed`]).
+const COMMITTED_FILE: &str = "committed.json";
+
+#[derive(Serialize, Deserialize)]
+struct KeptLook {
+    key: String,
+    look: Look,
+}
 
 /// Something Kule opened a task's copy in outside the sandbox (see
 /// [`Task::opened_outside`]).

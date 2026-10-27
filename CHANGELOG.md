@@ -1,6 +1,29 @@
 # Changes
 
-## Unreleased
+## 0.2.0-preview.17
+
+A security preview. A value Kule masks in a task's settings files that the
+folder's git repository holds, a `.env` committed once and taken out since
+included, no longer reaches the task's commands through git unasked:
+nothing starts until you accept it for the folder, and each run says so.
+On macOS and Linux, cargo's registry tokens in `~/.cargo` stay hidden
+wherever `CARGO_HOME` points. Kule's own escape attempts run on macOS, Linux and Windows, and a change
+to the documentation alone no longer runs the whole CI.
+
+### Security
+
+- A value Kule masks in a task's settings files, or a secret kept for its
+  folder, that the folder's git repository holds no longer reaches the
+  task's commands through git unasked. Before an agent run, `kule exec`,
+  `kule shell` or a terminal starts, Kule looks for it in the repository's
+  index, every branch, tag and stash, the history of the `.env`-style
+  files, the references' logs and the objects git keeps outside the
+  history. Where it is, nothing starts until you accept it for the folder
+  (`kule secrets history TASK --accept`, or the app's question), and each
+  run says so; a look that cannot finish in time is held the same way.
+- On macOS and Linux, cargo's registry tokens in `~/.cargo` are hidden from
+  a task's commands whatever `CARGO_HOME` names, as well as in the folder
+  it names.
 
 ### Testing
 

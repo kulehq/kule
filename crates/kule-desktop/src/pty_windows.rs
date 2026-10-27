@@ -110,7 +110,7 @@ impl Terminals {
         prepare(home, task, key, &tell);
         let id = self.start(home, task, &program, &args, cols, rows, tell)?;
         let notes = kule_daemon::shell::Task::open(home, task)
-            .and_then(|t| t.home_withheld_notes())
+            .and_then(|t| t.start_notes())
             .unwrap_or_default();
         Ok((id, notes))
     }

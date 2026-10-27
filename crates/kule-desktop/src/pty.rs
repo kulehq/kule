@@ -170,7 +170,7 @@ impl Terminals {
         // Handed back with the id rather than sent as output: what is sent
         // before the window knows the id is never shown.
         let notes = kule_daemon::shell::Task::open(home, task)
-            .and_then(|t| t.home_withheld_notes())
+            .and_then(|t| t.start_notes())
             .unwrap_or_default();
         Ok((id, notes))
     }

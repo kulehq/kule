@@ -121,6 +121,22 @@ pub enum Call {
     ForgetOutside {
         task: String,
     },
+    /// Whether the task's git repository holds the values Kule masks in
+    /// it, and whether the person accepted that for its folder.
+    Committed {
+        task: String,
+    },
+    /// The person accepts, for the task's folder, that git hands its
+    /// commands the values Kule masks: commands start there again.
+    AcceptCommitted {
+        task: String,
+    },
+    /// Takes back what was accepted for a folder.
+    ForgetCommitted {
+        folder: PathBuf,
+    },
+    /// The folders it was accepted for.
+    CommittedAccepted,
     StartRun {
         task: String,
         agent: String,

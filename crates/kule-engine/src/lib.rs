@@ -28,6 +28,7 @@ mod caches;
 mod checkpoint;
 mod clienthello;
 mod clock;
+mod committed;
 mod effects;
 mod error;
 mod fsops;
@@ -86,6 +87,10 @@ pub use caches::{
     Sources as CacheSources,
 };
 pub use checkpoint::{Checkpoint, State as CheckpointState};
+pub use committed::{
+    Finding as CommittedFinding, Folder as CommittedFolder, Look as CommittedLook,
+    committed_accepted, forget_committed,
+};
 pub use effects::{Change, Effect, EffectSet, Move};
 pub use error::{Error, Result};
 pub use fsops::{carry, entries_in, open_beneath, remove_beneath};
