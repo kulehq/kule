@@ -784,8 +784,15 @@ EOF
   ! grep -qE '[0-9]+ (failed|error)' "$work/itsdangerous.log" || fail "itsdangerous's tests failed: $work/itsdangerous.log"
   say "project: itsdangerous ok ($installed packages from PyPI, $passed tests passed)"
 
+  # Go finds its root beside its program. Where that lies in a home that is
+  # not the gate's (a CI runner's tool cache), a task's commands read the
+  # program's folder alone; named, the root is granted (GOROOT is one of
+  # the variables that name a tool's folder).
+  export GOROOT
+  GOROOT=$(go env GOROOT)
   build hello-go 'export GOTOOLCHAIN=local GOPROXY=off GOFLAGS=-mod=mod
     go vet ./... && go test ./...'
+  unset GOROOT
   grep -q '^ok ' "$work/hello-go.log" || fail "hello-go: go test passed nothing: $work/hello-go.log"
   say "project: hello-go ok (built and tested with the installed Go)"
 
