@@ -773,8 +773,10 @@ EOF
   # Every package comes from PyPI in the task: pip's cache is new. On
   # macOS pip checks certificates in the system's trust service, which the
   # task keeps closed (docs/troubleshooting.md): pip's own roots instead.
+  # Only there: an older pip elsewhere (Ubuntu 24.04's) refuses the option.
   # shellcheck disable=SC2016
-  build itsdangerous 'export PIP_CACHE_DIR="$TMPDIR/pip-cache" PIP_USE_DEPRECATED=legacy-certs
+  build itsdangerous 'export PIP_CACHE_DIR="$TMPDIR/pip-cache"
+    if [ "$(uname)" = Darwin ]; then export PIP_USE_DEPRECATED=legacy-certs; fi
     python3 -m venv .venv && .venv/bin/pip install --disable-pip-version-check . pytest freezegun &&
     .venv/bin/python -m pytest -q'
   installed=$(sed -n 's/^Successfully installed //p' "$work/itsdangerous.log" | wc -w | tr -d ' ')
