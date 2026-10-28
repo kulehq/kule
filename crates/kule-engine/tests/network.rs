@@ -645,6 +645,8 @@ func main() {
 
     let s = Setup::new();
     let mut sandbox = Sandbox::new(&s.task).unwrap();
+    // A task runs a program only from a folder Kule grants.
+    sandbox.grant_env(&[src.path().to_owned()], None);
     sandbox.use_proxy(&s._proxy);
     let out = sandbox
         .command(probe.to_str().unwrap(), &[])
