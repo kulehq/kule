@@ -64,7 +64,7 @@ Varsayılan olarak hiçbir şeye güvenilmez:
 ### Bir görevin komutlarının hâlâ okuyabildikleri {#what-a-tasks-commands-can-still-read}
 
 Projelerinizin, oturumlarınızın ve uygulamaların verilerinin bulunduğu
-yerlerde okuma varsayılan olarak reddedilir (bkz. [Sandbox](concepts/sandbox.md#what-is-hidden));
+yerlerde okuma varsayılan olarak reddedilir (bkz. [Sandbox](concepts/sandbox.md#what-a-command-may-read));
 bilgisayarın geri kalanı, araçlar ihtiyaç duyduğu için okunabilir kalır:
 
 - sistem: `/usr`, `/bin`, `/sbin`, `/etc`, `/opt`, `/Library`, `/System`,

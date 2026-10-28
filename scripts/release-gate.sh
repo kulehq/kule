@@ -773,8 +773,10 @@ EOF
   # Every package comes from PyPI in the task: pip's cache is new. On
   # macOS pip checks certificates in the system's trust service, which the
   # task keeps closed (docs/troubleshooting.md): pip's own roots instead.
+  # Only there: an older pip elsewhere (Ubuntu 24.04's) refuses the option.
   # shellcheck disable=SC2016
-  build itsdangerous 'export PIP_CACHE_DIR="$TMPDIR/pip-cache" PIP_USE_DEPRECATED=legacy-certs
+  build itsdangerous 'export PIP_CACHE_DIR="$TMPDIR/pip-cache"
+    if [ "$(uname)" = Darwin ]; then export PIP_USE_DEPRECATED=legacy-certs; fi
     python3 -m venv .venv && .venv/bin/pip install --disable-pip-version-check . pytest freezegun &&
     .venv/bin/python -m pytest -q'
   installed=$(sed -n 's/^Successfully installed //p' "$work/itsdangerous.log" | wc -w | tr -d ' ')
@@ -784,8 +786,15 @@ EOF
   ! grep -qE '[0-9]+ (failed|error)' "$work/itsdangerous.log" || fail "itsdangerous's tests failed: $work/itsdangerous.log"
   say "project: itsdangerous ok ($installed packages from PyPI, $passed tests passed)"
 
+  # Go finds its root beside its program. Where that lies in a home that is
+  # not the gate's (a CI runner's tool cache), a task's commands read the
+  # program's folder alone; named, the root is granted (GOROOT is one of
+  # the variables that name a tool's folder).
+  export GOROOT
+  GOROOT=$(go env GOROOT)
   build hello-go 'export GOTOOLCHAIN=local GOPROXY=off GOFLAGS=-mod=mod
     go vet ./... && go test ./...'
+  unset GOROOT
   grep -q '^ok ' "$work/hello-go.log" || fail "hello-go: go test passed nothing: $work/hello-go.log"
   say "project: hello-go ok (built and tested with the installed Go)"
 

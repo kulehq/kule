@@ -9,6 +9,15 @@ use kule_acp::{Cost, Event, run, run_limited};
 use kule_engine::{Change, RunUsage, Sandbox, Task};
 use tempfile::TempDir;
 
+/// The sandbox of `task` with the test agent's folder granted: a task
+/// runs a program only from a folder Kule grants, as it does a tool's.
+fn sandbox_for(task: &Task) -> Sandbox {
+    let mut sandbox = Sandbox::new(task).unwrap();
+    let agent = std::path::Path::new(env!("CARGO_BIN_EXE_kule-test-agent"));
+    sandbox.grant_env(&[agent.parent().unwrap().to_owned()], None);
+    sandbox
+}
+
 struct Setup {
     _home: TempDir,
     _ws: TempDir,
@@ -33,7 +42,7 @@ impl Setup {
     /// Runs `script` through the test agent in the sandbox; returns the
     /// events in order.
     fn run(&self, script: &str) -> Vec<Event> {
-        let sandbox = Sandbox::new(&self.task).unwrap();
+        let sandbox = sandbox_for(&self.task);
         let agent = sandbox
             .start(env!("CARGO_BIN_EXE_kule-test-agent"), &[])
             .unwrap();
@@ -50,7 +59,7 @@ impl Setup {
     /// [`Setup::run`] stopped at `limit`; returns how it ended and the
     /// events.
     fn run_limited(&self, script: &str, limit: Cost) -> (Result<String, String>, Vec<Event>) {
-        let sandbox = Sandbox::new(&self.task).unwrap();
+        let sandbox = sandbox_for(&self.task);
         let agent = sandbox
             .start(env!("CARGO_BIN_EXE_kule-test-agent"), &[])
             .unwrap();
@@ -494,7 +503,7 @@ impl Setup {
         terminals: bool,
         control: &kule_acp::RunControl,
     ) -> Vec<Event> {
-        let sandbox = Sandbox::new(&self.task).unwrap();
+        let sandbox = sandbox_for(&self.task);
         let agent = sandbox
             .start(env!("CARGO_BIN_EXE_kule-test-agent"), &[])
             .unwrap();
@@ -614,7 +623,7 @@ fn pictures_go_only_to_an_agent_that_takes_them() {
         data: "iVBORw0KGgo=".into(),
     };
     let run = |args: &[&str]| {
-        let sandbox = Sandbox::new(&s.task).unwrap();
+        let sandbox = sandbox_for(&s.task);
         let args: Vec<String> = args.iter().map(|a| a.to_string()).collect();
         let agent = sandbox
             .start(env!("CARGO_BIN_EXE_kule-test-agent"), &args)
@@ -689,7 +698,7 @@ fn the_session_is_given_the_mcp_servers_it_is_offered() {
         &["-y".into(), "@acme/db@1.2.3".into(), "--stdio".into()],
         &[("DB_NAME".to_owned(), "notes".to_owned())].into(),
     );
-    let sandbox = Sandbox::new(&s.task).unwrap();
+    let sandbox = sandbox_for(&s.task);
     let agent = sandbox
         .start(env!("CARGO_BIN_EXE_kule-test-agent"), &[])
         .unwrap();
