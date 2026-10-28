@@ -22,13 +22,20 @@ düşer ve uygulamanızı ya da atmanızı bekler.
 Bir görevin komutları `HOME`'u gerçek ev dizininiz olarak değil, görevin
 ev katmanı (`<task>/home`) olarak görür:
 
-- ev dizininizin en üstündeki küçük dosyalar ve `~/.config` orada
-  **klon**dur (APFS bunları tek seferde klonlar; başka yerlerde `.config`,
-  64 MiB'ın altında kaldığı sürece kopyalanır);
+- kabukların ve araç zincirlerinin ev dizininizin en üstünde okuduğu ayar
+  dosyaları (`.zshrc`, `.gitconfig`, `.editorconfig`, …) ve `~/.config`
+  orada **klon**dur (APFS bunları tek seferde klonlar; başka yerlerde
+  `.config`, 64 MiB'ın altında kaldığı sürece kopyalanır);
 - ev dizininizin en üstündeki yeni dosyalar da oraya düşer;
-- diğer her kayıt sizin dosyanıza bir **bağlantıdır** (link), böylece araç
-  zincirleri, önbellekler ve ayarlar her zamanki yerlerinde bulunur. Bir
-  bağlantı üzerinden yazma, önceden olduğu gibi sandbox'a takılır;
+- bir araç zincirinin kendi klasörü (`~/.cargo`, `~/.m2`, `~/go`, …) ve
+  nokta ile başlamayan her kayıt sizin dosyanıza bir **bağlantıdır**
+  (link), böylece araç zincirleri, önbellekler ve ayarlar her zamanki
+  yerlerinde bulunur. Bir bağlantı üzerinden yazma, önceden olduğu gibi
+  sandbox'a takılır;
+- nokta ile başlayan, hiçbir araç zincirinin okuduğu bilinmeyen diğer her
+  kayıt **katmanda hiç yer almaz**: onu arayan bir araç, sizde yokmuş gibi
+  hiçbir şey bulmaz ve gerçek dosya erişim dışında kalır (bkz.
+  [Sandbox](sandbox.md));
 - ajanın kendi durumu da **klonlanır**: ajan oraya yazar; yazdıkları ev
   dizininize hiç ulaşmaz ve asla incelemeye sunulmaz;
 - gizli yollar (`~/.ssh`, `~/.aws`, …) katmanda hiç yer almaz;

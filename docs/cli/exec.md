@@ -87,7 +87,8 @@ hidden and why.
 | --- | --- | --- | --- |
 | `--allow-write` | path | | Also let the command write under this path. Repeatable. |
 | `--hide` | path | | Also hide this path from the command. Repeatable. |
-| `--reveal` | path | | Let the command read a path that is hidden by default, such as `~/Library/Keychains` for an agent's own login, or a project beside the workspace (read-only). Repeatable. Kule's home and the task's own folder are never revealed. |
+| `--reveal` | path | | Let the command read a path it may not read by default, such as `~/Library/Keychains` for an agent's own login, or a project beside the workspace (read-only). Repeatable. Kule's home, the task's own folder, your home itself and the other paths the validator refuses (see [`kule tools`](tools.md)) are never revealed: the command is refused with why. |
+| `--trace` | | | Linux: run the command under `strace` from outside its sandbox and list the files the sandbox refused it, with what to do. Linux does not report refusals itself; macOS and Windows runs list them always. Needs `strace` installed. |
 | `--pass-env` | name | | Pass this environment variable on to the command. Repeatable. |
 | `--no-network` | | | Shut TCP networking for the command, localhost included. |
 | `--open-network` | | | Let the command connect anywhere, bypassing the proxy and the policy. |

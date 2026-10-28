@@ -213,13 +213,30 @@ refuses to run a command less isolated than it means to.
 
 ### Linux: a command gets "permission denied" but nothing is listed
 
-**Cause:** Landlock reports refusals only to the audit log, so Kule cannot
-list them as it does on macOS. The command still gets the error.
+**Cause:** Landlock reports refusals only to the kernel's audit log, which
+Kule cannot read as a person, so it cannot list them as it does on macOS.
+The command still gets the error.
 
-**Fix:** the path is outside what the sandbox allows (see
-[The sandbox](concepts/sandbox.md)). For a project beside the workspace,
-`kule reveal add PATH`; for one command, `kule exec --reveal PATH` or
-`--allow-write PATH`.
+**Fix:** run the command once with `kule exec --trace TASK -- …` (needs
+`strace`): Kule runs it under `strace` from outside the sandbox and lists
+every file the sandbox refused, with what to do. A task's commands read only
+what is granted (see [`kule tools`](cli/tools.md)): for a folder of tools
+Kule does not know, `kule tools add PATH`; for a project beside the
+workspace, `kule reveal add PATH`; for one command, `kule exec --reveal PATH`
+or `--allow-write PATH`.
+
+### A tool fails to read a folder: "sandbox: refused file-read-data …"
+
+**Cause:** a task's commands read nothing but what is granted: the task's
+own folders, the system, your toolchains, and what you added. A toolchain
+installed somewhere Kule does not know (`/opt/corp/sdk`), or a file a
+variable points a tool to outside your home, is refused.
+
+**Fix:** the run lists the refusal with the folder to add:
+`kule tools add '/opt/corp/sdk'` lets every task read it, never write it.
+Add the narrowest folder that works. Kule refuses a folder that would weaken
+it (your home, a credential folder, Kule's own, the root of a disk); see
+[`kule tools`](cli/tools.md).
 
 ## Network and certificates
 
@@ -242,6 +259,48 @@ service, which stays closed in a task while its network goes through the
 proxy.
 
 **Fix:** `pip install --use-deprecated=legacy-certs …`.
+
+### NuGet cannot restore in a task on macOS
+
+**Symptom:** `error NU1301: ... The SSL connection could not be
+established ... bad certificate format`, with
+`sandbox: refused mach-lookup com.apple.SecurityServer (dotnet)` after the
+command.
+
+**Cause:** .NET on macOS checks certificates through the system's trust
+service, which stays closed to a task's commands while their network goes
+through the proxy (it fetches addresses past the proxy). It reads no
+`SSL_CERT_FILE`, so the proxy's authority and the system's roots in it do
+not help.
+
+**Fix:** restore with the network open for that one command, which
+bypasses the proxy and the policy:
+`kule exec TASK --open-network -- dotnet restore`; or restore outside the
+task first (the packages are then in your NuGet cache, which the task
+reads). `dotnet build` then works in the task. `dotnet test` does not on
+macOS: its test host talks to the runner over loopback, which a task's
+programs do not get there ([#84](https://github.com/kulehq/kule/issues/84));
+run the tests outside the task, or in a task on Linux, where all of this
+works as it is.
+
+### Gradle does not run in a task on macOS
+
+**Symptom:** `Could not create service of type FileLockContentionHandler`
+with `java.net.SocketException: Operation not permitted`; or, with servers
+allowed, `Could not connect to the Gradle daemon` and
+`sandbox: refused network-outbound remote:*:PORT (java)` after the command.
+
+**Cause:** Gradle's processes talk to each other over loopback: the client
+to the daemon it forks (also with `--no-daemon`), the build to the workers
+that run tests. On macOS a task's programs reach nothing on the network but
+the proxy, loopback included, and listen only when you allow servers; so
+Gradle cannot connect to itself. Maven needs none of this: its forks talk
+over pipes.
+
+**Fix:** build with Maven in the task, or run Gradle with
+`kule exec TASK --open-network -- gradle …`, which bypasses the proxy and
+the policy for that command. On Linux Gradle runs as it is: loopback is the
+task's own there.
 
 ### A connection is cut for Encrypted Client Hello
 

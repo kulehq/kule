@@ -7,10 +7,11 @@ description: What Kule supports on macOS, Linux and Windows, how the sandbox dif
 # Platforms
 
 Kule runs on **macOS**, **Linux** and **Windows 11**. The sandbox is a
-different thing on each: on macOS and Linux a command may read everything
-but what Kule hides; on Windows it may read nothing but what Kule grants.
-What a command may write, where its network goes and what reaches your
-folder are the same on all three.
+different mechanism on each (Seatbelt, Landlock with namespaces, a process
+container), and the same rule on all three: a command reads nothing but
+what Kule grants (see [`kule tools`](cli/tools.md)). What a command may
+write, where its network goes and what reaches your folder are the same on
+all three too.
 
 ## Support at a glance
 
@@ -142,7 +143,8 @@ put-back replaces is moved to `~/.kule/kept/replaced`, never lost.
   network from outside the sandbox.
 - On **macOS**, while a task's network goes through the proxy, the system's
   certificate service stays closed to its commands. A tool that checks
-  certificates only through it cannot use HTTPS in a task. pip 24.2 and
+  certificates only through it cannot use HTTPS in a task; .NET (NuGet
+  restores among it) is one. pip 24.2 and
   later works with `--use-deprecated=legacy-certs` (older pip refuses the
   option, so Kule does not set it). Go is told to use the roots
   `SSL_CERT_FILE` names.

@@ -1438,7 +1438,7 @@ impl Profile {
                     self.state.iter().map(|s| home.join(s)).collect();
                 let ignored: Vec<String> =
                     self.state.iter().chain(&self.outside).cloned().collect();
-                task.prepare_home(&home, &state, sandbox.hidden(), sandbox.shown(), &ignored)?;
+                task.prepare_home(&home, &state, sandbox.hidden(), &sandbox.shown(), &ignored)?;
                 sandbox.use_home(task, &home)?;
             }
         }

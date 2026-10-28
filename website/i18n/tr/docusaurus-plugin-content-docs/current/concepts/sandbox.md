@@ -40,55 +40,72 @@ Geri kalan her şey salt okunur ya da gizlidir.
 --global`) reddedilmez: görevin [ev katmanına](home-layer.md) düşer ve
 incelemenizi bekler.
 
-## Neler gizlenir {#what-is-hidden}
+## Bir komut neleri okuyabilir {#what-is-hidden}
 
-Bir komut şunları okuyamaz:
+Bir komut, Windows'ta olduğu gibi macOS ve Linux'ta da **yalnızca verilen
+yerleri** okur. Verilenler, her biri kaynağıyla birlikte
+[`kule tools`](../cli/tools.md) ile gösterilir:
 
-- **kimlik bilgileri**: `~/.ssh`, `~/.aws`, `~/.npmrc`, cargo'nun depo
-  token'ları (`~/.cargo`'da ve `CARGO_HOME`'un gösterdiği klasörde) ve
-  benzerleri;
-- **kendi dosyalarınız**: Documents, Desktop, Downloads, Pictures, Movies,
-  Music, iCloud Drive ve bulut depolama klasörleri ile ev dizininizin en
-  üstündeki, ayarları dışında kalan her şey (`.` ile başlayan adlar ve
-  `~/Library` dışındakiler): Kule'nin açtığı ya da açmadığı diğer
-  projeleriniz ve oradaki dosyalarınız. Ev dizininizin en üstündeki bir
-  bağlantı olduğu gibi bırakılır;
-- **çalışma klasörünün yanındaki projeler**: çalışma klasörünüzün içinde
-  bulunduğu klasör, o klasör ev dizininizdeyse (ev dizininin kendisi, bir
-  nokta klasörü ya da `~/Library` değilse);
-- **Kule'nin açtığı diğer her proje**, nerede olursa olsun, ev dizininizde
-  ya da dışında; çalışma klasörünün kendisinde olduğu gibi yanındaki
-  projelerle birlikte;
-- **uygulamaların ve araçların ayarlarını ve verilerini tuttuğu yerler**:
-  `~/.config`, `~/.local/share`, `~/Library/Application Support` ve
-  `~/Library/Preferences`; bir uygulamanın oturumu ve yeni bir aracın
-  ayarları da. Araç zincirlerinin, kabukların ve istemlerin orada okuduğu
-  okunabilir kalır: git, jj, uv, pip, Poetry (`auth.toml` hariç), Ruff,
-  mise, Go, Flutter, Matplotlib, fish, zsh, Nushell, Starship ve direnv
-  ayarları; uv, mise, pnpm, fnm ve pipx'in `~/.local/share` içinde
-  tuttukları, man sayfaları ve fontlarla birlikte;
-- **diğer araçların oturumları**: GitHub Copilot, Firebase ve ayarlarını
-  onunla birlikte tutan araçlar, Wrangler, Fly, Doppler, SOPS, Podman'ın
-  `auth.json` dosyası, Yarn'ın ve Bun'ın ev dizininizdeki ayarları,
-  NuGet'in kendi `NuGet.Config` dosyası;
-- **editörlerin** oturum ve eklenti gizli değerleri depoları (VS Code,
-  Insiders sürümü, Cursor, Windsurf, VSCodium) ve geçmişlerin yanında
-  **kaydedilmiş kabuk oturumları** (`~/.zsh_sessions`, `~/.bash_sessions`);
-- **Kule'nin ev klasörü** (`~/.kule`): diğer görevler, ayarlar, gizli
-  değerler, imzalama anahtarı;
-- **diğer ajanların oturumları ve konuşma kayıtları**.
+- **görevin kendi klasörleri**: kopyası, geçici klasörü ve ev katmanı
+  (okuma ve yazma);
+- **sistem**: `/usr`, `/bin`, `/System/Library`, `/Library/Developer`,
+  Homebrew, Xcode ve bütünüyle `/etc`; ancak orada adıyla kapatılan birkaç
+  kimlik dosyası dışında (`pip.conf`, `docker/config.json`, `rclone.conf`,
+  `samba/smb.conf`, `environment`, `profile.d`). Linux'ta ayrıca `/proc`,
+  `/sys`, `/run` altındaki çözücü dosyaları ve `/var` ile `/tmp` altında dar
+  yerler; `/opt`, `/tmp` ya da `/run` asla bütünüyle değil;
+- komutlara aktarılan değişkenlerin söylediği **araçlarınızın yerleri**: her
+  `PATH` girdisi (ve ev dizininizin dışındaki bir `bin`'in üstündeki aracın
+  kendi klasörü), `JAVA_HOME`, `GOROOT`, `DOTNET_ROOT` ve Kule'nin aktardığı
+  diğerleri;
+- **araç zincirlerinin ev dizininizde kendi dosyalarını tuttuğu yerler**:
+  `~/.cargo`, `~/.rustup`, `~/.npm`, `~/.m2`, `~/.gradle`, `~/.nuget`
+  (içindeki NuGet ayarları hariç; kimlik bilgisi taşıyabilir),
+  `~/.dotnet`, `~/go`, `~/.cache`, `~/.local/bin`, uv, pipx, mise, pnpm ve
+  fnm'nin `~/.local/share` içinde tuttukları; git, jj, uv, pip, Poetry
+  (`auth.toml` hariç), Ruff, mise, Go, Flutter, Matplotlib, fish, zsh,
+  Nushell, Starship ve direnv'in `~/.config` içindeki ayarları;
+  `~/Library/Java/JavaVirtualMachines` ve araçların ev dizininizin en üstünde
+  okuduğu ayar dosyaları (`.gitconfig`, `.editorconfig`, `.tool-versions`, …);
+- **sizin** `kule tools add` ile eklediğiniz ve bir **yöneticinin** araçlar
+  dosyasında adını verdiği yerler;
+- [`kule reveal`](../cli/reveal.md) ile açtığınız, **çalışma klasörünün
+  yanındaki bir proje**, ve `kule exec --reveal`'in tek bir komut için açtığı.
 
-Bu gizli klasörlerin içinde, araçlar ihtiyaç duyduğu için birkaç şey
-okunabilir kalır: çalışma klasörünün git dizini (bir worktree'nin yanındaki
-deposu), `PATH` ile SDK değişkenlerinizin gösterdiği klasörler ve
-`PATH`'inizdeki bir program bir bağlantıysa gösterdiği klasör (Claude
-Code'un yerel kurulumu, uv'nin araçları). macOS'ta tercihleri sistem
-üzerinden okuyan bir program da aynı sınıra uyar: gizli bir uygulamanın
-tercihlerine o yoldan da ulaşılmaz.
+Verilen bir kökün içinde kimlik dosyaları adıyla kapalı kalır:
+`~/.cargo/credentials.toml`, `~/.m2/settings.xml`, `~/.gradle/gradle.properties`,
+`~/.nuget/NuGet/NuGet.Config` ve `CARGO_HOME`'un gösterdiği klasör. Verilen
+bir yere giden yol üstündeki klasörler listelenir, okunmaz; böylece yollar
+çözülür.
 
-Gizli bir şeyi tek bir komutun okumasına izin vermek için komutu
-`--reveal YOL` ile çalıştırın (bkz. [`kule exec`](../cli/exec.md)): Kule'nin
-onun içinde gizlediği gizli kalır.
+Geri kalan her şey komut için yoktur: ev dizininizin kendisi, Documents,
+Desktop, Downloads, Kule'nin açtığı ya da açmadığı diğer projeleriniz,
+`~/.ssh`, `~/.aws` ve diğer her kimlik klasörü, uygulamaların ayar ve veri
+tuttuğu yerler (`~/.config`, `~/.local/share`,
+`~/Library/Application Support`, `~/Library/Preferences`; yukarıda adı geçen
+araç zinciri ayarları dışında), editörlerin depoları ve kabuk oturumları,
+diğer ajanların oturumları, Kule'nin ev klasörü (`~/.kule`) ve bir
+değişkenin bir aracı yönlendirdiği, ev dizininizin dışındaki herhangi bir
+dosya. Ev dizininizin en üstünde, hiçbir araç zincirinin okuduğu bilinmeyen
+bir nokta girdisi (token tutabilen bir aracın ayarları) komutların ev
+dizininde hiç yoktur: onu arayan bir araç, sizde yokmuş gibi hiçbir şey
+bulmaz ve gerçek dosya erişim dışında kalır (bkz. [Ev katmanı](home-layer.md)).
+
+Her verilen yer, kim adlandırmış olsa da **tek bir doğrulayıcıdan** geçer: ev
+dizininiz ya da üstündeki bir klasör, başka bir kişinin ev dizini, Kule'nin
+ev klasörü, bir kimlik klasörü, kendi klasörlerinizden biri, bir uygulama
+veri deposu, bir diskin ya da volume'ün kökü, birinci seviye bir sistem
+klasörü (`/opt`, `/usr`) ve bir görevin yazdığı yerler, nedeniyle birlikte
+reddedilir. Karar çözülmüş yol üzerinde, her çalıştırmadan önce verilir.
+Hiçbir şey çalışma klasöründen ya da kopyadan gelmez: bir ajan kendi
+sandbox'ını genişletemez.
+
+Bir aracın Kule'nin tanımadığı bir klasöre ihtiyacı olduğunda komut reddi
+bir hata olarak görür ve koşu bunu ne yapılacağıyla birlikte listeler:
+`kule tools add '/opt/corp/sdk'`. Retleri kendiliğinden bildirmeyen
+Linux'ta komutu bir kez `kule exec --trace` ile çalıştırın. Tek bir komutun
+bir yolu okumasına izin vermek için komutu `--reveal YOL` ile çalıştırın
+(bkz. [`kule exec`](../cli/exec.md)); doğrulayıcı orada da geçerlidir.
 
 ## Bir komut ortamından ne alır
 

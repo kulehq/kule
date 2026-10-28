@@ -45,7 +45,7 @@ fn what_opens_the_sandbox_wider_is_said() {
     assert!(out.status.success(), "{said}");
     for line in [
         format!("kule: the command may write {dir}, outside the task's copy"),
-        format!("kule: the command may read {dir}, which the sandbox hides"),
+        format!("kule: the command may read {dir}, which it may not read by default"),
         "kule: the command gets KULE_TEST_SECRET from your environment".to_owned(),
     ] {
         assert!(said.contains(&line), "{line} in {said}");
@@ -405,4 +405,47 @@ fn a_masked_value_git_holds_runs_nothing_until_accepted() {
         String::from_utf8_lossy(&out.stderr)
     );
     assert!(!exec().status.success());
+}
+
+/// A command inherits Kule's standard input, output and errors; where those
+/// are files outside what the task may read, a program still gets their
+/// facts (Python asks for its output's as it starts, and runs without one
+/// when refused), the file itself and nothing on the way to it.
+#[cfg(target_os = "macos")]
+#[test]
+fn the_inherited_files_tell_their_facts_to_the_command() {
+    let (home, ws) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+    // Outside the task and every grant, as a log a person redirects to.
+    let outside = TempDir::new_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
+    let (input, output) = (
+        outside.path().join("in.txt"),
+        outside.path().join("out.log"),
+    );
+    fs::write(&input, "from the file\n").unwrap();
+    let kule = |args: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_kule"))
+            .args(args)
+            .env("KULE_HOME", home.path())
+            .output()
+            .unwrap()
+    };
+    let out = kule(&["new", ws.path().to_str().unwrap()]);
+    let id = String::from_utf8_lossy(&out.stdout)
+        .split_whitespace()
+        .nth(1)
+        .unwrap()
+        .to_owned();
+    let script = "[ -f /dev/fd/0 ] && [ -f /dev/fd/1 ] && read -r line && echo \"ok: $line\"";
+    let out = Command::new(env!("CARGO_BIN_EXE_kule"))
+        .args(["exec", &id, "--", "sh", "-c", script])
+        .env("KULE_HOME", home.path())
+        .stdin(fs::File::open(&input).unwrap())
+        .stdout(fs::File::create(&output).unwrap())
+        .output()
+        .unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "{err}");
+    let written = fs::read_to_string(&output).unwrap();
+    assert!(written.contains("ok: from the file"), "{written}\n{err}");
+    assert!(!written.contains("refused file-read-metadata"), "{written}");
 }

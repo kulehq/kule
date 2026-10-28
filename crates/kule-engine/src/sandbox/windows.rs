@@ -2,10 +2,11 @@
 //! measured in `docs/windows-measurements.md`) around each command. Unlike
 //! Seatbelt and Landlock, which let a command read everything but what is
 //! hidden, the container lets it read nothing but what is granted: the
-//! task's copy and temporary folder (writable), its home layer, the
-//! person's tools (Windows, Program Files, what is on `PATH` and where
-//! toolchains install themselves) and what the sandbox lets through inside
-//! a hidden folder. Credentials inside a grant are denied by name. Every
+//! task's copy and temporary folder (writable), its home layer, and the
+//! roots the `grants` module computes (Windows, Program Files, what is on
+//! `PATH`, where toolchains install themselves, what the person or an
+//! administrator added) and what the sandbox lets through inside a hidden
+//! folder. Credentials inside a grant are denied by name. Every
 //! folder on the way to a grant is listed, not read, so that paths
 //! resolve. The network is shut, open, or the proxy's alone, which the
 //! container reaches only in the proxy's own app container (see
@@ -427,69 +428,6 @@ fn beside_the_way(
     beside
 }
 
-/// Where the person's tools are, readable to every command: Windows and
-/// the program folders, what is on `PATH` and the folders toolchains and
-/// package managers install themselves in. Nothing that holds the home
-/// itself.
-fn tool_roots() -> Vec<PathBuf> {
-    let var = |name: &str| std::env::var_os(name).map(PathBuf::from);
-    let mut roots: Vec<PathBuf> = [
-        "SystemRoot",
-        "ProgramFiles",
-        "ProgramFiles(x86)",
-        "ProgramW6432",
-        "ProgramData",
-    ]
-    .into_iter()
-    .filter_map(var)
-    .collect();
-    if let Some(home) = crate::osfs::person_home() {
-        for rel in [
-            ".cargo", ".rustup", ".dotnet", ".bun", ".deno", ".pyenv", "scoop", "go",
-        ] {
-            roots.push(home.join(rel));
-        }
-    }
-    if let Some(local) = var("LOCALAPPDATA") {
-        for rel in [
-            "Programs",
-            "Microsoft\\WindowsApps",
-            "Microsoft\\WinGet",
-            "pnpm",
-            "Yarn",
-            "pip",
-            "uv",
-            "nvm",
-            "Volta",
-            "fnm_multishells",
-        ] {
-            roots.push(local.join(rel));
-        }
-    }
-    if let Some(roaming) = var("APPDATA") {
-        for rel in ["npm", "nvm", "uv", "Python"] {
-            roots.push(roaming.join(rel));
-        }
-    }
-    if let Some(data) = var("ProgramData") {
-        roots.push(data.join("chocolatey"));
-    }
-    roots.extend(super::tools_from_env());
-    let home = crate::osfs::person_home();
-    roots.retain(|r| {
-        r.is_absolute()
-            && r.parent().is_some()
-            && r.is_dir()
-            && !home.as_deref().is_some_and(|h| h.starts_with(r))
-    });
-    roots.sort();
-    roots.dedup();
-    // One inside another is the other's.
-    let all = roots.clone();
-    roots.retain(|r| !all.iter().any(|o| o != r && r.starts_with(o)));
-    roots
-}
-
 impl Sandbox {
     /// The container for `program` with `args`, from what this sandbox
     /// grants and hides (see the module's notes).
@@ -506,11 +444,8 @@ impl Sandbox {
     ) -> Result<Container> {
         let mut readwrite: Vec<PathBuf> = self.writable().into_iter().map(Path::to_owned).collect();
         readwrite.extend(self.layer.iter().cloned());
-        let mut readonly: Vec<PathBuf> = self.see_through.clone();
+        let mut readonly: Vec<PathBuf> = self.readable();
         readonly.extend(also.map(Path::to_owned));
-        readonly.extend(self.protected.iter().cloned());
-        readonly.extend(self.beside_links.iter().cloned());
-        readonly.extend(tool_roots());
         // A grant that is not there grants nothing, and may be refused.
         readonly.retain(|p| p.exists());
         readwrite.sort();

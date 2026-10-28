@@ -1,5 +1,100 @@
 # Changes
 
+## Unreleased
+
+A task's commands now read nothing but what is granted, on macOS and Linux
+as on Windows: the task's own folders, the system's base, your toolchains
+and the folders you add with the new `kule tools`. Everything else, your
+home included, is simply not there for them. At the top of your home only
+what shells and toolchains read is in the commands' home; pip's and uv's
+index settings are cloned with their tokens masked.
+
+### Security
+
+- Reads are granted, never assumed (#46 follow-up). On macOS and Linux a
+  task's commands could read any file the sandbox did not hide by name:
+  credentials outside the home that a variable pointed a tool to, and the
+  settings files of tools at the top of the home, some of which hold tokens.
+  Now, as on Windows, a command reads only the roots Kule grants: the
+  task's copy, its temporary folder and home layer; the operating system's
+  programs, libraries and settings (`/etc` whole, but for a few credential
+  files denied by name); where `PATH` and the SDK variables say your tools
+  are; where toolchains keep their own files in your home (`~/.cargo`,
+  `~/.m2`, …); and what you or an administrator add. Every source goes
+  through one validator that refuses a path that would weaken Kule (your
+  home or a folder above it, another person's home, Kule's home, a
+  credential folder, your own folders, where apps keep data, the root of a
+  disk, a first-level system folder, what a task writes), on the resolved
+  path, before every run.
+- At the top of your home only what shells and toolchains read is in the
+  commands' home: startup files and known settings files are cloned (and
+  masked), toolchains' folders are linked, and every other entry starting
+  with a dot is not there at all, so a tool finds nothing rather than a
+  refusal. The real file stays out of reach.
+- pip's and uv's index settings (`~/.config/pip/pip.conf`, `~/.pip/pip.conf`,
+  `~/Library/Application Support/pip/pip.conf`, `~/.config/uv/uv.toml`,
+  `~/.pydistutils.cfg`) are cloned into the commands' home with the token
+  in an index URL masked by a placeholder the proxy fills in, and the real
+  files hidden. In `/etc`, `pip.conf`, `xdg/pip/pip.conf`,
+  `docker/config.json`, `rclone.conf`, `samba/smb.conf`, `environment` and
+  `profile.d` are denied by name.
+- NuGet's settings folder (`~/.nuget/NuGet`), which can hold feed
+  credentials, is not there for a command, which finds no file rather than
+  a refusal NuGet stops at; NuGet makes its own settings in the commands'
+  home, and your packages beside it are read as before.
+- `kule exec --reveal` goes through the same validator: your home, the root
+  of a disk and the other refused paths open for no one command, and the
+  command is refused with why.
+
+### Added
+
+- `kule tools list|add|remove`: every root a task's commands may read, with
+  its source (`task`, `system`, `env`, `tool`, `person`, `admin`), what was
+  named but refused and why, and a way to let every task read a folder of
+  tools Kule does not know, read-only. An administrator can name folders
+  for every task in `/etc/kule/tools.toml` (Linux),
+  `/Library/Application Support/Kule/tools.toml` (macOS) or
+  `%ProgramData%\Kule\tools.toml` (Windows); the file is read only while
+  root owns it and its folder and no one else can write them.
+- A refused read is listed by the run with what to do: the folder to add
+  with `kule tools add`, taken from Kule's own record of the refusal.
+- `kule exec --trace` (Linux): runs the command under `strace` from outside
+  its sandbox and lists the files the sandbox refused it, since Linux does
+  not report refusals itself.
+- `kule isolation` says that commands read only what is granted.
+- Gradle and Maven get caches of the task's own, as the other package
+  managers do: `GRADLE_USER_HOME` under the task's tmp (Gradle cannot start
+  in a read-only user home), and Maven's local repository there through
+  `MAVEN_OPTS`.
+- JVMs reach the registries: Java reads none of the `*_PROXY` variables,
+  so `JAVA_TOOL_OPTIONS` points every JVM (Gradle, sbt) at the task's
+  proxy, and Maven, which reads proxies from its settings alone, gets a
+  settings file naming it in `MAVEN_ARGS`. Before, Maven and Gradle
+  resolved names themselves and reached nothing. Java and .NET go to the
+  proxy over IPv4: through the IPv6 socket both open by default, the macOS
+  sandbox does not take 127.0.0.1 for loopback and refused them.
+- NuGet restores on macOS: its one-time migration of the person's caches
+  takes a mutex in `/tmp`, where a task does not write, and failed every
+  restore; the commands' home now carries the marker that says the
+  migration ran (the caches are the task's own anyway), as Kule's, never
+  offered as a change of your home.
+- Linux: a task's programs connect to the task's own servers. In the task's
+  network namespace nothing listens but them and the proxy's relay, so the
+  TCP rule that kept connections to the proxy's port alone (and so kept
+  Gradle's client from its daemon, and tests from a server beside them) is
+  only for a task that shares this computer's network (weaker isolation).
+- A command that inherits Kule's standard input, output or errors as a file
+  (a log you redirect to) may read that file's facts, nothing more:
+  Python asks for its output's as it starts, and ran without one when
+  refused.
+- A refused read of a file's facts (a probe) lists no folder to add; a
+  refused read of its contents does.
+- The release gate's project check runs a project per toolchain in a task,
+  not only ripgrep and commander: itsdangerous from PyPI, a Maven project
+  with JUnit from Maven Central, a Go module, and on Linux a Gradle project
+  and an xUnit project from NuGet, so that what each toolchain reads is
+  checked against the grants on every change and before every release.
+
 ## 0.2.0-preview.17
 
 A security preview. A value Kule masks in a task's settings files that the

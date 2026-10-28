@@ -103,9 +103,10 @@ fn projects_kule_opened_are_hidden_from_every_other_task() {
 
 #[cfg(unix)]
 /// Whatever lies at the top of the home but its settings is the person's
-/// own: a project Kule never opened, a file. The settings and toolchains
-/// there stay readable, the tools on `PATH` in such a folder too, and a
-/// link at the top leads where it leads.
+/// own: a project Kule never opened, a file. The toolchains' own folders
+/// and settings there stay readable, the tools on `PATH` in such a folder
+/// too; a link at the top leads where it leads, which is readable only
+/// where that is granted.
 #[test]
 fn what_lies_at_the_top_of_the_home_is_the_persons_own() {
     let (_home, home) = home_with(&[
@@ -122,24 +123,21 @@ fn what_lies_at_the_top_of_the_home_is_the_persons_own() {
     plant(&elsewhere.join("cellar/tool"));
     std::os::unix::fs::symlink(&elsewhere, home.join("brew")).unwrap();
     let s = Setup::new();
+    let tools = [home.join("sdk/tool/bin")];
     let mut sandbox = Sandbox::new(&s.task).unwrap();
-    sandbox
-        .hide_personal(&home, &[home.join("sdk/tool/bin")])
-        .unwrap();
+    sandbox.hide_personal(&home, &tools).unwrap();
+    sandbox.grant_env(&tools, Some(&home));
+    sandbox.grant_defaults(&home);
     for path in [
         "projects/never-opened/.env",
         "notes.txt",
         "Applications/Some.app/token",
         "sdk/other/secret",
+        "brew/cellar/tool",
     ] {
         assert!(!reads(&sandbox, &home.join(path)), "{path} was read");
     }
-    for path in [
-        ".gitconfig",
-        ".rustup/settings.toml",
-        "sdk/tool/bin/tool",
-        "brew/cellar/tool",
-    ] {
+    for path in [".gitconfig", ".rustup/settings.toml", "sdk/tool/bin/tool"] {
         assert!(reads(&sandbox, &home.join(path)), "{path} was not read");
     }
 }
@@ -257,6 +255,7 @@ fn a_tool_linked_from_path_into_app_data_runs() {
     sandbox
         .hide_settings(&home, std::slice::from_ref(&bin))
         .unwrap();
+    sandbox.grant_env(std::slice::from_ref(&bin), Some(&home));
     let out = sh(&sandbox, &format!("'{}'", bin.join("a-tool").display()));
     assert!(out.status.success(), "{out:?}");
     assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "ran");
@@ -316,7 +315,7 @@ fn the_home_layer_holds_only_settings_the_sandbox_shows() {
     let s = Setup::new();
     let mut sandbox = Sandbox::for_task_with(&s.task, Some(sources(&home))).unwrap();
     s.task
-        .prepare_home(&home, &[], sandbox.hidden(), sandbox.shown(), &[])
+        .prepare_home(&home, &[], sandbox.hidden(), &sandbox.shown(), &[])
         .unwrap();
     sandbox.use_home(&s.task, &home).unwrap();
     let out = sh(
@@ -360,6 +359,171 @@ fn the_home_layer_holds_only_settings_the_sandbox_shows() {
         fs::read_to_string(home.join(".config/some-new-tool/token")).unwrap(),
         "canary\n"
     );
+}
+
+/// At the top of the home only what toolchains and shells read is there
+/// for a command: a toolchain's folder is linked, a startup file cloned,
+/// and any other dot entry (a tool's settings that may hold a token) is
+/// simply not in the commands' home, nor readable where it really is.
+/// Package index settings are cloned with their tokens masked.
+#[test]
+fn only_what_toolchains_read_is_in_the_commands_home() {
+    let (_home, home) = home_with(&[
+        ".condarc",
+        ".terraformrc",
+        ".composer/auth.json",
+        ".cargo/config.toml",
+        ".zshrc",
+        ".m2/settings.xml",
+        ".m2/toolchains.xml",
+        ".nuget/NuGet/NuGet.Config",
+        ".nuget/packages/newtonsoft.json/13.0.3/lib/net6.0/Newtonsoft.Json.dll",
+    ]);
+    let token = "ghp_1234567890abcdefghijklmnopqrstuvwxyz";
+    for conf in [".config/pip/pip.conf", ".pip/pip.conf"] {
+        plant(&home.join(conf));
+        fs::write(
+            home.join(conf),
+            format!(
+                "[global]\nindex-url = https://me:{token}@pypi.example.com/simple\ntimeout = 60\n"
+            ),
+        )
+        .unwrap();
+    }
+    fs::write(
+        home.join(".pydistutils.cfg"),
+        format!("[easy_install]\nindex_url = https://me:{token}@pypi.example.com/simple\n"),
+    )
+    .unwrap();
+    fs::write(
+        home.join(".config/uv/uv.toml"),
+        format!("index-url = \"https://me:{token}@pypi.example.com/simple\"\n"),
+    )
+    .map_or_else(
+        |_| {
+            fs::create_dir_all(home.join(".config/uv")).unwrap();
+            fs::write(
+                home.join(".config/uv/uv.toml"),
+                format!("index-url = \"https://me:{token}@pypi.example.com/simple\"\n"),
+            )
+            .unwrap();
+        },
+        |_| {},
+    );
+    let s = Setup::new();
+    let mut sandbox = Sandbox::for_task_with(&s.task, Some(sources(&home))).unwrap();
+    s.task
+        .prepare_home(&home, &[], sandbox.hidden(), &sandbox.shown(), &[])
+        .unwrap();
+    sandbox.use_home(&s.task, &home).unwrap();
+    let layer = s.task.home_layer();
+    // Not there, not refused: as if the person had none.
+    for gone in [".condarc", ".terraformrc", ".composer/auth.json"] {
+        assert!(
+            fs::symlink_metadata(layer.join(gone)).is_err(),
+            "{gone} is in the layer"
+        );
+        let out = sh(&sandbox, &format!("cat \"$HOME/{gone}\""));
+        let said = String::from_utf8_lossy(&out.stderr);
+        assert!(said.contains("No such file"), "{gone}: {out:?}");
+        assert!(
+            !reads(&sandbox, &home.join(gone)),
+            "{gone} was read where it is"
+        );
+    }
+    // What toolchains read is there: linked, or cloned. A credential file
+    // inside a linked folder is refused as ever.
+    for there in [".cargo/config.toml", ".zshrc", ".m2/toolchains.xml"] {
+        let out = sh(&sandbox, &format!("cat \"$HOME/{there}\""));
+        assert!(out.status.success(), "{there}: {out:?}");
+    }
+    let out = sh(&sandbox, "cat \"$HOME/.m2/settings.xml\"");
+    assert!(!out.status.success() && out.stdout.is_empty(), "{out:?}");
+    // NuGet's settings can hold feed credentials and NuGet stops at a file
+    // it may not read: not there, so NuGet makes its own; its packages are.
+    let out = sh(&sandbox, "cat \"$HOME/.nuget/NuGet/NuGet.Config\"");
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("No such file"),
+        "{out:?}"
+    );
+    let out = sh(
+        &sandbox,
+        "cat \"$HOME/.nuget/packages/newtonsoft.json/13.0.3/lib/net6.0/Newtonsoft.Json.dll\"",
+    );
+    assert!(out.status.success(), "{out:?}");
+    // Index settings: masked in the layer, hidden where they are.
+    for conf in [
+        ".config/pip/pip.conf",
+        ".pip/pip.conf",
+        ".pydistutils.cfg",
+        ".config/uv/uv.toml",
+    ] {
+        let out = sh(&sandbox, &format!("cat \"$HOME/{conf}\""));
+        assert!(out.status.success(), "{conf}: {out:?}");
+        let text = String::from_utf8_lossy(&out.stdout);
+        assert!(!text.contains(token), "{conf} shows the token: {text}");
+        assert!(
+            text.contains("pypi.example.com"),
+            "{conf} lost its URL: {text}"
+        );
+        let out = sh(&sandbox, &format!("cat '{}'", home.join(conf).display()));
+        assert!(!out.status.success(), "{conf} was read where it is");
+    }
+}
+
+/// Escape attempt (#46): a file outside every grant, where a tool was
+/// pointed by a variable or a setting (`/opt/creds/aws`, a folder beside
+/// the home), read outside Kule first, then from a task: with reads
+/// granted rather than assumed, nothing outside the grants is readable,
+/// hidden list or not, by its path or through a link made in the copy.
+#[test]
+fn escape_reads_a_file_outside_every_grant() {
+    let (_home, home) = home_with(&[".zshrc"]);
+    let outside = TempDir::new_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
+    let outside = fs::canonicalize(outside.path()).unwrap();
+    let creds = outside.join("creds/aws");
+    plant(&creds);
+    // Outside Kule the file reads as any other.
+    let out = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(format!("cat '{}'", creds.display()))
+        .output()
+        .unwrap();
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "canary\n");
+    let s = Setup::new();
+    let sandbox = Sandbox::for_task_with(&s.task, Some(sources(&home))).unwrap();
+    assert!(!reads(&sandbox, &creds), "read by its path");
+    let out = sh(
+        &sandbox,
+        &format!(
+            "ln -s '{}' creds-link && cat creds-link; ln -s '{}' creds-dir && cat creds-dir/aws; cat \"$(dirname '{}')\"/*",
+            creds.display(),
+            creds.parent().unwrap().display(),
+            creds.display()
+        ),
+    );
+    assert!(
+        !String::from_utf8_lossy(&out.stdout).contains("canary"),
+        "{out:?}"
+    );
+    // Listed with its source once the person grants it, read-only; the
+    // folder above the home is refused however it is named.
+    let mut sandbox = Sandbox::for_task_with(&s.task, Some(sources(&home))).unwrap();
+    sandbox.reveal(creds.parent().unwrap()).unwrap();
+    assert!(reads(&sandbox, &creds));
+    assert!(
+        !sh(&sandbox, &format!("echo x > '{}'", creds.display()))
+            .status
+            .success()
+    );
+    assert!(
+        sandbox
+            .grants()
+            .iter()
+            .any(|g| g.path == creds.parent().unwrap() && g.source == kule_engine::Source::Revealed)
+    );
+    let mut sandbox = Sandbox::for_task_with(&s.task, Some(sources(&home))).unwrap();
+    assert!(sandbox.reveal(home.parent().unwrap()).is_err());
 }
 
 /// On macOS a program reads preferences through the system's preferences

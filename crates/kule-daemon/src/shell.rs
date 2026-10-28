@@ -122,7 +122,7 @@ pub fn sandbox(home: &Path, task: &Task) -> Result<Sandbox> {
             .map_err(text)?
             .hide_agents(&mut sandbox, person)
             .map_err(text)?;
-        task.prepare_home(person, &[], sandbox.hidden(), sandbox.shown(), &[])
+        task.prepare_home(person, &[], sandbox.hidden(), &sandbox.shown(), &[])
             .map_err(text)?;
         sandbox.use_home(task, person).map_err(text)?;
     }

@@ -6,12 +6,17 @@
 //! inherit all of it. When the sandbox cannot be set up, nothing runs: there
 //! is no silent fallback to running unsandboxed.
 //!
+//! Reads are granted, never assumed: a command reads nothing but the roots
+//! the `grants` module computes (the task's own folders, the system's base,
+//! the person's tools and what they or an administrator added), with
+//! credentials inside a grant denied by name. Every folder on the way to a
+//! grant is listed, not read, so paths resolve.
+//!
 //! macOS uses Seatbelt (`sandbox-exec`), Linux uses Landlock. Both need real
 //! paths: Seatbelt matches resolved paths, and Landlock works on file
 //! descriptors, so a symlink in the copy cannot lead a write outside it.
-//! Windows uses a process container (see the `windows` module here), which
-//! grants paths rather than hiding them; a command is started through
-//! [`Start`] on every platform.
+//! Windows uses a process container (see the `windows` module here); a
+//! command is started through [`Start`] on every platform.
 
 mod start;
 #[cfg(windows)]
@@ -29,6 +34,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::caches::{self, Sources};
 use crate::error::{Error, IoContext, Result};
+use crate::grants::{self, Access, Bounds, Grant, Refused, Source};
 use crate::protect::{Kept, PutBack};
 use crate::task::{CACHES_LOCK, Task};
 
@@ -174,7 +180,7 @@ pub(crate) fn personal_folders(workspace: &Path, home: &Path) -> Result<Vec<Path
 /// Where the person's tools are, as the variables passed to commands name
 /// them: each `PATH` entry, and the others that hold a path (`JAVA_HOME`,
 /// `GOROOT`, …).
-fn tools_from_env() -> Vec<PathBuf> {
+pub(crate) fn tools_from_env() -> Vec<PathBuf> {
     let mut tools: Vec<PathBuf> = std::env::var_os("PATH")
         .map(|path| std::env::split_paths(&path).collect())
         .unwrap_or_default();
@@ -296,7 +302,7 @@ pub const HIDDEN_IN_HOME: &[&str] = &[
     "Library/Application Support/pypoetry/auth.toml",
     ".yarnrc.yml",
     ".bunfig.toml",
-    ".nuget/NuGet/NuGet.Config",
+    ".nuget/NuGet",
     // What the person typed, in shells and other tools.
     ".zsh_history",
     ".zsh_sessions",
@@ -440,7 +446,7 @@ pub const HIDDEN_IN_HOME: &[&str] = &[
     ".config/gh",
     ".cargo/credentials.toml",
     ".cargo/credentials",
-    ".nuget/NuGet/NuGet.Config",
+    ".nuget/NuGet",
     ".terraform.d/credentials.tfrc.json",
     ".m2/settings.xml",
     ".gradle/gradle.properties",
@@ -527,8 +533,10 @@ const OUTSIDE_SERVICES: &[&str] = &[
 
 /// What every sandboxed command may do on macOS, on top of nothing: the
 /// profile starts from `(deny default)`. Processes and signals within the
-/// sandbox; reading files (what is hidden is taken away after); the system
-/// facts and services that toolchains need. Writes, the network and the GPU
+/// sandbox; the devices every program opens, and the links at the root
+/// (`/etc`, `/tmp`, `/var`) and the data volume's root, to resolve paths
+/// through (files are read only where granted, see `seatbelt_profile`);
+/// the system facts and services that toolchains need. Writes, the network and the GPU
 /// are allowed after it, each as narrowly as the task needs.
 ///
 /// Shared memory goes by name, and any process of the person's may hold a
@@ -541,7 +549,14 @@ const OUTSIDE_SERVICES: &[&str] = &[
 const SEATBELT_BASE: &str = r#"(allow process-exec process-fork)
 (allow signal (target same-sandbox))
 (allow process-info* (target same-sandbox))
-(allow file-read* file-map-executable file-ioctl)
+(allow file-map-executable file-ioctl)
+(allow file-read*
+  (literal "/dev/null") (literal "/dev/zero") (literal "/dev/random") (literal "/dev/urandom")
+  (literal "/dev/tty") (literal "/dev/ptmx") (literal "/dev/autofs_nowait") (literal "/dev/dtracehelper")
+  (literal "/dev/stdin") (literal "/dev/stdout") (literal "/dev/stderr") (regex #"^/dev/fd/"))
+(allow file-read-metadata file-read-data (literal "/dev") (literal "/dev/fd"))
+(allow file-read* (literal "/etc") (literal "/tmp") (literal "/var"))
+(allow file-read-metadata (literal "/System/Volumes/Data"))
 (allow system-fsctl)
 (allow system-socket)
 (allow network*)
@@ -635,6 +650,13 @@ pub struct Sandbox {
     see_through: Vec<PathBuf>,
     /// The folders hidden as the person's own, among `hidden`.
     personal: Vec<PathBuf>,
+    /// What commands may read beyond the task's own folders: each root
+    /// with who named it (see [`crate::grants`]). What is hidden inside
+    /// one stays hidden.
+    granted: Vec<Grant>,
+    /// What a source named that the validator refused, and why: shown
+    /// with the grants, never granted.
+    refused_grants: Vec<(PathBuf, Source, Refused)>,
     /// Where apps and tools keep settings and data, among `hidden` (see
     /// [`Sandbox::hide_settings`]): a writable root inside one, such as an
     /// agent's home of its own in Kule's folder there, stays writable.
@@ -904,11 +926,110 @@ fn hint(operation: &str, path: &str) -> Option<String> {
              there. Write under $TMPDIR, the task's own temporary directory."
                 .to_owned(),
         ),
+        // A read of a file's contents, not of its facts: programs probe
+        // what lies around them (every app, each folder on a way up) and
+        // work without an answer; one that needs the file reads it next.
+        ("file-read-data", path) if path.starts_with('/') => Some(read_hint(path)),
         _ => None,
     }
 }
 
 /// Where the hints of a run's refusals wait for the agent's next prompt.
+/// What a person can do about a read the sandbox refused at `path`: a
+/// task's commands read only what is granted, so a tool that needs the
+/// folder is given it with `kule tools add`, by the person, for every task;
+/// the validator refuses a folder that would weaken Kule. The suggestion
+/// names the folder the path is in, taken from Kule's own record of the
+/// refusal, never from what a command printed.
+pub(crate) fn read_hint(path: &str) -> String {
+    let folder = match std::fs::symlink_metadata(path) {
+        Ok(m) if m.is_dir() => path.to_owned(),
+        _ => Path::new(path)
+            .parent()
+            .map_or_else(|| path.to_owned(), |p| p.display().to_string()),
+    };
+    format!(
+        "A task's commands read only what is granted (kule tools list). If a tool \
+         needs this, `kule tools add '{folder}'` lets every task read that folder, \
+         never write it; Kule refuses a folder that would weaken it (your home, a \
+         credential folder, Kule's own)."
+    )
+}
+
+/// The refusals in `text`, the output of `strace -f -e trace=%file` run
+/// around a command from outside its sandbox (Linux, `kule exec --trace`):
+/// each file call that failed with `EACCES` or `EPERM`, as a [`Denial`]
+/// with the process's id, whether it read or wrote, and the path. Linux
+/// reports no refusals itself; this is Kule's own record of them, taken
+/// from the kernel's answers, never from what the command printed.
+pub fn traced_denials(text: &str) -> Vec<Denial> {
+    let mut denials: Vec<Denial> = Vec::new();
+    for line in text.lines() {
+        let Some((head, result)) = line.rsplit_once(" = -1 ") else {
+            continue;
+        };
+        if !(result.starts_with("EACCES") || result.starts_with("EPERM")) {
+            continue;
+        }
+        let (pid, call) = match head.split_once(' ') {
+            Some((pid, call)) if pid.bytes().all(|b| b.is_ascii_digit()) => (pid, call.trim()),
+            _ => ("?", head.trim()),
+        };
+        let Some((name, args)) = call.split_once('(') else {
+            continue;
+        };
+        let Some(start) = args.find('"') else {
+            continue;
+        };
+        let Some(len) = args[start + 1..].find('"') else {
+            continue;
+        };
+        let path = &args[start + 1..start + 1 + len];
+        if !path.starts_with('/') {
+            continue;
+        }
+        let writes = matches!(
+            name,
+            "mkdir"
+                | "mkdirat"
+                | "unlink"
+                | "unlinkat"
+                | "rename"
+                | "renameat"
+                | "renameat2"
+                | "rmdir"
+                | "chmod"
+                | "fchmodat"
+                | "chown"
+                | "fchownat"
+                | "link"
+                | "linkat"
+                | "symlink"
+                | "symlinkat"
+                | "truncate"
+                | "creat"
+                | "mknod"
+                | "mknodat"
+                | "utimensat"
+        ) || (name.starts_with("open")
+            && ["O_WRONLY", "O_RDWR", "O_CREAT", "O_TRUNC"]
+                .iter()
+                .any(|flag| args.contains(flag)));
+        let operation = if writes { "write" } else { "read" };
+        let denial = Denial {
+            process: format!("pid {pid}"),
+            operation: operation.to_owned(),
+            path: path.to_owned(),
+            saved: None,
+            hint: (!writes).then(|| read_hint(path)),
+        };
+        if !denials.contains(&denial) {
+            denials.push(denial);
+        }
+    }
+    denials
+}
+
 const HINTS_FILE: &str = "refused-hints.json";
 
 impl Denial {
@@ -935,7 +1056,7 @@ impl Sandbox {
         let mut bytes = [0u8; 8];
         crate::osfs::random_bytes(&mut bytes).at(Path::new("random"))?;
         let own: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
-        Ok(Sandbox {
+        let mut sandbox = Sandbox {
             copy: real(&task.copy())?,
             tmp: real(&tmp)?,
             writable: Vec::new(),
@@ -950,6 +1071,8 @@ impl Sandbox {
             ],
             see_through: Vec::new(),
             personal: Vec::new(),
+            granted: Vec::new(),
+            refused_grants: Vec::new(),
             stores: Vec::new(),
             beside_links: Vec::new(),
             workspace: real_or_planned(task.workspace())?,
@@ -974,7 +1097,165 @@ impl Sandbox {
             terminal: None,
             #[cfg(target_os = "macos")]
             watch: Default::default(),
-        })
+        };
+        // The system's base: what every command needs to run at all, with
+        // the credential files a person can read in `/etc` denied by name.
+        let bounds = sandbox.bounds(None);
+        sandbox.add_grants(grants::system_roots(), Source::System, &bounds);
+        #[cfg(unix)]
+        for name in grants::ETC_HIDDEN {
+            sandbox.hide(&Path::new("/etc").join(name))?;
+        }
+        Ok(sandbox)
+    }
+
+    /// The person's tools, granted: where the variables passed to commands
+    /// say they are (`PATH`, an SDK's home), where toolchains keep their
+    /// own files in `home` by default, what the person added with `kule
+    /// tools add` (in Kule's home `kule_home`) and what the administrator's
+    /// file names. Each through the validator; what it refuses is kept to
+    /// be shown, never granted. Called once the hidden paths are known, so
+    /// the validator holds each root against them.
+    pub fn grant_tools(&mut self, kule_home: &Path, home: Option<&Path>) -> Result<()> {
+        let home = home.map(real_or_planned).transpose()?;
+        self.grant_env(&tools_from_env(), home.as_deref());
+        if let Some(home) = &home {
+            self.grant_defaults(home);
+        }
+        let bounds = self.bounds(home.as_deref());
+        let person: Vec<PathBuf> = crate::tools::tools(kule_home)?
+            .into_iter()
+            .map(|t| t.path)
+            .collect();
+        self.add_grants(person, Source::Person, &bounds);
+        self.add_grants(crate::tools::admin_tools().paths, Source::Admin, &bounds);
+        Ok(())
+    }
+
+    /// Grants where `tools` (the folders `PATH` and the SDK variables
+    /// name) say the person's tools are: each entry, a tool's root above
+    /// its `bin` outside `home`, and the folder a program in one leads to
+    /// where it is a link into `home`.
+    pub fn grant_env(&mut self, tools: &[PathBuf], home: Option<&Path>) {
+        let bounds = self.bounds(home);
+        let mut from_env: Vec<PathBuf> = tools
+            .iter()
+            .flat_map(|t| grants::path_roots(t, home))
+            .collect();
+        if let Some(home) = home {
+            from_env.extend(linked_tools(&tool_dirs(tools, home), home));
+        }
+        self.add_grants(from_env, Source::Env, &bounds);
+        // A `PATH` entry's root that is refused while the entry itself is
+        // granted (`/usr/bin` under `/usr`) is nothing to tell.
+        let granted: Vec<PathBuf> = self.granted.iter().map(|g| g.path.clone()).collect();
+        self.refused_grants.retain(|(path, source, _)| {
+            *source != Source::Env || !granted.iter().any(|g| g.starts_with(path) && g != path)
+        });
+    }
+
+    /// Grants where toolchains keep their own files in `home` by default
+    /// (see [`grants::tool_defaults`]).
+    pub fn grant_defaults(&mut self, home: &Path) {
+        let bounds = self.bounds(Some(home));
+        self.add_grants(grants::tool_defaults(home), Source::ToolDefault, &bounds);
+    }
+
+    /// Grants each of `roots` the validator lets through for `source`,
+    /// read-only, and keeps the rest with why.
+    fn add_grants(&mut self, roots: Vec<PathBuf>, source: Source, bounds: &Bounds) {
+        let (granted, refused) = grants::granted(roots, source, bounds);
+        for grant in granted {
+            if !self.granted.iter().any(|g| g.path == grant.path) {
+                self.granted.push(grant);
+            }
+        }
+        self.refused_grants
+            .extend(refused.into_iter().map(|(p, why)| (p, source, why)));
+    }
+
+    /// What the validator holds a grant against here: Kule's homes (the
+    /// task's, and the default one in `home`), the person's `home`, what is
+    /// hidden as a credential or Kule's own (not the person's folders and
+    /// stores, which are held apart: a tool's folder inside one is fine),
+    /// those folders and stores themselves, and what the task writes.
+    fn bounds(&self, home: Option<&Path>) -> Bounds {
+        let mut kule_homes = vec![self.hidden[0].clone()];
+        if let Some(home) = home {
+            kule_homes.push(home.join(".kule"));
+        }
+        Bounds {
+            kule_homes,
+            home: home.map(Path::to_owned),
+            hidden: self
+                .hidden
+                .iter()
+                .filter(|h| !self.personal.contains(h) && !self.stores.contains(h))
+                .cloned()
+                .collect(),
+            personal: self.personal.clone(),
+            stores: self.stores.clone(),
+            writable: self
+                .writable()
+                .into_iter()
+                .map(Path::to_owned)
+                .chain(self.layer.clone())
+                .collect(),
+        }
+    }
+
+    /// Every path a command may reach beyond the system's base and the
+    /// task's own folders, how far, and who named it: the grants, the
+    /// task's writable folders, what `kule reveal` and the person's own
+    /// folders let through, and what is hidden by name inside a grant.
+    pub fn grants(&self) -> Vec<Grant> {
+        let mut all: Vec<Grant> = self
+            .writable()
+            .into_iter()
+            .chain(self.layer.as_deref())
+            .map(|p| Grant {
+                path: p.to_owned(),
+                access: Access::ReadWrite,
+                source: Source::Task,
+            })
+            .collect();
+        all.extend(self.granted.iter().cloned());
+        all.extend(self.see_through.iter().map(|p| Grant {
+            path: p.clone(),
+            access: Access::Read,
+            source: Source::Beside,
+        }));
+        let roots: Vec<PathBuf> = all.iter().map(|g| g.path.clone()).collect();
+        all.extend(
+            self.hidden
+                .iter()
+                .filter(|h| roots.iter().any(|r| h.starts_with(r) && *h != r))
+                .map(|h| Grant {
+                    path: h.clone(),
+                    access: Access::Denied,
+                    source: Source::Hidden,
+                }),
+        );
+        all
+    }
+
+    /// What a source named that is not granted, with who named it and why.
+    pub fn refused_grants(&self) -> &[(PathBuf, Source, Refused)] {
+        &self.refused_grants
+    }
+
+    /// Every root a command may read beyond its writable folders: the
+    /// grants, what is let through inside the person's folders, the
+    /// protected paths and the links beside the copy. Sorted, no two the
+    /// same.
+    pub fn readable(&self) -> Vec<PathBuf> {
+        let mut roots: Vec<PathBuf> = self.granted.iter().map(|g| g.path.clone()).collect();
+        roots.extend(self.see_through.iter().cloned());
+        roots.extend(self.protected.iter().cloned());
+        roots.extend(self.beside_links.iter().cloned());
+        roots.sort();
+        roots.dedup();
+        roots
     }
 
     /// What the sandbox refused the commands it ran within the last
@@ -1016,7 +1297,7 @@ impl Sandbox {
         if cfg!(target_os = "linux") && tmp.is_dir() {
             sandbox.allow_write(tmp)?;
         }
-        if let Some(sources) = sources {
+        if let Some(sources) = &sources {
             for secret in HIDDEN_IN_HOME {
                 sandbox.hide(&sources.home.join(secret))?;
             }
@@ -1051,14 +1332,25 @@ impl Sandbox {
                     opened.push(path);
                 }
             }
-            sandbox.beside_links = crate::beside::place_links(task, &workspace, &opened)?;
-            sandbox.use_task_caches(&sources)?;
+            // Resolved where they lie, as every path the sandbox matches
+            // is: the links themselves are what commands read (realpath).
+            sandbox.beside_links = crate::beside::place_links(task, &workspace, &opened)?
+                .iter()
+                .map(|link| here(link))
+                .collect::<Result<_>>()?;
+            sandbox.use_task_caches(sources)?;
             // Only a disk limit needs them measured, and a walk through a
             // person's package caches takes long.
             if limits.disk_mb.is_some() {
                 task.note_caches_made(&sandbox.tmp.join("caches"))?;
             }
         }
+        // Last, once everything hidden is known.
+        let home = sources
+            .as_ref()
+            .map(|s| s.home.clone())
+            .or_else(crate::osfs::person_home);
+        sandbox.grant_tools(&task.home(), home.as_deref())?;
         Ok(sandbox)
     }
 
@@ -1403,11 +1695,26 @@ impl Sandbox {
         if revealed && here.ends_with("Library/Keychains") {
             self.keychain = true;
         }
-        // Windows grants rather than hides: a path that was not hidden is
-        // not readable either until it is granted, read-only.
-        #[cfg(windows)]
-        if !revealed && !self.see_through.contains(&here) {
-            self.see_through.push(here);
+        // Inside what the command writes already: nothing to grant.
+        if !revealed && self.writable().iter().any(|w| here.starts_with(w)) {
+            return Ok(());
+        }
+        // Reads are granted, not assumed: what was hidden is now readable,
+        // and what was not hidden is not readable either until granted.
+        // The second goes through the validator, as every grant does: the
+        // root of a disk or the home itself opens for no one command.
+        if !revealed {
+            let bounds = self.bounds(crate::osfs::person_home().as_deref());
+            grants::validate(&here, Source::Revealed, &bounds).map_err(|why| {
+                Error::Invalid(format!("{} cannot be revealed: {why}", path.display()))
+            })?;
+        }
+        if !self.granted.iter().any(|g| g.path == here) {
+            self.granted.push(Grant {
+                path: here,
+                access: Access::Read,
+                source: Source::Revealed,
+            });
         }
         Ok(())
     }
@@ -1496,11 +1803,11 @@ impl Sandbox {
         &self.hidden
     }
 
-    /// What commands may read inside hidden paths (see
-    /// [`Sandbox::hide_personal`]): the home layer holds these of the
-    /// person's settings it would otherwise leave out.
-    pub fn shown(&self) -> &[PathBuf] {
-        &self.see_through
+    /// What commands may read beyond the task's own folders (see
+    /// [`Sandbox::readable`]): the home layer holds these of the person's
+    /// entries, and nothing else of the home.
+    pub fn shown(&self) -> Vec<PathBuf> {
+        self.readable()
     }
 
     /// Ends what still runs in this sandbox: a process that left its
@@ -2045,6 +2352,46 @@ impl Sandbox {
             // Node's built-in fetch ignores the variables above unless told
             // to (Node 24+); without the proxy its connections just fail.
             put(&mut set, "NODE_USE_ENV_PROXY", "1");
+            // Java reads none of them: every JVM (Gradle, sbt, a program's
+            // own client) is told in the variable all of them pick up, or
+            // it resolves names itself and reaches nothing. On IPv4: Java
+            // reaches 127.0.0.1 through an IPv6 socket otherwise, which the
+            // macOS sandbox does not take for loopback and refuses.
+            put(
+                &mut set,
+                "JAVA_TOOL_OPTIONS",
+                format!(
+                    "-Dhttp.proxyHost=127.0.0.1 -Dhttp.proxyPort={port} \
+                     -Dhttps.proxyHost=127.0.0.1 -Dhttps.proxyPort={port} \
+                     -Djava.net.preferIPv4Stack=true"
+                ),
+            );
+            // .NET reads them, but reaches 127.0.0.1 through an IPv6 socket
+            // too; so IPv6 is off for its networking in the task, where the
+            // proxy is all there is to reach.
+            put(&mut set, "DOTNET_SYSTEM_NET_DISABLEIPV6", "1");
+            // Maven reads proxies from its settings alone, and the person's
+            // settings are not there for a command (they can hold
+            // credentials): a settings file of the task's, in its tmp, named
+            // in the variable Maven 3.9 and later read.
+            let settings = format!(
+                "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+                 <settings xmlns=\"http://maven.apache.org/SETTINGS/1.2.0\">\n\
+                 \x20 <proxies>\n\
+                 \x20   <proxy><id>kule-http</id><active>true</active><protocol>http</protocol><host>127.0.0.1</host><port>{port}</port></proxy>\n\
+                 \x20   <proxy><id>kule-https</id><active>true</active><protocol>https</protocol><host>127.0.0.1</host><port>{port}</port></proxy>\n\
+                 \x20 </proxies>\n\
+                 </settings>\n"
+            );
+            crate::fsops::put_beneath(
+                &self.tmp,
+                "kule-maven-settings.xml",
+                settings.as_bytes(),
+                0o644,
+            )?;
+            let mut args = OsString::from("-s ");
+            args.push(self.tmp.join("kule-maven-settings.xml"));
+            put(&mut set, "MAVEN_ARGS", args);
             // Go on macOS checks certificates with the system's services,
             // which a command reaches only with the network open; told to,
             // it checks them against the roots `SSL_CERT_FILE` names, as on
@@ -2147,6 +2494,38 @@ fn terminal_path(terminal: std::os::fd::BorrowedFd<'_>) -> Result<PathBuf> {
         )));
     }
     Ok(path)
+}
+
+/// The files Kule's own standard input, output and errors are, which a
+/// command inherits where the caller gives it no others: a file a person
+/// redirects to or from, or a named pipe; not a terminal, nor a pipe
+/// without a name. Each by the name the kernel holds for it.
+#[cfg(target_os = "macos")]
+fn inherited_files() -> Vec<PathBuf> {
+    use std::os::unix::ffi::OsStrExt;
+
+    let mut files = Vec::new();
+    for fd in 0..3 {
+        // SAFETY: fstat writes one stat into `st`; F_GETPATH writes at most
+        // PATH_MAX bytes, NUL-ended, into `name`.
+        let mut st: libc::stat = unsafe { std::mem::zeroed() };
+        if unsafe { libc::fstat(fd, &raw mut st) } != 0
+            || !matches!(st.st_mode & libc::S_IFMT, libc::S_IFREG | libc::S_IFIFO)
+        {
+            continue;
+        }
+        let mut name = [0 as libc::c_char; libc::PATH_MAX as usize];
+        if unsafe { libc::fcntl(fd, libc::F_GETPATH, name.as_mut_ptr()) } != 0 {
+            continue;
+        }
+        // SAFETY: F_GETPATH ended the name with a NUL inside the buffer.
+        let name = unsafe { std::ffi::CStr::from_ptr(name.as_ptr()) };
+        let path = PathBuf::from(std::ffi::OsStr::from_bytes(name.to_bytes()));
+        if path.is_absolute() && !files.contains(&path) {
+            files.push(path);
+        }
+    }
+    files
 }
 
 /// Landlock judges a descriptor by how it was opened, before the command
@@ -2330,7 +2709,7 @@ const FORK_WAIT: Duration = Duration::from_millis(200);
 
 /// The resolved form of a path that may not exist: its nearest existing
 /// ancestor resolved, the rest appended.
-fn real_or_planned(path: &Path) -> Result<PathBuf> {
+pub(crate) fn real_or_planned(path: &Path) -> Result<PathBuf> {
     let mut missing = Vec::new();
     let mut existing = path;
     loop {
@@ -2371,7 +2750,7 @@ impl Sandbox {
     /// path can change the profile's meaning. Later rules win, so the hidden
     /// paths come last and override any allowance. Every deny carries this
     /// sandbox's tag, so its refusals can be told apart in the system log.
-    fn seatbelt_profile(&self) -> (String, Vec<(String, &Path)>) {
+    fn seatbelt_profile(&self) -> (String, Vec<(String, PathBuf)>) {
         let tag = format!("(with message \"{}\")", self.tag);
         let mut params = Vec::new();
         // A task's id is hex; anything else would not reach the profile.
@@ -2384,8 +2763,11 @@ impl Sandbox {
         } else {
             String::new()
         };
+        // With the keychain's service come the system's keychains, which
+        // the service reads beside the person's (root certificates).
         let keychain = if self.keychain {
-            "(allow mach-lookup (global-name \"com.apple.SecurityServer\"))\n"
+            "(allow mach-lookup (global-name \"com.apple.SecurityServer\"))\n\
+             (allow file-read* (subpath \"/Library/Keychains\"))\n"
         } else {
             ""
         };
@@ -2402,7 +2784,7 @@ impl Sandbox {
         );
         for (i, path) in self.writable().into_iter().enumerate() {
             text.push_str(&format!("\n  (subpath (param \"W{i}\"))"));
-            params.push((format!("W{i}"), path));
+            params.push((format!("W{i}"), path.to_owned()));
         }
         text.push_str(")\n");
         // Unix sockets lead to daemons running as the user (Kule's own,
@@ -2414,8 +2796,8 @@ impl Sandbox {
              (allow network-outbound (remote unix-socket (subpath (param \"C\"))))\n\
              (allow network-outbound (remote unix-socket (subpath (param \"T\"))))\n"
         ));
-        params.push(("C".to_owned(), self.copy.as_path()));
-        params.push(("T".to_owned(), self.tmp.as_path()));
+        params.push(("C".to_owned(), self.copy.clone()));
+        params.push(("T".to_owned(), self.tmp.clone()));
         // Terminals: its own controlling one, and those it makes; never the
         // person's other terminals, to read their keys or write into them.
         text.push_str(&format!(
@@ -2427,7 +2809,7 @@ impl Sandbox {
         ));
         if let Some(terminal) = &self.terminal {
             text.push_str("(allow file-read* file-write* file-ioctl (literal (param \"PTY\")))\n");
-            params.push(("PTY".to_owned(), terminal.as_path()));
+            params.push(("PTY".to_owned(), terminal.clone()));
         }
         // What the system's services would do for it outside the sandbox:
         // open apps and documents, drive other apps, write other programs'
@@ -2497,17 +2879,20 @@ impl Sandbox {
             text.push_str(&format!(
                 "(deny file-read* file-write* (subpath (param \"H{i}\")) {tag})\n"
             ));
-            params.push((format!("H{i}"), path.as_path()));
+            params.push((format!("H{i}"), path.clone()));
         }
-        // Tools and the git directory in a hidden folder of the person's,
-        // to read; what is hidden inside them, or as them, is taken away
-        // again after.
-        for (i, path) in self.see_through.iter().enumerate() {
+        // What may be read: each granted root, and the tools and the git
+        // directory in a hidden folder of the person's. After the hidden
+        // paths, since a root may lie inside one (a toolchain's folder
+        // where apps keep their data); what is hidden inside a root is
+        // taken away again after.
+        let readable = self.readable();
+        for (i, path) in readable.iter().enumerate() {
             text.push_str(&format!("(allow file-read* (subpath (param \"S{i}\")))\n"));
-            params.push((format!("S{i}"), path.as_path()));
+            params.push((format!("S{i}"), path.clone()));
         }
         for (i, path) in self.hidden.iter().enumerate() {
-            if self.see_through.iter().any(|s| path.starts_with(s)) {
+            if readable.iter().any(|s| path.starts_with(s)) {
                 text.push_str(&format!(
                     "(deny file-read* file-write* (subpath (param \"H{i}\")) {tag})\n"
                 ));
@@ -2524,7 +2909,7 @@ impl Sandbox {
             text.push_str(&format!(
                 "(allow file-read* file-write* (subpath (param \"O{i}\")))\n"
             ));
-            params.push((format!("O{i}"), path.as_path()));
+            params.push((format!("O{i}"), (*path).clone()));
         }
         for (i, path) in self.hidden.iter().enumerate() {
             if opened.iter().any(|o| path.starts_with(o) && path != *o) {
@@ -2541,7 +2926,7 @@ impl Sandbox {
         );
         if let Some(layer) = &self.layer {
             text.push_str("(allow file-read* file-write* (subpath (param \"L\")))\n");
-            params.push(("L".to_owned(), layer.as_path()));
+            params.push(("L".to_owned(), layer.clone()));
         }
         let writable = self.writable();
         let mut between = 0;
@@ -2549,7 +2934,7 @@ impl Sandbox {
             text.push_str(&format!(
                 "(deny file-write* (subpath (param \"P{i}\")) {tag})\n"
             ));
-            params.push((format!("P{i}"), path.as_path()));
+            params.push((format!("P{i}"), path.clone()));
             // A rule holds a path by its name: a directory on the way to it
             // inside a writable root, renamed, would take it out from under
             // the rule, to be changed and renamed back.
@@ -2563,28 +2948,60 @@ impl Sandbox {
                 text.push_str(&format!(
                     "(deny file-write-unlink file-write-create (literal (param \"Q{between}\")) {tag})\n"
                 ));
-                params.push((format!("Q{between}"), dir));
+                params.push((format!("Q{between}"), dir.to_owned()));
                 between += 1;
             }
         }
         // Resolving the working directory (realpath) looks at every directory
         // on the way to the copy and tmp, inside the hidden home too; what
-        // those directories list stays hidden.
-        let ancestors: std::collections::BTreeSet<&Path> = self
+        // those directories list stays hidden. The folders on the way to a
+        // granted root are listed as well, not read, so paths resolve
+        // (shells abort without `/`); never one that is hidden, or inside
+        // what is hidden, which a listing would show.
+        let own: std::collections::BTreeSet<&Path> = self
             .copy
             .ancestors()
             .skip(1)
             .chain(self.tmp.ancestors().skip(1))
             .chain(self.layer.iter().flat_map(|l| l.ancestors().skip(1)))
-            .chain(self.see_through.iter().flat_map(|s| s.ancestors().skip(1)))
             .chain(opened.iter().flat_map(|o| o.ancestors().skip(1)))
             .chain(self.beside_links.iter().map(PathBuf::as_path))
             .collect();
-        for (i, dir) in ancestors.into_iter().enumerate() {
+        let hidden = |dir: &Path| self.hidden.iter().any(|h| dir.starts_with(h));
+        let (listed, through): (
+            std::collections::BTreeSet<&Path>,
+            std::collections::BTreeSet<&Path>,
+        ) = readable
+            .iter()
+            .flat_map(|s| s.ancestors().skip(1))
+            .partition(|dir| !hidden(dir));
+        // A hidden folder on the way to a root inside it (the person's
+        // folder a worktree's repository lies in): its facts, not its list.
+        let own: std::collections::BTreeSet<&Path> = own.union(&through).copied().collect();
+        for (i, dir) in own.iter().filter(|d| !listed.contains(*d)).enumerate() {
             text.push_str(&format!(
                 "(allow file-read-metadata (literal (param \"A{i}\")))\n"
             ));
-            params.push((format!("A{i}"), dir));
+            params.push((format!("A{i}"), dir.to_path_buf()));
+        }
+        for (i, dir) in listed.into_iter().enumerate() {
+            text.push_str(&format!(
+                "(allow file-read-metadata file-read-data (literal (param \"D{i}\")))\n"
+            ));
+            params.push((format!("D{i}"), dir.to_owned()));
+        }
+        // The files the command's standard input, output and errors are
+        // when it inherits Kule's (a log a person redirects to, in a folder
+        // of theirs or outside every grant): their facts, which a program
+        // asks for as it starts (Python runs without an output it cannot
+        // fstat), of the file alone, nothing on the way to it or beside
+        // it. Last, so that a hidden folder the person put the file in
+        // does not take them away: they chose that file.
+        for (i, file) in inherited_files().iter().enumerate() {
+            text.push_str(&format!(
+                "(allow file-read-metadata (literal (param \"IO{i}\")))\n"
+            ));
+            params.push((format!("IO{i}"), file.clone()));
         }
         (text, params)
     }
@@ -2637,7 +3054,6 @@ impl Sandbox {
     fn platform_command(&self, program: &str, args: &[String]) -> Result<Command> {
         use std::os::unix::process::CommandExt;
 
-        let mut ruleset = Some(self.landlock_ruleset()?);
         let mut command = self.session_command(program);
         command.args(args);
         // Namespaces of its own first: its uid map is written under /proc,
@@ -2651,6 +3067,7 @@ impl Sandbox {
         };
         let read_only = self.mounted_read_only();
         let network_shared = matches!(net, Net::Shared);
+        let mut ruleset = Some(self.landlock_ruleset(network_shared)?);
         // Without Landlock's rule for Unix sockets, those outside the
         // task's folders are covered for the command instead: the person's
         // runtime directory whole, where their daemons make theirs, also
@@ -2774,10 +3191,12 @@ impl Sandbox {
         Ok(command)
     }
 
-    /// Reads are allowed everywhere except the hidden paths. Landlock only
-    /// allows, so the hidden paths are carved out: each ancestor of a hidden
-    /// path is replaced by its children, the hidden one left out.
-    fn landlock_ruleset(&self) -> Result<landlock::RulesetCreated> {
+    /// Reads are allowed under the granted roots, but for the hidden paths
+    /// inside them. Landlock only allows, so the hidden paths are carved
+    /// out: each ancestor of a hidden path is replaced by its children, the
+    /// hidden one left out. `network_shared` says the command runs on this
+    /// computer's network rather than in a namespace of its own.
+    fn landlock_ruleset(&self, network_shared: bool) -> Result<landlock::RulesetCreated> {
         use landlock::{
             ABI, Access, AccessFs, AccessNet, CompatLevel, Compatible, Ruleset, RulesetAttr,
             RulesetCreatedAttr, path_beneath_rules,
@@ -2792,11 +3211,18 @@ impl Sandbox {
             .handle_access(AccessFs::from_all(abi))
             .map_err(|e| fail(&e))?;
         // TCP rules need ABI 4 (Linux 6.7); HardRequirement makes an older
-        // kernel refuse instead of leaving the network open.
+        // kernel refuse instead of leaving the network open. With the
+        // network going through the proxy, a command in a network namespace
+        // of its own connects to any port: nothing listens there but the
+        // task's own programs and the proxy's relay, and a program reaches
+        // its own servers (Gradle its daemon, a test the server beside it).
+        // One on this computer's network (weaker isolation) connects to the
+        // proxy's port alone, away from the person's own services.
         let net = match self.network {
             Network::Allow => None,
             Network::Deny => Some(AccessNet::BindTcp | AccessNet::ConnectTcp),
-            Network::Proxy(_) => Some(AccessNet::ConnectTcp.into()),
+            Network::Proxy(_) if network_shared => Some(AccessNet::ConnectTcp.into()),
+            Network::Proxy(_) => None,
         };
         if let Some(net) = net {
             ruleset = ruleset.handle_access(net).map_err(|e| fail(&e))?;
@@ -2824,20 +3250,26 @@ impl Sandbox {
                 .handle_access(device_ioctl())
                 .map_err(|e| fail(&e))?;
         }
-        let carve_all = |roots: Vec<PathBuf>| {
-            self.hidden
-                .iter()
-                .fold(roots, |roots, hidden| carve(roots, hidden))
-        };
-        let mut readable = carve_all(vec![PathBuf::from("/")]);
-        // Tools and the git directory in a hidden folder of the person's
-        // come back to read, but for what is hidden inside them, or as them.
-        for see in &self.see_through {
+        // Each granted root, carved by what is hidden inside it: a root
+        // inside a hidden folder (a toolchain's folder where apps keep
+        // their data) is readable all the same, as the grant says. A root
+        // that is not there, or is a link, gets no rule: Landlock would
+        // open a link and allow what it points to.
+        let mut readable: Vec<PathBuf> = Vec::new();
+        for root in self.readable() {
+            if !std::fs::symlink_metadata(&root).is_ok_and(|m| !m.file_type().is_symlink()) {
+                continue;
+            }
+            // A root hidden as such (a settings file the layer holds masked,
+            // whose real one is hidden) is not readable at all.
+            if self.hidden.contains(&root) {
+                continue;
+            }
             readable.extend(
                 self.hidden
                     .iter()
-                    .filter(|h| h.starts_with(see))
-                    .fold(vec![see.clone()], |roots, h| carve(roots, h)),
+                    .filter(|h| h.starts_with(&root) && **h != root)
+                    .fold(vec![root.clone()], |roots, h| carve(roots, h)),
             );
         }
         // Writable roots are carved the same way: an allowance for a
@@ -2893,7 +3325,6 @@ impl Sandbox {
         }
         devices.extend(self.devices.iter().cloned());
         let read_only_devices = ["/dev/random", "/dev/urandom"].map(PathBuf::from);
-        let readable = carve(readable, Path::new("/dev"));
         let mut created = ruleset
             .create()
             .map_err(|e| fail(&e))?
@@ -2912,7 +3343,9 @@ impl Sandbox {
             .map_err(|e| fail(&e))?
             .add_rules(path_beneath_rules(&writable, AccessFs::from_all(abi)))
             .map_err(|e| fail(&e))?;
-        if let Network::Proxy(port) = self.network {
+        if let Network::Proxy(port) = self.network
+            && network_shared
+        {
             created = created
                 .add_rule(landlock::NetPort::new(port, AccessNet::ConnectTcp))
                 .map_err(|e| fail(&e))?;
@@ -3218,6 +3651,29 @@ mod tests {
         assert_eq!(other.hint, None);
     }
 
+    /// A read refused names the folder to add; a probe of a file's facts
+    /// (every app in /System/Applications, when LaunchServices is closed)
+    /// says nothing: programs make them by the dozen and work without.
+    #[test]
+    fn a_refused_read_names_the_folder_a_probe_of_facts_does_not() {
+        let read = parse_denial(
+            "Sandbox: java(4242) deny(1) file-read-data /opt/tools/jdk/lib/modules\nkule-1-2",
+        )
+        .unwrap();
+        assert!(
+            read.hint
+                .as_deref()
+                .is_some_and(|h| h.contains("kule tools add '/opt/tools/jdk/lib'")),
+            "{:?}",
+            read.hint
+        );
+        let probe = parse_denial(
+            "Sandbox: Python(4242) deny(1) file-read-metadata /System/Applications/Chess.app\nkule-1-2",
+        )
+        .unwrap();
+        assert_eq!(probe.hint, None);
+    }
+
     /// A server refused, or a write to the system's /tmp, says why and
     /// what works instead.
     #[test]
@@ -3355,6 +3811,43 @@ mod linux_tests {
             PathBuf::from("/nonexistent-runtime"),
         ];
         assert_eq!(sandbox.runtime_dirs(&candidates), [runtime]);
+    }
+}
+
+#[cfg(test)]
+mod trace_tests {
+    use super::*;
+
+    #[test]
+    fn strace_output_gives_the_refused_paths_and_how_they_were_tried() {
+        let text = "\
+12345 openat(AT_FDCWD, \"/home/dev/.aws/credentials\", O_RDONLY|O_CLOEXEC) = -1 EACCES (Permission denied)\n\
+12345 openat(AT_FDCWD, \"/home/dev/.aws/credentials\", O_RDONLY|O_CLOEXEC) = -1 EACCES (Permission denied)\n\
+12346 newfstatat(AT_FDCWD, \"/opt/creds\", {st_mode=S_IFDIR}, 0) = 0\n\
+12346 openat(AT_FDCWD, \"/opt/out/x\", O_WRONLY|O_CREAT|O_TRUNC, 0666) = -1 EACCES (Permission denied)\n\
+12347 mkdir(\"/opt/new\", 0777) = -1 EPERM (Operation not permitted)\n\
+12347 openat(AT_FDCWD, \"relative\", O_RDONLY) = -1 EACCES (Permission denied)\n\
+12348 openat(AT_FDCWD, \"/nowhere\", O_RDONLY) = -1 ENOENT (No such file or directory)\n";
+        let denials = traced_denials(text);
+        let seen: Vec<(&str, &str, &str)> = denials
+            .iter()
+            .map(|d| (d.process.as_str(), d.operation.as_str(), d.path.as_str()))
+            .collect();
+        assert_eq!(
+            seen,
+            vec![
+                ("pid 12345", "read", "/home/dev/.aws/credentials"),
+                ("pid 12346", "write", "/opt/out/x"),
+                ("pid 12347", "write", "/opt/new"),
+            ]
+        );
+        assert!(
+            denials[0]
+                .hint
+                .as_deref()
+                .is_some_and(|h| h.contains("kule tools add '/home/dev/.aws'"))
+        );
+        assert!(denials[1].hint.is_none());
     }
 }
 

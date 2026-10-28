@@ -43,6 +43,7 @@ can make Kule refuse to work until it is fixed or removed.
 | `remembered.json` | What you told Kule not to ask about again (`kule rules`). | no |
 | `committed.json` | The folders where you accepted that git holds the values Kule masks (`kule secrets history`), each value as a digest keyed by this file's key, never the value. | no |
 | `beside.json` | Projects beside a folder that its tasks may read (`kule reveal`). | no |
+| `tools.json` | Folders every task's commands may read, added with `kule tools add`. | no |
 | `isolation.json` | Whether you accepted weaker isolation (`kule isolation`). | no |
 | `secrets.json` | Kept secrets: names, hosts, folders, and values **sealed** (encrypted). Readable by you alone. | no |
 | `secrets.key` | The key that seals the secrets, **only** when the system does not keep it: a Kule home other than the default, a computer without a keychain or Secret Service, or a Windows session over SSH. For the default home the key is in the macOS keychain (item `Kule secrets`), Secret Service on Linux, or the Windows Credential Manager (an entry ending in `Kule secrets`). On Windows a file from 0.2.0-preview.15 or earlier moves to the Credential Manager the first time the secrets are opened. The file is readable by you alone. | no |

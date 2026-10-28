@@ -1697,6 +1697,51 @@ fn mask_settings(path: &str, text: &str, task: &mut TaskSecrets, vault: &Vault) 
         if value.starts_with(PLACEHOLDER_PREFIX) {
             return Ok(None);
         }
+        // A package index URL with a token in it: the token alone is
+        // masked, so the tool still reaches the index, with the proxy
+        // putting the token back in the credentials it sends there.
+        if kept.is_none()
+            && crate::home::is_index_setting(path)
+            && let Some((before, password, after)) = url_password(value)
+            && password.len() >= 8
+            && !password.starts_with(PLACEHOLDER_PREFIX)
+        {
+            let p = placeholder_for(path, key, password, task, vault)?;
+            return Ok(Some(format!("{before}{p}{after}")));
+        }
+        placeholder_for(path, key, value, task, vault).map(Some)
+    })
+}
+
+/// A URL value with a password in its userinfo (`https://me:token@host/`),
+/// in three parts: up to and including the `:`, the password, and from
+/// the `@` on.
+fn url_password(value: &str) -> Option<(&str, &str, &str)> {
+    let (scheme, rest) = value.split_once("://")?;
+    let at = rest.find('@')?;
+    let userinfo = &rest[..at];
+    if userinfo.contains('/') {
+        return None;
+    }
+    let colon = userinfo.find(':')?;
+    let start = scheme.len() + 3 + colon + 1;
+    let end = scheme.len() + 3 + at;
+    Some((&value[..start], &value[start..end], &value[end..]))
+}
+
+/// The placeholder for `value` found under `key` in the settings file at
+/// `path`: the one of a kept secret the value is, the one it got already in
+/// this task, or a new one; noted in `task` so a commit puts the value
+/// back wherever its placeholder went.
+fn placeholder_for(
+    path: &str,
+    key: &str,
+    value: &str,
+    task: &mut TaskSecrets,
+    vault: &Vault,
+) -> Result<String> {
+    let kept = vault.placeholder_for_value(value);
+    {
         if let Some(p) = kept {
             // Kept so commit can put it back like any other, wherever it
             // was found.
@@ -1721,7 +1766,7 @@ fn mask_settings(path: &str, text: &str, task: &mut TaskSecrets, vault: &Vault) 
                     }
                 }
             }
-            return Ok(Some(p.to_owned()));
+            return Ok(p.to_owned());
         }
         let known = task
             .masked
@@ -1744,8 +1789,8 @@ fn mask_settings(path: &str, text: &str, task: &mut TaskSecrets, vault: &Vault) 
                 p
             }
         };
-        Ok(Some(p))
-    })
+        Ok(p)
+    }
 }
 
 /// A key for [`shown`]: new for each view, so its marks say nothing about
@@ -1851,6 +1896,40 @@ mod tests {
             Ok(looks_secret(key, value).then(|| format!("P{n}")))
         })
         .unwrap()
+    }
+
+    #[test]
+    fn an_index_urls_token_alone_is_masked() {
+        assert_eq!(
+            url_password("https://me:tok-123@pypi.example.com/simple"),
+            Some(("https://me:", "tok-123", "@pypi.example.com/simple"))
+        );
+        assert_eq!(url_password("https://pypi.example.com/simple"), None);
+        assert_eq!(url_password("https://host/a:b@c"), None);
+        let vault = Vault::default();
+        let mut task = TaskSecrets::default();
+        let text = "[global]\nindex-url = https://me:ghp_abcdefgh12345678@pypi.example.com/simple\ntimeout = 60\n";
+        let masked = mask_settings(".config/pip/pip.conf", text, &mut task, &vault).unwrap();
+        assert!(
+            masked.contains("index-url = https://me:kule_secret_"),
+            "{masked}"
+        );
+        assert!(
+            masked.contains("@pypi.example.com/simple\ntimeout = 60"),
+            "{masked}"
+        );
+        let (_, kept) = task.masked.iter().next().unwrap();
+        assert_eq!(kept.value, "ghp_abcdefgh12345678");
+        // Elsewhere the whole value goes, as before.
+        let mut task = TaskSecrets::default();
+        let masked = mask_settings(
+            ".zshrc",
+            "export DB=postgres://app:longpassword1@db/app\n",
+            &mut task,
+            &vault,
+        )
+        .unwrap();
+        assert!(masked.starts_with("export DB=kule_secret_"), "{masked}");
     }
 
     #[test]

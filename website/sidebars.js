@@ -93,7 +93,7 @@ const sidebars = {
         {
           type: 'category',
           label: 'Policy and access',
-          items: ['cli/policy', 'cli/rules', 'cli/reveal', 'cli/isolation'],
+          items: ['cli/policy', 'cli/rules', 'cli/tools', 'cli/reveal', 'cli/isolation'],
         },
         {
           type: 'category',

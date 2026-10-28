@@ -1,16 +1,21 @@
 //! The home layer: what a task's commands write in the person's home
 //! directory, caught for review instead of refused.
 //!
-//! Commands get `HOME` pointing at a layer in the task's directory. Its
-//! small files at the top (`.zshrc`, `.gitconfig`) and `.config` are
-//! clones of the person's: a command changes those, and anything new it
-//! makes at the top, in the layer. Every other top-level entry is a link to
-//! the person's own, so tools find their toolchains, caches and settings
+//! Commands get `HOME` pointing at a layer in the task's directory. The
+//! small settings files at the top that shells and tools read (`.zshrc`,
+//! `.gitconfig`; see [`STARTUP`] and `grants::SETTINGS_FILES_IN_HOME`) and
+//! `.config` are clones of the person's: a command changes those, and
+//! anything new it makes at the top, in the layer. A top-level entry the
+//! sandbox lets commands read (a toolchain's folder, `~/.cargo`) is a link
+//! to the person's own, so tools find their toolchains, caches and settings
 //! where they always are, and a write through such a link meets the
-//! sandbox as before. The agent's own state is cloned into the layer, never
-//! linked: it writes there, what it writes is never offered, and nothing of
-//! it reaches the person's home. Paths the sandbox hides (`.ssh`, `.aws`,
-//! …) are not in the layer at all.
+//! sandbox as before. Every other entry starting with a dot is not in the
+//! layer at all: a tool that looks for it finds nothing there, as if the
+//! person had none, and the real one stays out of reach. The agent's own
+//! state is cloned into the layer, never linked: it writes there, what it
+//! writes is never offered, and nothing of it reaches the person's home.
+//! Paths the sandbox hides (`.ssh`, `.aws`, …) are not in the layer
+//! either.
 //!
 //! A person sees the changes ([`Task::home_changes`]) and takes them to the
 //! real home ([`Task::apply_home`]) or throws them away
@@ -34,8 +39,33 @@ use crate::secrets::{self, TaskSecrets};
 use crate::task::Task;
 use crate::textdiff::{self, TextDiff};
 
-/// Directories cloned whole into the layer, where tools keep settings.
-const CAPTURED_DIRS: &[&str] = &[".config"];
+/// Directories cloned whole into the layer, where tools keep settings:
+/// `.pip` for pip's own `pip.conf`, whose index URLs may carry a token.
+// `.nuget` too: NuGet stops at a settings file it may not read, so its
+// settings folder (hidden, it can hold feed credentials) is not there for
+// a command, which makes its own; the packages beside it are linked.
+const CAPTURED_DIRS: &[&str] = &[".config", ".pip", ".nuget"];
+
+/// Settings folders deeper in the home cloned into the layer, with the
+/// folders on the way made the layer's own (see [`capture_state`]): pip's
+/// on macOS, whose `pip.conf` is masked like the others.
+const CAPTURED_DEEP: &[&str] = &["Library/Application Support/pip"];
+
+/// Where NuGet keeps the marker of its one-time cache migration, under the
+/// home (`XDG_DATA_HOME` unset); the layer carries one (see
+/// [`Task::prepare_home`]).
+const NUGET_MIGRATIONS: &str = ".local/share/NuGet/Migrations";
+
+/// Settings files whose index URLs may carry a token (`https://user:token@…`
+/// in pip's and uv's settings): cloned into the layer with the token
+/// masked, the real file hidden.
+const INDEX_SETTINGS: &[&str] = &[
+    ".config/pip/pip.conf",
+    ".pip/pip.conf",
+    "Library/Application Support/pip/pip.conf",
+    ".config/uv/uv.toml",
+    ".pydistutils.cfg",
+];
 /// A top-level file larger than this is linked, not cloned.
 const MAX_FILE: u64 = 1024 * 1024;
 /// A captured directory with more than this is linked instead: the layer is
@@ -100,12 +130,35 @@ fn startup(rel: &str) -> bool {
     })
 }
 
+/// Whether `rel` is a package index settings file ([`INDEX_SETTINGS`]), where
+/// a URL's token alone is masked (see `secrets::mask_settings`).
+pub(crate) fn is_index_setting(path: &str) -> bool {
+    INDEX_SETTINGS
+        .iter()
+        .any(|s| path == *s || path.ends_with(&format!("/{s}")))
+}
+
 /// Whether the layer's file at `rel` is one whose settings that look like
 /// secrets Kule masks, as in the copy's `.env` files: what shells and tools
-/// read as they start (`export GITHUB_TOKEN=…` in `.zshrc`) and env files
-/// (`~/.env`), where people keep tokens.
+/// read as they start (`export GITHUB_TOKEN=…` in `.zshrc`), env files
+/// (`~/.env`), where people keep tokens, and package index settings
+/// ([`INDEX_SETTINGS`]).
 fn masks_home(rel: &str) -> bool {
-    startup(rel) || secrets::is_env_file(rel)
+    startup(rel) || secrets::is_env_file(rel) || INDEX_SETTINGS.contains(&rel)
+}
+
+/// Whether the top-level entry `name` of the home belongs in the layer
+/// when nothing the sandbox lets commands read is at or under it: the
+/// settings files shells and tools read, and env files, each cloned (and
+/// masked); and every entry not starting with a dot, which is linked (the
+/// person's own folders among them are hidden, and not here). Any other
+/// dot entry is not there for a command.
+fn in_layer(name: &str) -> bool {
+    !name.starts_with('.')
+        || CAPTURED_DIRS.contains(&name)
+        || startup(name)
+        || secrets::is_env_file(name)
+        || crate::grants::SETTINGS_FILES_IN_HOME.contains(&name)
 }
 
 /// What the layer started from.
@@ -231,44 +284,35 @@ fn capture_state(
     clock: &Clock,
 ) -> Result<()> {
     let parts: Vec<&str> = rel.split('/').collect();
+    // Whether the folder at this depth is reached through a link of the
+    // layer's that the step above replaced: then the person's folder is
+    // here, and its other entries stay links, at every depth below.
+    let mut through_link = false;
     for depth in 1..parts.len() {
         let on = parts[..depth].join("/");
         let (from, to) = (real.join(&on), dir.join(&on));
+        let real_dir = fs::symlink_metadata(&from).is_ok_and(|m| m.is_dir());
         match fs::symlink_metadata(&to) {
-            Ok(m) if m.is_dir() => {}
+            Ok(m) if m.is_dir() => through_link = false,
             Ok(_) if layer.links.contains(&on) => {
-                if !fs::symlink_metadata(&from).is_ok_and(|m| m.is_dir()) {
+                if !real_dir {
                     return Ok(());
                 }
                 fs::remove_file(&to).at(&to)?;
                 layer.links.remove(&on);
                 fs::create_dir(&to).at(&to)?;
-                let mut children: Vec<_> = fs::read_dir(&from)
-                    .at(&from)?
-                    .filter_map(|e| e.ok())
-                    .map(|e| e.file_name())
-                    .collect();
-                children.sort();
-                for child in children {
-                    let Some(name) = child.to_str() else { continue };
-                    let from = from.join(&child);
-                    let concealed =
-                        hidden.contains(&from) && !shown.iter().any(|s| s.starts_with(&from));
-                    if name == parts[depth] || concealed {
-                        continue;
-                    }
-                    let target = if fs::symlink_metadata(&from).at(&from)?.is_symlink() {
-                        fs::read_link(&from).at(&from)?
-                    } else {
-                        from.clone()
-                    };
-                    let to = to.join(&child);
-                    crate::osfs::symlink(&target, &to).at(&to)?;
-                    layer.links.insert(format!("{on}/{name}"));
-                }
+                link_siblings(&from, &to, &on, parts[depth], hidden, shown, layer)?;
+                through_link = true;
             }
             Ok(_) => return Ok(()),
-            Err(_) => fs::create_dir(&to).at(&to)?,
+            Err(_) => {
+                fs::create_dir(&to).at(&to)?;
+                if through_link && real_dir {
+                    link_siblings(&from, &to, &on, parts[depth], hidden, shown, layer)?;
+                } else {
+                    through_link = false;
+                }
+            }
         }
     }
     let caught = |p: &String| *p == rel || p.starts_with(&format!("{rel}/"));
@@ -300,6 +344,43 @@ fn capture_state(
         };
         crate::osfs::symlink(&target, &to).at(&to)?;
         layer.links.insert(rel.to_owned());
+    }
+    Ok(())
+}
+
+/// Links each entry of the person's folder `from` into the layer's folder
+/// `to` (at `on`, relative), but for `except`, which the caller makes a
+/// folder of its own next, and what is hidden with nothing shown inside.
+fn link_siblings(
+    from: &Path,
+    to: &Path,
+    on: &str,
+    except: &str,
+    hidden: &[PathBuf],
+    shown: &[PathBuf],
+    layer: &mut Layer,
+) -> Result<()> {
+    let mut children: Vec<_> = fs::read_dir(from)
+        .at(from)?
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name())
+        .collect();
+    children.sort();
+    for child in children {
+        let Some(name) = child.to_str() else { continue };
+        let from = from.join(&child);
+        let concealed = hidden.contains(&from) && !shown.iter().any(|s| s.starts_with(&from));
+        if name == except || concealed {
+            continue;
+        }
+        let target = if fs::symlink_metadata(&from).at(&from)?.is_symlink() {
+            fs::read_link(&from).at(&from)?
+        } else {
+            from.clone()
+        };
+        let to = to.join(&child);
+        crate::osfs::symlink(&target, &to).at(&to)?;
+        layer.links.insert(format!("{on}/{name}"));
     }
     Ok(())
 }
@@ -422,6 +503,11 @@ impl Task {
             let captured = CAPTURED_DIRS.contains(&text.as_str());
             let hidden_dir = hidden.contains(&from);
             if hidden_dir && !(captured && shows(&from)) {
+                continue;
+            }
+            // A dot entry the commands may not read anywhere is not in
+            // their home either: they find nothing, not a refusal.
+            if !in_layer(&text) && !shows(&from) {
                 continue;
             }
             let Some(stamp) = Stamp::of(&from)? else {
@@ -560,6 +646,11 @@ impl Task {
                 }
             }
         }
+        for rel in CAPTURED_DEEP {
+            if fs::symlink_metadata(real.join(rel)).is_ok() {
+                capture_state(&real, &dir, rel, &hidden, &shown, &mut layer, &real_clock)?;
+            }
+        }
         for path in state {
             if let Some(rel) = under(&given, path).or_else(|| under(&real, path)) {
                 capture_state(&real, &dir, &rel, &hidden, &shown, &mut layer, &real_clock)?;
@@ -607,6 +698,34 @@ impl Task {
                 }
             }
         }
+        // NuGet runs a one-time migration of the person's caches (it fixes
+        // their permissions) under a mutex named for every process, which
+        // lives in /tmp: a task does not write there on macOS, and the
+        // caches are the task's own anyway. The marker that says the
+        // migration ran, so NuGet skips it; Kule's, never offered as a
+        // change. Made only through folders of the layer's own, never
+        // through a link into the person's home.
+        // The folders on the way (`.local`, `.local/share`) become folders
+        // of the layer's own where they were links, their other entries
+        // still links to the person's.
+        capture_state(
+            &real,
+            &dir,
+            NUGET_MIGRATIONS,
+            &hidden,
+            &shown,
+            &mut layer,
+            &real_clock,
+        )?;
+        let folder = dir.join(NUGET_MIGRATIONS);
+        if !fs::symlink_metadata(&folder).is_ok_and(|m| m.file_type().is_symlink()) {
+            fs::create_dir_all(&folder).at(&folder)?;
+            let marker = folder.join("1");
+            if fs::symlink_metadata(&marker).is_err() {
+                fs::write(&marker, b"").at(&marker)?;
+            }
+        }
+        layer.ignored.push(NUGET_MIGRATIONS.to_owned());
         write_json(&self.layer_path(), &layer)?;
         Ok(dir)
     }

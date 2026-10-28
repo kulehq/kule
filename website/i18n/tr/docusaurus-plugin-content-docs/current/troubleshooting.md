@@ -224,14 +224,32 @@ edin.
 
 ### Linux: bir komut "permission denied" alıyor ama hiçbir şey listelenmiyor
 
-**Neden:** Landlock reddettiklerini yalnızca denetim kaydına (audit log)
-bildirir; bu yüzden Kule onları macOS'taki gibi listeleyemez. Komut yine de
-hatayı alır.
+**Neden:** Landlock reddettiklerini yalnızca çekirdeğin denetim kaydına
+(audit log) bildirir; Kule onu bir kişi olarak okuyamaz, bu yüzden retleri
+macOS'taki gibi listeleyemez. Komut yine de hatayı alır.
 
-**Çözüm:** yol, sandbox'ın izin verdiklerinin dışında (bkz.
-[Sandbox](concepts/sandbox.md)). Çalışma klasörünün yanındaki bir proje
-için `kule reveal add PATH`; tek bir komut için `kule exec --reveal PATH`
-ya da `--allow-write PATH`.
+**Çözüm:** komutu bir kez `kule exec --trace GÖREV -- …` ile çalıştırın
+(`strace` gerekir): Kule onu sandbox'ın dışından `strace` altında çalıştırır
+ve sandbox'ın reddettiği her dosyayı ne yapılacağıyla birlikte listeler. Bir
+görevin komutları yalnızca verilen yerleri okur (bkz.
+[`kule tools`](cli/tools.md)): Kule'nin tanımadığı bir araç klasörü için
+`kule tools add PATH`; çalışma klasörünün yanındaki bir proje için
+`kule reveal add PATH`; tek bir komut için `kule exec --reveal PATH` ya da
+`--allow-write PATH`.
+
+### Bir araç bir klasörü okuyamıyor: "sandbox: refused file-read-data …"
+
+**Neden:** bir görevin komutları yalnızca verilen yerleri okur: görevin kendi
+klasörleri, sistem, araç zincirleriniz ve eklediğiniz yerler. Kule'nin
+tanımadığı bir yere kurulmuş bir araç zinciri (`/opt/corp/sdk`) ya da bir
+değişkenin bir aracı yönlendirdiği, ev dizininizin dışındaki bir dosya
+reddedilir.
+
+**Çözüm:** koşu, reddi eklenecek klasörle birlikte listeler:
+`kule tools add '/opt/corp/sdk'` her görevin onu okumasına izin verir, asla
+yazmasına değil. İşe yarayan en dar klasörü ekleyin. Kule, kendisini
+zayıflatacak bir klasörü (ev dizininiz, bir kimlik klasörü, Kule'nin kendi
+klasörü, bir diskin kökü) reddeder; bkz. [`kule tools`](cli/tools.md).
 
 ## Ağ ve sertifikalar
 
@@ -255,6 +273,46 @@ dışı bırakır.
 görevde kapalı kalır.
 
 **Çözüm:** `pip install --use-deprecated=legacy-certs …`.
+
+### NuGet macOS'ta bir görevde paket indiremiyor
+
+**Belirti:** `error NU1301: ... The SSL connection could not be
+established ... bad certificate format` ve komutun ardından
+`sandbox: refused mach-lookup com.apple.SecurityServer (dotnet)`.
+
+**Neden:** .NET macOS'ta sertifikaları sistemin güven servisi üzerinden
+denetler; görevin ağı proxy'den geçerken bu servis komutlara kapalı kalır
+(proxy'yi aşarak adreslere gider). `SSL_CERT_FILE` okumadığı için proxy'nin
+otoritesi ve içindeki sistem kökleri de yardımcı olmaz.
+
+**Çözüm:** paketleri yalnız o komut için ağı açarak indirin; bu, proxy'yi
+ve politikayı o komut için atlar:
+`kule exec GÖREV --open-network -- dotnet restore`; ya da önce görevin
+dışında indirin (paketler NuGet önbelleğinizde olur, görev onu okur).
+`dotnet build` sonra görevde çalışır. `dotnet test` macOS'ta çalışmaz: test
+sunucusu çalıştırıcıyla loopback üzerinden konuşur, görevin programları
+orada buna erişmez ([#84](https://github.com/kulehq/kule/issues/84));
+testleri görevin dışında ya da Linux'ta bir görevde koşturun, orada hepsi
+olduğu gibi çalışır.
+
+### Gradle macOS'ta bir görevde çalışmıyor
+
+**Belirti:** `Could not create service of type FileLockContentionHandler`
+ve `java.net.SocketException: Operation not permitted`; ya da sunuculara
+izin verilmişse `Could not connect to the Gradle daemon` ve komutun
+ardından `sandbox: refused network-outbound remote:*:PORT (java)`.
+
+**Neden:** Gradle'ın süreçleri birbiriyle loopback üzerinden konuşur:
+istemci, çatalladığı daemon'la (`--no-daemon` ile bile), derleme ise
+testleri koşturan işçilerle. macOS'ta görevin programları ağda proxy'den
+başka hiçbir yere erişemez, loopback dahil; dinlemeleri de ancak siz
+sunuculara izin verirseniz mümkün. Bu yüzden Gradle kendine bağlanamaz.
+Maven'ın buna ihtiyacı yok: çatalları borularla konuşur.
+
+**Çözüm:** görevde Maven ile derleyin ya da Gradle'ı
+`kule exec GÖREV --open-network -- gradle …` ile çalıştırın; bu, o komut
+için proxy'yi ve politikayı atlar. Linux'ta Gradle olduğu gibi çalışır:
+loopback orada görevin kendisine aittir.
 
 ### Bir bağlantı Encrypted Client Hello yüzünden kesiliyor {#a-connection-is-cut-for-encrypted-client-hello}
 
