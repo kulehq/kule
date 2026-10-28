@@ -159,11 +159,13 @@ These are listed in [Platforms](../platforms.md) too:
 - HTTP/2 is not spoken: clients fall back to HTTP/1.1. WebSocket upgrades
   are not supported yet.
 - On macOS, tools that check certificates only through the system's own
-  service cannot use HTTPS in a task. pip 24.2 and later works with
-  `--use-deprecated=legacy-certs`. Go is told to use the roots
-  `SSL_CERT_FILE` names.
+  services cannot use HTTPS in a task: .NET (NuGet restores among it) is
+  one. pip 24.2 and later works with `--use-deprecated=legacy-certs`. Go
+  is told to use the roots `SSL_CERT_FILE` names.
 - NuGet's and Maven's tools on macOS trust the system's roots alone, so
-  their registries pass through unseen, as Go's module proxy does.
+  their registries pass through unseen, as Go's module proxy does. JVMs
+  are pointed at the proxy with `JAVA_TOOL_OPTIONS`, since Java reads none
+  of the `*_PROXY` variables.
 - On Linux, network rules need Linux 6.7 or later.
 
 ## Related

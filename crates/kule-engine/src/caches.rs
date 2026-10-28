@@ -46,7 +46,16 @@ const PLAIN: &[(&str, &str)] = &[
     ("GOMODCACHE", "go-mod"),
     ("YARN_CACHE_FOLDER", "yarn"),
     ("NUGET_PACKAGES", "nuget"),
+    // Gradle's whole user home: its caches, the distributions its wrapper
+    // fetches, the native library it unpacks and its daemon's files. The
+    // person's `~/.gradle` is read-only to a task, which Gradle cannot
+    // start in.
+    ("GRADLE_USER_HOME", "gradle"),
 ];
+
+/// Maven's local repository, under the task's tmp: Maven reads it from a
+/// system property, which `MAVEN_OPTS` carries to its JVM.
+const MAVEN: &str = "m2";
 
 /// pnpm's home, under the task's tmp: up to pnpm 10 its store is the
 /// `store` folder there. pnpm 11 reads the store from its own variable, and
@@ -150,6 +159,11 @@ pub(crate) fn prepare(tmp: &Path, sources: &Sources) -> Result<Vec<(String, OsSt
         fsops::kept_child(&caches, dir, &path)?;
         env.push(((*var).to_owned(), path.into_os_string()));
     }
+    let m2 = root.join(MAVEN);
+    fsops::kept_child(&caches, MAVEN, &m2)?;
+    let mut maven_opts = OsString::from("-Dmaven.repo.local=");
+    maven_opts.push(&m2);
+    env.push(("MAVEN_OPTS".to_owned(), maven_opts));
     let pnpm = root.join(PNPM);
     let store = pnpm.join("store");
     fsops::kept_child(&fsops::kept_child(&caches, PNPM, &pnpm)?, "store", &store)?;
@@ -297,14 +311,24 @@ mod tests {
             if name == "RestoreAdditionalProjectFallbackFolders" {
                 continue;
             }
-            assert!(Path::new(value).starts_with(tmp.path()), "{name}");
-            assert!(Path::new(value).is_dir(), "{name}");
+            let value = match name.as_str() {
+                // A property for Maven's JVM, its value the path.
+                "MAVEN_OPTS" => {
+                    let text = value.to_str().unwrap();
+                    Path::new(text.strip_prefix("-Dmaven.repo.local=").unwrap())
+                }
+                _ => Path::new(value),
+            };
+            assert!(value.starts_with(tmp.path()), "{name}");
+            assert!(value.is_dir(), "{name}");
         }
         for name in [
             "CARGO_HOME",
             "npm_config_cache",
             "XDG_CACHE_HOME",
             "GOCACHE",
+            "GRADLE_USER_HOME",
+            "MAVEN_OPTS",
             "PNPM_HOME",
             "pnpm_config_store_dir",
         ] {

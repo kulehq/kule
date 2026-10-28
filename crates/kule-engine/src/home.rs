@@ -48,6 +48,11 @@ const CAPTURED_DIRS: &[&str] = &[".config", ".pip"];
 /// on macOS, whose `pip.conf` is masked like the others.
 const CAPTURED_DEEP: &[&str] = &["Library/Application Support/pip"];
 
+/// Where NuGet keeps the marker of its one-time cache migration, under the
+/// home (`XDG_DATA_HOME` unset); the layer carries one (see
+/// [`Task::prepare_home`]).
+const NUGET_MIGRATIONS: &str = ".local/share/NuGet/Migrations";
+
 /// Settings files whose index URLs may carry a token (`https://user:token@…`
 /// in pip's and uv's settings): cloned into the layer with the token
 /// masked, the real file hidden.
@@ -661,6 +666,27 @@ impl Task {
                     entry.copy = entry.copy.clone().unknown();
                 }
             }
+        }
+        // NuGet runs a one-time migration of the person's caches (it fixes
+        // their permissions) under a mutex named for every process, which
+        // lives in /tmp: a task does not write there on macOS, and the
+        // caches are the task's own anyway. The marker that says the
+        // migration ran, so NuGet skips it; Kule's, never offered as a
+        // change. Made only through folders of the layer's own, never
+        // through a link into the person's home.
+        let migrations = Path::new(NUGET_MIGRATIONS);
+        let through_a_link = migrations
+            .ancestors()
+            .skip(1)
+            .any(|a| fs::symlink_metadata(dir.join(a)).is_ok_and(|m| m.file_type().is_symlink()));
+        if !through_a_link {
+            let folder = dir.join(migrations);
+            fs::create_dir_all(&folder).at(&folder)?;
+            let marker = folder.join("1");
+            if fs::symlink_metadata(&marker).is_err() {
+                fs::write(&marker, b"").at(&marker)?;
+            }
+            layer.ignored.push(NUGET_MIGRATIONS.to_owned());
         }
         write_json(&self.layer_path(), &layer)?;
         Ok(dir)

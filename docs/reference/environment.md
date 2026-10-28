@@ -60,10 +60,14 @@ profile names its own under `pass_env`.
 | `SSL_CERT_FILE`, `CURL_CA_BUNDLE`, `REQUESTS_CA_BUNDLE`, `PIP_CERT`, `GIT_SSL_CAINFO`, `CARGO_HTTP_CAINFO`, `AWS_CA_BUNDLE` | `<task>/tmp/kule-ca-bundle.pem` | The system's roots plus the task's own certificate authority, which the proxy uses to fill in [secrets](../concepts/secrets.md) for their hosts. |
 | `NODE_EXTRA_CA_CERTS` | `<task>/tmp/kule-ca.pem` | The same authority, for Node. |
 | `GODEBUG` | adds `x509sslcertoverrideplatform=1` | macOS: makes Go check certificates against `SSL_CERT_FILE`. Your own `GODEBUG` settings are kept. |
+| `JAVA_TOOL_OPTIONS` | `-Dhttp.proxyHost=127.0.0.1 -Dhttp.proxyPort=… -Dhttps.proxyHost=… -Dhttps.proxyPort=… -Djava.net.preferIPv4Stack=true` | Points every JVM (Gradle, sbt, a program's own HTTP client) at the proxy, over IPv4: Java does not read the `*_PROXY` variables. |
+| `DOTNET_SYSTEM_NET_DISABLEIPV6` | `1` | .NET reaches the proxy over IPv4: through an IPv6 socket the macOS sandbox would not take 127.0.0.1 for loopback. |
+| `MAVEN_ARGS` | `-s <task>/tmp/kule-maven-settings.xml` | Maven reads proxies from its settings alone: a settings file naming the task's proxy (your `~/.m2/settings.xml` is not there for a command, as it can hold credentials). Maven 3.9 and later. |
 | `CARGO_HOME` | `<task>/tmp/caches/cargo` | The task's own cargo cache (with your cargo settings, never `credentials.toml`). |
 | `npm_config_cache` | `<task>/tmp/caches/npm` | The task's own npm cache. |
 | `PNPM_HOME`, `pnpm_config_store_dir` | under `<task>/tmp/caches/pnpm` | pnpm. |
-| `YARN_CACHE_FOLDER`, `PIP_CACHE_DIR`, `UV_CACHE_DIR`, `GOCACHE`, `GOMODCACHE`, `NUGET_PACKAGES`, `XDG_CACHE_HOME` | under `<task>/tmp/caches/` | Each tool's cache, the task's own. |
+| `YARN_CACHE_FOLDER`, `PIP_CACHE_DIR`, `UV_CACHE_DIR`, `GOCACHE`, `GOMODCACHE`, `NUGET_PACKAGES`, `XDG_CACHE_HOME`, `GRADLE_USER_HOME` | under `<task>/tmp/caches/` | Each tool's cache, the task's own; for Gradle its whole user home. |
+| `MAVEN_OPTS` | `-Dmaven.repo.local=<task>/tmp/caches/m2` | Maven's local repository, the task's own. |
 | `NODE_OPTIONS`, `PYTHONPATH`, `RUBYOPT` | load a small file from `<task>/tmp/.kule-loopback/` | Points Node, Python and Ruby servers that ask for every address at this computer only. (On Linux Kule also holds every program's servers to loopback by itself.) Your own values are kept. |
 | a kept secret's name, e.g. `STRIPE_KEY` | `kule_secret_…` | A placeholder; the proxy puts the value in only for that secret's hosts. |
 

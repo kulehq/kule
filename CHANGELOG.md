@@ -58,6 +58,33 @@ index settings are cloned with their tokens masked.
   its sandbox and lists the files the sandbox refused it, since Linux does
   not report refusals itself.
 - `kule isolation` says that commands read only what is granted.
+- Gradle and Maven get caches of the task's own, as the other package
+  managers do: `GRADLE_USER_HOME` under the task's tmp (Gradle cannot start
+  in a read-only user home), and Maven's local repository there through
+  `MAVEN_OPTS`.
+- JVMs reach the registries: Java reads none of the `*_PROXY` variables,
+  so `JAVA_TOOL_OPTIONS` points every JVM (Gradle, sbt) at the task's
+  proxy, and Maven, which reads proxies from its settings alone, gets a
+  settings file naming it in `MAVEN_ARGS`. Before, Maven and Gradle
+  resolved names themselves and reached nothing. Java and .NET go to the
+  proxy over IPv4: through the IPv6 socket both open by default, the macOS
+  sandbox does not take 127.0.0.1 for loopback and refused them.
+- NuGet restores on macOS: its one-time migration of the person's caches
+  takes a mutex in `/tmp`, where a task does not write, and failed every
+  restore; the commands' home now carries the marker that says the
+  migration ran (the caches are the task's own anyway), as Kule's, never
+  offered as a change of your home.
+- Linux: a task's programs connect to the task's own servers. In the task's
+  network namespace nothing listens but them and the proxy's relay, so the
+  TCP rule that kept connections to the proxy's port alone (and so kept
+  Gradle's client from its daemon, and tests from a server beside them) is
+  only for a task that shares this computer's network (weaker isolation).
+- A command that inherits Kule's standard input, output or errors as a file
+  (a log you redirect to) may read that file's facts, nothing more:
+  Python asks for its output's as it starts, and ran without one when
+  refused.
+- A refused read of a file's facts (a probe) lists no folder to add; a
+  refused read of its contents does.
 
 ## 0.2.0-preview.17
 

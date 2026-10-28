@@ -926,7 +926,10 @@ fn hint(operation: &str, path: &str) -> Option<String> {
              there. Write under $TMPDIR, the task's own temporary directory."
                 .to_owned(),
         ),
-        (op, path) if op.starts_with("file-read") && path.starts_with('/') => Some(read_hint(path)),
+        // A read of a file's contents, not of its facts: programs probe
+        // what lies around them (every app, each folder on a way up) and
+        // work without an answer; one that needs the file reads it next.
+        ("file-read-data", path) if path.starts_with('/') => Some(read_hint(path)),
         _ => None,
     }
 }
@@ -2349,6 +2352,46 @@ impl Sandbox {
             // Node's built-in fetch ignores the variables above unless told
             // to (Node 24+); without the proxy its connections just fail.
             put(&mut set, "NODE_USE_ENV_PROXY", "1");
+            // Java reads none of them: every JVM (Gradle, sbt, a program's
+            // own client) is told in the variable all of them pick up, or
+            // it resolves names itself and reaches nothing. On IPv4: Java
+            // reaches 127.0.0.1 through an IPv6 socket otherwise, which the
+            // macOS sandbox does not take for loopback and refuses.
+            put(
+                &mut set,
+                "JAVA_TOOL_OPTIONS",
+                format!(
+                    "-Dhttp.proxyHost=127.0.0.1 -Dhttp.proxyPort={port} \
+                     -Dhttps.proxyHost=127.0.0.1 -Dhttps.proxyPort={port} \
+                     -Djava.net.preferIPv4Stack=true"
+                ),
+            );
+            // .NET reads them, but reaches 127.0.0.1 through an IPv6 socket
+            // too; so IPv6 is off for its networking in the task, where the
+            // proxy is all there is to reach.
+            put(&mut set, "DOTNET_SYSTEM_NET_DISABLEIPV6", "1");
+            // Maven reads proxies from its settings alone, and the person's
+            // settings are not there for a command (they can hold
+            // credentials): a settings file of the task's, in its tmp, named
+            // in the variable Maven 3.9 and later read.
+            let settings = format!(
+                "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+                 <settings xmlns=\"http://maven.apache.org/SETTINGS/1.2.0\">\n\
+                 \x20 <proxies>\n\
+                 \x20   <proxy><id>kule-http</id><active>true</active><protocol>http</protocol><host>127.0.0.1</host><port>{port}</port></proxy>\n\
+                 \x20   <proxy><id>kule-https</id><active>true</active><protocol>https</protocol><host>127.0.0.1</host><port>{port}</port></proxy>\n\
+                 \x20 </proxies>\n\
+                 </settings>\n"
+            );
+            crate::fsops::put_beneath(
+                &self.tmp,
+                "kule-maven-settings.xml",
+                settings.as_bytes(),
+                0o644,
+            )?;
+            let mut args = OsString::from("-s ");
+            args.push(self.tmp.join("kule-maven-settings.xml"));
+            put(&mut set, "MAVEN_ARGS", args);
             // Go on macOS checks certificates with the system's services,
             // which a command reaches only with the network open; told to,
             // it checks them against the roots `SSL_CERT_FILE` names, as on
@@ -2451,6 +2494,38 @@ fn terminal_path(terminal: std::os::fd::BorrowedFd<'_>) -> Result<PathBuf> {
         )));
     }
     Ok(path)
+}
+
+/// The files Kule's own standard input, output and errors are, which a
+/// command inherits where the caller gives it no others: a file a person
+/// redirects to or from, or a named pipe; not a terminal, nor a pipe
+/// without a name. Each by the name the kernel holds for it.
+#[cfg(target_os = "macos")]
+fn inherited_files() -> Vec<PathBuf> {
+    use std::os::unix::ffi::OsStrExt;
+
+    let mut files = Vec::new();
+    for fd in 0..3 {
+        // SAFETY: fstat writes one stat into `st`; F_GETPATH writes at most
+        // PATH_MAX bytes, NUL-ended, into `name`.
+        let mut st: libc::stat = unsafe { std::mem::zeroed() };
+        if unsafe { libc::fstat(fd, &raw mut st) } != 0
+            || !matches!(st.st_mode & libc::S_IFMT, libc::S_IFREG | libc::S_IFIFO)
+        {
+            continue;
+        }
+        let mut name = [0 as libc::c_char; libc::PATH_MAX as usize];
+        if unsafe { libc::fcntl(fd, libc::F_GETPATH, name.as_mut_ptr()) } != 0 {
+            continue;
+        }
+        // SAFETY: F_GETPATH ended the name with a NUL inside the buffer.
+        let name = unsafe { std::ffi::CStr::from_ptr(name.as_ptr()) };
+        let path = PathBuf::from(std::ffi::OsStr::from_bytes(name.to_bytes()));
+        if path.is_absolute() && !files.contains(&path) {
+            files.push(path);
+        }
+    }
+    files
 }
 
 /// Landlock judges a descriptor by how it was opened, before the command
@@ -2915,6 +2990,19 @@ impl Sandbox {
             ));
             params.push((format!("D{i}"), dir.to_owned()));
         }
+        // The files the command's standard input, output and errors are
+        // when it inherits Kule's (a log a person redirects to, in a folder
+        // of theirs or outside every grant): their facts, which a program
+        // asks for as it starts (Python runs without an output it cannot
+        // fstat), of the file alone, nothing on the way to it or beside
+        // it. Last, so that a hidden folder the person put the file in
+        // does not take them away: they chose that file.
+        for (i, file) in inherited_files().iter().enumerate() {
+            text.push_str(&format!(
+                "(allow file-read-metadata (literal (param \"IO{i}\")))\n"
+            ));
+            params.push((format!("IO{i}"), file.clone()));
+        }
         (text, params)
     }
 
@@ -2966,7 +3054,6 @@ impl Sandbox {
     fn platform_command(&self, program: &str, args: &[String]) -> Result<Command> {
         use std::os::unix::process::CommandExt;
 
-        let mut ruleset = Some(self.landlock_ruleset()?);
         let mut command = self.session_command(program);
         command.args(args);
         // Namespaces of its own first: its uid map is written under /proc,
@@ -2980,6 +3067,7 @@ impl Sandbox {
         };
         let read_only = self.mounted_read_only();
         let network_shared = matches!(net, Net::Shared);
+        let mut ruleset = Some(self.landlock_ruleset(network_shared)?);
         // Without Landlock's rule for Unix sockets, those outside the
         // task's folders are covered for the command instead: the person's
         // runtime directory whole, where their daemons make theirs, also
@@ -3106,8 +3194,9 @@ impl Sandbox {
     /// Reads are allowed under the granted roots, but for the hidden paths
     /// inside them. Landlock only allows, so the hidden paths are carved
     /// out: each ancestor of a hidden path is replaced by its children, the
-    /// hidden one left out.
-    fn landlock_ruleset(&self) -> Result<landlock::RulesetCreated> {
+    /// hidden one left out. `network_shared` says the command runs on this
+    /// computer's network rather than in a namespace of its own.
+    fn landlock_ruleset(&self, network_shared: bool) -> Result<landlock::RulesetCreated> {
         use landlock::{
             ABI, Access, AccessFs, AccessNet, CompatLevel, Compatible, Ruleset, RulesetAttr,
             RulesetCreatedAttr, path_beneath_rules,
@@ -3122,11 +3211,18 @@ impl Sandbox {
             .handle_access(AccessFs::from_all(abi))
             .map_err(|e| fail(&e))?;
         // TCP rules need ABI 4 (Linux 6.7); HardRequirement makes an older
-        // kernel refuse instead of leaving the network open.
+        // kernel refuse instead of leaving the network open. With the
+        // network going through the proxy, a command in a network namespace
+        // of its own connects to any port: nothing listens there but the
+        // task's own programs and the proxy's relay, and a program reaches
+        // its own servers (Gradle its daemon, a test the server beside it).
+        // One on this computer's network (weaker isolation) connects to the
+        // proxy's port alone, away from the person's own services.
         let net = match self.network {
             Network::Allow => None,
             Network::Deny => Some(AccessNet::BindTcp | AccessNet::ConnectTcp),
-            Network::Proxy(_) => Some(AccessNet::ConnectTcp.into()),
+            Network::Proxy(_) if network_shared => Some(AccessNet::ConnectTcp.into()),
+            Network::Proxy(_) => None,
         };
         if let Some(net) = net {
             ruleset = ruleset.handle_access(net).map_err(|e| fail(&e))?;
@@ -3247,7 +3343,9 @@ impl Sandbox {
             .map_err(|e| fail(&e))?
             .add_rules(path_beneath_rules(&writable, AccessFs::from_all(abi)))
             .map_err(|e| fail(&e))?;
-        if let Network::Proxy(port) = self.network {
+        if let Network::Proxy(port) = self.network
+            && network_shared
+        {
             created = created
                 .add_rule(landlock::NetPort::new(port, AccessNet::ConnectTcp))
                 .map_err(|e| fail(&e))?;
@@ -3551,6 +3649,29 @@ mod tests {
             parse_denial("Sandbox: Python(4242) deny(1) mach-lookup com.apple.lsd.mapdb\nkule-1-2")
                 .unwrap();
         assert_eq!(other.hint, None);
+    }
+
+    /// A read refused names the folder to add; a probe of a file's facts
+    /// (every app in /System/Applications, when LaunchServices is closed)
+    /// says nothing: programs make them by the dozen and work without.
+    #[test]
+    fn a_refused_read_names_the_folder_a_probe_of_facts_does_not() {
+        let read = parse_denial(
+            "Sandbox: java(4242) deny(1) file-read-data /opt/tools/jdk/lib/modules\nkule-1-2",
+        )
+        .unwrap();
+        assert!(
+            read.hint
+                .as_deref()
+                .is_some_and(|h| h.contains("kule tools add '/opt/tools/jdk/lib'")),
+            "{:?}",
+            read.hint
+        );
+        let probe = parse_denial(
+            "Sandbox: Python(4242) deny(1) file-read-metadata /System/Applications/Chess.app\nkule-1-2",
+        )
+        .unwrap();
+        assert_eq!(probe.hint, None);
     }
 
     /// A server refused, or a write to the system's /tmp, says why and

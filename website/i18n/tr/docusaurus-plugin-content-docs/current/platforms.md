@@ -149,7 +149,8 @@ okunur olarak bağlanır (mount). Kullanıcı ad alanları yoksa ve bağlantı
   diğerleri de sandbox'ın dışından ağdan uzak tutulur.
 - **macOS**'ta, bir görevin ağ trafiği proxy'den geçerken sistemin sertifika
   hizmeti görevin komutlarına kapalı kalır. Sertifikaları yalnızca bu hizmet
-  üzerinden doğrulayan bir araç, bir görevde HTTPS kullanamaz. pip 24.2 ve
+  üzerinden doğrulayan bir araç, bir görevde HTTPS kullanamaz; .NET (NuGet
+  indirmeleri dahil) bunlardan biridir. pip 24.2 ve
   sonrası `--use-deprecated=legacy-certs` ile çalışır (daha eski pip bu
   seçeneği reddeder; bu yüzden Kule onu kendisi eklemez). Go'ya,
   `SSL_CERT_FILE`'ın gösterdiği kök sertifikaları kullanması söylenir.

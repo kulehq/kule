@@ -260,6 +260,43 @@ proxy.
 
 **Fix:** `pip install --use-deprecated=legacy-certs …`.
 
+### NuGet cannot restore in a task on macOS
+
+**Symptom:** `error NU1301: ... The SSL connection could not be
+established ... bad certificate format`, with
+`sandbox: refused mach-lookup com.apple.SecurityServer (dotnet)` after the
+command.
+
+**Cause:** .NET on macOS checks certificates through the system's keychain
+and trust services, which a task's commands never get (the keychain opens
+secrets; the trust service fetches addresses past the proxy). It reads no
+`SSL_CERT_FILE`, so the proxy's authority and the system's roots in it do
+not help.
+
+**Fix:** restore and build .NET projects in a task on Linux, where .NET
+checks certificates against `SSL_CERT_FILE`; on macOS, restore outside the
+task first (the packages the task needs are then in your NuGet cache, which
+the task reads).
+
+### Gradle does not run in a task on macOS
+
+**Symptom:** `Could not create service of type FileLockContentionHandler`
+with `java.net.SocketException: Operation not permitted`; or, with servers
+allowed, `Could not connect to the Gradle daemon` and
+`sandbox: refused network-outbound remote:*:PORT (java)` after the command.
+
+**Cause:** Gradle's processes talk to each other over loopback: the client
+to the daemon it forks (also with `--no-daemon`), the build to the workers
+that run tests. On macOS a task's programs reach nothing on the network but
+the proxy, loopback included, and listen only when you allow servers; so
+Gradle cannot connect to itself. Maven needs none of this: its forks talk
+over pipes.
+
+**Fix:** build with Maven in the task, or run Gradle with
+`kule exec TASK --open-network -- gradle …`, which bypasses the proxy and
+the policy for that command. On Linux Gradle runs as it is: loopback is the
+task's own there.
+
 ### A connection is cut for Encrypted Client Hello
 
 **Symptom:** a browser or a tool built on one cannot reach a host the task

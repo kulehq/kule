@@ -258,7 +258,7 @@ fn a_dropped_proxy_stops_serving() {
 fn commands_find_the_proxy_in_the_usual_variables() {
     let s = Setup::new();
     let out = s.python(
-        "import os; print(os.environ['HTTPS_PROXY'], os.environ['http_proxy'], os.environ.get('NO_PROXY'), os.environ.get('NODE_USE_ENV_PROXY'))",
+        "import os; print(os.environ['HTTPS_PROXY'], os.environ['http_proxy'], os.environ.get('NO_PROXY'), os.environ.get('NODE_USE_ENV_PROXY'), os.environ['JAVA_TOOL_OPTIONS']); a = os.environ['MAVEN_ARGS'].split(' ', 1); print(a[0], open(a[1]).read().count('<port>' + os.environ['HTTPS_PROXY'].rsplit(':', 1)[1] + '</port>'), os.environ['DOTNET_SYSTEM_NET_DISABLEIPV6'])",
     );
     let text = String::from_utf8_lossy(&out.stdout);
     let parts: Vec<&str> = text.split_whitespace().collect();
@@ -267,6 +267,57 @@ fn commands_find_the_proxy_in_the_usual_variables() {
     assert_eq!(parts[2], "None");
     // Node's fetch reads the variables only when this says so.
     assert_eq!(parts[3], "1");
+    // Java reads none of them: every JVM is told the same proxy.
+    let port = parts[0].rsplit(':').next().unwrap();
+    assert_eq!(
+        parts[4..9],
+        [
+            "-Dhttp.proxyHost=127.0.0.1".to_owned(),
+            format!("-Dhttp.proxyPort={port}"),
+            "-Dhttps.proxyHost=127.0.0.1".to_owned(),
+            format!("-Dhttps.proxyPort={port}"),
+            "-Djava.net.preferIPv4Stack=true".to_owned(),
+        ],
+        "{text}"
+    );
+    // Maven takes the proxy from a settings file of the task's: once for
+    // http, once for https.
+    assert_eq!(parts[9..11], ["-s", "2"], "{text}");
+    // .NET would reach the proxy through an IPv6 socket, which the macOS
+    // sandbox does not take for loopback: IPv4 only.
+    assert_eq!(parts[11..], ["1"], "{text}");
+}
+
+/// A program in the task reaches a server the task runs (Gradle its daemon,
+/// a test the server beside it): on Linux, where the task's network
+/// namespace holds nothing but its own programs and the proxy's relay. On
+/// macOS the task's programs share this computer's loopback with the
+/// person's own services, so nothing listens unless the person allows
+/// servers, and a connection to anything but the proxy stays refused
+/// (docs/troubleshooting.md).
+#[test]
+fn a_tasks_programs_reach_the_tasks_own_servers() {
+    let s = Setup::new();
+    let out = s.python(
+        r#"
+import http.server as h, socket, threading
+try:
+    s = h.ThreadingHTTPServer(("127.0.0.1", 0), h.SimpleHTTPRequestHandler)
+    threading.Thread(target=s.serve_forever, daemon=True).start()
+    c = socket.create_connection(("127.0.0.1", s.server_port), timeout=5)
+    c.sendall(b"GET / HTTP/1.0\r\n\r\n")
+    print("reached" if c.recv(12).startswith(b"HTTP/1.0 200") else "odd")
+except OSError as e:
+    print("refused", e.errno)
+"#,
+    );
+    let text = String::from_utf8_lossy(&out.stdout);
+    let err = String::from_utf8_lossy(&out.stderr);
+    if cfg!(target_os = "linux") {
+        assert_eq!(text.trim(), "reached", "{text}\n{err}");
+    } else {
+        assert!(text.trim().starts_with("refused"), "{text}\n{err}");
+    }
 }
 
 #[test]

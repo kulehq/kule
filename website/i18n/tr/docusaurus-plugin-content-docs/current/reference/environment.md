@@ -63,7 +63,11 @@ Bir ajan profili kendininkileri `pass_env` altında adlandırır.
 | `CARGO_HOME` | `<task>/tmp/caches/cargo` | Görevin kendi cargo önbelleği (cargo ayarlarınızla, ama asla `credentials.toml` olmadan). |
 | `npm_config_cache` | `<task>/tmp/caches/npm` | Görevin kendi npm önbelleği. |
 | `PNPM_HOME`, `pnpm_config_store_dir` | `<task>/tmp/caches/pnpm` altında | pnpm. |
-| `YARN_CACHE_FOLDER`, `PIP_CACHE_DIR`, `UV_CACHE_DIR`, `GOCACHE`, `GOMODCACHE`, `NUGET_PACKAGES`, `XDG_CACHE_HOME` | `<task>/tmp/caches/` altında | Her aracın önbelleği; görevin kendisine ait. |
+| `YARN_CACHE_FOLDER`, `PIP_CACHE_DIR`, `UV_CACHE_DIR`, `GOCACHE`, `GOMODCACHE`, `NUGET_PACKAGES`, `XDG_CACHE_HOME`, `GRADLE_USER_HOME` | `<task>/tmp/caches/` altında | Her aracın önbelleği; görevin kendisine ait. Gradle için kullanıcı dizininin tamamı. |
+| `MAVEN_OPTS` | `-Dmaven.repo.local=<task>/tmp/caches/m2` | Maven'ın yerel deposu; görevin kendisine ait. |
+| `JAVA_TOOL_OPTIONS` | `-Dhttp.proxyHost=127.0.0.1 -Dhttp.proxyPort=… -Dhttps.proxyHost=… -Dhttps.proxyPort=… -Djava.net.preferIPv4Stack=true` | Her JVM'i (Gradle, sbt, bir programın kendi HTTP istemcisi) IPv4 üzerinden proxy'ye yönlendirir: Java `*_PROXY` değişkenlerini okumaz. |
+| `DOTNET_SYSTEM_NET_DISABLEIPV6` | `1` | .NET proxy'ye IPv4 üzerinden ulaşır: IPv6 soketiyle macOS kum havuzu 127.0.0.1'i loopback saymazdı. |
+| `MAVEN_ARGS` | `-s <task>/tmp/kule-maven-settings.xml` | Maven proxy'leri yalnızca ayarlarından okur: görevin proxy'sini adlandıran bir ayar dosyası (`~/.m2/settings.xml` dosyanız kimlik bilgisi taşıyabildiği için komutlara görünmez). Maven 3.9 ve sonrası. |
 | `NODE_OPTIONS`, `PYTHONPATH`, `RUBYOPT` | `<task>/tmp/.kule-loopback/` içinden küçük bir dosya yükler | Her adresi isteyen Node, Python ve Ruby sunucularını yalnızca bu bilgisayara yönlendirir. (Linux'ta Kule ayrıca her programın sunucularını kendisi loopback'te tutar.) Kendi değerleriniz korunur. |
 | saklanan bir gizli değerin adı, örn. `STRIPE_KEY` | `kule_secret_…` | Bir yer tutucu; proxy değeri yalnızca o gizli değerin host'ları için koyar. |
 

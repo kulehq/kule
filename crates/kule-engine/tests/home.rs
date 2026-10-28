@@ -946,3 +946,21 @@ fn home_changes_wait_while_a_terminal_is_open() {
     s.task.undo_home().unwrap();
     assert!(!s.person.path().join(".newrc").exists());
 }
+
+/// NuGet skips its one-time migration, whose mutex lives in /tmp where a
+/// task does not write on macOS: the layer carries the marker that says it
+/// ran, Kule's own, never offered as a change of the home.
+#[test]
+fn the_layer_carries_nugets_migration_marker_as_kules_own() {
+    let s = Setup::new();
+    let out = s.run("[ -f \"$HOME/.local/share/NuGet/Migrations/1\" ] && echo there");
+    assert_eq!(out.trim(), "there");
+    let changes = s.task.home_changes().unwrap();
+    assert!(
+        !changes
+            .iter()
+            .any(|c| c.path.starts_with(".local/share/NuGet")),
+        "{changes:?}"
+    );
+    assert!(!s.person.path().join(".local/share/NuGet").exists());
+}

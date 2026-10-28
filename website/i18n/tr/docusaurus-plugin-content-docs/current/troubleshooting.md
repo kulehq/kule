@@ -274,6 +274,42 @@ görevde kapalı kalır.
 
 **Çözüm:** `pip install --use-deprecated=legacy-certs …`.
 
+### NuGet macOS'ta bir görevde paket indiremiyor
+
+**Belirti:** `error NU1301: ... The SSL connection could not be
+established ... bad certificate format` ve komutun ardından
+`sandbox: refused mach-lookup com.apple.SecurityServer (dotnet)`.
+
+**Neden:** .NET macOS'ta sertifikaları sistemin anahtar zinciri ve güven
+servisleri üzerinden denetler; görevin komutları bunlara hiç erişmez
+(anahtar zinciri gizli bilgileri açar, güven servisi proxy'yi aşarak
+adreslere gider). `SSL_CERT_FILE` okumadığı için proxy'nin otoritesi ve
+içindeki sistem kökleri de yardımcı olmaz.
+
+**Çözüm:** .NET projelerini Linux'ta bir görevde indirip derleyin; orada
+.NET sertifikaları `SSL_CERT_FILE` ile denetler. macOS'ta paketleri önce
+görevin dışında indirin: görevin ihtiyaç duyduğu paketler NuGet
+önbelleğinizde olur, görev onu okur.
+
+### Gradle macOS'ta bir görevde çalışmıyor
+
+**Belirti:** `Could not create service of type FileLockContentionHandler`
+ve `java.net.SocketException: Operation not permitted`; ya da sunuculara
+izin verilmişse `Could not connect to the Gradle daemon` ve komutun
+ardından `sandbox: refused network-outbound remote:*:PORT (java)`.
+
+**Neden:** Gradle'ın süreçleri birbiriyle loopback üzerinden konuşur:
+istemci, çatalladığı daemon'la (`--no-daemon` ile bile), derleme ise
+testleri koşturan işçilerle. macOS'ta görevin programları ağda proxy'den
+başka hiçbir yere erişemez, loopback dahil; dinlemeleri de ancak siz
+sunuculara izin verirseniz mümkün. Bu yüzden Gradle kendine bağlanamaz.
+Maven'ın buna ihtiyacı yok: çatalları borularla konuşur.
+
+**Çözüm:** görevde Maven ile derleyin ya da Gradle'ı
+`kule exec GÖREV --open-network -- gradle …` ile çalıştırın; bu, o komut
+için proxy'yi ve politikayı atlar. Linux'ta Gradle olduğu gibi çalışır:
+loopback orada görevin kendisine aittir.
+
 ### Bir bağlantı Encrypted Client Hello yüzünden kesiliyor {#a-connection-is-cut-for-encrypted-client-hello}
 
 **Belirti:** bir tarayıcı ya da tarayıcı üzerine kurulu bir araç, görevin
