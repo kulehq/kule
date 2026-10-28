@@ -1,5 +1,15 @@
 # Changes
 
+## Unreleased
+
+### Security
+
+- A tool's folder on `PATH` inside one of your own folders, or where apps
+  keep settings and data, is readable as that folder, or as its
+  toolchain's root above a `bin` (`~/sdk/go1.22/bin` → `~/sdk/go1.22`),
+  never as an app's whole folder there. `kule tools list` shows that root
+  with the other grants.
+
 ## 0.2.0-preview.18
 
 A security preview. A task's commands now read nothing but what is

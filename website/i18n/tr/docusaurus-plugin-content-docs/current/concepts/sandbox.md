@@ -55,8 +55,10 @@ yerleri** okur. Verilenler, her biri kaynağıyla birlikte
   `/sys`, `/run` altındaki çözücü dosyaları ve `/var` ile `/tmp` altında dar
   yerler; `/opt`, `/tmp` ya da `/run` asla bütünüyle değil;
 - komutlara aktarılan değişkenlerin söylediği **araçlarınızın yerleri**: her
-  `PATH` girdisi (ve ev dizininizin dışındaki bir `bin`'in üstündeki aracın
-  kendi klasörü), `JAVA_HOME`, `GOROOT`, `DOTNET_ROOT` ve Kule'nin aktardığı
+  `PATH` girdisi (ve ev dizininizin dışındaki, ya da kendi klasörlerinizin ve
+  uygulamaların veri tuttuğu yerlerin içindeki bir `bin`'in üstündeki aracın
+  kendi klasörü, ama oradaki bir uygulamanın klasörünün tamamı asla),
+  `JAVA_HOME`, `GOROOT`, `DOTNET_ROOT` ve Kule'nin aktardığı
   diğerleri;
 - **araç zincirlerinin ev dizininizde kendi dosyalarını tuttuğu yerler**:
   `~/.cargo`, `~/.rustup`, `~/.npm`, `~/.m2`, `~/.gradle`, `~/.nuget`
