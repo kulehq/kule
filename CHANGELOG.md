@@ -85,6 +85,11 @@ index settings are cloned with their tokens masked.
   refused.
 - A refused read of a file's facts (a probe) lists no folder to add; a
   refused read of its contents does.
+- The release gate's project check runs a project per toolchain in a task,
+  not only ripgrep and commander: itsdangerous from PyPI, a Maven project
+  with JUnit from Maven Central, a Go module, and on Linux a Gradle project
+  and an xUnit project from NuGet, so that what each toolchain reads is
+  checked against the grants on every change and before every release.
 
 ## 0.2.0-preview.17
 

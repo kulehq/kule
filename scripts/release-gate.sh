@@ -30,11 +30,19 @@
 #            may not be written, the network not reached, no secret in the
 #            environment seen. The same scan outside the task must find
 #            each of them first.
-# project    installs, builds and tests real projects in a Kule task, from
-#            the registries the policy lets through (ripgrep from
-#            crates.io, commander from npm), with a home that holds tokens
-#            and settings; the workspace stays as it was, the token is
-#            masked, and a host the policy does not name is refused.
+# project    installs, builds and tests projects in Kule tasks, one per
+#            toolchain, with a home that holds tokens and settings: real
+#            ones from the registries the policy lets through (ripgrep from
+#            crates.io, commander from npm, itsdangerous from PyPI), and
+#            small ones made here for the toolchains whose registries pass
+#            unseen or are not in the policy (Maven with JUnit from Maven
+#            Central, a Go module with no dependency, and on Linux Gradle
+#            and xUnit from NuGet: on macOS Gradle's processes and .NET's
+#            certificate checks need what a task does not get, see
+#            docs/troubleshooting.md).
+#            Each toolchain finds what it reads under the grants; the
+#            workspace stays as it was, the token is masked, and a host the
+#            policy does not name is refused.
 # attest     verifies every asset of a release against its provenance, held
 #            to the release workflow and the tag
 #
@@ -52,10 +60,17 @@ BETTERLEAKS=1.9.0
 CARGO_AUDITABLE=0.7.7
 CARGO_AUDIT=0.22.2
 SANDBOX_PROBE=6.19.1
-# The real projects, each at a commit: ripgrep 15.2.0 and commander
-# 15.0.0. Their lockfiles name nothing but crates.io and npm.
+# The real projects, each at a commit: ripgrep 15.2.0, commander 15.0.0
+# and itsdangerous 2.2.0. Their lockfiles name nothing but crates.io and
+# npm; itsdangerous names only PyPI, where its test tools come from.
 RIPGREP=e89fff89ac9af12e8d4ce9d5fd07beb408ca730f
 COMMANDER=ba6d13ddb4243e5913367734f8c159089ffe7834
+ITSDANGEROUS=096c8d42545d3b68ea21a4f890fb2b2d8979c0bd
+# What the Java projects made here test with and build with, from Maven
+# Central.
+JUNIT=5.11.4
+SUREFIRE=3.5.2
+MAVEN_COMPILER=3.13.0
 REPO=kulehq/kule
 
 say() { printf '%s\n' "$*"; }
@@ -536,6 +551,16 @@ fetch() {
   [ "$(git -C "$dir" rev-parse HEAD)" = "$3" ] || fail "$1 is not at $3"
 }
 
+# made <name>: the files written to $HOME/code/<name> as a workspace,
+# committed: a project made here for a toolchain, as a person would start
+# one, so that what the task changes can be told from what was there.
+made() {
+  dir=$HOME/code/$1
+  git -C "$dir" init -q
+  git -C "$dir" add -A
+  git -C "$dir" -c user.name=gate -c user.email=gate@localhost commit -qm "$1"
+}
+
 # build <name> <script>: runs the script in a task on the project, its
 # network through the task's proxy, its output in $work/<name>.log. The
 # workspace stays as it was, and nothing gets out but to the registries.
@@ -556,11 +581,24 @@ build() {
 project() {
   exec 3>&2
   find_kule
-  for tool in git cargo node npm curl; do
+  for tool in git jq cargo node npm curl python3 go java mvn; do
     command -v "$tool" >/dev/null 2>&1 || fail "$tool is not installed"
   done
+  # Gradle talks to its own processes (its daemon, the workers that run
+  # tests) over loopback, and .NET checks certificates through the
+  # keychain's service: neither is a task's on macOS
+  # (docs/troubleshooting.md), so both run on Linux.
+  linux=
+  if [ "$(uname)" = Linux ]; then
+    for tool in gradle dotnet; do
+      command -v "$tool" >/dev/null 2>&1 || fail "$tool is not installed"
+    done
+    linux=1
+  fi
   node -e 'const [a, b] = process.versions.node.split(".").map(Number); process.exit(a > 22 || (a === 22 && b >= 12) ? 0 : 1)' ||
     fail "commander $COMMANDER needs Node 22.12 or newer"
+  python3 -c 'import sys, venv; sys.exit(0 if sys.version_info >= (3, 9) else 1)' 2>/dev/null ||
+    fail "itsdangerous $ITSDANGEROUS needs Python 3.9 or newer, with venv"
   scratch
   home=$work/home
   mkdir -p "$home/.config/tool" "$home/code"
@@ -581,6 +619,133 @@ EOF
   export HOME="$home" KULE_HOME="$work/kule"
   fetch ripgrep https://github.com/BurntSushi/ripgrep.git "$RIPGREP"
   fetch commander https://github.com/tj/commander.js.git "$COMMANDER"
+  fetch itsdangerous https://github.com/pallets/itsdangerous.git "$ITSDANGEROUS"
+
+  # A Go module with a test and nothing to fetch: the policy does not name
+  # Go's module proxy, so the module proxy is off in the task; what is
+  # checked is the toolchain's own reads (GOROOT, its caches, its settings).
+  mkdir -p "$home/code/hello-go"
+  cat >"$home/code/hello-go/hello.go" <<'EOF'
+package hello
+
+import "strings"
+
+// Greet returns a greeting for name.
+func Greet(name string) string { return "hello, " + strings.TrimSpace(name) }
+EOF
+  cat >"$home/code/hello-go/hello_test.go" <<'EOF'
+package hello
+
+import "testing"
+
+func TestGreet(t *testing.T) {
+	if got := Greet(" gate "); got != "hello, gate" {
+		t.Fatalf("Greet: %q", got)
+	}
+}
+EOF
+  (cd "$home/code/hello-go" && go mod init gate.local/hello >/dev/null 2>&1)
+  made hello-go
+
+  # A Maven project that tests with JUnit, its plugins and JUnit from Maven
+  # Central (no wrapper: the distribution would come from a host the policy
+  # does not name; the installed Maven runs it); and the same project for
+  # Gradle, where Gradle runs.
+  java=$work/java
+  mkdir -p "$java/src/main/java/hello" "$java/src/test/java/hello"
+  cat >"$java/src/main/java/hello/Hello.java" <<'EOF'
+package hello;
+
+public final class Hello {
+  private Hello() {}
+
+  public static String greet(String name) { return "hello, " + name.trim(); }
+}
+EOF
+  cat >"$java/src/test/java/hello/HelloTest.java" <<'EOF'
+package hello;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+
+import org.junit.jupiter.api.Test;
+
+class HelloTest {
+  @Test
+  void greets() { assertEquals("hello, gate", Hello.greet(" gate ")); }
+}
+EOF
+  mkdir -p "$home/code/hello-maven"
+  cp -R "$java/src" "$home/code/hello-maven/"
+  cat >"$home/code/hello-maven/pom.xml" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>gate.local</groupId>
+  <artifactId>hello</artifactId>
+  <version>1.0</version>
+  <properties>
+    <maven.compiler.release>17</maven.compiler.release>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+  </properties>
+  <dependencies>
+    <dependency>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <version>$JUNIT</version>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-compiler-plugin</artifactId>
+        <version>$MAVEN_COMPILER</version>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-surefire-plugin</artifactId>
+        <version>$SUREFIRE</version>
+      </plugin>
+    </plugins>
+  </build>
+</project>
+EOF
+  made hello-maven
+  if [ -n "$linux" ]; then
+    mkdir -p "$home/code/hello-gradle"
+    cp -R "$java/src" "$home/code/hello-gradle/"
+    printf "rootProject.name = 'hello'\n" >"$home/code/hello-gradle/settings.gradle"
+    cat >"$home/code/hello-gradle/build.gradle" <<EOF
+plugins { id 'java' }
+repositories { mavenCentral() }
+dependencies {
+  testImplementation platform('org.junit:junit-bom:$JUNIT')
+  testImplementation 'org.junit.jupiter:junit-jupiter'
+  testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+test {
+  useJUnitPlatform()
+  afterSuite { desc, result ->
+    if (desc.parent == null) println "gate tests: \${result.testCount} run, \${result.failedTestCount} failed"
+  }
+}
+EOF
+    made hello-gradle
+  fi
+
+  # An xUnit project as `dotnet new` makes one, its packages from NuGet
+  # restored in the task.
+  if [ -n "$linux" ]; then
+    mkdir -p "$home/code/hello-dotnet"
+    DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1 \
+      DOTNET_GENERATE_ASPNET_CERTIFICATE=false \
+      dotnet new xunit --output "$home/code/hello-dotnet" --name hello --no-restore >"$work/dotnet-new.log" 2>&1 ||
+      fail "dotnet new made no xUnit project: $work/dotnet-new.log"
+    made hello-dotnet
+  fi
 
   # Every crate comes from crates.io in the task: its cargo home is new.
   # shellcheck disable=SC2016
@@ -604,6 +769,62 @@ EOF
     fail "commander: ${passed:-no} tests passed, ${failed:-?} failed: $work/commander.log"
   fi
   say "project: commander ok ($added packages from npm, $passed tests passed)"
+
+  # Every package comes from PyPI in the task: pip's cache is new. On
+  # macOS pip checks certificates in the system's trust service, which the
+  # task keeps closed (docs/troubleshooting.md): pip's own roots instead.
+  # shellcheck disable=SC2016
+  build itsdangerous 'export PIP_CACHE_DIR="$TMPDIR/pip-cache" PIP_USE_DEPRECATED=legacy-certs
+    python3 -m venv .venv && .venv/bin/pip install --disable-pip-version-check . pytest freezegun &&
+    .venv/bin/python -m pytest -q'
+  installed=$(sed -n 's/^Successfully installed //p' "$work/itsdangerous.log" | wc -w | tr -d ' ')
+  passed=$(grep -oE '[0-9]+ passed' "$work/itsdangerous.log" | tail -1 | cut -d' ' -f1)
+  [ "$installed" -ge 5 ] || fail "itsdangerous: $installed packages installed from PyPI, 5 or more expected: $work/itsdangerous.log"
+  [ "${passed:-0}" -ge 50 ] || fail "itsdangerous: ${passed:-no} tests passed, 50 or more run: $work/itsdangerous.log"
+  ! grep -qE '[0-9]+ (failed|error)' "$work/itsdangerous.log" || fail "itsdangerous's tests failed: $work/itsdangerous.log"
+  say "project: itsdangerous ok ($installed packages from PyPI, $passed tests passed)"
+
+  build hello-go 'export GOTOOLCHAIN=local GOPROXY=off GOFLAGS=-mod=mod
+    go vet ./... && go test ./...'
+  grep -q '^ok ' "$work/hello-go.log" || fail "hello-go: go test passed nothing: $work/hello-go.log"
+  say "project: hello-go ok (built and tested with the installed Go)"
+
+  # Maven's local repository is the task's own (MAVEN_OPTS): every plugin
+  # and JUnit come from Maven Central.
+  build hello-maven 'mvn -B test'
+  fetched=$(grep -c '^\[INFO\] Downloaded from central: https://repo.maven.apache.org/' "$work/hello-maven.log" || true)
+  grep -q 'BUILD SUCCESS' "$work/hello-maven.log" || fail "hello-maven: the build did not succeed: $work/hello-maven.log"
+  [ "$fetched" -ge 20 ] || fail "hello-maven: $fetched files downloaded from Maven Central, 20 or more expected: $work/hello-maven.log"
+  grep -qE '^\[INFO\] Tests run: [1-9][0-9]*, Failures: 0, Errors: 0, Skipped: [0-9]+$' "$work/hello-maven.log" ||
+    fail "hello-maven: the tests did not all pass: $work/hello-maven.log"
+  say "project: hello-maven ok ($fetched files from Maven Central, tests passed)"
+
+  if [ -n "$linux" ]; then
+    build hello-gradle 'gradle test --no-daemon --console=plain'
+    # What Gradle fetched is in the task's own Gradle home (GRADLE_USER_HOME).
+    fetched=$(find "$KULE_HOME/tasks/$task/tmp/caches/gradle/caches" -name '*.jar' 2>/dev/null | wc -l | tr -d ' ')
+    junit=$(find "$KULE_HOME/tasks/$task/tmp/caches/gradle/caches" -name 'junit-jupiter-api-*.jar' 2>/dev/null | wc -l | tr -d ' ')
+    run=$(sed -n 's/^gate tests: \([0-9]*\) run, \([0-9]*\) failed$/\1/p' "$work/hello-gradle.log" | tail -1)
+    failed=$(sed -n 's/^gate tests: \([0-9]*\) run, \([0-9]*\) failed$/\2/p' "$work/hello-gradle.log" | tail -1)
+    grep -q '^BUILD SUCCESSFUL' "$work/hello-gradle.log" || fail "hello-gradle: the build did not succeed: $work/hello-gradle.log"
+    [ "$junit" -ge 1 ] && [ "$fetched" -ge 10 ] || fail "hello-gradle: $fetched jars from Maven Central in the task's Gradle home, JUnit among them expected: $work/hello-gradle.log"
+    [ "${run:-0}" -ge 1 ] && [ "${failed:-1}" = 0 ] || fail "hello-gradle: ${run:-no} tests run, ${failed:-?} failed: $work/hello-gradle.log"
+    say "project: hello-gradle ok ($fetched jars from Maven Central, $run tests passed)"
+  fi
+
+  if [ -n "$linux" ]; then
+    build hello-dotnet 'export DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1 DOTNET_GENERATE_ASPNET_CERTIFICATE=false
+      dotnet test'
+    # VSTest says "Passed!  - Failed: 0, Passed: 1, ..."; the testing
+    # platform "Passed! ... failed: 0 ... succeeded: 1".
+    grep -q 'Passed!' "$work/hello-dotnet.log" || fail "hello-dotnet: no test passed: $work/hello-dotnet.log"
+    grep -qiE 'failed: *0' "$work/hello-dotnet.log" || fail "hello-dotnet: a test failed: $work/hello-dotnet.log"
+    restored=$(find "$(timed 60 "$kule" path "$task")/obj" -name 'project.assets.json' | head -1)
+    [ -n "$restored" ] || fail "hello-dotnet: nothing restored from NuGet in the task: $work/hello-dotnet.log"
+    packages=$(jq '.libraries | length' "$restored")
+    [ "$packages" -ge 5 ] || fail "hello-dotnet: $packages packages restored from NuGet, 5 or more expected"
+    say "project: hello-dotnet ok ($packages packages from NuGet, tests passed)"
+  fi
 
   # The token is masked in the tasks' homes and the settings beside it are
   # as they were; its value is nowhere in Kule's home, sealed but there.

@@ -130,9 +130,13 @@ task's base or a project beside the workspace, may be read; the workspace
 and the home may not be written, no host reached, no secret in the
 environment seen. The same scan outside the task must find each of them
 first, so a clean result means something. And it installs, builds and
-tests real projects in a task (ripgrep from crates.io, commander from npm)
-with a home holding a token and settings: the workspace stays as it was,
-the token stays masked, and a host the policy does not name is refused.
+tests a project per toolchain in a task, with a home holding a token and
+settings: ripgrep from crates.io, commander from npm, itsdangerous from
+PyPI, a Maven project with JUnit from Maven Central, a Go module, and on
+Linux a Gradle project and an xUnit project from NuGet; each toolchain
+finds what it reads under the
+grants, the workspace stays as it was, the token stays masked, and a host
+the policy does not name is refused.
 Each tool runs at a pinned version. None sends a file it scans anywhere;
 osv-scanner asks osv.dev about the package names and versions in the
 lockfiles.
