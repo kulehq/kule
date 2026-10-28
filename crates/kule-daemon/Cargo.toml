@@ -11,10 +11,10 @@ rust-version.workspace = true
 [dependencies]
 blake3.workspace = true
 futures = "0.3.34"
-kule-acp = { version = "0.2.0-preview.18", path = "../kule-acp" }
-kule-engine = { version = "0.2.0-preview.18", path = "../kule-engine" }
-kule-ext = { version = "0.2.0-preview.18", path = "../kule-ext" }
-kule-view = { version = "0.2.0-preview.18", path = "../kule-view" }
+kule-acp = { version = "0.2.0-preview.19", path = "../kule-acp" }
+kule-engine = { version = "0.2.0-preview.19", path = "../kule-engine" }
+kule-ext = { version = "0.2.0-preview.19", path = "../kule-ext" }
+kule-view = { version = "0.2.0-preview.19", path = "../kule-view" }
 serde.workspace = true
 serde_json.workspace = true
 tokio = { version = "1.53.3", features = ["rt-multi-thread"] }

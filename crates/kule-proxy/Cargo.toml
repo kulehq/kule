@@ -14,7 +14,7 @@ name = "kule-proxy"
 path = "src/main.rs"
 
 [dependencies]
-kule-engine = { version = "0.2.0-preview.18", path = "../kule-engine" }
+kule-engine = { version = "0.2.0-preview.19", path = "../kule-engine" }
 
 [dev-dependencies]
 serde_json.workspace = true
