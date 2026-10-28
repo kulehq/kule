@@ -1,13 +1,14 @@
 # Changes
 
-## Unreleased
+## 0.2.0-preview.18
 
-A task's commands now read nothing but what is granted, on macOS and Linux
-as on Windows: the task's own folders, the system's base, your toolchains
-and the folders you add with the new `kule tools`. Everything else, your
-home included, is simply not there for them. At the top of your home only
-what shells and toolchains read is in the commands' home; pip's and uv's
-index settings are cloned with their tokens masked.
+A security preview. A task's commands now read nothing but what is
+granted, on macOS and Linux as on Windows: the task's own folders, the
+system's base, your toolchains and the folders you add with the new
+`kule tools`. Everything else, your home included, is simply not there
+for them. At the top of your home only what shells and toolchains read is
+in the commands' home; pip's and uv's index settings are cloned with
+their tokens masked.
 
 ### Security
 

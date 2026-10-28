@@ -46,7 +46,7 @@ body:
     attributes:
       label: Version
       description: What `kule --version` prints.
-      placeholder: kule 0.2.0-preview.17
+      placeholder: kule 0.2.0-preview.18
     validations:
       required: true
   - type: input
