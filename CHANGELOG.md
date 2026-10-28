@@ -38,6 +38,10 @@ index settings are cloned with their tokens masked.
   files hidden. In `/etc`, `pip.conf`, `xdg/pip/pip.conf`,
   `docker/config.json`, `rclone.conf`, `samba/smb.conf`, `environment` and
   `profile.d` are denied by name.
+- NuGet's settings folder (`~/.nuget/NuGet`), which can hold feed
+  credentials, is not there for a command, which finds no file rather than
+  a refusal NuGet stops at; NuGet makes its own settings in the commands'
+  home, and your packages beside it are read as before.
 - `kule exec --reveal` goes through the same validator: your home, the root
   of a disk and the other refused paths open for no one command, and the
   command is refused with why.

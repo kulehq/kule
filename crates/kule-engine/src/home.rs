@@ -41,7 +41,10 @@ use crate::textdiff::{self, TextDiff};
 
 /// Directories cloned whole into the layer, where tools keep settings:
 /// `.pip` for pip's own `pip.conf`, whose index URLs may carry a token.
-const CAPTURED_DIRS: &[&str] = &[".config", ".pip"];
+// `.nuget` too: NuGet stops at a settings file it may not read, so its
+// settings folder (hidden, it can hold feed credentials) is not there for
+// a command, which makes its own; the packages beside it are linked.
+const CAPTURED_DIRS: &[&str] = &[".config", ".pip", ".nuget"];
 
 /// Settings folders deeper in the home cloned into the layer, with the
 /// folders on the way made the layer's own (see [`capture_state`]): pip's
@@ -281,44 +284,35 @@ fn capture_state(
     clock: &Clock,
 ) -> Result<()> {
     let parts: Vec<&str> = rel.split('/').collect();
+    // Whether the folder at this depth is reached through a link of the
+    // layer's that the step above replaced: then the person's folder is
+    // here, and its other entries stay links, at every depth below.
+    let mut through_link = false;
     for depth in 1..parts.len() {
         let on = parts[..depth].join("/");
         let (from, to) = (real.join(&on), dir.join(&on));
+        let real_dir = fs::symlink_metadata(&from).is_ok_and(|m| m.is_dir());
         match fs::symlink_metadata(&to) {
-            Ok(m) if m.is_dir() => {}
+            Ok(m) if m.is_dir() => through_link = false,
             Ok(_) if layer.links.contains(&on) => {
-                if !fs::symlink_metadata(&from).is_ok_and(|m| m.is_dir()) {
+                if !real_dir {
                     return Ok(());
                 }
                 fs::remove_file(&to).at(&to)?;
                 layer.links.remove(&on);
                 fs::create_dir(&to).at(&to)?;
-                let mut children: Vec<_> = fs::read_dir(&from)
-                    .at(&from)?
-                    .filter_map(|e| e.ok())
-                    .map(|e| e.file_name())
-                    .collect();
-                children.sort();
-                for child in children {
-                    let Some(name) = child.to_str() else { continue };
-                    let from = from.join(&child);
-                    let concealed =
-                        hidden.contains(&from) && !shown.iter().any(|s| s.starts_with(&from));
-                    if name == parts[depth] || concealed {
-                        continue;
-                    }
-                    let target = if fs::symlink_metadata(&from).at(&from)?.is_symlink() {
-                        fs::read_link(&from).at(&from)?
-                    } else {
-                        from.clone()
-                    };
-                    let to = to.join(&child);
-                    crate::osfs::symlink(&target, &to).at(&to)?;
-                    layer.links.insert(format!("{on}/{name}"));
-                }
+                link_siblings(&from, &to, &on, parts[depth], hidden, shown, layer)?;
+                through_link = true;
             }
             Ok(_) => return Ok(()),
-            Err(_) => fs::create_dir(&to).at(&to)?,
+            Err(_) => {
+                fs::create_dir(&to).at(&to)?;
+                if through_link && real_dir {
+                    link_siblings(&from, &to, &on, parts[depth], hidden, shown, layer)?;
+                } else {
+                    through_link = false;
+                }
+            }
         }
     }
     let caught = |p: &String| *p == rel || p.starts_with(&format!("{rel}/"));
@@ -350,6 +344,43 @@ fn capture_state(
         };
         crate::osfs::symlink(&target, &to).at(&to)?;
         layer.links.insert(rel.to_owned());
+    }
+    Ok(())
+}
+
+/// Links each entry of the person's folder `from` into the layer's folder
+/// `to` (at `on`, relative), but for `except`, which the caller makes a
+/// folder of its own next, and what is hidden with nothing shown inside.
+fn link_siblings(
+    from: &Path,
+    to: &Path,
+    on: &str,
+    except: &str,
+    hidden: &[PathBuf],
+    shown: &[PathBuf],
+    layer: &mut Layer,
+) -> Result<()> {
+    let mut children: Vec<_> = fs::read_dir(from)
+        .at(from)?
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name())
+        .collect();
+    children.sort();
+    for child in children {
+        let Some(name) = child.to_str() else { continue };
+        let from = from.join(&child);
+        let concealed = hidden.contains(&from) && !shown.iter().any(|s| s.starts_with(&from));
+        if name == except || concealed {
+            continue;
+        }
+        let target = if fs::symlink_metadata(&from).at(&from)?.is_symlink() {
+            fs::read_link(&from).at(&from)?
+        } else {
+            from.clone()
+        };
+        let to = to.join(&child);
+        crate::osfs::symlink(&target, &to).at(&to)?;
+        layer.links.insert(format!("{on}/{name}"));
     }
     Ok(())
 }
@@ -674,20 +705,27 @@ impl Task {
         // migration ran, so NuGet skips it; Kule's, never offered as a
         // change. Made only through folders of the layer's own, never
         // through a link into the person's home.
-        let migrations = Path::new(NUGET_MIGRATIONS);
-        let through_a_link = migrations
-            .ancestors()
-            .skip(1)
-            .any(|a| fs::symlink_metadata(dir.join(a)).is_ok_and(|m| m.file_type().is_symlink()));
-        if !through_a_link {
-            let folder = dir.join(migrations);
+        // The folders on the way (`.local`, `.local/share`) become folders
+        // of the layer's own where they were links, their other entries
+        // still links to the person's.
+        capture_state(
+            &real,
+            &dir,
+            NUGET_MIGRATIONS,
+            &hidden,
+            &shown,
+            &mut layer,
+            &real_clock,
+        )?;
+        let folder = dir.join(NUGET_MIGRATIONS);
+        if !fs::symlink_metadata(&folder).is_ok_and(|m| m.file_type().is_symlink()) {
             fs::create_dir_all(&folder).at(&folder)?;
             let marker = folder.join("1");
             if fs::symlink_metadata(&marker).is_err() {
                 fs::write(&marker, b"").at(&marker)?;
             }
-            layer.ignored.push(NUGET_MIGRATIONS.to_owned());
         }
+        layer.ignored.push(NUGET_MIGRATIONS.to_owned());
         write_json(&self.layer_path(), &layer)?;
         Ok(dir)
     }

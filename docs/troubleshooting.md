@@ -267,16 +267,21 @@ established ... bad certificate format`, with
 `sandbox: refused mach-lookup com.apple.SecurityServer (dotnet)` after the
 command.
 
-**Cause:** .NET on macOS checks certificates through the system's keychain
-and trust services, which a task's commands never get (the keychain opens
-secrets; the trust service fetches addresses past the proxy). It reads no
+**Cause:** .NET on macOS checks certificates through the system's trust
+service, which stays closed to a task's commands while their network goes
+through the proxy (it fetches addresses past the proxy). It reads no
 `SSL_CERT_FILE`, so the proxy's authority and the system's roots in it do
 not help.
 
-**Fix:** restore and build .NET projects in a task on Linux, where .NET
-checks certificates against `SSL_CERT_FILE`; on macOS, restore outside the
-task first (the packages the task needs are then in your NuGet cache, which
-the task reads).
+**Fix:** restore with the network open for that one command, which
+bypasses the proxy and the policy:
+`kule exec TASK --open-network -- dotnet restore`; or restore outside the
+task first (the packages are then in your NuGet cache, which the task
+reads). `dotnet build` then works in the task. `dotnet test` does not on
+macOS: its test host talks to the runner over loopback, which a task's
+programs do not get there ([#84](https://github.com/kulehq/kule/issues/84));
+run the tests outside the task, or in a task on Linux, where all of this
+works as it is.
 
 ### Gradle does not run in a task on macOS
 

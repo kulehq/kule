@@ -376,6 +376,8 @@ fn only_what_toolchains_read_is_in_the_commands_home() {
         ".zshrc",
         ".m2/settings.xml",
         ".m2/toolchains.xml",
+        ".nuget/NuGet/NuGet.Config",
+        ".nuget/packages/newtonsoft.json/13.0.3/lib/net6.0/Newtonsoft.Json.dll",
     ]);
     let token = "ghp_1234567890abcdefghijklmnopqrstuvwxyz";
     for conf in [".config/pip/pip.conf", ".pip/pip.conf"] {
@@ -437,6 +439,18 @@ fn only_what_toolchains_read_is_in_the_commands_home() {
     }
     let out = sh(&sandbox, "cat \"$HOME/.m2/settings.xml\"");
     assert!(!out.status.success() && out.stdout.is_empty(), "{out:?}");
+    // NuGet's settings can hold feed credentials and NuGet stops at a file
+    // it may not read: not there, so NuGet makes its own; its packages are.
+    let out = sh(&sandbox, "cat \"$HOME/.nuget/NuGet/NuGet.Config\"");
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("No such file"),
+        "{out:?}"
+    );
+    let out = sh(
+        &sandbox,
+        "cat \"$HOME/.nuget/packages/newtonsoft.json/13.0.3/lib/net6.0/Newtonsoft.Json.dll\"",
+    );
+    assert!(out.status.success(), "{out:?}");
     // Index settings: masked in the layer, hidden where they are.
     for conf in [
         ".config/pip/pip.conf",

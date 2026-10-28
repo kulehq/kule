@@ -386,7 +386,9 @@ pub const TOOL_DEFAULTS_IN_HOME: &[&str] = &[
     ".jdks",
     ".sdkman",
     ".asdf",
-    // .NET
+    // .NET: NuGet's folder, but for its settings in it (`.nuget/NuGet`),
+    // which can hold feed credentials and which NuGet will not run past
+    // when refused; it makes its own in the commands' home.
     ".dotnet",
     ".nuget",
     ".templateengine",

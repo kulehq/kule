@@ -302,7 +302,7 @@ pub const HIDDEN_IN_HOME: &[&str] = &[
     "Library/Application Support/pypoetry/auth.toml",
     ".yarnrc.yml",
     ".bunfig.toml",
-    ".nuget/NuGet/NuGet.Config",
+    ".nuget/NuGet",
     // What the person typed, in shells and other tools.
     ".zsh_history",
     ".zsh_sessions",
@@ -446,7 +446,7 @@ pub const HIDDEN_IN_HOME: &[&str] = &[
     ".config/gh",
     ".cargo/credentials.toml",
     ".cargo/credentials",
-    ".nuget/NuGet/NuGet.Config",
+    ".nuget/NuGet",
     ".terraform.d/credentials.tfrc.json",
     ".m2/settings.xml",
     ".gradle/gradle.properties",

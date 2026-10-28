@@ -953,8 +953,15 @@ fn home_changes_wait_while_a_terminal_is_open() {
 #[test]
 fn the_layer_carries_nugets_migration_marker_as_kules_own() {
     let s = Setup::new();
-    let out = s.run("[ -f \"$HOME/.local/share/NuGet/Migrations/1\" ] && echo there");
-    assert_eq!(out.trim(), "there");
+    // A person with tools under ~/.local, which the layer links: the marker
+    // goes into folders of the layer's own, the tools stay reachable.
+    let uv = s.person.path().join(".local/share/uv/tools/ruff/bin");
+    fs::create_dir_all(&uv).unwrap();
+    fs::write(uv.join("ruff"), "#!/bin/sh\necho ruff\n").unwrap();
+    let out = s.run(
+        "[ -f \"$HOME/.local/share/NuGet/Migrations/1\" ] && echo there; cat \"$HOME/.local/share/uv/tools/ruff/bin/ruff\" | tail -1",
+    );
+    assert_eq!(out.trim(), "there\necho ruff", "{out}");
     let changes = s.task.home_changes().unwrap();
     assert!(
         !changes

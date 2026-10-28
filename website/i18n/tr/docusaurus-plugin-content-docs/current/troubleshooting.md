@@ -280,16 +280,20 @@ görevde kapalı kalır.
 established ... bad certificate format` ve komutun ardından
 `sandbox: refused mach-lookup com.apple.SecurityServer (dotnet)`.
 
-**Neden:** .NET macOS'ta sertifikaları sistemin anahtar zinciri ve güven
-servisleri üzerinden denetler; görevin komutları bunlara hiç erişmez
-(anahtar zinciri gizli bilgileri açar, güven servisi proxy'yi aşarak
-adreslere gider). `SSL_CERT_FILE` okumadığı için proxy'nin otoritesi ve
-içindeki sistem kökleri de yardımcı olmaz.
+**Neden:** .NET macOS'ta sertifikaları sistemin güven servisi üzerinden
+denetler; görevin ağı proxy'den geçerken bu servis komutlara kapalı kalır
+(proxy'yi aşarak adreslere gider). `SSL_CERT_FILE` okumadığı için proxy'nin
+otoritesi ve içindeki sistem kökleri de yardımcı olmaz.
 
-**Çözüm:** .NET projelerini Linux'ta bir görevde indirip derleyin; orada
-.NET sertifikaları `SSL_CERT_FILE` ile denetler. macOS'ta paketleri önce
-görevin dışında indirin: görevin ihtiyaç duyduğu paketler NuGet
-önbelleğinizde olur, görev onu okur.
+**Çözüm:** paketleri yalnız o komut için ağı açarak indirin; bu, proxy'yi
+ve politikayı o komut için atlar:
+`kule exec GÖREV --open-network -- dotnet restore`; ya da önce görevin
+dışında indirin (paketler NuGet önbelleğinizde olur, görev onu okur).
+`dotnet build` sonra görevde çalışır. `dotnet test` macOS'ta çalışmaz: test
+sunucusu çalıştırıcıyla loopback üzerinden konuşur, görevin programları
+orada buna erişmez ([#84](https://github.com/kulehq/kule/issues/84));
+testleri görevin dışında ya da Linux'ta bir görevde koşturun, orada hepsi
+olduğu gibi çalışır.
 
 ### Gradle macOS'ta bir görevde çalışmıyor
 

@@ -56,7 +56,8 @@ Windows. The grants, each shown with its source by [`kule tools`](../cli/tools.m
   `PATH` entry (and a tool's own folder above its `bin` outside your home),
   `JAVA_HOME`, `GOROOT`, `DOTNET_ROOT` and the others Kule passes on;
 - **where toolchains keep their own files in your home**: `~/.cargo`,
-  `~/.rustup`, `~/.npm`, `~/.m2`, `~/.gradle`, `~/.nuget`, `~/.dotnet`,
+  `~/.rustup`, `~/.npm`, `~/.m2`, `~/.gradle`, `~/.nuget` (not NuGet's
+  settings in it, which can hold feed credentials), `~/.dotnet`,
   `~/go`, `~/.cache`, `~/.local/bin`, what uv, pipx, mise, pnpm and fnm
   keep in `~/.local/share`, the settings of git, jj, uv, pip, Poetry (not
   its `auth.toml`), Ruff, mise, Go, Flutter, Matplotlib, fish, zsh,

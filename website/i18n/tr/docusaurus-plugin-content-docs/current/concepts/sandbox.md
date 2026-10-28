@@ -59,7 +59,8 @@ yerleri** okur. Verilenler, her biri kaynağıyla birlikte
   kendi klasörü), `JAVA_HOME`, `GOROOT`, `DOTNET_ROOT` ve Kule'nin aktardığı
   diğerleri;
 - **araç zincirlerinin ev dizininizde kendi dosyalarını tuttuğu yerler**:
-  `~/.cargo`, `~/.rustup`, `~/.npm`, `~/.m2`, `~/.gradle`, `~/.nuget`,
+  `~/.cargo`, `~/.rustup`, `~/.npm`, `~/.m2`, `~/.gradle`, `~/.nuget`
+  (içindeki NuGet ayarları hariç; kimlik bilgisi taşıyabilir),
   `~/.dotnet`, `~/go`, `~/.cache`, `~/.local/bin`, uv, pipx, mise, pnpm ve
   fnm'nin `~/.local/share` içinde tuttukları; git, jj, uv, pip, Poetry
   (`auth.toml` hariç), Ruff, mise, Go, Flutter, Matplotlib, fish, zsh,
