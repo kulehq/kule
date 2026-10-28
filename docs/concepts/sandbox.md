@@ -53,7 +53,9 @@ Windows. The grants, each shown with its source by [`kule tools`](../cli/tools.m
   `/sys`, the resolver's files under `/run` and narrow places under `/var`
   and `/tmp`; never `/opt`, `/tmp` or `/run` whole;
 - **where your tools are**, as the variables passed to commands say: each
-  `PATH` entry (and a tool's own folder above its `bin` outside your home),
+  `PATH` entry (and a tool's own folder above its `bin` outside your home,
+  or inside your own folders and where apps keep data, but never an app's
+  whole folder there),
   `JAVA_HOME`, `GOROOT`, `DOTNET_ROOT` and the others Kule passes on;
 - **where toolchains keep their own files in your home**: `~/.cargo`,
   `~/.rustup`, `~/.npm`, `~/.m2`, `~/.gradle`, `~/.nuget` (not NuGet's

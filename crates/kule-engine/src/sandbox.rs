@@ -197,7 +197,7 @@ pub(crate) fn tools_from_env() -> Vec<PathBuf> {
 
 /// `tools` resolved, and not the home directory or above it: that would
 /// leave everything.
-fn tool_dirs(tools: &[PathBuf], home: &Path) -> Vec<PathBuf> {
+pub(crate) fn tool_dirs(tools: &[PathBuf], home: &Path) -> Vec<PathBuf> {
     tools
         .iter()
         .filter(|t| t.is_absolute())
@@ -209,7 +209,7 @@ fn tool_dirs(tools: &[PathBuf], home: &Path) -> Vec<PathBuf> {
 /// Where the programs in the tool folders under `home` lead, when they
 /// are links: the folder each one is in. Those outside the home (the
 /// system's, Homebrew's) lead nowhere the sandbox hides.
-fn linked_tools(tools: &[PathBuf], home: &Path) -> Vec<PathBuf> {
+pub(crate) fn linked_tools(tools: &[PathBuf], home: &Path) -> Vec<PathBuf> {
     let mut found = Vec::new();
     for dir in tools.iter().filter(|t| t.starts_with(home)) {
         let Ok(entries) = std::fs::read_dir(dir) else {
@@ -226,6 +226,33 @@ fn linked_tools(tools: &[PathBuf], home: &Path) -> Vec<PathBuf> {
         }
     }
     found
+}
+
+/// How much of a hidden `folder` a tool's folder `tool` inside it opens:
+/// the folder itself, or where it is a `bin` (`sbin`, `Scripts`), the
+/// toolchain's root above it (`~/sdk/go1.22/bin` → `~/sdk/go1.22`), as
+/// [`grants::path_roots`] climbs outside a home. Never the hidden folder
+/// itself, nor a dot folder, nor in a store (`stores`: where apps keep
+/// settings and data) an app's whole folder there (`JetBrains/bin` opens
+/// `bin` alone): beside the tool, those hold what is the person's.
+pub(crate) fn tool_root(tool: &Path, folder: &Path, stores: bool) -> PathBuf {
+    let is_bin = tool
+        .file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|n| matches!(n, "bin" | "sbin" | "Scripts"));
+    if let Some(parent) = tool.parent()
+        && is_bin
+        && parent.starts_with(folder)
+        && parent != folder
+        && !parent
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.starts_with('.'))
+        && !(stores && parent.parent() == Some(folder))
+    {
+        return parent.to_owned();
+    }
+    tool.to_owned()
 }
 
 /// The git directories of a workspace that is a linked worktree or keeps
@@ -1548,7 +1575,7 @@ impl Sandbox {
         let home = real_or_planned(home)?;
         let folders = personal_folders(&self.workspace, &home)?;
         let tools = tool_dirs(tools, &home);
-        self.hide_folders(folders, &tools);
+        self.hide_folders(folders, &tools, false);
         Ok(())
     }
 
@@ -1584,7 +1611,7 @@ impl Sandbox {
         folders.sort();
         folders.dedup();
         folders.retain(|f| !self.personal.contains(f));
-        self.hide_folders(folders, &tools);
+        self.hide_folders(folders, &tools, false);
         Ok(())
     }
 
@@ -1633,25 +1660,23 @@ impl Sandbox {
             }
         }
         self.stores.extend(stores.iter().cloned());
-        self.hide_folders(stores, &tools);
+        self.hide_folders(stores, &tools, true);
         Ok(())
     }
 
-    /// Hides `folders` as the person's own: but for the folders of `tools`
-    /// inside one, and the workspace's git directory, each readable.
-    fn hide_folders(&mut self, folders: Vec<PathBuf>, tools: &[PathBuf]) {
+    /// Hides `folders` as the person's own (`stores`: where apps keep
+    /// settings and data): but for the folders of `tools` inside one, each
+    /// as far as [`tool_root`] says, and the workspace's git directory,
+    /// each readable.
+    fn hide_folders(&mut self, folders: Vec<PathBuf>, tools: &[PathBuf], stores: bool) {
         let git = git_dirs(&self.workspace);
         for folder in folders {
             // A folder a tool is in, or on the way to one, is left alone.
             if tools.iter().any(|t| folder.starts_with(t)) {
                 continue;
             }
-            for tool in tools {
-                if let Ok(within) = tool.strip_prefix(&folder)
-                    && let Some(first) = within.components().next()
-                {
-                    self.see_through.push(folder.join(first));
-                }
+            for tool in tools.iter().filter(|t| t.starts_with(&folder)) {
+                self.see_through.push(tool_root(tool, &folder, stores));
             }
             for dir in git.iter().filter(|d| d.starts_with(&folder)) {
                 self.see_through.push(dir.clone());

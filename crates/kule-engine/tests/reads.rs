@@ -142,6 +142,71 @@ fn what_lies_at_the_top_of_the_home_is_the_persons_own() {
     }
 }
 
+/// A tool's folder inside where apps keep settings and data opens that
+/// folder, or the toolchain's root above a `bin`, never the app's whole
+/// folder there: beside a launcher's scripts lie every editor's settings.
+#[test]
+fn a_tool_inside_an_apps_data_opens_no_more_than_its_own_folder() {
+    let (_home, home) = home_with(&[
+        ".local/share/JetBrains/Toolbox/scripts/idea",
+        ".local/share/JetBrains/Toolbox/settings.json",
+        ".local/share/JetBrains/IntelliJIdea/options/other.xml",
+        ".local/share/app/bin/tool",
+        ".local/share/app/session",
+        ".local/share/nvim/mason/bin/linter",
+        ".local/share/nvim/mason/packages/linter/lib.txt",
+        ".local/share/nvim/shada/main.shada",
+    ]);
+    let s = Setup::new();
+    let tools = [
+        home.join(".local/share/JetBrains/Toolbox/scripts"),
+        home.join(".local/share/app/bin"),
+        home.join(".local/share/nvim/mason/bin"),
+    ];
+    let mut sandbox = Sandbox::new(&s.task).unwrap();
+    sandbox.hide_settings(&home, &tools).unwrap();
+    sandbox.grant_env(&tools, Some(&home));
+    for path in [
+        ".local/share/JetBrains/Toolbox/scripts/idea",
+        ".local/share/app/bin/tool",
+        ".local/share/nvim/mason/bin/linter",
+        // The toolchain's root above its `bin`, inside the app's folder.
+        ".local/share/nvim/mason/packages/linter/lib.txt",
+    ] {
+        assert!(reads(&sandbox, &home.join(path)), "{path} was not read");
+    }
+    for path in [
+        ".local/share/JetBrains/Toolbox/settings.json",
+        ".local/share/JetBrains/IntelliJIdea/options/other.xml",
+        ".local/share/app/session",
+        ".local/share/nvim/shada/main.shada",
+    ] {
+        assert!(!reads(&sandbox, &home.join(path)), "{path} was read");
+    }
+}
+
+/// A toolchain kept in a folder of the person's own, its `bin` on `PATH`,
+/// is readable from its root (Go finds its own beside its program); what
+/// lies beside it stays the person's.
+#[test]
+fn a_toolchain_in_a_persons_folder_opens_its_root_alone() {
+    let (_home, home) = home_with(&[
+        "sdk/go1.22/bin/go",
+        "sdk/go1.22/src/runtime.go",
+        "sdk/notes.txt",
+        "sdk/go1.21/src/runtime.go",
+    ]);
+    let s = Setup::new();
+    let tools = [home.join("sdk/go1.22/bin")];
+    let mut sandbox = Sandbox::new(&s.task).unwrap();
+    sandbox.hide_personal(&home, &tools).unwrap();
+    sandbox.grant_env(&tools, Some(&home));
+    assert!(reads(&sandbox, &home.join("sdk/go1.22/src/runtime.go")));
+    for path in ["sdk/notes.txt", "sdk/go1.21/src/runtime.go"] {
+        assert!(!reads(&sandbox, &home.join(path)), "{path} was read");
+    }
+}
+
 /// A project Kule opened that holds the home itself (a task on the whole
 /// home) hides nothing more from the others: hiding it would take their
 /// toolchains away.
