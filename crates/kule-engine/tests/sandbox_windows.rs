@@ -852,3 +852,43 @@ fn a_command_gets_a_home_of_its_own_and_none_of_the_persons() {
         text(&out)
     );
 }
+
+/// A tool's folder on `PATH` inside where apps keep their data opens that
+/// folder, or its toolchain's root above a `bin`, never the app's whole
+/// folder there nor what lies beside the tool's own.
+#[test]
+fn a_tool_inside_app_data_opens_no_more_than_its_own_folder() {
+    if !available() {
+        return;
+    }
+    let s = Setup::new();
+    let home = s.outside();
+    // `type` takes `\`, not `/`.
+    let at = |path: &str| path.split('/').fold(home.clone(), |p, c| p.join(c));
+    let plant = |path: &str| {
+        let path = at(path);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, "canary\n").unwrap();
+        path
+    };
+    let tool = plant("AppData/Local/Programs/App/bin/tool.txt");
+    let lib = plant("AppData/Local/Programs/App/lib.txt");
+    let beside = plant("AppData/Local/Programs/Other/session.txt");
+    let vendor = plant("AppData/Local/Vendor/bin/tool.txt");
+    let vendor_data = plant("AppData/Local/Vendor/session.txt");
+    let tools = [
+        at("AppData/Local/Programs/App/bin"),
+        at("AppData/Local/Vendor/bin"),
+    ];
+    let mut sandbox = s.sandbox();
+    sandbox.hide_settings(&home, &tools).unwrap();
+    sandbox.grant_env(&tools, Some(&home));
+    for path in [&tool, &lib, &vendor] {
+        let out = cmd(&sandbox, &format!("type {}", q(path)));
+        assert!(ok(&out), "{} was not read: {}", path.display(), text(&out));
+    }
+    for path in [&beside, &vendor_data] {
+        let out = cmd(&sandbox, &format!("type {}", q(path)));
+        assert!(!ok(&out), "{} was read: {}", path.display(), text(&out));
+    }
+}

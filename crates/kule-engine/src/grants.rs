@@ -677,6 +677,15 @@ pub fn granted(
 /// names, each root with its source; and what was named but refused, with
 /// why. A task's sandbox computes the same, with its own folders besides.
 pub fn preview(kule_home: &Path, home: &Path) -> (Vec<Grant>, Vec<(PathBuf, Source, Refused)>) {
+    preview_with(kule_home, home, &crate::sandbox::tools_from_env())
+}
+
+/// [`preview`] for the tools on `tools` (`PATH` and an SDK's variables).
+fn preview_with(
+    kule_home: &Path,
+    home: &Path,
+    tools: &[PathBuf],
+) -> (Vec<Grant>, Vec<(PathBuf, Source, Refused)>) {
     let bounds = Bounds::for_person(kule_home, home);
     let real_home = bounds.home.clone();
     let mut all = Vec::new();
@@ -687,7 +696,6 @@ pub fn preview(kule_home: &Path, home: &Path) -> (Vec<Grant>, Vec<(PathBuf, Sour
         refused.extend(no.into_iter().map(|(p, why)| (p, source, why)));
     };
     take(system_roots(), Source::System);
-    let tools = crate::sandbox::tools_from_env();
     take(
         tools
             .iter()
@@ -696,6 +704,32 @@ pub fn preview(kule_home: &Path, home: &Path) -> (Vec<Grant>, Vec<(PathBuf, Sour
         Source::Env,
     );
     if let Some(home) = &real_home {
+        // A tool's folder inside one hidden as the person's own, or where
+        // apps keep settings and data, opens its toolchain's root there;
+        // in the second, also where a program on `PATH` links to (see
+        // `Sandbox::hide_settings`).
+        use crate::sandbox::{linked_tools, personal_folders, tool_dirs, tool_root};
+        let entries = tool_dirs(tools, home);
+        let mut linked = entries.clone();
+        linked.extend(linked_tools(&entries, home));
+        let folders = personal_folders(home, home).unwrap_or_default();
+        let mut roots = Vec::new();
+        for (folder, stores) in folders
+            .iter()
+            .map(|f| (f, false))
+            .chain(bounds.stores.iter().map(|s| (s, true)))
+        {
+            let dirs = if stores { &linked } else { &entries };
+            roots.extend(
+                dirs.iter()
+                    .filter(|d| d.starts_with(folder) && *d != folder)
+                    .map(|d| tool_root(d, folder, stores))
+                    .filter(|root| !entries.contains(root)),
+            );
+        }
+        roots.sort();
+        roots.dedup();
+        take(roots, Source::Env);
         take(tool_defaults(home), Source::ToolDefault);
     }
     take(
@@ -765,5 +799,38 @@ mod tests {
             path_roots(Path::new("/opt/.hidden/bin"), Some(home)),
             vec![PathBuf::from("/opt/.hidden/bin")]
         );
+    }
+
+    /// What a tool's folder inside the person's own folders or an app's
+    /// data opens in a task is told by `kule tools list` too: the
+    /// toolchain's root above its `bin`, never an app's whole folder.
+    #[test]
+    fn the_preview_tells_the_root_a_tool_in_a_hidden_folder_opens() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let home = std::fs::canonicalize(dir.path()).unwrap();
+        let tools = [
+            home.join("sdk/go1.22/bin"),
+            home.join(".local/share/JetBrains/Toolbox/scripts"),
+            home.join(".local/share/app/bin"),
+        ];
+        for tool in &tools {
+            std::fs::create_dir_all(tool).unwrap();
+        }
+        let (grants, _) = preview_with(&home.join(".kule"), &home, &tools);
+        let shown = |path: &str| {
+            grants
+                .iter()
+                .any(|g| g.path == home.join(path) && g.source == Source::Env)
+        };
+        assert!(shown("sdk/go1.22"), "{grants:?}");
+        for tool in ["sdk/go1.22/bin", ".local/share/JetBrains/Toolbox/scripts"] {
+            assert!(shown(tool), "{tool}: {grants:?}");
+        }
+        for wider in [".local/share/JetBrains", ".local/share/app", "sdk"] {
+            assert!(
+                !grants.iter().any(|g| g.path == home.join(wider)),
+                "{wider}"
+            );
+        }
     }
 }
