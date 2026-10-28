@@ -13,6 +13,15 @@ use kule_acp::governor::{Measured, Plan, Watch, govern};
 use kule_engine::{Sandbox, Task};
 use tempfile::TempDir;
 
+/// The sandbox of `task` with the test agent's folder granted: a task
+/// runs a program only from a folder Kule grants, as it does a tool's.
+fn sandbox_for(task: &Task) -> Sandbox {
+    let mut sandbox = Sandbox::new(task).unwrap();
+    let agent = std::path::Path::new(env!("CARGO_BIN_EXE_kule-test-agent"));
+    sandbox.grant_env(&[agent.parent().unwrap().to_owned()], None);
+    sandbox
+}
+
 struct Setup {
     _home: TempDir,
     _ws: TempDir,
@@ -51,7 +60,7 @@ impl Setup {
 
     /// `script` held to `plan`; `waiting` says a person is being asked.
     fn run_with(&self, script: &str, plan: Plan, waiting: bool, control: &RunControl) -> Ran {
-        let sandbox = Sandbox::new(&self.task).unwrap();
+        let sandbox = sandbox_for(&self.task);
         let agent = sandbox
             .start(env!("CARGO_BIN_EXE_kule-test-agent"), &[])
             .unwrap();
