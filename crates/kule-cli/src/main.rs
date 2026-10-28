@@ -65,6 +65,17 @@ enum RulesCmd {
 }
 
 #[derive(Subcommand)]
+enum ToolsCmd {
+    /// List every root a task's commands may read, with where each comes
+    /// from, and what was named but refused (the default).
+    List,
+    /// Let every task read PATH, a folder of tools Kule does not know.
+    Add { path: PathBuf },
+    /// Take a folder back.
+    Remove { id: u64 },
+}
+
+#[derive(Subcommand)]
 enum RevealCmd {
     /// List them, and what the folder builds from that its tasks cannot
     /// read (the default).
@@ -382,6 +393,12 @@ enum Cmd {
         /// Let the command connect anywhere, bypassing the proxy and policy.
         #[arg(long)]
         open_network: bool,
+        /// Linux: run the command under strace from outside its sandbox
+        /// and list the files the sandbox refused it, since Linux does not
+        /// report refusals itself (macOS and Windows runs list them
+        /// always). Needs strace installed.
+        #[arg(long, conflicts_with = "no_sandbox")]
+        trace: bool,
         /// Run without the sandbox: the command can write anywhere you can,
         /// and reach any host; the sandbox's options mean nothing then.
         #[arg(long, conflicts_with_all = [
@@ -509,6 +526,13 @@ enum Cmd {
     Reveal {
         #[command(subcommand)]
         action: Option<RevealCmd>,
+    },
+    /// What every task's commands may read beyond their own folders: the
+    /// system, your toolchains, and the folders you add here, read-only.
+    /// Commands read nothing else; a refused read is listed by the run.
+    Tools {
+        #[command(subcommand)]
+        action: Option<ToolsCmd>,
     },
     /// What the task's commands wrote in your home directory (~/.zshrc,
     /// ~/.config, new files at the top): caught in the task's home layer
@@ -793,10 +817,14 @@ fn run() -> Result<ExitCode> {
             pass_env,
             no_network,
             open_network,
+            trace,
             no_sandbox,
             command,
         } => {
             let task = Task::open(&home, &task)?;
+            if trace {
+                return traced_exec(&home, &task);
+            }
             // Held while the command runs: commit and rollback wait for it.
             let _at_work = task.agent_at_work()?;
             let logged_before = connections(&task)?.len();
@@ -821,7 +849,7 @@ fn run() -> Result<ExitCode> {
                     kule_acp::Agents::load(&home)?.hide_agents(&mut sandbox, person)?;
                     // What the command writes in the home is caught for
                     // review (`kule home`), not refused.
-                    task.prepare_home(person, &[], sandbox.hidden(), sandbox.shown(), &[])?;
+                    task.prepare_home(person, &[], sandbox.hidden(), &sandbox.shown(), &[])?;
                     sandbox.use_home(&task, person)?;
                     for note in task.start_notes()? {
                         eprintln!("kule: {note}");
@@ -841,7 +869,7 @@ fn run() -> Result<ExitCode> {
                 for path in &reveal {
                     sandbox.reveal(path)?;
                     eprintln!(
-                        "kule: the command may read {}, which the sandbox hides",
+                        "kule: the command may read {}, which it may not read by default",
                         paint::plain_line(&path.display().to_string())
                     );
                 }
@@ -1183,6 +1211,7 @@ fn run() -> Result<ExitCode> {
                     println!("  - {reason}");
                 }
             }
+            println!("commands read only what is granted (kule tools list), on every platform");
             let gaps = kule_engine::isolation_gaps(Network::Proxy(0), servers);
             if gaps.is_empty() {
                 println!("this computer gives a sandboxed command all of its isolation");
@@ -1405,6 +1434,7 @@ fn run() -> Result<ExitCode> {
         Cmd::Reveal { action } => {
             reveal_cmd(&home, action.unwrap_or(RevealCmd::List { folder: None }))?
         }
+        Cmd::Tools { action } => tools_cmd(&home, action.unwrap_or(ToolsCmd::List))?,
         Cmd::Secrets { action } => secrets_cmd(&home, action.unwrap_or(SecretsCmd::List))?,
         Cmd::Home { task, action } => home_cmd(&home, &task, action.unwrap_or(HomeCmd::List))?,
         Cmd::Policy { choice } => match choice.as_deref() {
@@ -2505,6 +2535,132 @@ fn reveal_cmd(home: &Path, action: RevealCmd) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn tools_cmd(home: &Path, action: ToolsCmd) -> Result<()> {
+    let person = person_home()?;
+    match action {
+        ToolsCmd::List => {
+            let added = kule_engine::tools(home)?;
+            if added.is_empty() {
+                println!("no folder added: kule tools add PATH lets every task read one");
+            }
+            for tool in &added {
+                println!(
+                    "{:>3}  {}",
+                    tool.id,
+                    paint::plain_line(&tool.path.display().to_string())
+                );
+            }
+            let admin = kule_engine::admin_tools();
+            if let Some(why) = &admin.ignored {
+                println!("warning: {why}");
+            }
+            let (grants, refused) = kule_engine::grants::preview(home, &person);
+            println!();
+            println!("every task's commands read, and never write:");
+            for grant in &grants {
+                println!(
+                    "  {:<7} {}",
+                    grant.source.to_string(),
+                    paint::plain_line(&grant.path.display().to_string())
+                );
+            }
+            println!(
+                "  {:<7} /etc whole, but for {} names (pip.conf, docker/config.json, …)",
+                "system",
+                kule_engine::grants::ETC_HIDDEN.len()
+            );
+            if !refused.is_empty() {
+                println!("named but refused:");
+                for (path, source, why) in &refused {
+                    println!(
+                        "  {:<7} {}: {why}",
+                        source.to_string(),
+                        paint::plain_line(&path.display().to_string())
+                    );
+                }
+            }
+            println!("the task's own folders, and what `kule reveal` opens, besides");
+        }
+        ToolsCmd::Add { path } => {
+            let kept = kule_engine::add_tool(home, &path, &person)?;
+            println!(
+                "kept as {}: every task reads {}, never writes it",
+                kept.id,
+                kept.path.display()
+            );
+        }
+        ToolsCmd::Remove { id } => {
+            if kule_engine::remove_tool(home, id)? {
+                println!("removed {id}: not readable from the next command on");
+            } else {
+                println!("nothing added as {id}");
+            }
+        }
+    }
+    Ok(())
+}
+
+/// `kule exec --trace` (Linux): this very command again, without
+/// `--trace`, under `strace` from outside the sandbox, which follows the
+/// command into its namespaces and Landlock domain and notes every file
+/// call the kernel refused. The refusals are listed as macOS lists its
+/// own, recorded for the task, and the command's own exit code comes
+/// back. The trace is written in Kule's home, out of the sandbox's reach,
+/// and removed once read.
+fn traced_exec(home: &Path, task: &Task) -> Result<ExitCode> {
+    if !cfg!(target_os = "linux") {
+        bail!(
+            "--trace is for Linux, where the sandbox does not report what it refused; here every run lists it"
+        );
+    }
+    let strace = std::env::var_os("PATH")
+        .map(|p| {
+            std::env::split_paths(&p)
+                .map(|d| d.join("strace"))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default()
+        .into_iter()
+        .find(|p| p.is_file())
+        .ok_or_else(|| {
+            anyhow!("--trace needs strace, which is not on your PATH (apt install strace)")
+        })?;
+    let me = std::env::current_exe().context("where kule is")?;
+    let again: Vec<std::ffi::OsString> = std::env::args_os()
+        .skip(1)
+        .filter(|a| a != "--trace")
+        .collect();
+    let log = home.join(format!("trace-{}-{}.log", task.id(), std::process::id()));
+    let status = Command::new(&strace)
+        .arg("-f")
+        .arg("-o")
+        .arg(&log)
+        .arg("-e")
+        .arg("trace=%file")
+        .arg("--")
+        .arg(&me)
+        .args(&again)
+        .status()
+        .with_context(|| format!("could not run {}", strace.display()))?;
+    let text = std::fs::read_to_string(&log).unwrap_or_default();
+    let _ = std::fs::remove_file(&log);
+    let denials = kule_engine::traced_denials(&text);
+    if denials.is_empty() {
+        println!("trace: the sandbox refused the command no file");
+    } else {
+        println!("trace: what the sandbox refused the command, as the kernel answered it:");
+        print_denials(&denials, None);
+        if let Err(e) = record_denials(task, &denials) {
+            eprintln!("kule: what the sandbox refused could not be recorded: {e}");
+        }
+    }
+    Ok(match status.code() {
+        Some(0) => ExitCode::SUCCESS,
+        Some(code) => ExitCode::from(code.clamp(1, 255) as u8),
+        None => ExitCode::FAILURE,
+    })
 }
 
 /// What `folder`'s manifests build from that its tasks cannot read.

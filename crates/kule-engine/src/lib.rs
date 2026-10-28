@@ -33,6 +33,7 @@ mod effects;
 mod error;
 mod fsops;
 mod git;
+pub mod grants;
 mod groups;
 mod history;
 mod home;
@@ -71,6 +72,7 @@ mod sync;
 mod task;
 mod textdiff;
 mod tls;
+pub mod tools;
 mod usage;
 #[cfg(windows)]
 pub mod windows;
@@ -95,6 +97,7 @@ pub use effects::{Change, Effect, EffectSet, Move};
 pub use error::{Error, Result};
 pub use fsops::{carry, entries_in, open_beneath, remove_beneath};
 pub use git::{Carried, CarriedEntry, GitState, GitSummary, RefChange};
+pub use grants::{Access, Bounds, Grant, Refused, Source};
 pub use groups::{
     GROUP_POLICY_DIR, GROUPS_FILE, Group, GroupPolicy, MAX_GROUP_POLICY, MAX_GROUPS, create_group,
     delete_group, group_policy_text, groups, set_group_budget, set_group_limits, set_group_order,
@@ -128,7 +131,7 @@ pub use sandbox::ProcessFinder;
 pub use sandbox::{
     Denial, Ended, HIDDEN_IN_HOME, INCOMPLETE, Io, Network, PASSED_ENV, PASSED_ENV_WINDOWS,
     PERSONAL_IN_HOME, Process, Refusals, Sandbox, Start, UNREPORTED, denials, isolates_network,
-    own_processes, protects_in_place, record_denials,
+    own_processes, protects_in_place, record_denials, traced_denials,
 };
 #[cfg(windows)]
 pub use sandbox::{Terminal, TerminalInput, TerminalStart};
@@ -156,6 +159,7 @@ pub use task::{
     Unreadable,
 };
 pub use textdiff::{DiffSkip, Hunk, Line, LineKind, TextDiff};
+pub use tools::{AdminTools, Tool, add_tool, admin_file, admin_tools, remove_tool, tools};
 pub use usage::{
     BudgetLeft, BudgetScope, GroupSpent, Money, Reserved, RunUsage, Spent, daily_budget,
     daily_left, groups_spent, set_daily_budget, spent_today,

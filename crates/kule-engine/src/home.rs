@@ -1,16 +1,21 @@
 //! The home layer: what a task's commands write in the person's home
 //! directory, caught for review instead of refused.
 //!
-//! Commands get `HOME` pointing at a layer in the task's directory. Its
-//! small files at the top (`.zshrc`, `.gitconfig`) and `.config` are
-//! clones of the person's: a command changes those, and anything new it
-//! makes at the top, in the layer. Every other top-level entry is a link to
-//! the person's own, so tools find their toolchains, caches and settings
+//! Commands get `HOME` pointing at a layer in the task's directory. The
+//! small settings files at the top that shells and tools read (`.zshrc`,
+//! `.gitconfig`; see [`STARTUP`] and `grants::SETTINGS_FILES_IN_HOME`) and
+//! `.config` are clones of the person's: a command changes those, and
+//! anything new it makes at the top, in the layer. A top-level entry the
+//! sandbox lets commands read (a toolchain's folder, `~/.cargo`) is a link
+//! to the person's own, so tools find their toolchains, caches and settings
 //! where they always are, and a write through such a link meets the
-//! sandbox as before. The agent's own state is cloned into the layer, never
-//! linked: it writes there, what it writes is never offered, and nothing of
-//! it reaches the person's home. Paths the sandbox hides (`.ssh`, `.aws`,
-//! …) are not in the layer at all.
+//! sandbox as before. Every other entry starting with a dot is not in the
+//! layer at all: a tool that looks for it finds nothing there, as if the
+//! person had none, and the real one stays out of reach. The agent's own
+//! state is cloned into the layer, never linked: it writes there, what it
+//! writes is never offered, and nothing of it reaches the person's home.
+//! Paths the sandbox hides (`.ssh`, `.aws`, …) are not in the layer
+//! either.
 //!
 //! A person sees the changes ([`Task::home_changes`]) and takes them to the
 //! real home ([`Task::apply_home`]) or throws them away
@@ -34,8 +39,25 @@ use crate::secrets::{self, TaskSecrets};
 use crate::task::Task;
 use crate::textdiff::{self, TextDiff};
 
-/// Directories cloned whole into the layer, where tools keep settings.
-const CAPTURED_DIRS: &[&str] = &[".config"];
+/// Directories cloned whole into the layer, where tools keep settings:
+/// `.pip` for pip's own `pip.conf`, whose index URLs may carry a token.
+const CAPTURED_DIRS: &[&str] = &[".config", ".pip"];
+
+/// Settings folders deeper in the home cloned into the layer, with the
+/// folders on the way made the layer's own (see [`capture_state`]): pip's
+/// on macOS, whose `pip.conf` is masked like the others.
+const CAPTURED_DEEP: &[&str] = &["Library/Application Support/pip"];
+
+/// Settings files whose index URLs may carry a token (`https://user:token@…`
+/// in pip's and uv's settings): cloned into the layer with the token
+/// masked, the real file hidden.
+const INDEX_SETTINGS: &[&str] = &[
+    ".config/pip/pip.conf",
+    ".pip/pip.conf",
+    "Library/Application Support/pip/pip.conf",
+    ".config/uv/uv.toml",
+    ".pydistutils.cfg",
+];
 /// A top-level file larger than this is linked, not cloned.
 const MAX_FILE: u64 = 1024 * 1024;
 /// A captured directory with more than this is linked instead: the layer is
@@ -100,12 +122,35 @@ fn startup(rel: &str) -> bool {
     })
 }
 
+/// Whether `rel` is a package index settings file ([`INDEX_SETTINGS`]), where
+/// a URL's token alone is masked (see `secrets::mask_settings`).
+pub(crate) fn is_index_setting(path: &str) -> bool {
+    INDEX_SETTINGS
+        .iter()
+        .any(|s| path == *s || path.ends_with(&format!("/{s}")))
+}
+
 /// Whether the layer's file at `rel` is one whose settings that look like
 /// secrets Kule masks, as in the copy's `.env` files: what shells and tools
-/// read as they start (`export GITHUB_TOKEN=…` in `.zshrc`) and env files
-/// (`~/.env`), where people keep tokens.
+/// read as they start (`export GITHUB_TOKEN=…` in `.zshrc`), env files
+/// (`~/.env`), where people keep tokens, and package index settings
+/// ([`INDEX_SETTINGS`]).
 fn masks_home(rel: &str) -> bool {
-    startup(rel) || secrets::is_env_file(rel)
+    startup(rel) || secrets::is_env_file(rel) || INDEX_SETTINGS.contains(&rel)
+}
+
+/// Whether the top-level entry `name` of the home belongs in the layer
+/// when nothing the sandbox lets commands read is at or under it: the
+/// settings files shells and tools read, and env files, each cloned (and
+/// masked); and every entry not starting with a dot, which is linked (the
+/// person's own folders among them are hidden, and not here). Any other
+/// dot entry is not there for a command.
+fn in_layer(name: &str) -> bool {
+    !name.starts_with('.')
+        || CAPTURED_DIRS.contains(&name)
+        || startup(name)
+        || secrets::is_env_file(name)
+        || crate::grants::SETTINGS_FILES_IN_HOME.contains(&name)
 }
 
 /// What the layer started from.
@@ -424,6 +469,11 @@ impl Task {
             if hidden_dir && !(captured && shows(&from)) {
                 continue;
             }
+            // A dot entry the commands may not read anywhere is not in
+            // their home either: they find nothing, not a refusal.
+            if !in_layer(&text) && !shows(&from) {
+                continue;
+            }
             let Some(stamp) = Stamp::of(&from)? else {
                 continue;
             };
@@ -558,6 +608,11 @@ impl Task {
                     crate::osfs::symlink(&from, &to).at(&to)?;
                     layer.links.insert(text);
                 }
+            }
+        }
+        for rel in CAPTURED_DEEP {
+            if fs::symlink_metadata(real.join(rel)).is_ok() {
+                capture_state(&real, &dir, rel, &hidden, &shown, &mut layer, &real_clock)?;
             }
         }
         for path in state {

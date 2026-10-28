@@ -30,6 +30,7 @@ ring = "0.17.14"
 keyring = { version = "3.6.3", default-features = false, features = ["apple-native", "windows-native", "async-secret-service", "async-io", "crypto-rust"] }
 serde.workspace = true
 serde_json.workspace = true
+toml = "1.1.8"
 similar = "2.7.0"
 # Folds names as a case-insensitive disk reads them (see policy.rs).
 unicode-normalization = "0.1.25"

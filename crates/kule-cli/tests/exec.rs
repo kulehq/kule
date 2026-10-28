@@ -45,7 +45,7 @@ fn what_opens_the_sandbox_wider_is_said() {
     assert!(out.status.success(), "{said}");
     for line in [
         format!("kule: the command may write {dir}, outside the task's copy"),
-        format!("kule: the command may read {dir}, which the sandbox hides"),
+        format!("kule: the command may read {dir}, which it may not read by default"),
         "kule: the command gets KULE_TEST_SECRET from your environment".to_owned(),
     ] {
         assert!(said.contains(&line), "{line} in {said}");

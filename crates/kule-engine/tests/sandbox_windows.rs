@@ -773,9 +773,11 @@ fn a_revealed_folder_is_read_and_not_written() {
 
 /// A folder a command may read that holds Kule's home would open the home
 /// whole: with the task's copy inside, the home above the copy is not
-/// denied, only not granted. The command is refused instead, whether the
-/// home itself or a folder above it is the one revealed. Breaks when a
-/// grant holding a hidden folder that holds a grant is not refused.
+/// denied, only not granted. The grant is refused by the validator as it
+/// is asked for, whether the home itself or a folder above it; and were
+/// one to get through, the command would be refused instead of started.
+/// Breaks when a grant holding a hidden folder that holds a grant is not
+/// refused anywhere.
 #[test]
 fn a_grant_that_holds_kules_home_is_refused() {
     if !available() {
@@ -785,16 +787,18 @@ fn a_grant_that_holds_kules_home_is_refused() {
     let home = fs::canonicalize(s.home.path()).unwrap();
     for granted in [home.clone(), home.parent().unwrap().to_owned()] {
         let mut sandbox = s.sandbox();
-        sandbox.reveal(&granted).unwrap();
-        let said = match sandbox.start(
-            "cmd.exe",
-            &["/d".to_owned(), "/c".to_owned(), "dir".to_owned()],
-        ) {
+        let said = match sandbox.reveal(&granted) {
             Err(e) => e.to_string(),
-            Ok(_) => String::from("started"),
+            Ok(()) => match sandbox.start(
+                "cmd.exe",
+                &["/d".to_owned(), "/c".to_owned(), "dir".to_owned()],
+            ) {
+                Err(e) => e.to_string(),
+                Ok(_) => String::from("started"),
+            },
         };
         assert!(
-            said.contains("starts none"),
+            said.contains("cannot be revealed") || said.contains("starts none"),
             "a command reading {} was not refused: {said}",
             granted.display()
         );
@@ -816,7 +820,7 @@ fn a_command_gets_a_home_of_its_own_and_none_of_the_persons() {
     let person = kule_engine::osfs::person_home().unwrap();
     let mut sandbox = s.sandbox();
     s.task
-        .prepare_home(&person, &[], sandbox.hidden(), sandbox.shown(), &[])
+        .prepare_home(&person, &[], sandbox.hidden(), &sandbox.shown(), &[])
         .unwrap();
     sandbox.use_home(&s.task, &person).unwrap();
     let out = cmd(

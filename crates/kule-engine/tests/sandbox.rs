@@ -166,7 +166,9 @@ fn escape_copy_hard_link_to_a_readable_file() {
 
     let target = readable.join("readable.txt");
     fs::write(&target, "original\n").unwrap();
-    let out = sh(&s.sandbox(), &attempt(&target));
+    let mut sandbox = s.sandbox();
+    sandbox.reveal(&readable).unwrap();
+    let out = sh(&sandbox, &attempt(&target));
     assert_eq!(
         text(&out),
         "original",
@@ -654,11 +656,14 @@ fn a_link_in_place_of_a_login_or_state_opens_nothing_more() {
     );
     assert!(!elsewhere.join("job.plist").exists());
 
-    // Kule's home and the folder stay hidden, whatever is revealed.
+    // Kule's home and the folder are never revealed: asked to, Kule says
+    // so, and the command does not run with them.
     let mut sandbox = s.sandbox();
-    sandbox
+    let refused = sandbox
         .reveal(&fs::canonicalize(s.task.workspace()).unwrap())
-        .unwrap();
+        .unwrap_err()
+        .to_string();
+    assert!(refused.contains("cannot be revealed"), "{refused}");
     let out = sh(
         &sandbox,
         &format!("cat '{}/README.md'", s.task.workspace().display()),
@@ -681,6 +686,7 @@ fn a_hidden_directory_behind_a_link_stays_hidden() {
     fs::write(home.join("dotfiles/zshrc"), "export A=1\n").unwrap();
     std::os::unix::fs::symlink(home.join("dotfiles/ssh"), home.join(".ssh")).unwrap();
     let mut sandbox = s.sandbox();
+    sandbox.reveal(&home.join("dotfiles")).unwrap();
     sandbox.hide(&home.join(".ssh")).unwrap();
     let out = sh(
         &sandbox,
@@ -1061,13 +1067,14 @@ fn hidden_paths_cannot_be_read_or_listed() {
     fs::write(secrets.join("id_ed25519"), "PRIVATE KEY\n").unwrap();
     fs::write(s.outside().join("public.txt"), "public\n").unwrap();
     let mut sandbox = s.sandbox();
+    sandbox.reveal(&s.outside()).unwrap();
     sandbox.hide(&secrets).unwrap();
 
     let out = sh(&sandbox, &format!("cat '{}/id_ed25519'", secrets.display()));
     assert!(!ok(&out));
     assert!(!text(&out).contains("PRIVATE"));
     assert!(!ok(&sh(&sandbox, &format!("ls '{}'", secrets.display()))));
-    // Everything around the hidden path stays readable.
+    // Everything granted around the hidden path stays readable.
     let out = sh(
         &sandbox,
         &format!("cat '{}/public.txt'", s.outside().display()),
@@ -2298,7 +2305,7 @@ fn the_persons_package_caches_are_read_only() {
         ".npm",
         ".nuget/packages",
         ".cache",
-        "Library/Caches",
+        "Library/Caches/pip",
     ];
     for cache in caches {
         fs::create_dir_all(home.join(cache)).unwrap();
@@ -2408,8 +2415,11 @@ fn a_command_denied_the_gpu_gets_no_metal_device() {
         eprintln!("skipped: no Swift compiler or no GPU here");
         return;
     }
-    assert_eq!(metal_works(Some(&s.sandbox()), &probe), Some(true));
+    let mut sandbox = s.sandbox();
+    sandbox.reveal(&dir).unwrap();
+    assert_eq!(metal_works(Some(&sandbox), &probe), Some(true));
     let mut denied = s.sandbox();
+    denied.reveal(&dir).unwrap();
     denied.deny_gpu();
     assert_eq!(metal_works(Some(&denied), &probe), Some(false));
 }
@@ -2527,7 +2537,12 @@ fn a_tool_or_a_worktrees_repository_beside_the_workspace_stays_readable() {
         .unwrap();
     sandbox.hide(&dev.join("sdk/token")).unwrap();
 
-    let out = sh(&sandbox, "git log --oneline | wc -l");
+    // git reads the settings in HOME, which the layer gives a task's
+    // commands; here, the test's home, so the person's own is not asked.
+    let out = sh(
+        &sandbox,
+        &format!("HOME='{}' git log --oneline | wc -l", home.display()),
+    );
     assert!(ok(&out) && text(&out) == "1", "{out:?}");
     let out = sh(
         &sandbox,
@@ -2558,22 +2573,36 @@ fn a_tool_or_a_worktrees_repository_beside_the_workspace_stays_readable() {
     assert!(!ok(&out), "another repository opened: {out:?}");
 }
 
+/// In the home only the toolchains' own folders are readable, where the
+/// workspace lies in a dot folder or not: a dot entry beside it that no
+/// toolchain is known to read is not there for a command, neither at the
+/// top of the home nor where apps keep their data.
 #[test]
-fn folders_where_toolchains_live_stay_readable() {
-    for (workspace, beside) in [
-        // At the top of the home the settings stay readable; the rest is
-        // the person's own (see the tests in reads.rs).
-        ("proj", ".tool.txt"),
-        (".local/proj", ".local/share/tool.txt"),
-        ("Library/Developer/proj", "Library/Developer/tool.txt"),
+fn only_the_toolchains_own_folders_in_the_home_are_readable() {
+    for (workspace, beside, granted) in [
+        ("proj", ".tool.txt", ".cargo/config.toml"),
+        (
+            ".local/proj",
+            ".local/share/tool.txt",
+            ".local/share/uv/tool.txt",
+        ),
+        (
+            "Library/Developer/proj",
+            "Library/Developer/tool.txt",
+            "Library/Developer/CommandLineTools/tool.txt",
+        ),
     ] {
-        let home = home_with(&[&format!("{workspace}/README.md"), beside]);
+        let home = home_with(&[&format!("{workspace}/README.md"), beside, granted]);
         let home = fs::canonicalize(home.path()).unwrap();
         let (_kule, task) = task_on(&home.join(workspace));
         let mut sandbox = Sandbox::new(&task).unwrap();
         sandbox.hide_personal(&home, &[]).unwrap();
+        sandbox.hide_settings(&home, &[]).unwrap();
+        sandbox.grant_defaults(&home);
         let out = sh(&sandbox, &format!("cat '{}'", home.join(beside).display()));
-        assert!(ok(&out), "{beside} beside {workspace}: {out:?}");
+        assert!(!ok(&out), "{beside} beside {workspace} was read: {out:?}");
+        let out = sh(&sandbox, &format!("cat '{}'", home.join(granted).display()));
+        assert!(ok(&out), "{granted} beside {workspace}: {out:?}");
     }
 }
 

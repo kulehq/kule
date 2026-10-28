@@ -36,9 +36,17 @@ impl Setup {
         fs::canonicalize(self.outside.path()).unwrap().join("ran")
     }
 
+    /// A shell with the person's tools granted, as a task's commands have
+    /// them (`PATH`, the toolchains' folders in the home).
     fn sh(&self, script: &str) -> Output {
-        Sandbox::new(&self.task)
-            .unwrap()
+        let mut sandbox = Sandbox::new(&self.task).unwrap();
+        sandbox
+            .grant_tools(
+                self._home.path(),
+                kule_engine::osfs::person_home().as_deref(),
+            )
+            .unwrap();
+        sandbox
             .command("sh", &["-c".to_owned(), script.to_owned()])
             .unwrap()
             .output()
@@ -410,7 +418,9 @@ fn everyday_tools_still_work() {
             .is_ok_and(|o| o.status.success())
     };
     let mut scripts = vec![
-        "git init -q r && cd r && git -c user.name=k -c user.email=k@k commit -q --allow-empty -m one && git log --oneline | wc -l",
+        // Without a home layer, git's home is the test's own: the person's
+        // real settings file is not granted here.
+        "export HOME=\"$TMPDIR\" && git init -q r && cd r && git -c user.name=k -c user.email=k@k commit -q --allow-empty -m one && git log --oneline | wc -l",
         "python3 -c 'import json, sqlite3, ssl; print(1)'",
         "python3 -c 'from multiprocessing import shared_memory as s; m=s.SharedMemory(create=True, size=8); m.buf[0]=1; print(m.buf[0]); m.close(); m.unlink()'",
         // PostgreSQL's dynamic shared memory, by the name it gives it.
@@ -505,6 +515,8 @@ fn an_unlocked_keychain_opens_only_when_revealed() {
     let mut sandbox = Sandbox::new(&s.task).unwrap();
     sandbox.hide(&keychains).unwrap();
     sandbox.reveal(&keychains).unwrap();
+    // The probe keychain's own folder, which reads are granted in.
+    sandbox.reveal(keychain.0.parent().unwrap()).unwrap();
     let out = sandbox
         .command("sh", &["-c".to_owned(), read])
         .unwrap()

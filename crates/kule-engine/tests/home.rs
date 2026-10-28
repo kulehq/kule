@@ -85,7 +85,7 @@ impl Setup {
                 p,
                 &state.iter().map(|s| p.join(s)).collect::<Vec<_>>(),
                 sandbox.hidden(),
-                sandbox.shown(),
+                &sandbox.shown(),
                 &state.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>(),
             )
             .unwrap();
@@ -302,10 +302,13 @@ fn a_same_size_save_while_the_layer_is_made_is_not_overwritten() {
     for _ in 0..SAME_TICK_TRIES {
         let s = Setup::new();
         let p = s.person.path();
+        // Many settings to clone before the one saved again: in `.config`,
+        // which is cloned entry by entry (a dot file at the top that no
+        // toolchain reads is not in the layer at all).
         for i in 0..500 {
-            fs::write(p.join(format!(".b{i}")), "b\n").unwrap();
+            fs::write(p.join(format!(".config/b{i}")), "b\n").unwrap();
         }
-        let a = p.join(".a");
+        let a = p.join(".zshrc");
         fs::write(&a, "1\n").unwrap();
         // Saves .a again as soon as its clone appears, while the rest of the
         // home is still being cloned. Gives up after a while, so a layer
@@ -315,7 +318,7 @@ fn a_same_size_save_while_the_layer_is_made_is_not_overwritten() {
             std::thread::spawn(move || {
                 let started = std::time::Instant::now();
                 while started.elapsed() < std::time::Duration::from_secs(30) {
-                    if layer.join(".a").exists() {
+                    if layer.join(".zshrc").exists() {
                         fs::write(&a, "2\n").unwrap();
                         return;
                     }
@@ -331,12 +334,12 @@ fn a_same_size_save_while_the_layer_is_made_is_not_overwritten() {
             .unwrap();
         writer.join().unwrap();
         let layer = s.task.home_layer();
-        let cloned = fs::read_to_string(layer.join(".a")).unwrap();
-        fs::write(layer.join(".a"), "agent\n").unwrap();
-        match s.task.apply_reviewed(&[".a".to_owned()]) {
+        let cloned = fs::read_to_string(layer.join(".zshrc")).unwrap();
+        fs::write(layer.join(".zshrc"), "agent\n").unwrap();
+        match s.task.apply_reviewed(&[".zshrc".to_owned()]) {
             Err(e) => {
-                assert!(e.to_string().contains("~/.a"), "{e}");
-                assert_eq!(s.real(".a"), "2\n");
+                assert!(e.to_string().contains("~/.zshrc"), "{e}");
+                assert_eq!(s.real(".zshrc"), "2\n");
             }
             Ok(_) => assert_eq!(cloned, "2\n", "the person's save was overwritten unseen"),
         }
@@ -593,11 +596,8 @@ fn another_agents_layer_holds_nothing_of_the_first_ones_state() {
     let layer = s.task.home_layer();
     assert!(layer.join(".claude/.credentials.json").exists());
     s.run_as(&[".codex"], "true");
-    assert!(
-        fs::symlink_metadata(layer.join(".claude"))
-            .unwrap()
-            .is_symlink()
-    );
+    // Another agent's folder is no toolchain's: not in this layer at all.
+    assert!(fs::symlink_metadata(layer.join(".claude")).is_err());
     assert!(!s.person.path().join(".claude/.credentials.json").exists());
 }
 
