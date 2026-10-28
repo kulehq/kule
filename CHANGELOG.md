@@ -1,6 +1,9 @@
 # Changes
 
-## Unreleased
+## 0.2.0-preview.19
+
+A security preview. A tool's folder on `PATH` inside your own folders or
+where apps keep their data now opens no more than that tool needs.
 
 ### Security
 
