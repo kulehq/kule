@@ -63,7 +63,7 @@ Nothing is trusted by default:
 ### What a task's commands can still read {#what-a-tasks-commands-can-still-read}
 
 Reads are refused by default where your projects, sign-ins and apps' data
-lie (see [The sandbox](concepts/sandbox.md#what-is-hidden)); the rest of the
+lie (see [The sandbox](concepts/sandbox.md#what-a-command-may-read)); the rest of the
 computer stays readable, since tools need it:
 
 - the system: `/usr`, `/bin`, `/sbin`, `/etc`, `/opt`, `/Library`,

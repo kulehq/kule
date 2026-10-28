@@ -40,7 +40,7 @@ Geri kalan her şey salt okunur ya da gizlidir.
 --global`) reddedilmez: görevin [ev katmanına](home-layer.md) düşer ve
 incelemenizi bekler.
 
-## Bir komut neleri okuyabilir {#what-is-hidden}
+## Bir komut neleri okuyabilir {#what-a-command-may-read}
 
 Bir komut, Windows'ta olduğu gibi macOS ve Linux'ta da **yalnızca verilen
 yerleri** okur. Verilenler, her biri kaynağıyla birlikte
