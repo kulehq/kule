@@ -7,10 +7,11 @@ description: What Kule supports on macOS, Linux and Windows, how the sandbox dif
 # Platforms
 
 Kule runs on **macOS**, **Linux** and **Windows 11**. The sandbox is a
-different thing on each: on macOS and Linux a command may read everything
-but what Kule hides; on Windows it may read nothing but what Kule grants.
-What a command may write, where its network goes and what reaches your
-folder are the same on all three.
+different mechanism on each (Seatbelt, Landlock with namespaces, a process
+container), and the same rule on all three: a command reads nothing but
+what Kule grants (see [`kule tools`](cli/tools.md)). What a command may
+write, where its network goes and what reaches your folder are the same on
+all three too.
 
 ## Support at a glance
 

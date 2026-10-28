@@ -224,14 +224,32 @@ edin.
 
 ### Linux: bir komut "permission denied" alıyor ama hiçbir şey listelenmiyor
 
-**Neden:** Landlock reddettiklerini yalnızca denetim kaydına (audit log)
-bildirir; bu yüzden Kule onları macOS'taki gibi listeleyemez. Komut yine de
-hatayı alır.
+**Neden:** Landlock reddettiklerini yalnızca çekirdeğin denetim kaydına
+(audit log) bildirir; Kule onu bir kişi olarak okuyamaz, bu yüzden retleri
+macOS'taki gibi listeleyemez. Komut yine de hatayı alır.
 
-**Çözüm:** yol, sandbox'ın izin verdiklerinin dışında (bkz.
-[Sandbox](concepts/sandbox.md)). Çalışma klasörünün yanındaki bir proje
-için `kule reveal add PATH`; tek bir komut için `kule exec --reveal PATH`
-ya da `--allow-write PATH`.
+**Çözüm:** komutu bir kez `kule exec --trace GÖREV -- …` ile çalıştırın
+(`strace` gerekir): Kule onu sandbox'ın dışından `strace` altında çalıştırır
+ve sandbox'ın reddettiği her dosyayı ne yapılacağıyla birlikte listeler. Bir
+görevin komutları yalnızca verilen yerleri okur (bkz.
+[`kule tools`](cli/tools.md)): Kule'nin tanımadığı bir araç klasörü için
+`kule tools add PATH`; çalışma klasörünün yanındaki bir proje için
+`kule reveal add PATH`; tek bir komut için `kule exec --reveal PATH` ya da
+`--allow-write PATH`.
+
+### Bir araç bir klasörü okuyamıyor: "sandbox: refused file-read-data …"
+
+**Neden:** bir görevin komutları yalnızca verilen yerleri okur: görevin kendi
+klasörleri, sistem, araç zincirleriniz ve eklediğiniz yerler. Kule'nin
+tanımadığı bir yere kurulmuş bir araç zinciri (`/opt/corp/sdk`) ya da bir
+değişkenin bir aracı yönlendirdiği, ev dizininizin dışındaki bir dosya
+reddedilir.
+
+**Çözüm:** koşu, reddi eklenecek klasörle birlikte listeler:
+`kule tools add '/opt/corp/sdk'` her görevin onu okumasına izin verir, asla
+yazmasına değil. İşe yarayan en dar klasörü ekleyin. Kule, kendisini
+zayıflatacak bir klasörü (ev dizininiz, bir kimlik klasörü, Kule'nin kendi
+klasörü, bir diskin kökü) reddeder; bkz. [`kule tools`](cli/tools.md).
 
 ## Ağ ve sertifikalar
 

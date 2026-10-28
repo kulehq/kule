@@ -39,51 +39,67 @@ Writes to your **home directory** (`~/.zshrc`, `~/.config`, `git config
 --global`) are not refused: they land in the task's
 [home layer](home-layer.md) and wait for your review.
 
-## What is hidden
+## What a command may read
 
-A command cannot read:
+A command reads **nothing but what is granted**, on macOS and Linux as on
+Windows. The grants, each shown with its source by [`kule tools`](../cli/tools.md):
 
-- **credentials**: `~/.ssh`, `~/.aws`, `~/.npmrc`, cargo's registry tokens
-  (in `~/.cargo`, and in the folder `CARGO_HOME` names) and the like;
-- **your own files**: Documents, Desktop, Downloads, Pictures, Movies,
-  Music, iCloud Drive and cloud storage folders, and everything else at the
-  top of your home but its settings (a name starting with `.`, and
-  `~/Library`): your other projects, whether Kule opened them or not, and
-  your files there. A link at the top of your home is left as it is;
-- **the projects beside the workspace**: the folder your workspace lies in,
-  when that folder is in your home (not the home itself, a dot folder or
-  `~/Library`);
-- **every other project Kule opened**, wherever it lies, in your home or
-  outside it, with the projects beside it as for the workspace's own;
-- **where apps and tools keep settings and data**: `~/.config`,
-  `~/.local/share`, `~/Library/Application Support` and
-  `~/Library/Preferences`, an app's sign-in and a new tool's settings
-  included. What toolchains, shells and prompts read there stays readable:
-  the settings of git, jj, uv, pip, Poetry (not its `auth.toml`), Ruff,
-  mise, Go, Flutter, Matplotlib, fish, zsh, Nushell, Starship and direnv,
-  and what uv, mise, pnpm, fnm and pipx keep in `~/.local/share`, with man
-  pages and fonts;
-- **sign-ins of other tools**: GitHub Copilot, Firebase and the tools that
-  keep their settings with it, Wrangler, Fly, Doppler, SOPS, Podman's
-  `auth.json`, Yarn's and Bun's settings in your home, NuGet's own
-  `NuGet.Config`;
-- **editors' stores** of signed-in sessions and extension secrets (VS Code,
-  its Insiders build, Cursor, Windsurf, VSCodium), and **saved shell
-  sessions** (`~/.zsh_sessions`, `~/.bash_sessions`) beside the histories;
-- **Kule's home** (`~/.kule`): other tasks, settings, secrets, the signing
-  key;
-- **other agents' logins and transcripts**.
+- the **task's own folders**: its copy, its temporary folder and its home
+  layer (read and write);
+- the **system**: `/usr`, `/bin`, `/System/Library`, `/Library/Developer`,
+  Homebrew, Xcode, and `/etc` whole but for a few credential files denied
+  by name (`pip.conf`, `docker/config.json`, `rclone.conf`,
+  `samba/smb.conf`, `environment`, `profile.d`). On Linux also `/proc`,
+  `/sys`, the resolver's files under `/run` and narrow places under `/var`
+  and `/tmp`; never `/opt`, `/tmp` or `/run` whole;
+- **where your tools are**, as the variables passed to commands say: each
+  `PATH` entry (and a tool's own folder above its `bin` outside your home),
+  `JAVA_HOME`, `GOROOT`, `DOTNET_ROOT` and the others Kule passes on;
+- **where toolchains keep their own files in your home**: `~/.cargo`,
+  `~/.rustup`, `~/.npm`, `~/.m2`, `~/.gradle`, `~/.nuget`, `~/.dotnet`,
+  `~/go`, `~/.cache`, `~/.local/bin`, what uv, pipx, mise, pnpm and fnm
+  keep in `~/.local/share`, the settings of git, jj, uv, pip, Poetry (not
+  its `auth.toml`), Ruff, mise, Go, Flutter, Matplotlib, fish, zsh,
+  Nushell, Starship and direnv in `~/.config`, `~/Library/Java/JavaVirtualMachines`,
+  and the settings files tools read at the top of your home
+  (`.gitconfig`, `.editorconfig`, `.tool-versions`, …);
+- what **you** add with `kule tools add`, and what an **administrator**
+  names in the tools file;
+- a **project beside the workspace** you opened with
+  [`kule reveal`](../cli/reveal.md), and what `kule exec --reveal` opens
+  for one command.
 
-Inside those hidden folders, a few things stay readable because tools need
-them: the workspace's git directory (a worktree's repository next to it),
-the folders your `PATH` and SDK variables name, and the folder a program on
-your `PATH` leads to when it is a link (Claude Code's native install, uv's
-tools). On macOS a program that reads preferences through the system keeps
-to the same: a hidden app's preferences stay out of reach that way too.
+Inside a granted root, credentials stay denied by name:
+`~/.cargo/credentials.toml`, `~/.m2/settings.xml`, `~/.gradle/gradle.properties`,
+`~/.nuget/NuGet/NuGet.Config`, and the folder `CARGO_HOME` names. The
+folders on the way to a grant are listed, not read, so paths resolve.
 
-To let one command read something hidden, run it with `--reveal PATH`
-(see [`kule exec`](../cli/exec.md)): what Kule hides inside it stays
-hidden.
+Everything else is not there for a command: your home itself, Documents,
+Desktop, Downloads, your other projects whether Kule opened them or not,
+`~/.ssh`, `~/.aws` and every other credential folder, where apps keep
+settings and data (`~/.config`, `~/.local/share`,
+`~/Library/Application Support`, `~/Library/Preferences`) beyond the
+toolchains' settings named above, editors' stores and shell sessions, other
+agents' logins, Kule's home (`~/.kule`), and any file outside your home a
+variable points a tool to. At the top of your home, a dot entry no toolchain
+is known to read (a tool's settings that may hold a token) is not in the
+commands' home at all: a tool that looks for it finds nothing, as if you had
+none, and the real one stays out of reach (see [Home layer](home-layer.md)).
+
+Every grant goes through **one validator**, whoever names it: your home or a
+folder above it, another person's home, Kule's home, a credential folder,
+one of your own folders, a store of app data, the root of a disk or volume,
+a first-level system folder (`/opt`, `/usr`) and what a task writes are
+refused, with why. The decision is made on the resolved path, before every
+run. Nothing comes from the workspace or the copy: an agent cannot widen its
+own sandbox.
+
+When a tool needs a folder Kule does not know, the command sees the refusal
+as an error and the run lists it with what to do:
+`kule tools add '/opt/corp/sdk'`. On Linux, which does not report
+refusals itself, run the command once with `kule exec --trace`. To let one
+command read a path, run it with `--reveal PATH` (see
+[`kule exec`](../cli/exec.md)); the validator holds there too.
 
 ## What a command gets from its environment
 

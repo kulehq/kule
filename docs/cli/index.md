@@ -138,6 +138,7 @@ TASK=$(kule new ~/code/app | awk '{print $2}')
 | --- | --- |
 | [`kule policy`](policy.md) | Print the policy that holds, or switch between `balanced` and `careful`. |
 | [`kule rules`](rules.md) | List, add or forget what you told Kule not to ask about again. |
+| [`kule tools`](tools.md) | What every task's commands may read, with its source; add a folder of tools (read-only). |
 | [`kule reveal`](reveal.md) | Let a folder's tasks read a project beside it (read-only). |
 | [`kule isolation`](isolation.md) | Show what this computer cannot give the sandbox, and accept it or not. |
 

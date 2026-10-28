@@ -90,7 +90,8 @@ Neyin gizlendiğinin ve nedeninin tam listesi için bkz.
 | --- | --- | --- | --- |
 | `--allow-write` | yol | | Komutun bu yolun altına da yazmasına izin verir. Tekrarlanabilir. |
 | `--hide` | yol | | Bu yolu da komuttan gizler. Tekrarlanabilir. |
-| `--reveal` | yol | | Komutun varsayılan olarak gizli bir yolu okumasına izin verir; örneğin bir ajanın kendi oturumu için `~/Library/Keychains` ya da çalışma klasörünün yanındaki bir proje (salt okunur). Tekrarlanabilir. Kule'nin ev klasörü ve görevin kendi klasörü asla açılmaz. |
+| `--reveal` | yol | | Komutun varsayılan olarak okuyamadığı bir yolu okumasına izin verir; örneğin bir ajanın kendi oturumu için `~/Library/Keychains` ya da çalışma klasörünün yanındaki bir proje (salt okunur). Tekrarlanabilir. Kule'nin ev klasörü, görevin kendi klasörü, ev dizininizin kendisi ve doğrulayıcının reddettiği diğer yollar (bkz. [`kule tools`](tools.md)) asla açılmaz: komut nedeniyle birlikte reddedilir. |
+| `--trace` | | | Linux: komutu sandbox'ının dışından `strace` altında çalıştırır ve sandbox'ın ona reddettiği dosyaları ne yapılacağıyla birlikte listeler. Linux retleri kendiliğinden bildirmez; macOS ve Windows koşuları her zaman listeler. `strace` kurulu olmalıdır. |
 | `--pass-env` | ad | | Bu ortam değişkenini komuta aktarır. Tekrarlanabilir. |
 | `--no-network` | | | Komut için TCP ağını, localhost dahil, kapatır. |
 | `--open-network` | | | Komutun proxy'yi ve politikayı atlayarak her yere bağlanmasına izin verir. |

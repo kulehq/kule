@@ -47,6 +47,7 @@ açabilir.
 | `remembered.json` | Kule'ye bir daha sormamasını söyledikleriniz (`kule rules`). | hayır |
 | `committed.json` | Git'in, Kule'nin maskelediği değerleri tuttuğunu kabul ettiğiniz klasörler (`kule secrets history`); her değer, bu dosyanın anahtarıyla alınmış bir özet olarak tutulur, değerin kendisi asla. | hayır |
 | `beside.json` | Bir klasörün yanındaki, görevlerinin okuyabildiği projeler (`kule reveal`). | hayır |
+| `tools.json` | Her görevin komutlarının okuyabildiği, `kule tools add` ile eklenen klasörler. | hayır |
 | `isolation.json` | Daha zayıf yalıtımı kabul edip etmediğiniz (`kule isolation`). | hayır |
 | `secrets.json` | Saklanan gizli değerler: adlar, host'lar, klasörler ve **mühürlenmiş** (şifrelenmiş) değerler. Yalnızca siz okuyabilirsiniz. | hayır |
 | `secrets.key` | Gizli değerleri mühürleyen anahtar; **yalnızca** sistem onu saklamadığında: varsayılan dışında bir Kule ev dizini, anahtar zinciri veya Secret Service olmayan bir bilgisayar ya da SSH üzerinden açılmış bir Windows oturumu. Varsayılan ev dizini için anahtar macOS anahtar zincirinde (`Kule secrets` öğesi), Linux'ta Secret Service'te ya da Windows'ta Credential Manager'dadır (`Kule secrets` ile biten bir kayıt). Windows'ta 0.2.0-preview.15 veya öncesinden kalan bir dosya, gizli değerler ilk açıldığında Credential Manager'a taşınır. Dosyayı yalnızca siz okuyabilirsiniz. | hayır |

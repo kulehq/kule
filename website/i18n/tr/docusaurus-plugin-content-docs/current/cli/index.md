@@ -145,6 +145,7 @@ TASK=$(kule new ~/code/app | awk '{print $2}')
 | --- | --- |
 | [`kule policy`](policy.md) | Geçerli politikayı yazdırır ya da `balanced` ile `careful` arasında geçiş yapar. |
 | [`kule rules`](rules.md) | Kule'ye bir daha sormamasını söylediklerinizi listeler, ekler ya da unutturur. |
+| [`kule tools`](tools.md) | Her görevin komutlarının neleri okuyabildiğini kaynağıyla gösterir; bir araç klasörü ekler (salt okunur). |
 | [`kule reveal`](reveal.md) | Bir klasörün görevlerinin yanındaki bir projeyi (salt okunur) okumasına izin verir. |
 | [`kule isolation`](isolation.md) | Bu bilgisayarın sandbox'a neleri veremediğini gösterir; bunu kabul edip etmemenizi sağlar. |
 

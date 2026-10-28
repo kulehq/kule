@@ -213,13 +213,30 @@ refuses to run a command less isolated than it means to.
 
 ### Linux: a command gets "permission denied" but nothing is listed
 
-**Cause:** Landlock reports refusals only to the audit log, so Kule cannot
-list them as it does on macOS. The command still gets the error.
+**Cause:** Landlock reports refusals only to the kernel's audit log, which
+Kule cannot read as a person, so it cannot list them as it does on macOS.
+The command still gets the error.
 
-**Fix:** the path is outside what the sandbox allows (see
-[The sandbox](concepts/sandbox.md)). For a project beside the workspace,
-`kule reveal add PATH`; for one command, `kule exec --reveal PATH` or
-`--allow-write PATH`.
+**Fix:** run the command once with `kule exec --trace TASK -- …` (needs
+`strace`): Kule runs it under `strace` from outside the sandbox and lists
+every file the sandbox refused, with what to do. A task's commands read only
+what is granted (see [`kule tools`](cli/tools.md)): for a folder of tools
+Kule does not know, `kule tools add PATH`; for a project beside the
+workspace, `kule reveal add PATH`; for one command, `kule exec --reveal PATH`
+or `--allow-write PATH`.
+
+### A tool fails to read a folder: "sandbox: refused file-read-data …"
+
+**Cause:** a task's commands read nothing but what is granted: the task's
+own folders, the system, your toolchains, and what you added. A toolchain
+installed somewhere Kule does not know (`/opt/corp/sdk`), or a file a
+variable points a tool to outside your home, is refused.
+
+**Fix:** the run lists the refusal with the folder to add:
+`kule tools add '/opt/corp/sdk'` lets every task read it, never write it.
+Add the narrowest folder that works. Kule refuses a folder that would weaken
+it (your home, a credential folder, Kule's own, the root of a disk); see
+[`kule tools`](cli/tools.md).
 
 ## Network and certificates
 

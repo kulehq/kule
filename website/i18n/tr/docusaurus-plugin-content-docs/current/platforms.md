@@ -7,8 +7,10 @@ description: Kule'nin macOS, Linux ve Windows'ta neleri desteklediği, sandbox'�
 # Platformlar
 
 Kule **macOS**, **Linux** ve **Windows 11**'de çalışır. Sandbox üçünde
-farklı bir şeydir: macOS ve Linux'ta bir komut, Kule'nin gizlediği dışında
-her şeyi okuyabilir; Windows'ta ise Kule'nin verdiği dışında hiçbir şeyi
+farklı bir mekanizmadır (Seatbelt, ad alanlarıyla Landlock, bir süreç
+konteyneri) ve üçünde de aynı kural geçerlidir: bir komut Kule'nin verdiği
+dışında hiçbir şeyi okumaz (bkz. [`kule tools`](cli/tools.md)); Windows'ta
+da Kule'nin verdiği dışında hiçbir şeyi
 okuyamaz. Bir komutun nereye yazabildiği, ağının nereden geçtiği ve
 klasörünüze neyin ulaştığı üçünde de aynıdır.
 

@@ -21,13 +21,19 @@ Kule does neither. The writes are **caught**: they land in the task's
 A task's commands see `HOME` as the task's home layer (`<task>/home`), not
 your real home:
 
-- the small files at the top of your home and `~/.config` are **clones**
-  there (APFS clones them in one go; elsewhere `.config` is copied while it
-  stays under 64 MiB);
+- the settings files shells and toolchains read at the top of your home
+  (`.zshrc`, `.gitconfig`, `.editorconfig`, …) and `~/.config` are
+  **clones** there (APFS clones them in one go; elsewhere `.config` is
+  copied while it stays under 64 MiB);
 - new files at the top of your home land there too;
-- every other entry is a **link** to your own, so toolchains, caches and
-  settings are found where they always are. A write through a link meets
-  the sandbox as before;
+- a toolchain's own folder (`~/.cargo`, `~/.m2`, `~/go`, …) and every
+  entry that does not start with a dot is a **link** to your own, so
+  toolchains, caches and settings are found where they always are. A write
+  through a link meets the sandbox as before;
+- any other entry starting with a dot, which no toolchain is known to read,
+  is **not in the layer at all**: a tool that looks for it finds nothing,
+  as if you had none, and the real one stays out of reach (see
+  [The sandbox](sandbox.md));
 - the agent's own state is **cloned** too: the agent writes there, and
   what it writes never reaches your home and is never offered for review;
 - hidden paths (`~/.ssh`, `~/.aws`, …) are not in the layer at all;
