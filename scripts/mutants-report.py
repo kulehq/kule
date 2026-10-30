@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
 """Joins the results of cargo-mutants runs over the same mutants on several
-platforms (ci.yml's `mutants-report` job): a mutant is caught where any
-platform's tests caught it, and missed only where every platform that
-could build it missed it, since code one platform compiles out is nothing
-to its tests. Prints the score, writes it to $GITHUB_STEP_SUMMARY when set,
-and exits 2 when a mutant was missed everywhere.
+platforms (ci.yml's `mutants-report` job). Code one platform compiles out
+is nothing to its tests: there the mutant is reported as missed without
+having been built. So a mutant is caught where any platform's tests caught
+it; missed only where every platform missed it; and neither where no
+platform caught it but one found it unviable (it did not build where the
+code compiles) or timed out. Prints the score, writes it to
+$GITHUB_STEP_SUMMARY when set, and exits 2 when a mutant was missed
+everywhere.
 
     scripts/mutants-report.py DIR    # DIR holds the shards' outcomes.json files
+    scripts/mutants-report.py --self-test
 """
 
 import json
@@ -43,17 +47,39 @@ def verdicts(seen):
     for key, summaries in sorted(seen.items()):
         if "CaughtMutant" in summaries:
             caught.append(key)
-        elif "MissedMutant" in summaries:
+        elif all(s == "MissedMutant" for s in summaries):
             missed.append(key)
         else:
-            other.append((key, summaries))  # unviable or timed out everywhere
+            # Unviable or timed out where the code compiles; a "missed"
+            # beside that came from a platform that never built it.
+            other.append((key, summaries))
     return caught, missed, other
+
+
+def self_test():
+    """The join's rules, each on the case that needs it."""
+    key = lambda n: ("f.rs", n, 1, "()")  # noqa: E731
+    seen = {
+        key(1): ["CaughtMutant", "MissedMutant"],  # caught on one platform
+        key(2): ["MissedMutant", "MissedMutant"],  # missed everywhere
+        key(3): ["Unviable", "MissedMutant"],  # compiled nowhere it was tested
+        key(4): ["Timeout", "MissedMutant"],
+        key(5): ["MissedMutant"],  # one shard only
+    }
+    caught, missed, other = verdicts(seen)
+    assert caught == [key(1)], caught
+    assert missed == [key(2), key(5)], missed
+    assert [k for k, _ in other] == [key(3), key(4)], other
+    print("self-test ok")
+    return 0
 
 
 def main(argv):
     if len(argv) != 2:
         print(__doc__, file=sys.stderr)
         return 1
+    if argv[1] == "--self-test":
+        return self_test()
     seen, shards = mutants(argv[1])
     if shards == 0:
         print(f"no outcomes.json under {argv[1]}: the mutants jobs left no results", file=sys.stderr)

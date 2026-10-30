@@ -297,6 +297,7 @@ jobs:
             echo "the mutants jobs did not all succeed: $MUTANTS"
             exit 1
           fi
+          python3 -I scripts/mutants-report.py --self-test
           python3 -I scripts/mutants-report.py shards
 
   # The Windows sandbox, required: windows-latest is Windows Server, whose
