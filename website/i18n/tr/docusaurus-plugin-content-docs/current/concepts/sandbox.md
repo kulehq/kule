@@ -64,7 +64,9 @@ yerleri** okur. Verilenler, her biri kaynağıyla birlikte
   `~/.cargo`, `~/.rustup`, `~/.npm`, `~/.m2`, `~/.gradle`, `~/.nuget`
   (içindeki NuGet ayarları hariç; kimlik bilgisi taşıyabilir),
   `~/.dotnet`, `~/go`, `~/.cache`, `~/.local/bin`, uv, pipx, mise, pnpm ve
-  fnm'nin `~/.local/share` içinde tuttukları; git, jj, uv, pip, Poetry
+  fnm'nin `~/.local/share` içinde tuttukları (ve pipx'in evi nerede
+  tutuyorsa orası: pipx 1.5 öncesinden kalan `~/.local/pipx`, macOS'ta
+  `~/Library/Application Support/pipx`); git, jj, uv, pip, Poetry
   (`auth.toml` hariç), Ruff, mise, Go, Flutter, Matplotlib, fish, zsh,
   Nushell, Starship ve direnv'in `~/.config` içindeki ayarları;
   `~/Library/Java/JavaVirtualMachines` ve araçların ev dizininizin en üstünde

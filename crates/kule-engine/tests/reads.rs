@@ -185,6 +185,73 @@ fn a_tool_inside_an_apps_data_opens_no_more_than_its_own_folder() {
     }
 }
 
+/// A tool pipx installed runs from wherever pipx keeps its home: its
+/// launcher in `~/.local/bin` is a link into the venv, and the venv reads
+/// pip and setuptools from the `shared` venv beside it (`pipx_shared.pth`),
+/// so pipx's home is needed whole: `~/.local/pipx` (pipx before 1.5, kept
+/// where it exists), `~/.local/share/pipx`, or on macOS
+/// `~/Library/Application Support/pipx`. What else lies where apps keep
+/// their data stays hidden.
+#[test]
+fn a_tool_pipx_installed_reads_its_venv_wherever_pipx_keeps_it() {
+    let homes = [
+        ("old", ".local/pipx"),
+        ("xdg", ".local/share/pipx"),
+        ("mac", "Library/Application Support/pipx"),
+    ];
+    let planted: Vec<String> = homes
+        .iter()
+        .flat_map(|(name, pipx)| {
+            [
+                format!("{pipx}/venvs/{name}/bin/{name}"),
+                format!("{pipx}/venvs/{name}/lib/site.py"),
+                format!("{pipx}/shared/lib/pip.py"),
+            ]
+        })
+        // Beside pipx's: an app's, and one whose name starts like pip's.
+        .chain([
+            "Library/Application Support/other/token".to_owned(),
+            "Library/Application Support/pipfoo/token".to_owned(),
+        ])
+        .collect();
+    let (_home, home) = home_with(&planted.iter().map(String::as_str).collect::<Vec<_>>());
+    fs::create_dir_all(home.join(".local/bin")).unwrap();
+    for (name, pipx) in homes {
+        std::os::unix::fs::symlink(
+            home.join(pipx)
+                .join("venvs")
+                .join(name)
+                .join("bin")
+                .join(name),
+            home.join(".local/bin").join(name),
+        )
+        .unwrap();
+    }
+    let s = Setup::new();
+    let tools = [home.join(".local/bin")];
+    let mut sandbox = Sandbox::new(&s.task).unwrap();
+    sandbox.hide_personal(&home, &tools).unwrap();
+    sandbox.hide_settings(&home, &tools).unwrap();
+    sandbox.grant_env(&tools, Some(&home));
+    sandbox.grant_defaults(&home);
+    for (name, pipx) in homes {
+        for file in [
+            format!("venvs/{name}/lib/site.py"),
+            "shared/lib/pip.py".to_owned(),
+        ] {
+            let path = home.join(pipx).join(&file);
+            assert!(reads(&sandbox, &path), "{pipx}/{file} was not read");
+        }
+    }
+    for app in ["other", "pipfoo"] {
+        let token = home
+            .join("Library/Application Support")
+            .join(app)
+            .join("token");
+        assert!(!reads(&sandbox, &token), "{app}'s token was read");
+    }
+}
+
 /// A toolchain kept in a folder of the person's own, its `bin` on `PATH`,
 /// is readable from its root (Go finds its own beside its program); what
 /// lies beside it stays the person's.

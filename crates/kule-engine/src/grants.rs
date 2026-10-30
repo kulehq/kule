@@ -370,6 +370,8 @@ pub const TOOL_DEFAULTS_IN_HOME: &[&str] = &[
     ".pyenv",
     ".local/share/uv",
     ".local/share/pipx",
+    // pipx's home from before 1.5, which it keeps using where it exists
+    ".local/pipx",
     ".local/share/mise",
     ".cache",
     ".local/bin",
@@ -409,6 +411,8 @@ pub const TOOL_DEFAULTS_IN_HOME: &[&str] = &[
     "Library/Developer/CommandLineTools",
     "Library/Application Support/go",
     "Library/Application Support/pip",
+    // pipx's home on macOS since 1.5 (platformdirs), unless an older one exists
+    "Library/Application Support/pipx",
     "Library/Application Support/pypoetry",
     "Library/Application Support/ruff",
     "Library/Application Support/jj",

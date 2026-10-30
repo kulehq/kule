@@ -1886,7 +1886,7 @@ fn print_denials(denials: &[Denial], lost: Option<&str>) {
         }
     }
     for hint in hints {
-        println!("  {hint}");
+        println!("  {}", paint::plain_line(&hint));
     }
     if let Some(lost) = lost {
         println!("{}", paint::dim(&format!("sandbox: {lost}")));
@@ -2646,7 +2646,13 @@ fn traced_exec(home: &Path, task: &Task) -> Result<ExitCode> {
         .with_context(|| format!("could not run {}", strace.display()))?;
     let text = std::fs::read_to_string(&log).unwrap_or_default();
     let _ = std::fs::remove_file(&log);
-    let denials = kule_engine::traced_denials(&text);
+    let mut denials = kule_engine::traced_denials(&text);
+    // Each hint held against the validator, as `kule tools add` would hold
+    // the folder it names.
+    if let Some(person) = kule_engine::osfs::person_home() {
+        let bounds = kule_engine::Bounds::for_person(home, &person);
+        kule_engine::check_hints(&mut denials, &bounds);
+    }
     if denials.is_empty() {
         println!("trace: the sandbox refused the command no file");
     } else {
