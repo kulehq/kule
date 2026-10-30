@@ -1,0 +1,17 @@
+# cargo-mutants, for the mutation tests (ci.yml's `mutants` jobs,
+# MAINTAINING.md): each function a change touches is altered in turn, and
+# a test must fail for every alteration.
+
+# Never mutated: what only Windows compiles. CI mutates on macOS and Linux,
+# where an alteration there changes nothing and no test could catch it.
+exclude_globs = [
+  "**/windows.rs",
+  "**/*_windows.rs",
+  "**/windows/**",
+  "crates/kule-pty-helper/**",
+]
+
+# Tests run real processes and vary in time: a mutant counts as a timeout
+# only well past what the unmutated tree took, and never under two minutes.
+timeout_multiplier = 3.0
+minimum_test_timeout = 120

@@ -2,7 +2,7 @@ name: outdated
 
 # Versions pinned outside Cargo.lock that Dependabot does not follow: the
 # agents' packages in agents.toml, the Tauri CLI the release builds with,
-# and the vendored xterm. Once a week; a newer version fails the run, so
+# cargo-mutants, and the vendored xterm. Once a week; a newer version fails the run, so
 # the pin gets looked at. Nothing is changed here.
 
 on:
@@ -50,6 +50,8 @@ jobs:
           done
           pinned=$(sed -n 's/^  TAURI_CLI_VERSION: //p' .github/workflows/release.yml)
           check tauri-cli "$pinned" "$(curl -fsS https://crates.io/api/v1/crates/tauri-cli -H 'User-Agent: kule-outdated' | jq -r .crate.max_stable_version)"
+          pinned=$(grep -oE 'cargo-mutants --version [0-9.]+' .github/workflows/ci.yml | head -1 | awk '{print $3}')
+          check cargo-mutants "$pinned" "$(curl -fsS https://crates.io/api/v1/crates/cargo-mutants -H 'User-Agent: kule-outdated' | jq -r .crate.max_stable_version)"
           # The vendored xterm and its addons, as vendor/xterm/README.md lists them.
           # The backticks are the README's own, matched as they are.
           # shellcheck disable=SC2016
