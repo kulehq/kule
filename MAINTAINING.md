@@ -28,7 +28,10 @@ the job summary). Besides that:
 - **The docs site builds** in both locales (`cd website && npm run build`),
   with broken links set to throw.
 - **A mutant missed on both platforms** means a changed function has no
-  test that tells it from a stub: write the test. Code only Windows
+  test that tells it from a stub: write the test. A `mutants` job red at
+  its *baseline* ran no mutant: the test suite itself failed there, as it
+  would in the `test` job; rerun the failed jobs, and look at the test as
+  ever when it fails again. Code only Windows
   compiles is never mutated (`.cargo/mutants.toml`); a function in a
   shared file that only Windows compiles is excluded there by name
   (`exclude_re`), never by weakening the report. Before a pull request,

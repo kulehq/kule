@@ -2022,7 +2022,9 @@ fn stored_under(since: std::time::SystemTime, dir: &Path) -> std::collections::B
 /// 2000 of a sandbox's refusals, measured): the rest the log drops with no
 /// word, and still delivers what comes after, Kule's own refusal among it.
 /// What the log's store shows refused is listed all the same, and such a
-/// list is never told as all there was, as the store fills late (macOS).
+/// list is never told as all there was: it is told as incomplete, or with
+/// when the log noted dropping the kernel's messages (`lost`), which is
+/// how a loss is told (see `Refusals`), as the store fills late (macOS).
 #[cfg(target_os = "macos")]
 #[test]
 fn refusals_the_stream_dropped_are_read_from_the_store() {
@@ -2103,7 +2105,7 @@ fn refusals_the_stream_dropped_are_read_from_the_store() {
         missing.first()
     );
     assert!(
-        refusals.incomplete || missing_settled == 0,
+        refusals.incomplete || !refusals.lost.is_empty() || missing_settled == 0,
         "told as all there was: {what}"
     );
     // What the store had shown when Kule read it is listed: without the

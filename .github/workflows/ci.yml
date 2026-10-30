@@ -255,10 +255,11 @@ jobs:
           # In place: a copy of the tree under the runner's temp folder
           # gives the daemon tests socket paths too long to bind (macOS).
           cargo mutants --in-place --in-diff mutants.diff --shard "$SHARD/4" --output mutants.out || code=$?
-          # 2: a mutant was missed; 3: one timed out; 4: one did not build.
-          # The report job weighs those across the platforms; anything
-          # else is an error of this job's own.
-          case $code in 0|2|3|4) ;; *) exit "$code" ;; esac
+          # 2: a mutant was missed; 3: one timed out. The report job
+          # weighs those across the platforms. 4: the tests failed in the
+          # unmutated tree, so nothing was tested here; that and anything
+          # else fail this job, and the report with it.
+          case $code in 0|2|3) ;; *) exit "$code" ;; esac
           # A diff with nothing to mutate still reports, as no mutants.
           mkdir -p mutants.out/mutants.out
           [ -f mutants.out/mutants.out/outcomes.json ] || echo '{"outcomes": []}' > mutants.out/mutants.out/outcomes.json
