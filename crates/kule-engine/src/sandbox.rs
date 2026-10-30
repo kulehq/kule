@@ -3852,9 +3852,11 @@ mod hint_tests {
         let root = std::fs::canonicalize(dir.path()).unwrap();
         // The home where homes lie, the tool's folder outside them.
         let (kule, home, elsewhere) = (root.join("kule"), root.join("Users/me"), root.join("opt"));
+        // A store where apps keep their data, as this platform has it.
+        let store_dir = home.join(SETTINGS_IN_HOME[0]);
         for file in [
             home.join(".aws/credentials"),
-            home.join("Library/Preferences/com.app.plist"),
+            store_dir.join("app.cfg"),
             elsewhere.join("jdk/lib/modules"),
         ] {
             std::fs::create_dir_all(file.parent().unwrap()).unwrap();
@@ -3882,11 +3884,11 @@ mod hint_tests {
             )),
             "{aws}"
         );
-        let store = hint(home.join("Library/Preferences/com.app.plist"));
+        let store = hint(store_dir.join("app.cfg"));
         assert!(
             store.contains(&format!(
                 "`kule tools add '{}'` would be refused: {}",
-                home.join("Library/Preferences").display(),
+                store_dir.display(),
                 Refused::Store
             )),
             "{store}"
