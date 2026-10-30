@@ -1,6 +1,10 @@
 # Changes
 
-## Unreleased
+## 0.2.0-preview.20
+
+A fix preview. Tools pipx installed run in a task again, a refused read's
+hint names only a folder Kule would take, what a refusal names is shown
+as plain text, and mutation tests join CI.
 
 ### Fixed
 
@@ -14,6 +18,12 @@
 - What a refusal names is listed as plain text, in the terminal and in
   the window: a character in a path that would drive a terminal or hide a
   word is shown escaped.
+
+### Changed
+
+- Mutation tests (cargo-mutants) run in CI on what each change touches,
+  on macOS and Linux; a changed function no test tells from a stub is
+  red.
 
 ## 0.2.0-preview.19
 
