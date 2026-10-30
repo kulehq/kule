@@ -1646,6 +1646,23 @@ fn refusals_are_reported_where_the_platform_allows() {
             );
         }
     }
+    // The hint of the token's read is held against the validator as `kule
+    // tools add` would hold the folder: hidden, so it says the folder
+    // would be refused instead of naming it to add.
+    if let Some(read) = refusals
+        .denials
+        .iter()
+        .find(|d| wanted(d, "file-read", &token))
+    {
+        assert!(
+            read.hint.as_deref().is_some_and(|h| h.contains(&format!(
+                "`kule tools add '{}'` would be refused",
+                secrets.display()
+            ))),
+            "{:?}",
+            read.hint
+        );
+    }
 }
 
 /// The children of `parent` still running that name `words` in how they

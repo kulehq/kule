@@ -180,6 +180,7 @@ The workspace is plain Cargo:
 cargo fmt --all --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo test --workspace --locked        # tests run on the real filesystem and real processes
+TMPDIR=$HOME/.cache cargo mutants --in-diff <(git diff main)   # mutation tests on what you changed (cargo-mutants 27.1.0)
 ```
 
 The documentation site lives in [`website/`](website) and is built from the

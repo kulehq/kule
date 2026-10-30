@@ -422,6 +422,7 @@ pub const SETTINGS_READ: &[&str] = &[
     ".local/share/fish",
     "Library/Application Support/go",
     "Library/Application Support/pip",
+    "Library/Application Support/pipx",
     "Library/Application Support/pypoetry",
     "Library/Application Support/ruff",
     "Library/Application Support/jj",
@@ -696,6 +697,10 @@ pub struct Sandbox {
     workspace: PathBuf,
     /// Readable but never writable, even inside a writable path.
     protected: Vec<PathBuf>,
+    /// The person's home the grants were made for (see
+    /// [`Sandbox::grant_tools`]): what the hints of refusals are held
+    /// against.
+    hint_home: Option<PathBuf>,
     network: Network,
     /// Environment variables passed on beyond [`PASSED_ENV`].
     passed_env: Vec<String>,
@@ -873,6 +878,35 @@ pub struct Denial {
     pub hint: Option<String>,
 }
 
+/// `text` as plain text: a character that would drive a terminal or hide
+/// a word (a control character, a mark that turns text around, one that
+/// shows nothing) is shown escaped (`\u{1b}`). What a refusal names comes
+/// from a path a command chose, and is shown in terminals and the window.
+pub fn plain_text(text: &str) -> String {
+    let unsafe_char = |c: char| {
+        c.is_control()
+            || matches!(
+                c,
+                '\u{00AD}'
+                    | '\u{061C}'
+                    | '\u{200B}'..='\u{200F}'
+                    | '\u{2028}'..='\u{202E}'
+                    | '\u{2060}'..='\u{2069}'
+                    | '\u{FEFF}'
+                    | '\u{E0000}'..='\u{E007F}'
+            )
+    };
+    text.chars()
+        .map(|c| {
+            if unsafe_char(c) {
+                c.escape_unicode().to_string()
+            } else {
+                c.to_string()
+            }
+        })
+        .collect()
+}
+
 impl Denial {
     /// The same refusals once each, with how many times, in the order
     /// first seen. A terminal device by number (`/dev/ttys003`,
@@ -969,18 +1003,50 @@ fn hint(operation: &str, path: &str) -> Option<String> {
 /// names the folder the path is in, taken from Kule's own record of the
 /// refusal, never from what a command printed.
 pub(crate) fn read_hint(path: &str) -> String {
-    let folder = match std::fs::symlink_metadata(path) {
-        Ok(m) if m.is_dir() => path.to_owned(),
-        _ => Path::new(path)
-            .parent()
-            .map_or_else(|| path.to_owned(), |p| p.display().to_string()),
-    };
+    let folder = hint_folder(path);
     format!(
         "A task's commands read only what is granted (kule tools list). If a tool \
          needs this, `kule tools add '{folder}'` lets every task read that folder, \
          never write it; Kule refuses a folder that would weaken it (your home, a \
          credential folder, Kule's own)."
     )
+}
+
+/// The folder a hint names for a refused read at `path`: the path where it
+/// is a folder, else the folder it is in.
+fn hint_folder(path: &str) -> String {
+    match std::fs::symlink_metadata(path) {
+        Ok(m) if m.is_dir() => path.to_owned(),
+        _ => Path::new(path)
+            .parent()
+            .map_or_else(|| path.to_owned(), |p| p.display().to_string()),
+    }
+}
+
+/// [`read_hint`] held against the validator first: the folder is named to
+/// add only where `kule tools add` would take it; otherwise the hint says
+/// why it would not (a credential folder, where apps keep their data), so
+/// no one is sent down a dead end. The folder is Kule's own derivation
+/// from its record of the refusal, never what a command printed.
+pub fn checked_read_hint(path: &str, bounds: &Bounds) -> String {
+    let folder = hint_folder(path);
+    match grants::validate(Path::new(&folder), Source::Person, bounds) {
+        Ok(_) => read_hint(path),
+        Err(why) => format!(
+            "A task's commands read only what is granted (kule tools list); \
+             `kule tools add '{folder}'` would be refused: {why}."
+        ),
+    }
+}
+
+/// Holds the hint of every refusal in `denials` against `bounds` (see
+/// [`checked_read_hint`]).
+pub fn check_hints(denials: &mut [Denial], bounds: &Bounds) {
+    for denial in denials.iter_mut() {
+        if denial.hint.is_some() {
+            denial.hint = Some(checked_read_hint(&denial.path, bounds));
+        }
+    }
 }
 
 /// The refusals in `text`, the output of `strace -f -e trace=%file` run
@@ -1043,12 +1109,14 @@ pub fn traced_denials(text: &str) -> Vec<Denial> {
                 .iter()
                 .any(|flag| args.contains(flag)));
         let operation = if writes { "write" } else { "read" };
+        // strace shows a path's bytes escaped; held to plain text all the same.
+        let path = plain_text(path);
         let denial = Denial {
             process: format!("pid {pid}"),
             operation: operation.to_owned(),
-            path: path.to_owned(),
+            hint: (!writes).then(|| read_hint(&path)),
+            path,
             saved: None,
-            hint: (!writes).then(|| read_hint(path)),
         };
         if !denials.contains(&denial) {
             denials.push(denial);
@@ -1104,6 +1172,7 @@ impl Sandbox {
             beside_links: Vec::new(),
             workspace: real_or_planned(task.workspace())?,
             protected: Vec::new(),
+            hint_home: None,
             network: Network::Allow,
             passed_env: Vec::new(),
             env: Vec::new(),
@@ -1145,6 +1214,7 @@ impl Sandbox {
     /// the validator holds each root against them.
     pub fn grant_tools(&mut self, kule_home: &Path, home: Option<&Path>) -> Result<()> {
         let home = home.map(real_or_planned).transpose()?;
+        self.hint_home.clone_from(&home);
         self.grant_env(&tools_from_env(), home.as_deref());
         if let Some(home) = &home {
             self.grant_defaults(home);
@@ -1290,7 +1360,14 @@ impl Sandbox {
     /// unprivileged process (Linux); the command still sees each refusal as
     /// an error.
     pub fn denials(&self, window: Duration) -> Result<Option<Refusals>> {
-        self.platform_denials(window)
+        let mut refusals = self.platform_denials(window)?;
+        // Each hint held against the validator, as `kule tools add` would
+        // hold the folder it names.
+        if let Some(refusals) = &mut refusals {
+            let bounds = self.bounds(self.hint_home.as_deref());
+            check_hints(&mut refusals.denials, &bounds);
+        }
+        Ok(refusals)
     }
 
     /// [`Sandbox::new`] plus the defaults: on Linux `/tmp` writable (a
@@ -3065,12 +3142,15 @@ pub(crate) fn parse_denial(message: &str) -> Option<Denial> {
     let (_, rest) = rest.split_once(") deny(")?;
     let (_, rest) = rest.split_once(") ")?;
     let (operation, path) = rest.split_once(' ').unwrap_or((rest, ""));
+    // As plain text: the path is the command's own choice of characters.
+    let (process, operation, path) = (plain_text(process), plain_text(operation), plain_text(path));
+    let hint = hint(&operation, &path);
     Some(Denial {
-        process: process.to_owned(),
-        operation: operation.to_owned(),
-        path: path.to_owned(),
+        process,
+        operation,
+        path,
         saved: None,
-        hint: hint(operation, path),
+        hint,
     })
 }
 
@@ -3613,6 +3693,19 @@ impl Sandbox {
 mod tests {
     use super::*;
 
+    /// A refused path with characters that would drive a terminal is
+    /// listed escaped, in the refusal and in its hint alike.
+    #[test]
+    fn a_refused_path_is_listed_as_plain_text() {
+        let read =
+            parse_denial("Sandbox: sh(42) deny(1) file-read-data /opt/x\u{1b}[2J/y\u{7}\nkule-1-2")
+                .unwrap();
+        assert_eq!(read.path, "/opt/x\\u{1b}[2J/y\\u{7}");
+        let hint = read.hint.unwrap();
+        assert!(hint.contains("'/opt/x\\u{1b}[2J'"), "{hint}");
+        assert!(!hint.chars().any(char::is_control), "{hint}");
+    }
+
     #[test]
     fn denials_are_read_also_as_duplicate_reports() {
         let plain = "Sandbox: bash(89964) deny(1) file-write-create /Users/me/.zshrc\nkule-1-2";
@@ -3731,6 +3824,102 @@ mod tests {
             hint.contains("window server") && hint.contains("pandoc"),
             "{hint}"
         );
+    }
+}
+
+#[cfg(test)]
+mod hint_tests {
+    use super::*;
+
+    /// What a refusal names is shown as plain text: a character that
+    /// would drive a terminal or hide a word is escaped, the rest kept.
+    #[test]
+    fn what_a_refusal_names_is_plain_text() {
+        assert_eq!(plain_text("/opt/tools/ü"), "/opt/tools/ü");
+        assert_eq!(
+            plain_text("/tmp/\u{1b}]0;x\u{7}a\u{202E}b\nc"),
+            "/tmp/\\u{1b}]0;x\\u{7}a\\u{202e}b\\u{a}c"
+        );
+    }
+
+    /// The hint of a refused read names the folder to add only where
+    /// `kule tools add` would take it; for a credential folder or a store
+    /// where apps keep their data it says why not, so no one runs the
+    /// command to find out.
+    #[test]
+    fn a_hint_names_a_folder_only_where_kule_tools_add_would_take_it() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let root = std::fs::canonicalize(dir.path()).unwrap();
+        // The home where homes lie, the tool's folder outside them.
+        let (kule, home, elsewhere) = (root.join("kule"), root.join("Users/me"), root.join("opt"));
+        // A store where apps keep their data, as this platform has it.
+        let store_dir = home.join(SETTINGS_IN_HOME[0]);
+        for file in [
+            home.join(".aws/credentials"),
+            store_dir.join("app.cfg"),
+            elsewhere.join("jdk/lib/modules"),
+        ] {
+            std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+            std::fs::write(&file, "x\n").unwrap();
+        }
+        let bounds = Bounds::for_person(&kule, &home);
+        let hint = |path: PathBuf| checked_read_hint(&path.display().to_string(), &bounds);
+        // A file's folder; a folder itself.
+        for path in [elsewhere.join("jdk/lib/modules"), elsewhere.join("jdk/lib")] {
+            let jdk = hint(path);
+            assert!(
+                jdk.contains(&format!(
+                    "`kule tools add '{}'`",
+                    elsewhere.join("jdk/lib").display()
+                )) && !jdk.contains("would be refused"),
+                "{jdk}"
+            );
+        }
+        let aws = hint(home.join(".aws/credentials"));
+        assert!(
+            aws.contains(&format!(
+                "`kule tools add '{}'` would be refused: {}",
+                home.join(".aws").display(),
+                Refused::Hidden
+            )),
+            "{aws}"
+        );
+        let store = hint(store_dir.join("app.cfg"));
+        assert!(
+            store.contains(&format!(
+                "`kule tools add '{}'` would be refused: {}",
+                store_dir.display(),
+                Refused::Store
+            )),
+            "{store}"
+        );
+        // Held for every refusal that carries a hint, and for no other.
+        let mut denials = vec![
+            Denial {
+                process: "java".into(),
+                operation: "file-read-data".into(),
+                path: home.join(".aws/credentials").display().to_string(),
+                saved: None,
+                hint: Some(read_hint(
+                    &home.join(".aws/credentials").display().to_string(),
+                )),
+            },
+            Denial {
+                process: "java".into(),
+                operation: "file-write-create".into(),
+                path: home.join(".aws/x").display().to_string(),
+                saved: None,
+                hint: None,
+            },
+        ];
+        check_hints(&mut denials, &bounds);
+        assert!(
+            denials[0]
+                .hint
+                .as_deref()
+                .is_some_and(|h| h.contains("would be refused"))
+        );
+        assert_eq!(denials[1].hint, None);
     }
 }
 

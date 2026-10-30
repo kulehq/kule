@@ -130,8 +130,9 @@ pub use remembered::{
 pub use sandbox::ProcessFinder;
 pub use sandbox::{
     Denial, Ended, HIDDEN_IN_HOME, INCOMPLETE, Io, Network, PASSED_ENV, PASSED_ENV_WINDOWS,
-    PERSONAL_IN_HOME, Process, Refusals, Sandbox, Start, UNREPORTED, denials, isolates_network,
-    own_processes, protects_in_place, record_denials, traced_denials,
+    PERSONAL_IN_HOME, Process, Refusals, Sandbox, Start, UNREPORTED, check_hints,
+    checked_read_hint, denials, isolates_network, own_processes, protects_in_place, record_denials,
+    traced_denials,
 };
 #[cfg(windows)]
 pub use sandbox::{Terminal, TerminalInput, TerminalStart};

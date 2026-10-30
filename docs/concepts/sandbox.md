@@ -61,7 +61,9 @@ Windows. The grants, each shown with its source by [`kule tools`](../cli/tools.m
   `~/.rustup`, `~/.npm`, `~/.m2`, `~/.gradle`, `~/.nuget` (not NuGet's
   settings in it, which can hold feed credentials), `~/.dotnet`,
   `~/go`, `~/.cache`, `~/.local/bin`, what uv, pipx, mise, pnpm and fnm
-  keep in `~/.local/share`, the settings of git, jj, uv, pip, Poetry (not
+  keep in `~/.local/share` (and pipx's home wherever pipx keeps it:
+  `~/.local/pipx` from before pipx 1.5, on macOS
+  `~/Library/Application Support/pipx`), the settings of git, jj, uv, pip, Poetry (not
   its `auth.toml`), Ruff, mise, Go, Flutter, Matplotlib, fish, zsh,
   Nushell, Starship and direnv in `~/.config`, `~/Library/Java/JavaVirtualMachines`,
   and the settings files tools read at the top of your home

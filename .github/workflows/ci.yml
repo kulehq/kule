@@ -200,6 +200,106 @@ jobs:
           fi
           cargo test -p kule-engine --locked --test sandbox weaker_isolation
 
+  # Mutation tests on what the change touches (cargo-mutants, pinned;
+  # .cargo/mutants.toml): each function the diff changed is altered in
+  # turn, and a test must fail for every alteration. Only the diff's
+  # mutants, split over four shards on macOS and on Linux, so a round
+  # stays within the cap. A mutant in code one platform compiles out is
+  # missed there and caught on the other, so these jobs fail on nothing
+  # but their own errors: `mutants-report` joins the shards and fails on
+  # a mutant missed everywhere. Pull requests and pushes only: a
+  # scheduled run or one started by hand has no diff.
+  mutants:
+    needs: changes
+    if: ${{ !cancelled() && (github.event_name == 'pull_request' || github.event_name == 'push') }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        shard: [0, 1, 2, 3]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: needs.changes.outputs.code != 'false'
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Rust toolchain (rust-toolchain.toml)
+        if: needs.changes.outputs.code != 'false'
+        run: rustup toolchain install
+      - name: Desktop app dependencies (WebKitGTK)
+        if: needs.changes.outputs.code != 'false' && (runner.os == 'Linux')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev
+      - name: Unprivileged user namespaces (the sandbox's own network)
+        if: needs.changes.outputs.code != 'false' && (runner.os == 'Linux')
+        run: |
+          if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+      - name: cargo-mutants, at a pinned version
+        if: needs.changes.outputs.code != 'false'
+        run: cargo install --locked cargo-mutants --version 27.1.0
+      - name: This shard of the diff's mutants
+        if: needs.changes.outputs.code != 'false'
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+          SHARD: ${{ matrix.shard }}
+        run: |
+          set -u
+          git diff "$BASE...$HEAD" > mutants.diff
+          code=0
+          # In place: a copy of the tree under the runner's temp folder
+          # gives the daemon tests socket paths too long to bind (macOS).
+          cargo mutants --in-place --in-diff mutants.diff --shard "$SHARD/4" --output mutants.out || code=$?
+          # 2: a mutant was missed; 3: one timed out; 4: one did not build.
+          # The report job weighs those across the platforms; anything
+          # else is an error of this job's own.
+          case $code in 0|2|3|4) ;; *) exit "$code" ;; esac
+          # A diff with nothing to mutate still reports, as no mutants.
+          mkdir -p mutants.out/mutants.out
+          [ -f mutants.out/mutants.out/outcomes.json ] || echo '{"outcomes": []}' > mutants.out/mutants.out/outcomes.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: needs.changes.outputs.code != 'false'
+        with:
+          name: mutants-${{ matrix.os }}-${{ matrix.shard }}
+          path: mutants.out/mutants.out/outcomes.json
+          if-no-files-found: error
+          retention-days: 7
+
+  # The mutation score, and the mutants missed on every platform (red).
+  # Required: it reports under its own name for a documentation-only
+  # change too, with its steps skipped.
+  mutants-report:
+    needs: [changes, mutants]
+    if: ${{ !cancelled() && (github.event_name == 'pull_request' || github.event_name == 'push') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: needs.changes.outputs.code != 'false'
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        if: needs.changes.outputs.code != 'false'
+        with:
+          pattern: mutants-*
+          path: shards
+      - name: Join the shards (scripts/mutants-report.py)
+        if: needs.changes.outputs.code != 'false'
+        env:
+          MUTANTS: ${{ needs.mutants.result }}
+        run: |
+          if [ "$MUTANTS" != success ]; then
+            echo "the mutants jobs did not all succeed: $MUTANTS"
+            exit 1
+          fi
+          python3 -I scripts/mutants-report.py --self-test
+          python3 -I scripts/mutants-report.py shards
+
   # The Windows sandbox, required: windows-latest is Windows Server, whose
   # process container cannot hide a path or open the way to a folder
   # without its contents, so there the container tests skip. windows-11-arm

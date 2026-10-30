@@ -9,8 +9,12 @@ run fails. Written for one person today; it holds for more.
 CI runs on every pull request: `cargo fmt`, clippy with warnings denied,
 the whole test suite on the real filesystem on macOS, Linux and Windows,
 the release gate's `canary`, `probe` and `project` steps on macOS and
-Linux (`scripts/release-gate.sh`), and the Windows sandbox tests on a
-Windows 11 runner, required to run and not skip. Besides that:
+Linux (`scripts/release-gate.sh`), the Windows sandbox tests on a
+Windows 11 runner, required to run and not skip, and the mutation tests
+on what the change touches (`mutants`, `mutants-report`: cargo-mutants
+alters each changed function in turn, four shards on macOS and on Linux,
+and a mutant no test catches on either platform is red; the score is in
+the job summary). Besides that:
 
 - **Windows, as a standard user.** The hosted Windows 11 runner's account
   is an administrator. Before a tag, run the container tests on a real
@@ -23,6 +27,17 @@ Windows 11 runner, required to run and not skip. Besides that:
   compiles is only checked there.
 - **The docs site builds** in both locales (`cd website && npm run build`),
   with broken links set to throw.
+- **A mutant missed on both platforms** means a changed function has no
+  test that tells it from a stub: write the test. Code only Windows
+  compiles is never mutated (`.cargo/mutants.toml`); a function in a
+  shared file that only Windows compiles is excluded there by name
+  (`exclude_re`), never by weakening the report. Before a pull request,
+  the same on one's own machine:
+  `TMPDIR=$HOME/.cache cargo mutants --in-diff <(git diff main)`.
+  cargo-mutants tests a copy of the tree under the temp folder: macOS's
+  own is so deep that the daemon tests' socket paths no longer bind, and
+  under `/tmp`, where agents can write, the extension tests refuse their
+  folders; a short folder in the home has neither problem.
 
 **Documentation-only changes.** A pull request or a push whose every
 changed file is documentation runs CI's required jobs with their steps

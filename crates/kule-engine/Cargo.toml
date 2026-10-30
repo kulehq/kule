@@ -15,8 +15,8 @@ blake3.workspace = true
 cedar-policy.workspace = true
 filetime.workspace = true
 gix.workspace = true
-kule-entities = { version = "0.2.0-preview.19", path = "../kule-entities" }
-kule-view = { version = "0.2.0-preview.19", path = "../kule-view" }
+kule-entities = { version = "0.2.0-preview.20", path = "../kule-entities" }
+kule-view = { version = "0.2.0-preview.20", path = "../kule-view" }
 # Shared with Lonca. Builds use the pinned commit; a crates.io publish uses
 # the version, so that version has to be on crates.io first.
 lonca-net = { version = "0.1.2", git = "https://github.com/selcukgural/lonca", rev = "bf7a03962d16601e07727819d5c80dc085a093b0" }
@@ -64,7 +64,7 @@ landlock = "0.4.7"
 mxc-sdk = { version = "=1.0.1", default-features = false }
 # The frames a terminal's helper reads (the helper itself ships beside
 # Kule's programs).
-kule-pty-helper = { version = "0.2.0-preview.19", path = "../kule-pty-helper" }
+kule-pty-helper = { version = "0.2.0-preview.20", path = "../kule-pty-helper" }
 # Handle-relative file calls (no link followed on the way), access lists,
 # locks and process queries; the proxy's app container, its pipes and the
 # job around it; the certificates the system trusts; the Windows build,

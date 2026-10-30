@@ -39,7 +39,7 @@ body:
     attributes:
       label: Version
       description: What `kule --version` prints.
-      placeholder: kule 0.2.0-preview.19
+      placeholder: kule 0.2.0-preview.20
     validations:
       required: true
   - type: dropdown

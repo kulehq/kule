@@ -449,3 +449,45 @@ fn the_inherited_files_tell_their_facts_to_the_command() {
     assert!(written.contains("ok: from the file"), "{written}\n{err}");
     assert!(!written.contains("refused file-read-metadata"), "{written}");
 }
+
+/// `kule exec --trace` runs the command under strace from outside the
+/// sandbox (Linux) and carries the command's own exit code back; without
+/// strace it says what to install. On the other platforms it is refused
+/// with where it belongs, so no run passes as traced that was not.
+#[test]
+fn a_traced_run_carries_the_commands_exit_code_or_is_refused() {
+    let (home, ws) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+    fs::write(ws.path().join("a.txt"), "a\n").unwrap();
+    let kule = |args: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_kule"))
+            .args(args)
+            .env("KULE_HOME", home.path())
+            .output()
+            .unwrap()
+    };
+    let out = kule(&["new", ws.path().to_str().unwrap()]);
+    let id = String::from_utf8_lossy(&out.stdout)
+        .split_whitespace()
+        .nth(1)
+        .unwrap()
+        .to_owned();
+    let out = kule(&["exec", &id, "--trace", "--", "sh", "-c", "exit 3"]);
+    let (said, err) = (
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+    if !cfg!(target_os = "linux") {
+        assert!(!out.status.success(), "{said}");
+        assert!(err.contains("--trace is for Linux"), "{err}");
+        return;
+    }
+    let strace = std::env::var_os("PATH")
+        .is_some_and(|p| std::env::split_paths(&p).any(|d| d.join("strace").is_file()));
+    if strace {
+        assert_eq!(out.status.code(), Some(3), "{said}{err}");
+        assert!(said.contains("trace: "), "{said}{err}");
+    } else {
+        assert!(!out.status.success(), "{said}");
+        assert!(err.contains("--trace needs strace"), "{err}");
+    }
+}
