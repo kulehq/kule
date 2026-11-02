@@ -6,7 +6,7 @@
 use std::fs;
 use std::io::Write;
 use std::net::{IpAddr, Ipv4Addr, TcpListener, TcpStream, UdpSocket};
-use std::process::Output;
+use std::process::{Command, Output};
 use std::time::Duration;
 
 use kule_engine::{
@@ -183,6 +183,61 @@ fn connections_around_the_proxy_are_blocked() {
         "import socket; socket.create_connection((\"127.0.0.1\", {up}), timeout=5)"
     ));
     assert!(!out.status.success(), "a direct connection went through");
+    assert!(connections(&s.task).unwrap().is_empty());
+}
+
+/// Escape attempt (#46): a listener on this computer reached straight,
+/// around the task's proxy, by a TCP connection and by datagrams. Outside
+/// Kule both get there, so the attempt is not broken; in a task neither
+/// does, and the proxy logs nothing. Breaks when a command's network is not
+/// held to the proxy.
+#[test]
+fn escape_network_a_listener_reached_around_the_proxy() {
+    let s = Setup::new();
+    let tcp = upstream();
+    let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
+    udp.set_read_timeout(Some(Duration::from_millis(500)))
+        .unwrap();
+    let port = udp.local_addr().unwrap().port();
+    let connect = format!(
+        "import socket\n\
+         print(socket.create_connection((\"127.0.0.1\", {tcp}), timeout=5).recv(64).decode().strip())"
+    );
+    let send = format!(
+        "import socket\ns = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)\n\
+         for _ in range(3):\n    try: s.sendto(b'leak', (\"127.0.0.1\", {port}))\n    except OSError: pass"
+    );
+    let plain = |script: &str| {
+        Command::new("python3")
+            .arg("-c")
+            .arg(script)
+            .output()
+            .unwrap()
+    };
+    let mut buf = [0u8; 16];
+    let out = plain(&connect);
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout).trim(),
+        "hello from upstream",
+        "the connection fails even outside Kule: {out:?}"
+    );
+    let _ = plain(&send);
+    assert!(
+        udp.recv(&mut buf).is_ok(),
+        "no datagram arrives even outside Kule"
+    );
+    while udp.recv(&mut buf).is_ok() {}
+
+    let out = s.python(&connect);
+    assert!(
+        !out.status.success() && !String::from_utf8_lossy(&out.stdout).contains("upstream"),
+        "a connection went around the proxy: {out:?}"
+    );
+    let _ = s.python(&send);
+    assert!(
+        udp.recv(&mut buf).is_err(),
+        "a datagram went around the proxy"
+    );
     assert!(connections(&s.task).unwrap().is_empty());
 }
 

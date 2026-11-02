@@ -13,7 +13,11 @@
 //! command write to, either. In a mount namespace of its own, such a file
 //! (an agent's settings, inside its writable state) is mounted read-only
 //! over itself, for the command alone: Kule and the person keep writing to
-//! it as before. Landlock then forbids the command any change to mounts.
+//! it as before. Each folder on the way to it inside the writable directory
+//! is mounted over itself as well, writable as ever: a mount point cannot be
+//! renamed or removed, so the command cannot move the read-only file away
+//! with its folder and put a file of its own under its name. Landlock then
+//! forbids the command any change to mounts.
 //!
 //! Its processes are its own, too: in a PID namespace the command can
 //! neither see nor signal any other process, and when it ends, the kernel
@@ -150,6 +154,9 @@ pub(crate) struct Isolation {
     /// one is gone, the relay stops.
     alive: OwnedFd,
     read_only: Vec<ReadOnly>,
+    /// Folders on the way to a read-only path, mounted over themselves so
+    /// they keep their names (see the module's notes).
+    pinned: Vec<CString>,
     /// Unix sockets to cover with an empty file for the command.
     masked: Vec<CString>,
     /// Directories to cover with an empty one of the command's own, so no
@@ -209,6 +216,7 @@ impl Isolation {
             to_kule,
             alive,
             read_only,
+            pinned: Vec::new(),
             masked: Vec::new(),
             covered: Vec::new(),
             tmp: None,
@@ -268,6 +276,21 @@ impl Isolation {
         }
         self.namespaces |= libc::CLONE_NEWNS;
         self.covered = dirs
+            .iter()
+            .map(|p| CString::new(p.as_os_str().as_bytes()))
+            .collect::<Result<_, _>>()?;
+        Ok(self)
+    }
+
+    /// Mounts each of `dirs` over itself in the command's mount namespace,
+    /// writable as before: a mount point cannot be renamed or removed, so
+    /// the read-only paths beneath keep their names. Parents first.
+    pub(crate) fn pin(mut self, dirs: &[PathBuf]) -> io::Result<Isolation> {
+        if dirs.is_empty() {
+            return Ok(self);
+        }
+        self.namespaces |= libc::CLONE_NEWNS;
+        self.pinned = dirs
             .iter()
             .map(|p| CString::new(p.as_os_str().as_bytes()))
             .collect::<Result<_, _>>()?;
@@ -367,6 +390,18 @@ impl Isolation {
                         return Err(e);
                     }
                 }
+            }
+            // Before the read-only mounts, which a later mount over a
+            // folder above them would hide; recursive, so nothing mounted
+            // beneath (a covered socket) is uncovered.
+            for dir in &self.pinned {
+                check(libc::mount(
+                    dir.as_ptr(),
+                    dir.as_ptr(),
+                    std::ptr::null(),
+                    libc::MS_BIND | libc::MS_REC,
+                    std::ptr::null(),
+                ))?;
             }
             for read_only in &self.read_only {
                 let path = read_only.path.as_ptr();
