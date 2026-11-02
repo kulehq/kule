@@ -1,6 +1,10 @@
 # Changes
 
-## Unreleased
+## 0.2.0-preview.21
+
+A security preview. On Linux, an agent's settings in its own state stay
+under their names, read-only, while its commands run; and three more of
+Kule's own escape attempts join the tests.
 
 ### Security
 

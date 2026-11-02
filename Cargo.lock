@@ -260,9 +260,9 @@ dependencies = [
 
 [[package]]
 name = "async-executor"
-version = "1.14.0"
+version = "1.14.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c96bf972d85afc50bf5ab8fe2d54d1586b4e0b46c97c50a0c9e71e2f7bcd812a"
+checksum = "f426a31126c735126297bc5ea7a521263c9faff4f63ca415267ee625651c4f37"
 dependencies = [
  "async-task",
  "concurrent-queue",
@@ -3449,7 +3449,7 @@ dependencies = [
 
 [[package]]
 name = "kule"
-version = "0.2.0-preview.20"
+version = "0.2.0-preview.21"
 dependencies = [
  "anyhow",
  "clap",
@@ -3468,7 +3468,7 @@ dependencies = [
 
 [[package]]
 name = "kule-acp"
-version = "0.2.0-preview.20"
+version = "0.2.0-preview.21"
 dependencies = [
  "agent-client-protocol",
  "async-process",
@@ -3489,7 +3489,7 @@ dependencies = [
 
 [[package]]
 name = "kule-daemon"
-version = "0.2.0-preview.20"
+version = "0.2.0-preview.21"
 dependencies = [
  "blake3",
  "futures",
@@ -3508,7 +3508,7 @@ dependencies = [
 
 [[package]]
 name = "kule-desktop"
-version = "0.2.0-preview.20"
+version = "0.2.0-preview.21"
 dependencies = [
  "base64 0.22.1",
  "kule-daemon",
@@ -3529,7 +3529,7 @@ dependencies = [
 
 [[package]]
 name = "kule-engine"
-version = "0.2.0-preview.20"
+version = "0.2.0-preview.21"
 dependencies = [
  "base64 0.22.1",
  "blake3",
@@ -3565,7 +3565,7 @@ dependencies = [
 
 [[package]]
 name = "kule-entities"
-version = "0.2.0-preview.20"
+version = "0.2.0-preview.21"
 dependencies = [
  "serde",
  "serde_json",
@@ -3582,7 +3582,7 @@ dependencies = [
 
 [[package]]
 name = "kule-ext"
-version = "0.2.0-preview.20"
+version = "0.2.0-preview.21"
 dependencies = [
  "blake3",
  "libc",
@@ -3596,7 +3596,7 @@ dependencies = [
 
 [[package]]
 name = "kule-proxy"
-version = "0.2.0-preview.20"
+version = "0.2.0-preview.21"
 dependencies = [
  "kule-engine",
  "serde_json",
@@ -3605,14 +3605,14 @@ dependencies = [
 
 [[package]]
 name = "kule-pty-helper"
-version = "0.2.0-preview.20"
+version = "0.2.0-preview.21"
 dependencies = [
  "windows 0.62.2",
 ]
 
 [[package]]
 name = "kule-view"
-version = "0.2.0-preview.20"
+version = "0.2.0-preview.21"
 dependencies = [
  "base64 0.22.1",
  "flate2",
