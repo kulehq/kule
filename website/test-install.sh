@@ -63,12 +63,24 @@ esac
 EOF
 chmod 755 "$shims"/*
 
-# A release: version 9.9.9, for both archives, with its SHA256SUMS.
-# $1 is what the stand-in `kule --version` does: "runs" or "breaks".
+# A mirror laid out as GitHub serves the releases: a feed naming v9.9.10
+# (a tag whose files are not up yet) and v9.9.9, and v9.9.9's files, both
+# archives and SHA256SUMS. $1 is what the stand-in `kule --version` does:
+# "runs" or "breaks".
+feed() {
+    printf '<?xml version="1.0" encoding="UTF-8"?>\n<feed xmlns="http://www.w3.org/2005/Atom">\n'
+    printf '  <link type="text/html" rel="alternate" href="https://github.com/kulehq/kule/releases"/>\n'
+    for v in "$@"; do
+        printf '  <entry>\n    <id>tag:github.com,2008:Repository/1/v%s</id>\n' "$v"
+        printf '    <link rel="alternate" type="text/html" href="https://github.com/kulehq/kule/releases/tag/v%s"/>\n  </entry>\n' "$v"
+    done
+    printf '</feed>\n'
+}
 release() {
     rel="$work/rel-$1"
     [ -d "$rel" ] && return 0
-    mkdir -p "$rel/pack"
+    mkdir -p "$rel/pack" "$rel/download/v9.9.9"
+    feed 9.9.10 9.9.9 >"$rel/releases.atom"
     if [ "$1" = runs ]; then
         printf '#!/bin/sh\necho "kule 9.9.9"\n' >"$rel/pack/kule"
     else
@@ -77,8 +89,8 @@ release() {
     chmod 755 "$rel/pack/kule"
     for platform in linux-x86_64 macos-universal; do
         a="kule-9.9.9-$platform.tar.gz"
-        tar -czf "$rel/$a" -C "$rel/pack" kule
-        printf '%s  %s\n' "$(sum "$rel/$a")" "$a" >>"$rel/SHA256SUMS"
+        tar -czf "$rel/download/v9.9.9/$a" -C "$rel/pack" kule
+        printf '%s  %s\n' "$(sum "$rel/download/v9.9.9/$a")" "$a" >>"$rel/download/v9.9.9/SHA256SUMS"
     done
 }
 release runs
@@ -159,7 +171,7 @@ fi
 # --- Nothing is installed when a check fails ------------------------------
 tampered="$work/rel-tampered"
 cp -R "$work/rel-runs" "$tampered"
-printf 'more\n' >>"$tampered/kule-9.9.9-linux-x86_64.tar.gz"
+printf 'more\n' >>"$tampered/download/v9.9.9/kule-9.9.9-linux-x86_64.tar.gz"
 install KULE_DOWNLOAD_URL="file://$tampered"
 if [ $status != 0 ] && ! installed && said "does not match its SHA256SUMS"; then
     ok "an archive that does not match SHA256SUMS installs nothing"
@@ -168,7 +180,7 @@ else
 fi
 unlisted="$work/rel-unlisted"
 cp -R "$work/rel-runs" "$unlisted"
-grep -v linux-x86_64 "$work/rel-runs/SHA256SUMS" >"$unlisted/SHA256SUMS"
+grep -v linux-x86_64 "$work/rel-runs/download/v9.9.9/SHA256SUMS" >"$unlisted/download/v9.9.9/SHA256SUMS"
 install KULE_DOWNLOAD_URL="file://$unlisted"
 if [ $status != 0 ] && ! installed && said "SHA256SUMS lists no"; then
     ok "an archive SHA256SUMS does not list installs nothing"
@@ -224,28 +236,44 @@ for case in "Linux aarch64 x no Kule release for Linux on aarch64" \
         bad "$os $arch: refused, \"$*\""
     fi
 done
-status=0
-env -i HOME="$work" PATH="$shims:$sys" KULE_DOWNLOAD_URL="file://$work/rel-runs" \
-    sh "$script" >"$work/out" 2>&1 || status=$?
-if [ $status != 0 ] && said "KULE_DOWNLOAD_URL needs KULE_VERSION"; then
-    ok "a mirror without a version is refused"
+
+# --- The newest release, from the feed -------------------------------------
+install KULE_VERSION=
+if [ $status = 0 ] && installed && said "v9.9.10 has no release files yet" &&
+    said "kule-9.9.9-linux-x86_64.tar.gz"; then
+    ok "without KULE_VERSION: the newest release in the feed with its files up, the one skipped said"
 else
-    bad "a mirror without a version is refused"
+    bad "without KULE_VERSION: the newest release in the feed with its files up, the one skipped said"
+fi
+empty="$work/rel-empty"
+mkdir -p "$empty"
+feed 9.9.12 9.9.11 >"$empty/releases.atom"
+install KULE_VERSION= KULE_DOWNLOAD_URL="file://$empty"
+if [ $status != 0 ] && ! installed && said "found no release with its files"; then
+    ok "a feed with no release's files up installs nothing"
+else
+    bad "a feed with no release's files up installs nothing"
+fi
+install KULE_VERSION=9.9.8
+if [ $status != 0 ] && ! installed && said "could not download"; then
+    ok "a KULE_VERSION with no release installs nothing"
+else
+    bad "a KULE_VERSION with no release installs nothing"
 fi
 
-# --- The newest release's version, from GitHub's list ---------------------
-eval "$(sed -n '/^tag_of() {$/,/^}$/p' "$script")"
-printf '[\n  {\n    "url": "x",\n    "tag_name": "v0.2.0-preview.21",\n    "name": "Kule"\n  },\n  {\n    "tag_name": "v0.2.0-preview.20"\n  }\n]\n' >"$work/many.json"
-printf '[{"url":"x","tag_name":"v0.2.0-preview.21","name":"Kule"},{"tag_name":"v0.2.0-preview.20"}]' >"$work/one.json"
+# --- The releases' versions, from GitHub's feed --------------------------
+eval "$(sed -n '/^tags_of() {$/,/^}$/p' "$script")"
+feed 0.2.0-preview.21 0.2.0-preview.20 >"$work/many.atom"
+tr -d '\n' <"$work/many.atom" >"$work/one.atom"
 # shellcheck disable=SC2016 # kept as text, never run
-printf '[{"tag_name":"v1.0$(touch pwned)"},{"tag_name":"v0.9"}]' >"$work/odd.json"
-if [ "$(tag_of "$work/many.json")" = 0.2.0-preview.21 ] &&
-    [ "$(tag_of "$work/one.json")" = 0.2.0-preview.21 ] &&
-    [ "$(tag_of "$work/odd.json")" = 0.9 ]; then
-    ok "the newest tag is read from the list on many lines or one, and only a version's characters"
+printf '<link href="https://github.com/kulehq/kule/releases/tag/v1.0$(touch pwned)"/><link href="https://github.com/other/kule/releases/tag/v5.0"/><link href="https://github.com/kulehq/kule/releases/tag/v0.9"/>' >"$work/odd.atom"
+if [ "$(tags_of "$work/many.atom" | tr '\n' ' ')" = "0.2.0-preview.21 0.2.0-preview.20 " ] &&
+    [ "$(tags_of "$work/one.atom" | tr '\n' ' ')" = "0.2.0-preview.21 0.2.0-preview.20 " ] &&
+    [ "$(tags_of "$work/odd.atom")" = 0.9 ]; then
+    ok "the releases are read from the feed newest first, on many lines or one: this repository's, a version's characters only"
 else
     : >"$work/out"
-    bad "the newest tag is read from the list on many lines or one, and only a version's characters"
+    bad "the releases are read from the feed newest first, on many lines or one: this repository's, a version's characters only"
 fi
 
 # --- The real thing, as a person runs it (CI) ------------------------------

@@ -3,8 +3,9 @@
 #
 #   curl -fsSL https://kulehq.github.io/kule/install.sh | sh
 #
-# It finds the newest release (previews included) at
-# https://github.com/kulehq/kule/releases, downloads the `kule` archive for
+# It finds the newest release (previews included) in the feed of
+# https://github.com/kulehq/kule/releases, skipping one whose files are not
+# up yet, downloads the `kule` archive for
 # this system (macOS 13 or later, Apple silicon and Intel; Linux x86_64),
 # and checks it against the release's SHA256SUMS. With the GitHub CLI
 # signed in, it also checks the archive's build provenance (that the
@@ -22,9 +23,10 @@
 #   KULE_NO_MODIFY_PATH=1          never touch a startup file
 #   KULE_REQUIRE_ATTESTATION=1     install nothing unless the build
 #                                  provenance was checked too
-#   KULE_DOWNLOAD_URL=URL          where the release files are (a mirror;
-#                                  the tests give a file:// directory);
-#                                  needs KULE_VERSION
+#   KULE_DOWNLOAD_URL=URL          a mirror laid out as GitHub serves the
+#                                  releases: releases.atom and
+#                                  download/v<version>/ (the tests give a
+#                                  file:// directory)
 #
 # Uninstall: rm ~/.local/bin/kule (and the "# kule" lines it added).
 #
@@ -35,7 +37,6 @@ set -eu
 
 REPO="kulehq/kule"
 RELEASES="https://github.com/$REPO/releases"
-API="https://api.github.com/repos/$REPO/releases?per_page=1"
 DOCS="https://kulehq.github.io/kule/docs/getting-started/install"
 
 say() {
@@ -82,38 +83,32 @@ platform() {
 }
 
 # Fetches $1 to the file $2, over HTTPS only (a mirror given in
-# KULE_DOWNLOAD_URL may also be a local directory).
-download() {
+# KULE_DOWNLOAD_URL may also be a local directory); fails quietly.
+fetch() {
     if has curl; then
         proto='=https'
         if [ -n "${KULE_DOWNLOAD_URL:-}" ]; then
             proto='=https,file'
         fi
         curl --proto "$proto" --proto-redir '=https' --tlsv1.2 \
-            --fail --silent --show-error --location --retry 3 \
-            --output "$2" "$1" || die "could not download $1"
+            --fail --silent --location --retry 3 \
+            --output "$2" "$1"
     elif has wget; then
-        wget --https-only --quiet --output-document="$2" "$1" ||
-            die "could not download $1"
+        wget --https-only --quiet --output-document="$2" "$1"
     else
         die "curl or wget is needed to download Kule"
     fi
 }
 
-# The version of the first release in the GitHub API's list $1: its tag
-# without the "v", whether the list comes on one line or many. Only what a
-# version holds is taken.
-tag_of() {
-    tr ',' '\n' <"$1" | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"v\([0-9A-Za-z.+-]*\)".*/\1/p' | head -n 1
+download() {
+    fetch "$1" "$2" || die "could not download $1"
 }
 
-# The newest release's version, previews included (GitHub's "latest"
-# leaves those out).
-newest() {
-    download "$API" "$1"
-    v=$(tag_of "$1")
-    [ -n "$v" ] || die "could not tell the newest release from $API; set KULE_VERSION"
-    printf '%s\n' "$v"
+# The versions of the releases in GitHub's feed $1 (releases.atom), newest
+# first: each release's tag without the "v", from its link, whether the
+# feed comes on one line or many. Only what a version holds is taken.
+tags_of() {
+    tr '"' '\n' <"$1" | sed -n 's#^https://github\.com/kulehq/kule/releases/tag/v\([0-9A-Za-z.+-]*\)$#\1#p'
 }
 
 sha256() {
@@ -165,23 +160,38 @@ main() {
     trap 'rm -rf "$tmp"' EXIT
     trap 'exit 1' INT TERM HUP
 
+    if [ -n "${KULE_DOWNLOAD_URL:-}" ]; then
+        mirror="${KULE_DOWNLOAD_URL%/}"
+        feed="$mirror/releases.atom"
+        files="$mirror/download"
+    else
+        feed="$RELEASES.atom"
+        files="$RELEASES/download"
+    fi
     if [ -n "${KULE_VERSION:-}" ]; then
         version=${KULE_VERSION#v}
-    elif [ -n "${KULE_DOWNLOAD_URL:-}" ]; then
-        die "KULE_DOWNLOAD_URL needs KULE_VERSION"
+        download "$files/v$version/SHA256SUMS" "$tmp/SHA256SUMS"
     else
-        version=$(newest "$tmp/releases.json")
+        # GitHub's "latest" leaves previews out; its feed has every
+        # release. A tag pushed before its release's files are up is
+        # skipped, and said so.
+        download "$feed" "$tmp/releases.atom"
+        version=""
+        for v in $(tags_of "$tmp/releases.atom" | head -n 3); do
+            if fetch "$files/v$v/SHA256SUMS" "$tmp/SHA256SUMS"; then
+                version=$v
+                break
+            fi
+            say "v$v has no release files yet; trying the one before it"
+        done
+        [ -n "$version" ] ||
+            die "found no release with its files in $feed; set KULE_VERSION"
     fi
-    if [ -n "${KULE_DOWNLOAD_URL:-}" ]; then
-        base="${KULE_DOWNLOAD_URL%/}"
-    else
-        base="$RELEASES/download/v$version"
-    fi
+    base="$files/v$version"
     archive="kule-$version-$platform.tar.gz"
 
     say "downloading $archive"
     download "$base/$archive" "$tmp/$archive"
-    download "$base/SHA256SUMS" "$tmp/SHA256SUMS"
     want=$(grep "  $archive\$" "$tmp/SHA256SUMS" | cut -d ' ' -f 1 || true)
     [ -n "$want" ] || die "SHA256SUMS lists no $archive; nothing installed"
     got=$(sha256 "$tmp/$archive")
