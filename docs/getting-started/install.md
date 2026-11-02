@@ -1,7 +1,7 @@
 ---
 title: Install Kule
 sidebar_label: Install
-description: Build Kule from source on macOS, Linux or Windows, or download a preview release, then install the agents and check that everything works.
+description: Install the kule command with one line on macOS or Linux, download a preview release, or build Kule from source, then install the agents and check that everything works.
 ---
 
 # Install Kule
@@ -26,10 +26,68 @@ line, only the app, or both.
 
 Kule is a **preview**: expect changes from one preview to the next. The
 latest pre-release, [`0.2.0-preview.20`](https://github.com/kulehq/kule/releases/tag/v0.2.0-preview.20), is on the releases page:
+[install the command with a script](#install-script),
 [download it](#download-a-preview-release), or
 [build from source](#build-from-source).
 
 :::
+
+## Install the command with a script {#install-script}
+
+On macOS 13 or later and on Linux x86_64, one line puts the prebuilt `kule`
+command on your `PATH`:
+
+```sh
+curl -fsSL https://kulehq.github.io/kule/install.sh | sh
+```
+
+The script:
+
+- finds the newest release (previews included) and downloads the `kule`
+  archive for your system;
+- checks it against the release's `SHA256SUMS` and, when the
+  [GitHub CLI](https://cli.github.com) is installed and signed in
+  (`gh auth login`), its [build provenance](#check-the-download-first).
+  Without it, the script says the provenance was **not** checked and
+  prints the command to check it yourself;
+- runs the program once where it unpacked it, so one that cannot run on
+  your system is never installed;
+- puts it in `~/.local/bin` and, when that is not on your `PATH`, adds it
+  once to your shell's startup file (`.zshrc`; `.bashrc`, or
+  `.bash_profile` on macOS; fish's `conf.d/kule.fish`; else `.profile`).
+
+Nothing is installed when a check fails. Running it again updates `kule`.
+It installs the command line only: the desktop app comes from the
+[release files](#download-a-preview-release). On Windows, use the setup
+program.
+
+To read the script before it runs:
+
+```sh
+curl -fsSLO https://kulehq.github.io/kule/install.sh
+less install.sh
+sh install.sh
+```
+
+| Setting | What it does |
+| --- | --- |
+| `KULE_VERSION=0.2.0-preview.21` | Installs that version instead of the newest. |
+| `KULE_INSTALL_DIR=DIR` | Installs into `DIR` instead of `~/.local/bin`. |
+| `KULE_NO_MODIFY_PATH=1` | Never touches a startup file. |
+| `KULE_REQUIRE_ATTESTATION=1` | Installs nothing unless the build provenance was checked too. |
+
+For example:
+
+```sh
+curl -fsSL https://kulehq.github.io/kule/install.sh | KULE_REQUIRE_ATTESTATION=1 sh
+```
+
+To uninstall, remove `~/.local/bin/kule` and the lines under `# kule` that
+the script added to your startup file.
+
+On Linux, Kule's sandbox needs unprivileged user namespaces: run
+`kule isolation` to see what your computer gives, and see the
+[Linux](#linux) notes below.
 
 ## Build from source
 

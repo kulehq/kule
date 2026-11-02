@@ -1,7 +1,7 @@
 ---
 title: Kule'yi kurun
 sidebar_label: Kurulum
-description: Kule'yi macOS, Linux ya da Windows'ta kaynak koddan derleyin veya bir önizleme sürümü indirin; ardından ajanları kurup her şeyin çalıştığını doğrulayın.
+description: kule komutunu macOS ya da Linux'ta tek satırla kurun, bir önizleme sürümü indirin ya da Kule'yi kaynak koddan derleyin; ardından ajanları kurup her şeyin çalıştığını doğrulayın.
 ---
 
 # Kule'yi kurun
@@ -26,10 +26,68 @@ yalnızca uygulamayı ya da ikisini birden kullanabilirsiniz.
 
 Kule bir **önizleme** (preview): bir önizlemeden ötekine değişiklikler
 bekleyin. En son ön sürüm, [`0.2.0-preview.20`](https://github.com/kulehq/kule/releases/tag/v0.2.0-preview.20), sürümler sayfasında:
+[komutu bir betikle kurun](#install-script),
 [indirin](#download-a-preview-release) ya da
 [kaynak koddan derleyin](#build-from-source).
 
 :::
+
+## Komutu bir betikle kurma {#install-script}
+
+macOS 13 ya da sonrasında ve Linux x86_64'te tek bir satır, hazır derlenmiş
+`kule` komutunu `PATH`'inize koyar:
+
+```sh
+curl -fsSL https://kulehq.github.io/kule/install.sh | sh
+```
+
+Betik:
+
+- en yeni sürümü (önizlemeler dahil) bulur ve sisteminize uygun `kule`
+  arşivini indirir;
+- arşivi sürümün `SHA256SUMS` dosyasıyla, [GitHub CLI](https://cli.github.com)
+  kuruluysa ve oturum açıksa (`gh auth login`) ayrıca
+  [derleme kaynağıyla (build provenance)](#check-the-download-first)
+  doğrular. GitHub CLI yoksa derleme kaynağının doğrulanmadığını **açıkça**
+  söyler ve kendiniz doğrulamanız için komutu yazar;
+- programı açtığı yerde bir kez çalıştırır; sisteminizde çalışamayan bir
+  program hiç kurulmaz;
+- onu `~/.local/bin` içine koyar ve bu klasör `PATH`'inizde değilse
+  kabuğunuzun başlangıç dosyasına bir kez ekler (`.zshrc`; `.bashrc`, macOS'ta
+  `.bash_profile`; fish'te `conf.d/kule.fish`; yoksa `.profile`).
+
+Bir doğrulama tutmazsa hiçbir şey kurulmaz. Yeniden çalıştırmak `kule`'yi
+günceller. Yalnızca komut satırını kurar: masaüstü uygulaması
+[sürüm dosyalarından](#download-a-preview-release) gelir. Windows'ta kurulum
+programını kullanın.
+
+Betiği çalışmadan önce okumak için:
+
+```sh
+curl -fsSLO https://kulehq.github.io/kule/install.sh
+less install.sh
+sh install.sh
+```
+
+| Ayar | Ne yapar |
+| --- | --- |
+| `KULE_VERSION=0.2.0-preview.21` | En yenisi yerine o sürümü kurar. |
+| `KULE_INSTALL_DIR=KLASÖR` | `~/.local/bin` yerine `KLASÖR` içine kurar. |
+| `KULE_NO_MODIFY_PATH=1` | Hiçbir başlangıç dosyasına dokunmaz. |
+| `KULE_REQUIRE_ATTESTATION=1` | Derleme kaynağı da doğrulanmadıkça hiçbir şey kurmaz. |
+
+Örneğin:
+
+```sh
+curl -fsSL https://kulehq.github.io/kule/install.sh | KULE_REQUIRE_ATTESTATION=1 sh
+```
+
+Kaldırmak için `~/.local/bin/kule` dosyasını ve betiğin başlangıç dosyanıza
+eklediği `# kule` altındaki satırları silin.
+
+Linux'ta Kule'nin sandbox'ı yetkisiz kullanıcı ad alanlarına (user
+namespaces) ihtiyaç duyar: bilgisayarınızın ne sunduğunu görmek için
+`kule isolation` çalıştırın ve aşağıdaki [Linux](#linux) notlarına bakın.
 
 ## Kaynak koddan derleme {#build-from-source}
 
@@ -151,7 +209,7 @@ Her sürüm şu dosyaları içerir:
 | `kule-<version>.cdx.json`, `kule-desktop-<version>.cdx.json` | CLI'ın ve uygulamanın CycloneDX SBOM'u: derlendikleri her crate. |
 | `SHA256SUMS` | Yukarıdaki her dosyanın sağlama toplamı. |
 
-### Önce indirdiğinizi doğrulayın
+### Önce indirdiğinizi doğrulayın {#check-the-download-first}
 
 Her dosyanın `SHA256SUMS` içinde bir sağlama toplamı ve bir **build
 provenance attestation**'ı (derleme kaynağı belgesi) vardır. Bu belge,

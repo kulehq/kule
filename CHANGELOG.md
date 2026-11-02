@@ -1,5 +1,17 @@
 # Changes
 
+## Unreleased
+
+### Added
+
+- An install script for the `kule` command on macOS and Linux:
+  `curl -fsSL https://kulehq.github.io/kule/install.sh | sh`. It takes the
+  newest release (previews included), checks the archive against the
+  release's `SHA256SUMS` and, with the GitHub CLI signed in, its build
+  provenance, runs it once before installing it, and puts it in
+  `~/.local/bin` and on `PATH`. Nothing is installed when a check fails;
+  `KULE_REQUIRE_ATTESTATION=1` makes the provenance check required.
+
 ## 0.2.0-preview.21
 
 A security preview. On Linux, an agent's settings in its own state stay
