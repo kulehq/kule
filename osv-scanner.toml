@@ -25,9 +25,9 @@ id = "RUSTSEC-2026-0372"
 reason = "zvariant_derive: macros of zvariant, through keyring's Secret Service and notify-rust on Linux"
 
 [[IgnoredVulns]]
-id = "GHSA-qwgh-2vcv-g2f7"
-reason = "block-buffer 0.10.4: a caught panic can leave the buffer cursor invalid; only at build time, in tauri-codegen (Tauri's proc-macro) and lalrpop (cedar-policy-core's build dependency) through digest 0.10, where no code catches panics; nothing of it ships in Kule's binaries, which hash through digest 0.11 and block-buffer 0.12.1, the fixed line"
-
-[[IgnoredVulns]]
 id = "GHSA-gcqx-w48m-w2h4"
 reason = "deepmerge 4.3.1: prototype poisoning of merged objects, no patched version; only in the docs site's build (Docusaurus's SVGR plugin, through svgo's config merging), whose inputs come from its own config and the repository's SVG files; nothing of it ships in Kule or the published pages"
+
+[[IgnoredVulns]]
+id = "GHSA-g3hv-75wg-m249"
+reason = "minimatch 3.1.5: a crafted glob pattern takes exponential time, fixed only in the 11 line; pinned exactly by serve-handler 6.1.7 (its latest), which Docusaurus uses for `docusaurus serve` alone, a local preview whose patterns come from the site's own config; neither the site's build nor the published pages run it, and nothing of it ships in Kule"
