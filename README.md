@@ -27,6 +27,19 @@ It works on any folder: code, but also notes, documents, photos and data.
 > 24H2 (update 26100.9278 or later). The latest preview release is
 > [0.2.0-preview.20](https://github.com/kulehq/kule/releases/tag/v0.2.0-preview.20); or build it from source (below). Expect changes between previews; see [CHANGELOG.md](CHANGELOG.md).
 
+**Install** the `kule` command on macOS 13+ or Linux x86_64 (prebuilt,
+checked against the release's `SHA256SUMS` and, with the GitHub CLI signed
+in, its build provenance; put on your `PATH`):
+
+```sh
+curl -fsSL https://kulehq.github.io/kule/install.sh | sh
+```
+
+or [download a release](https://github.com/kulehq/kule/releases) (the
+desktop app, Windows) by hand; the
+[install guide](https://kulehq.github.io/kule/docs/getting-started/install#install-script)
+says what the script does and how to read it first.
+
 ## Why Kule
 
 AI agents run commands with your permissions, on your real files. Kule puts
@@ -127,6 +140,11 @@ Every command takes `--home <DIR>` (or `KULE_HOME`, default `~/.kule`) and
 
 ## Install
 
+- **Script (macOS, Linux):**
+  `curl -fsSL https://kulehq.github.io/kule/install.sh | sh` puts the
+  newest release's `kule` command in `~/.local/bin`, after checking it;
+  nothing is installed when a check fails. See the
+  [install guide](https://kulehq.github.io/kule/docs/getting-started/install#install-script).
 - **From source:** as in the quick start. Binaries land in
   `target/release/`: `kule` (the CLI) and `kule-desktop` (the app).
 - **Preview releases:** the

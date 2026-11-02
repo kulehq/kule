@@ -52,9 +52,36 @@ jobs:
         with:
           path: website/build
 
+  # The installer the site serves (website/static/install.sh): shellcheck,
+  # its tests on a stand-in release, and the newest real release installed
+  # into a temporary home, with its build provenance checked (GH_TOKEN signs
+  # the GitHub CLI in for that alone).
+  install-script:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      attestations: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: shellcheck
+        if: runner.os == 'Linux'
+        run: shellcheck -s sh website/static/install.sh website/test-install.sh
+      - name: Tests, and the newest release installed
+        env:
+          KULE_TEST_ONLINE: "1"
+          GH_TOKEN: ${{ github.token }}
+        run: sh website/test-install.sh
+
   deploy:
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
-    needs: build
+    needs: [build, install-script]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
