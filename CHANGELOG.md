@@ -1,5 +1,22 @@
 # Changes
 
+## Unreleased
+
+### Security
+
+- On Linux, the folders on the way to a protected file inside a writable
+  folder (an agent's settings in its own state) keep their names while a
+  command runs: the file stays where it is, under its name, read-only.
+
+### Testing
+
+- More of Kule's own escape attempts (#46), on macOS and Linux: a
+  connection and datagrams to a listener on this computer around the
+  task's proxy; an order sent to a daemon's Unix socket outside the copy;
+  and an agent's hooks file, kept read-only in its writable state,
+  rewritten by renaming a folder on the way to it. Each gets through
+  outside Kule first and must not in a task.
+
 ## 0.2.0-preview.20
 
 A fix preview. Tools pipx installed run in a task again, a refused read's

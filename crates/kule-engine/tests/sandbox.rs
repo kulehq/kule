@@ -269,6 +269,109 @@ fn escape_home_cargo_credentials_beside_another_cargo_home() {
     }
 }
 
+/// Escape attempt (#46): an order sent to a daemon of the person's that
+/// listens on a Unix socket outside the copy, as ssh-agent, Docker and
+/// Kule's own daemon do. Outside Kule the daemon gets it, so the attempt is
+/// not broken; in a task the connection is refused and the daemon hears
+/// nothing. Breaks when a socket outside the copy and tmp can be reached.
+#[test]
+fn escape_sockets_an_order_to_a_daemon_outside_the_copy() {
+    use std::io::Read;
+    use std::os::unix::net::UnixListener;
+    use std::time::Duration;
+    let s = Setup::new();
+    let socket = s.outside().join("daemon.sock");
+    let daemon = UnixListener::bind(&socket).unwrap();
+    let (heard, orders) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        for stream in daemon.incoming().flatten() {
+            let mut said = String::new();
+            let _ = (&stream).read_to_string(&mut said);
+            let _ = heard.send(said);
+        }
+    });
+    let script = format!(
+        "import socket; s = socket.socket(socket.AF_UNIX); s.connect({:?}); s.sendall(b'order'); s.close()",
+        socket.to_str().unwrap()
+    );
+    let out = Command::new("python3")
+        .arg("-c")
+        .arg(&script)
+        .output()
+        .unwrap();
+    assert!(ok(&out), "the attempt fails even outside Kule: {out:?}");
+    assert_eq!(
+        orders.recv_timeout(Duration::from_secs(5)).unwrap(),
+        "order",
+        "the daemon did not hear the order sent outside Kule"
+    );
+
+    let out = sandbox_python(&s.sandbox(), &script);
+    assert!(!ok(&out), "the command connected to the daemon: {out:?}");
+    assert!(
+        orders.recv_timeout(Duration::from_millis(500)).is_err(),
+        "the daemon heard an order from the task"
+    );
+}
+
+/// Escape attempt (#46): an agent's hooks file, read-only inside the
+/// agent's writable state because what it names runs outside the sandbox,
+/// rewritten by renaming a folder on the way to it: a hooks file of the
+/// command's own made under the name it freed, and the moved one written
+/// and renamed back. Outside Kule the script rewrites it; in a task the
+/// rest of the state is written and the hooks file is as it was once the
+/// run is over. Breaks when a protected path is held by its name alone, or
+/// by its file alone.
+#[test]
+fn escape_protected_hooks_through_a_renamed_folder() {
+    let s = Setup::new();
+    let plant = |state: &Path| {
+        fs::create_dir_all(state.join("plugins/x")).unwrap();
+        fs::write(state.join("plugins/x/hooks.json"), "{}\n").unwrap();
+    };
+    let attempt = |state: &Path| {
+        format!(
+            "cd '{}' && echo session > other.json; mv plugins p2; \
+             mkdir -p plugins/x; echo '{{\"run\":1}}' > plugins/x/hooks.json; \
+             echo '{{\"run\":1}}' > p2/x/hooks.json && rm -r plugins && mv p2 plugins",
+            state.display()
+        )
+    };
+    let plain = s.outside().join("plain-state");
+    plant(&plain);
+    let out = Command::new("sh")
+        .arg("-c")
+        .arg(attempt(&plain))
+        .output()
+        .unwrap();
+    assert!(ok(&out), "the attempt fails even outside Kule: {out:?}");
+    assert_eq!(
+        fs::read_to_string(plain.join("plugins/x/hooks.json")).unwrap(),
+        "{\"run\":1}\n"
+    );
+
+    let state = s.outside().join("agent-state");
+    plant(&state);
+    let mut sandbox = s.sandbox();
+    sandbox.allow_write(&state).unwrap();
+    sandbox
+        .protect(&state.join("plugins/x/hooks.json"))
+        .unwrap();
+    let kept = sandbox.keep_protected().unwrap();
+    let out = sh(&sandbox, &attempt(&state));
+    kept.restore().unwrap();
+    assert_eq!(
+        fs::read_to_string(state.join("other.json")).unwrap(),
+        "session\n",
+        "the state must be writable for the attempt to mean anything: {out:?}"
+    );
+    assert_eq!(
+        fs::read_to_string(state.join("plugins/x/hooks.json")).unwrap(),
+        "{}\n",
+        "the hooks file was rewritten: {out:?}"
+    );
+}
+
 /// What the person typed, their browsers' and mail's stores, and the
 /// credentials tools keep in the home directory are out of a command's
 /// sight; the rest of the home stays readable.

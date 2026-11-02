@@ -1632,6 +1632,28 @@ impl Sandbox {
         Vec::new()
     }
 
+    /// The folders on the way to each of `read_only` that a command could
+    /// rename or remove: those strictly inside a writable root. Pinned in
+    /// its mount namespace, they keep the read-only paths under their
+    /// names. Sorted, so a folder comes before those inside it.
+    #[cfg(target_os = "linux")]
+    fn pinned(&self, read_only: &[PathBuf]) -> Vec<PathBuf> {
+        let writable = self.writable();
+        let mut dirs: Vec<PathBuf> = read_only
+            .iter()
+            .flat_map(|p| p.ancestors().skip(1))
+            .filter(|dir| {
+                writable
+                    .iter()
+                    .any(|root| dir.starts_with(root) && dir != root)
+            })
+            .map(Path::to_path_buf)
+            .collect();
+        dirs.sort();
+        dirs.dedup();
+        dirs
+    }
+
     /// Hides `path` from reading and writing. A path that does not exist yet
     /// is hidden too, in case something creates it.
     pub fn hide(&mut self, path: &Path) -> Result<()> {
@@ -3171,6 +3193,7 @@ impl Sandbox {
             Network::Proxy(port) => Net::Own(Some(port)),
         };
         let read_only = self.mounted_read_only();
+        let pinned = self.pinned(&read_only);
         let network_shared = matches!(net, Net::Shared);
         let mut ruleset = Some(self.landlock_ruleset(network_shared)?);
         // Without Landlock's rule for Unix sockets, those outside the
@@ -3209,6 +3232,7 @@ impl Sandbox {
             || own_ptys()
         {
             let mut isolation = Isolation::new(net, &read_only)
+                .and_then(|i| i.pin(&pinned))
                 .and_then(|i| i.mask_sockets(&masked))
                 .and_then(|i| i.cover(&covered))
                 .at(Path::new("/proc/self/ns"))?;
