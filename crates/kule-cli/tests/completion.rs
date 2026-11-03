@@ -264,7 +264,10 @@ fn the_home_is_the_one_named_on_the_line_else_the_default() {
     let person = TempDir::new().unwrap();
     let (_ws, theirs) = a_task(&person.path().join(".kule"), None);
     let mut cmd = kule();
-    cmd.env_remove("KULE_HOME").env("HOME", person.path());
+    // The person's home: HOME, and USERPROFILE on Windows.
+    cmd.env_remove("KULE_HOME")
+        .env("HOME", person.path())
+        .env("USERPROFILE", person.path());
     let ids = offered_by(cmd, "bash", &["kule", "status", ""]);
     assert!(ids.contains(&theirs), "{ids:?}");
 }
