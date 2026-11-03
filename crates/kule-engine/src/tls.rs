@@ -2277,6 +2277,14 @@ mod tests {
             early: Vec::new(),
         };
         let serving = std::thread::spawn(move || serve_plain("github.com", 80, head, tunnel, true));
+        // Bounded: passed on to a host that never reads, it would wait for
+        // good rather than fail.
+        client
+            .set_write_timeout(Some(Duration::from_secs(10)))
+            .unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_secs(10)))
+            .unwrap();
         let mut writer = client.try_clone().unwrap();
         let sending = std::thread::spawn(move || writer.write_all(&vec![b'x'; BODY]));
         let sent = sending.join().unwrap();
