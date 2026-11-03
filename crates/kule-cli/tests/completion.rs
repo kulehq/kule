@@ -237,108 +237,111 @@ fn the_script_holds_nothing_of_the_home_and_makes_none() {
 
 // ------------------------------------------------- each shell, for real
 
-/// `PATH` with the built `kule` first.
-fn path_with_kule() -> String {
-    let bin = Path::new(env!("CARGO_BIN_EXE_kule")).parent().unwrap();
-    format!(
-        "{}:{}",
-        bin.display(),
-        std::env::var("PATH").unwrap_or_default()
-    )
-}
-
-fn script(shell: &str, dir: &Path) -> std::path::PathBuf {
-    let out = kule().args(["completions", shell]).output().unwrap();
-    let path = dir.join(format!("kule.{shell}"));
-    fs::write(&path, out.stdout).unwrap();
-    path
-}
-
-fn shell(program: &str, code: &str, home: &Path) -> String {
-    let out = Command::new(program)
-        .args(["-c", code])
-        .env("PATH", path_with_kule())
-        .env("KULE_HOME", home)
-        .output()
-        .unwrap_or_else(|e| panic!("{program} is needed for this test: {e}"));
-    assert!(
-        out.status.success(),
-        "{program}: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    text(&out)
-}
-
+/// Each shell loads its script and completes with it.
 #[cfg(unix)]
-#[test]
-fn bash_loads_the_script_and_completes() {
-    let (dir, home) = (TempDir::new().unwrap(), TempDir::new().unwrap());
-    let (_ws, id) = a_task(home.path(), None);
-    let file = script("bash", dir.path());
-    // The bash on PATH, and the system's own: macOS keeps bash 3.2 there.
-    for bash in ["bash", "/bin/bash"] {
+mod each_shell {
+    use super::*;
+
+    /// `PATH` with the built `kule` first.
+    fn path_with_kule() -> String {
+        let bin = Path::new(env!("CARGO_BIN_EXE_kule")).parent().unwrap();
+        format!(
+            "{}:{}",
+            bin.display(),
+            std::env::var("PATH").unwrap_or_default()
+        )
+    }
+
+    fn script(shell: &str, dir: &Path) -> std::path::PathBuf {
+        let out = kule().args(["completions", shell]).output().unwrap();
+        let path = dir.join(format!("kule.{shell}"));
+        fs::write(&path, out.stdout).unwrap();
+        path
+    }
+
+    fn shell(program: &str, code: &str, home: &Path) -> String {
+        let out = Command::new(program)
+            .args(["-c", code])
+            .env("PATH", path_with_kule())
+            .env("KULE_HOME", home)
+            .output()
+            .unwrap_or_else(|e| panic!("{program} is needed for this test: {e}"));
+        assert!(
+            out.status.success(),
+            "{program}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        text(&out)
+    }
+
+    #[test]
+    fn bash_loads_the_script_and_completes() {
+        let (dir, home) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+        let (_ws, id) = a_task(home.path(), None);
+        let file = script("bash", dir.path());
+        // The bash on PATH, and the system's own: macOS keeps bash 3.2 there.
+        for bash in ["bash", "/bin/bash"] {
+            let complete = |words: &str| {
+                shell(
+                    bash,
+                    &format!(
+                        "source '{}'; COMP_WORDS=({words}); COMP_CWORD=$((${{#COMP_WORDS[@]}}-1)); _kule; printf '%s\\n' \"${{COMPREPLY[@]}}\"",
+                        file.display()
+                    ),
+                    home.path(),
+                )
+            };
+            assert_eq!(complete("kule rollb"), "rollback\n", "{bash}");
+            assert_eq!(complete("kule limits memo"), "memory=\n", "{bash}");
+            assert_eq!(
+                complete(&format!("kule status {}", &id[..4])),
+                format!("{id}\n"),
+                "{bash}"
+            );
+        }
+    }
+
+    #[test]
+    fn zsh_loads_the_script_and_completes() {
+        let (dir, home) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+        let (_ws, id) = a_task(home.path(), Some("named"));
+        let file = script("zsh", dir.path());
+        // zsh's own completion functions, standing in: what the script hands
+        // them is what a person sees.
         let complete = |words: &str| {
             shell(
-                bash,
+                "zsh",
                 &format!(
-                    "source '{}'; COMP_WORDS=({words}); COMP_CWORD=$((${{#COMP_WORDS[@]}}-1)); _kule; printf '%s\\n' \"${{COMPREPLY[@]}}\"",
+                    "compdef() {{ :; }}; _files() {{ print files; }}; \
+                     _describe() {{ print -l -- \"${{(@P)4}}\"; }}; \
+                     source '{}'; words=({words}); CURRENT=${{#words}}; _kule",
                     file.display()
                 ),
                 home.path(),
             )
         };
-        assert_eq!(complete("kule rollb"), "rollback\n", "{bash}");
-        assert_eq!(complete("kule limits memo"), "memory=\n", "{bash}");
-        assert_eq!(
-            complete(&format!("kule status {}", &id[..4])),
-            format!("{id}\n"),
-            "{bash}"
-        );
+        let rollback = complete("kule rollb");
+        assert!(rollback.starts_with("rollback:"), "{rollback}");
+        let ids = complete(&format!("kule status {}", &id[..4]));
+        assert!(ids.starts_with(&format!("{id}:named")), "{ids}");
+        assert_eq!(complete("kule new ''"), "files\n");
     }
-}
 
-#[cfg(unix)]
-#[test]
-fn zsh_loads_the_script_and_completes() {
-    let (dir, home) = (TempDir::new().unwrap(), TempDir::new().unwrap());
-    let (_ws, id) = a_task(home.path(), Some("named"));
-    let file = script("zsh", dir.path());
-    // zsh's own completion functions, standing in: what the script hands
-    // them is what a person sees.
-    let complete = |words: &str| {
-        shell(
-            "zsh",
-            &format!(
-                "compdef() {{ :; }}; _files() {{ print files; }}; \
-                 _describe() {{ print -l -- \"${{(@P)4}}\"; }}; \
-                 source '{}'; words=({words}); CURRENT=${{#words}}; _kule",
-                file.display()
-            ),
-            home.path(),
-        )
-    };
-    let rollback = complete("kule rollb");
-    assert!(rollback.starts_with("rollback:"), "{rollback}");
-    let ids = complete(&format!("kule status {}", &id[..4]));
-    assert!(ids.starts_with(&format!("{id}:named")), "{ids}");
-    assert_eq!(complete("kule new ''"), "files\n");
-}
-
-#[cfg(unix)]
-#[test]
-fn fish_loads_the_script_and_completes() {
-    let (dir, home) = (TempDir::new().unwrap(), TempDir::new().unwrap());
-    let (_ws, id) = a_task(home.path(), Some("named"));
-    let file = script("fish", dir.path());
-    let complete = |line: &str| {
-        shell(
-            "fish",
-            &format!("source '{}'; complete -C '{line}'", file.display()),
-            home.path(),
-        )
-    };
-    let rollback = complete("kule rollb");
-    assert!(rollback.starts_with("rollback\t"), "{rollback}");
-    let ids = complete(&format!("kule status {}", &id[..4]));
-    assert!(ids.starts_with(&format!("{id}\tnamed")), "{ids}");
+    #[test]
+    fn fish_loads_the_script_and_completes() {
+        let (dir, home) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+        let (_ws, id) = a_task(home.path(), Some("named"));
+        let file = script("fish", dir.path());
+        let complete = |line: &str| {
+            shell(
+                "fish",
+                &format!("source '{}'; complete -C '{line}'", file.display()),
+                home.path(),
+            )
+        };
+        let rollback = complete("kule rollb");
+        assert!(rollback.starts_with("rollback\t"), "{rollback}");
+        let ids = complete(&format!("kule status {}", &id[..4]));
+        assert!(ids.starts_with(&format!("{id}\tnamed")), "{ids}");
+    }
 }
