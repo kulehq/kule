@@ -1018,6 +1018,7 @@ pub(crate) fn serve_plain(
                     said.len()
                 );
                 let _ = client.stream.flush();
+                linger(&client.stream.inner);
                 return Err(Ended::Refused(why));
             }
         };
@@ -1040,6 +1041,7 @@ pub(crate) fn serve_plain(
                 said.len()
             );
             let _ = client.stream.flush();
+            linger(&client.stream.inner);
             return Err(Ended::Refused(why));
         }
         upstream
@@ -1062,6 +1064,30 @@ pub(crate) fn serve_plain(
         };
         if last || request.close {
             return Ok(());
+        }
+    }
+}
+
+/// The most a refused client's unread body is read and dropped, and for
+/// how long, before its connection closes.
+const LINGER_BYTES: u64 = 1 << 20;
+const LINGER_FOR: Duration = Duration::from_secs(2);
+
+/// Ends a connection Kule answered with a refusal so the client reads the
+/// answer: closed with what the client sent still unread, it would be reset,
+/// and a reset can drop the answer before the client reads it (Windows does).
+/// So Kule stops sending, then reads what the client is still sending, for
+/// a little while and up to a little, and drops it.
+fn linger(stream: &TcpStream) {
+    let _ = stream.shutdown(std::net::Shutdown::Write);
+    let _ = stream.set_read_timeout(Some(LINGER_FOR));
+    let started = std::time::Instant::now();
+    let mut from = stream.take(LINGER_BYTES);
+    let mut chunk = [0u8; 16 * 1024];
+    while started.elapsed() < LINGER_FOR {
+        match from.read(&mut chunk) {
+            Ok(n) if n > 0 => {}
+            _ => break,
         }
     }
 }
