@@ -25,7 +25,7 @@ yalnızca uygulamayı ya da ikisini birden kullanabilirsiniz.
 :::note Bir önizleme
 
 Kule bir **önizleme** (preview): bir önizlemeden ötekine değişiklikler
-bekleyin. En son ön sürüm, [`0.2.0-preview.21`](https://github.com/kulehq/kule/releases/tag/v0.2.0-preview.21), sürümler sayfasında:
+bekleyin. En son ön sürüm, [`0.2.0-preview.22`](https://github.com/kulehq/kule/releases/tag/v0.2.0-preview.22), sürümler sayfasında:
 [komutu bir betikle kurun](#install-script),
 [indirin](#download-a-preview-release) ya da
 [kaynak koddan derleyin](#build-from-source).
@@ -71,7 +71,7 @@ sh install.sh
 
 | Ayar | Ne yapar |
 | --- | --- |
-| `KULE_VERSION=0.2.0-preview.21` | En yenisi yerine o sürümü kurar. |
+| `KULE_VERSION=0.2.0-preview.22` | En yenisi yerine o sürümü kurar. |
 | `KULE_INSTALL_DIR=KLASÖR` | `~/.local/bin` yerine `KLASÖR` içine kurar. |
 | `KULE_NO_MODIFY_PATH=1` | Hiçbir başlangıç dosyasına dokunmaz. |
 | `KULE_REQUIRE_ATTESTATION=1` | Derleme kaynağı da doğrulanmadıkça hiçbir şey kurmaz. |
@@ -348,7 +348,7 @@ kule --version
 ```
 
 ```text
-kule 0.2.0-preview.21
+kule 0.2.0-preview.22
 ```
 
 (Sayı, derlediğiniz ya da indirdiğiniz sürümdür.)
