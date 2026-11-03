@@ -509,8 +509,19 @@ mod tests {
         let child = pids[1];
 
         let cpu = |pid| usage(&[pid])[0].cpu;
-        std::thread::sleep(Duration::from_millis(300));
-        let busy = cpu(child);
+        // The CPU time `pid` reaches past `past`, waiting up to ten seconds:
+        // on a busy machine a running process gets a core only now and then.
+        let cpu_past = |pid, past: Duration| {
+            let until = Instant::now() + Duration::from_secs(10);
+            loop {
+                let now = cpu(pid);
+                if now > past || Instant::now() > until {
+                    return now;
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        };
+        let busy = cpu_past(child, Duration::from_millis(100));
         assert!(busy > Duration::from_millis(100), "{busy:?}");
         assert!(usage(&[child])[0].memory > 0);
 
@@ -520,8 +531,8 @@ mod tests {
         std::thread::sleep(Duration::from_millis(300));
         assert!(cpu(child) - held < Duration::from_millis(20));
         resume(&pids);
-        std::thread::sleep(Duration::from_millis(300));
-        assert!(cpu(child) - held > Duration::from_millis(100));
+        let again = cpu_past(child, held + Duration::from_millis(100));
+        assert!(again - held > Duration::from_millis(100), "{again:?}");
 
         kill(&pids);
         let _ = root.wait();
