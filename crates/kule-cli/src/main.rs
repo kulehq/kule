@@ -641,10 +641,7 @@ fn complete(args: &[std::ffi::OsString]) {
         .iter()
         .map(|w| w.to_string_lossy().into_owned())
         .collect();
-    let home = std::env::var_os("KULE_HOME")
-        .filter(|h| !h.is_empty())
-        .map(PathBuf::from);
-    let offer = completion::offer(Cli::command(), shell, &words, home);
+    let offer = completion::offer(Cli::command(), shell, &words);
     let mut out = String::new();
     match offer {
         completion::Offer::Files => out.push_str("files\n"),

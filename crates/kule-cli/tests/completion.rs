@@ -18,10 +18,16 @@ fn text(out: &Output) -> String {
 
 /// What `kule __complete <shell>` offers for `words`, in `home`.
 fn offered(home: &Path, shell: &str, words: &[&str]) -> Vec<String> {
-    let out = kule()
+    let mut cmd = kule();
+    cmd.env("KULE_HOME", home);
+    offered_by(cmd, shell, words)
+}
+
+/// What `kule __complete <shell>` offers for `words`, run as `cmd` is set.
+fn offered_by(mut cmd: Command, shell: &str, words: &[&str]) -> Vec<String> {
+    let out = cmd
         .args(["__complete", shell, "--"])
         .args(words)
-        .env("KULE_HOME", home)
         .output()
         .unwrap();
     assert!(
@@ -144,6 +150,123 @@ fn task_ids_complete_from_the_home_with_their_names() {
             .any(|l| l.starts_with(&format!("--task={id}\t"))),
         "{after:?}"
     );
+}
+
+/// What a word is completed with depends on what stands before it: an
+/// option's value after the option, the next argument after a word, only
+/// arguments after `--`.
+#[test]
+fn each_word_is_completed_by_what_stands_before_it() {
+    let home = TempDir::new().unwrap();
+    let (_ws, id) = a_task(home.path(), None);
+    let at = |words: &[&str]| offered(home.path(), "bash", words);
+    // After `--`, a dash starts no option.
+    assert_eq!(at(&["kule", "status", "--", "-"]), ["values"]);
+    // A short option's value, and an option that is not there.
+    assert_eq!(at(&["kule", "ext", "pack", "dir", "-o", ""]), ["files"]);
+    assert_eq!(at(&["kule", "ext", "pack", "dir", "-x", ""]), ["values"]);
+    // A lone dash is an argument, as is a word given: neither is
+    // completed again.
+    assert_eq!(at(&["kule", "status", "-", ""]), ["values"]);
+    assert_eq!(at(&["kule", "status", &id, ""]), ["values"]);
+    // A flag takes no value: the argument after it is completed.
+    assert!(at(&["kule", "status", "--json", ""]).contains(&id));
+    // A word that is no subcommand is not followed by subcommands.
+    assert_eq!(at(&["kule", "nosuch", ""]), ["values"]);
+    // The last argument, when it takes many, takes each further word.
+    assert!(
+        at(&["kule", "limits", "memory=4", ""]).contains(&"cpu=".to_owned()),
+        "{:?}",
+        at(&["kule", "limits", "memory=4", ""])
+    );
+    // A name is no path: nothing to offer, and no file names.
+    assert_eq!(at(&["kule", "name", &id, ""]), ["values"]);
+    // A subcommand is described by the first line of its help.
+    assert!(
+        offered(home.path(), "zsh", &["kule", "rollb"])
+            .contains(&"rollback\tThrow the task's uncommitted changes away".to_owned())
+    );
+}
+
+/// Agent names, extension ids and group ids come from the home, each with
+/// what it is.
+#[test]
+fn agents_extensions_and_groups_complete_from_the_home() {
+    // Extensions refuse folders under the temp folder agents write to.
+    let home = TempDir::new_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
+    let work = TempDir::new_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
+    let (_ws, id) = a_task(home.path(), None);
+    let made = |args: &[&str]| {
+        let out = kule()
+            .args(args)
+            .current_dir(work.path())
+            .env("KULE_HOME", home.path())
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    };
+    made(&["group", "new", "clients"]);
+    made(&["ext", "new", "me.first-try"]);
+    made(&["ext", "dev", "first-try"]);
+    let at = |words: &[&str]| offered(home.path(), "zsh", words);
+
+    for words in [
+        &["kule", "run", &id, "--agent", ""][..],
+        &["kule", "agents", "show", ""],
+    ] {
+        let agents = at(words);
+        assert!(
+            agents.contains(&"claude-code\tagent".to_owned()),
+            "{words:?}: {agents:?}"
+        );
+    }
+    assert_eq!(
+        at(&["kule", "ext", "enable", ""]),
+        ["values", "me.first-try\tFirst Try"]
+    );
+    for words in [
+        &["kule", "limits", "--group", ""][..],
+        &["kule", "group", "put", &id, ""],
+    ] {
+        assert_eq!(at(words), ["values", "1\tclients"], "{words:?}");
+    }
+}
+
+/// The home is the one `--home` names when `KULE_HOME` names none, and
+/// `~/.kule` when neither does.
+#[test]
+fn the_home_is_the_one_named_on_the_line_else_the_default() {
+    let home = TempDir::new().unwrap();
+    let (_ws, id) = a_task(home.path(), None);
+    let named = home.path().to_str().unwrap();
+    // As for the command itself, `--home` wins over `KULE_HOME`.
+    let other = TempDir::new().unwrap();
+    let (_ws, elsewhere) = a_task(other.path(), None);
+    for env in ["", other.path().to_str().unwrap()] {
+        for words in [
+            &["kule", "--home", named, "status", ""][..],
+            &["kule", &format!("--home={named}"), "status", ""],
+        ] {
+            let mut cmd = kule();
+            cmd.env("KULE_HOME", env);
+            let ids = offered_by(cmd, "bash", words);
+            assert!(ids.contains(&id), "{words:?}: {ids:?}");
+            assert!(!ids.contains(&elsewhere), "{words:?}: {ids:?}");
+        }
+    }
+    let ids = offered(other.path(), "bash", &["kule", "status", ""]);
+    assert!(ids.contains(&elsewhere) && !ids.contains(&id), "{ids:?}");
+
+    let person = TempDir::new().unwrap();
+    let (_ws, theirs) = a_task(&person.path().join(".kule"), None);
+    let mut cmd = kule();
+    cmd.env_remove("KULE_HOME").env("HOME", person.path());
+    let ids = offered_by(cmd, "bash", &["kule", "status", ""]);
+    assert!(ids.contains(&theirs), "{ids:?}");
 }
 
 /// A name or label in the home holding what a terminal or shell would

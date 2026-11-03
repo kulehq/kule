@@ -268,6 +268,21 @@ mod tests {
         ] {
             assert!(refused(place("POST", target, false)), "{target}");
         }
+        // Why, as the person reads it in network.jsonl: one service Kule
+        // does not know is not two at once.
+        let why = |target: &str| match place("GET", target, true) {
+            Placed::Refused(why) => why,
+            other => panic!("{target}: {other:?}"),
+        };
+        assert!(
+            why("/me/proj/info/refs?service=git-upload-archive").contains("does not know"),
+            "{}",
+            why("/me/proj/info/refs?service=git-upload-archive")
+        );
+        assert!(
+            why("/me/proj/info/refs?service=git-upload-pack&service=git-upload-pack")
+                .contains("two services")
+        );
         let long = format!("/{}/git-receive-pack", "a".repeat(MAX_REPO + 1));
         assert!(refused(place("POST", &long, false)));
         let longest = format!("/{}/git-receive-pack", "a".repeat(MAX_REPO));
@@ -293,6 +308,16 @@ mod tests {
                 "{path}"
             );
         }
+        // Any LFS request but a bodiless read writes, a read with a body
+        // and a bodiless delete too.
+        assert_eq!(
+            place("GET", "/me/proj.git/info/lfs/locks", false),
+            push_to("me/proj")
+        );
+        assert_eq!(
+            place("DELETE", "/me/proj.git/info/lfs/locks/1", true),
+            push_to("me/proj")
+        );
         assert_eq!(
             lfs_batch(br#"{"operation":"download","objects":[]}"#),
             Ok(true)

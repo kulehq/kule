@@ -6,7 +6,7 @@ use std::collections::HashSet;
 
 use kule_engine::{Answer, BudgetScope, HeldRequest, Money, Question};
 
-use crate::service::{SharedBudget, TaskView};
+use crate::service::{RunEvent, SharedBudget, TaskView};
 
 /// One thing to tell.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -102,6 +102,28 @@ impl Alerts {
                 .chars()
                 .take(200)
                 .collect(),
+        }
+    }
+
+    /// What an event of task `task`'s run tells: that it is over, a
+    /// connection Kule refused unanswered, one approved that ended.
+    pub fn run(&self, task: &str, event: &RunEvent) -> Vec<Alert> {
+        match event {
+            RunEvent::Finished { error, .. } => vec![self.finished(task, error.as_deref())],
+            RunEvent::Answered {
+                host,
+                port,
+                held,
+                answer,
+                ..
+            } => self
+                .answered(task, host, *port, held.as_ref(), *answer)
+                .into_iter()
+                .collect(),
+            RunEvent::AfterApproval { host, port, why } => {
+                vec![self.after_approval(task, host, *port, why)]
+            }
+            _ => Vec::new(),
         }
     }
 
@@ -446,6 +468,53 @@ mod tests {
         );
         let cut = alerts.after_approval("a", "example.com", 443, "cut by Kule: another host");
         assert!(cut.body.contains("cut by Kule: another host"), "{cut:?}");
+    }
+
+    /// A run's events that tell something: its end, what Kule refused
+    /// unanswered (a held push with its repository), an approved connection
+    /// that ended. The rest tell nothing.
+    #[test]
+    fn a_run_s_events_tell_its_end_and_its_connections() {
+        let alerts = Alerts::new();
+        let finished = RunEvent::Finished {
+            error: None,
+            denials: Vec::new(),
+            unreported: false,
+            incomplete: false,
+            lost: None,
+            notes: Vec::new(),
+        };
+        assert_eq!(alerts.run("a", &finished), [alerts.finished("a", None)]);
+        let answered = |answer| RunEvent::Answered {
+            question: Some(1),
+            host: "github.com".into(),
+            port: 443,
+            held: Some(HeldRequest::Push {
+                repo: "me/proj".into(),
+            }),
+            answer,
+        };
+        let told = alerts.run("a", &answered(Answer::TimedOut));
+        assert_eq!(told.len(), 1, "{told:?}");
+        assert_eq!(told[0].title, "Task a: Kule refused a push");
+        assert_eq!(
+            told[0].body,
+            "To github.com/me/proj, as nobody answered in time."
+        );
+        assert_eq!(alerts.run("a", &answered(Answer::Denied)), []);
+        let after = RunEvent::AfterApproval {
+            host: "example.com".into(),
+            port: 443,
+            why: "cut by Kule".into(),
+        };
+        assert_eq!(
+            alerts.run("a", &after),
+            [alerts.after_approval("a", "example.com", 443, "cut by Kule")]
+        );
+        let quiet = RunEvent::Preparing {
+            text: "copying".into(),
+        };
+        assert_eq!(alerts.run("a", &quiet), []);
     }
 
     #[test]

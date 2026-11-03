@@ -1077,14 +1077,20 @@ const LINGER_FOR: Duration = Duration::from_secs(2);
 /// answer: closed with what the client sent still unread, it would be reset,
 /// and a reset can drop the answer before the client reads it (Windows does).
 /// So Kule stops sending, then reads what the client is still sending, for
-/// a little while and up to a little, and drops it.
+/// a little while and up to a little, and drops it. It ends when the client
+/// does, at the latest when the while is up.
 fn linger(stream: &TcpStream) {
     let _ = stream.shutdown(std::net::Shutdown::Write);
-    let _ = stream.set_read_timeout(Some(LINGER_FOR));
-    let started = std::time::Instant::now();
+    let until = Instant::now() + LINGER_FOR;
     let mut from = stream.take(LINGER_BYTES);
-    let mut chunk = [0u8; 16 * 1024];
-    while started.elapsed() < LINGER_FOR {
+    let mut chunk = [0u8; 16_384];
+    loop {
+        // Each read waits only for what is left of the while; none left,
+        // and the timeout cannot be set (a zero one is an error).
+        let left = until.saturating_duration_since(Instant::now());
+        if stream.set_read_timeout(Some(left)).is_err() {
+            break;
+        }
         match from.read(&mut chunk) {
             Ok(n) if n > 0 => {}
             _ => break,
@@ -2179,6 +2185,115 @@ mod tests {
                 let _ = serving.join();
             }
         }
+    }
+
+    /// Over plain HTTP a git host's reads pass: a fetch's bodiless GET
+    /// reaches the host. The same GET with a body is not a read.
+    #[test]
+    fn a_read_over_plain_http_reaches_a_git_host_and_one_with_a_body_does_not() {
+        let fetch = "GET /me/proj/info/refs?service=git-upload-pack HTTP/1.1\r\nHost: github.com\r\nConnection: close\r\n\r\n";
+        let with_body = "GET /me/proj/info/refs?service=git-upload-pack HTTP/1.1\r\nHost: github.com\r\nContent-Length: 4\r\nConnection: close\r\n\r\n";
+        for (head, body, passes) in [(fetch, "", true), (with_body, "0000", false)] {
+            let host = TcpListener::bind("127.0.0.1:0").unwrap();
+            let upstream = TcpStream::connect(host.local_addr().unwrap()).unwrap();
+            let (mut at_host, _) = host.accept().unwrap();
+            let proxy = TcpListener::bind("127.0.0.1:0").unwrap();
+            let mut client = TcpStream::connect(proxy.local_addr().unwrap()).unwrap();
+            let (proxy_end, _) = proxy.accept().unwrap();
+            client.write_all(body.as_bytes()).unwrap();
+            let tunnel = lonca_net::Tunnel {
+                client: proxy_end,
+                upstream,
+                early: Vec::new(),
+            };
+            let serving = std::thread::spawn(move || {
+                serve_plain("github.com", 80, head.to_owned(), tunnel, true)
+            });
+            at_host
+                .set_read_timeout(Some(Duration::from_millis(500)))
+                .unwrap();
+            let mut got = vec![0u8; 4096];
+            let n = at_host.read(&mut got).unwrap_or(0);
+            let got = String::from_utf8_lossy(&got[..n]).into_owned();
+            if passes {
+                assert!(got.starts_with("GET /me/proj/info/refs"), "{got}");
+                at_host
+                    .write_all(
+                        b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok",
+                    )
+                    .unwrap();
+                drop(at_host);
+                let mut reply = String::new();
+                let _ = client.read_to_string(&mut reply);
+                assert!(reply.starts_with("HTTP/1.1 200 OK"), "{reply}");
+                assert_eq!(serving.join().unwrap(), Ok(()));
+            } else {
+                assert!(got.is_empty(), "{got}");
+                let mut reply = String::new();
+                let _ = client.read_to_string(&mut reply);
+                assert!(reply.starts_with("HTTP/1.1 403 Forbidden"), "{reply}");
+                drop(client);
+                assert!(matches!(serving.join().unwrap(), Err(Ended::Refused(_))));
+            }
+        }
+    }
+
+    /// A refused plain request's client can finish sending what it was
+    /// sending and then read why: Kule reads and drops it rather than close
+    /// with it unread, which resets the connection (and on Windows can drop
+    /// the answer). Once the client is done, so is Kule, at once.
+    #[cfg(unix)]
+    #[test]
+    fn a_refused_plain_request_lets_its_client_finish_sending_and_read_why() {
+        use std::os::fd::AsRawFd;
+        // Under the most Kule reads, over what the sockets' buffers hold.
+        const BODY: usize = 768 * 1024;
+        let host = TcpListener::bind("127.0.0.1:0").unwrap();
+        let upstream = TcpStream::connect(host.local_addr().unwrap()).unwrap();
+        let (_at_host, _) = host.accept().unwrap();
+        let proxy = TcpListener::bind("127.0.0.1:0").unwrap();
+        let mut client = TcpStream::connect(proxy.local_addr().unwrap()).unwrap();
+        // A small, fixed send buffer: the body cannot wait in it whole, so
+        // the client gets to its end only while Kule reads.
+        let small: libc::c_int = 16 * 1024;
+        // SAFETY: a valid socket, and a c_int option of its own size.
+        let set = unsafe {
+            libc::setsockopt(
+                client.as_raw_fd(),
+                libc::SOL_SOCKET,
+                libc::SO_SNDBUF,
+                (&raw const small).cast(),
+                std::mem::size_of::<libc::c_int>() as libc::socklen_t,
+            )
+        };
+        assert_eq!(set, 0, "{}", io::Error::last_os_error());
+        let (proxy_end, _) = proxy.accept().unwrap();
+        let head = format!(
+            "POST /me/proj/git-receive-pack HTTP/1.1\r\nHost: github.com\r\nContent-Length: {BODY}\r\n\r\n"
+        );
+        let tunnel = lonca_net::Tunnel {
+            client: proxy_end,
+            upstream,
+            early: Vec::new(),
+        };
+        let serving = std::thread::spawn(move || serve_plain("github.com", 80, head, tunnel, true));
+        let mut writer = client.try_clone().unwrap();
+        let sending = std::thread::spawn(move || writer.write_all(&vec![b'x'; BODY]));
+        let sent = sending.join().unwrap();
+        assert!(sent.is_ok(), "{sent:?}");
+        let mut reply = String::new();
+        let read = client.read_to_string(&mut reply);
+        assert!(read.is_ok(), "{read:?}: {reply}");
+        assert!(reply.starts_with("HTTP/1.1 403 Forbidden"), "{reply}");
+        let closed = Instant::now();
+        drop(client);
+        let ended = serving.join().unwrap();
+        assert!(
+            closed.elapsed() < LINGER_FOR / 2,
+            "{:?} after the client closed",
+            closed.elapsed()
+        );
+        assert!(matches!(ended, Err(Ended::Refused(_))), "{ended:?}");
     }
 
     /// A secret split between two chunks is blanked as one: the body is

@@ -110,16 +110,17 @@ pub(crate) enum Offer {
 }
 
 /// Answers `kule __complete <shell> -- <words>`: the words of the command
-/// line up to the one being completed, `kule` first. `home` is Kule's home
-/// as `--home` or `KULE_HOME` name it, if they do.
-pub(crate) fn offer(cli: Command, shell: Shell, words: &[String], home: Option<PathBuf>) -> Offer {
+/// line up to the one being completed, `kule` first. Kule's home is the
+/// one `--home` names on the line, else `KULE_HOME`'s, else the default:
+/// the command's own order.
+pub(crate) fn offer(cli: Command, shell: Shell, words: &[String]) -> Offer {
     let mut cmd = cli;
     cmd.build();
     let Some((current, before)) = words.split_last() else {
         return Offer::Values(Vec::new());
     };
     let before = before.get(1..).unwrap_or_default();
-    let home = home.or_else(|| named_home(before)).or_else(default_home);
+    let home = named_home(before).or_else(|| kule_daemon::default_home().ok());
 
     let mut path: Vec<String> = Vec::new();
     let mut positional = 0;
@@ -247,10 +248,12 @@ impl Found<'_> {
             (Some("ext"), "id") => self.read(extensions),
             (_, "group") => self.read(groups),
             (Some("limits"), "settings") => settings(),
+            // clap gives an argument parsed as a path `AnyPath` unless
+            // its definition names another hint.
             _ if matches!(
                 arg.get_value_hint(),
                 clap::ValueHint::AnyPath | clap::ValueHint::FilePath | clap::ValueHint::DirPath
-            ) || is_path(arg) =>
+            ) =>
             {
                 return Offer::Files;
             }
@@ -361,11 +364,6 @@ fn takes_value(arg: &Arg) -> bool {
     arg.get_action().takes_values()
 }
 
-/// Whether `arg` is read as a path, by the parser clap gives it.
-fn is_path(arg: &Arg) -> bool {
-    arg.get_value_parser().type_id() == clap::builder::ValueParser::path_buf().type_id()
-}
-
 /// The positional argument a word at `index` (from 0) fills: the last one
 /// takes the rest when it takes many.
 fn positional_at(cmd: &Command, index: usize) -> Option<Arg> {
@@ -414,13 +412,6 @@ fn named_home(words: &[String]) -> Option<PathBuf> {
     None
 }
 
-fn default_home() -> Option<PathBuf> {
-    std::env::var_os("KULE_HOME")
-        .filter(|h| !h.is_empty())
-        .map(PathBuf::from)
-        .or_else(|| kule_daemon::default_home().ok())
-}
-
 /// A value plain enough to hand a shell: what Kule's ids and names are made
 /// of, and the `=` of a setting.
 fn plain_value(value: &str) -> bool {
@@ -434,4 +425,36 @@ fn plain_value(value: &str) -> bool {
 /// A description on one line, hidden characters made visible, not too long.
 fn plain_about(about: &str) -> String {
     crate::paint::plain_line(about).chars().take(80).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::{Arg, value_parser};
+
+    use super::*;
+
+    fn words(words: &[&str]) -> Vec<String> {
+        words.iter().map(|w| (*w).to_owned()).collect()
+    }
+
+    /// A command that takes a subcommand or a path first offers its
+    /// subcommands, not file names, which would hide them; with no
+    /// subcommands to offer, file names.
+    #[test]
+    fn subcommands_are_offered_before_file_names() {
+        let path = || Arg::new("dir").value_parser(value_parser!(PathBuf));
+        let both = Command::new("kule")
+            .disable_help_subcommand(true)
+            .subcommand(Command::new("sub"))
+            .arg(path());
+        assert_eq!(
+            offer(both, Shell::Bash, &words(&["kule", ""])),
+            Offer::Values(vec![("sub".to_owned(), String::new())])
+        );
+        let only_files = Command::new("kule").arg(path());
+        assert_eq!(
+            offer(only_files, Shell::Bash, &words(&["kule", ""])),
+            Offer::Files
+        );
+    }
 }

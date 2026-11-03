@@ -556,6 +556,62 @@ mod tests {
         );
     }
 
+    /// The task's log keeps every approved connection that did not go
+    /// through as approved; the person is told of it unless it was cut for
+    /// a push they denied themselves.
+    #[test]
+    fn an_approved_connection_cut_for_a_push_they_denied_is_logged_untold() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("network.jsonl");
+        let approvals = Approvals::new();
+        let told = std::sync::Arc::new(Mutex::new(Vec::new()));
+        let into = std::sync::Arc::clone(&told);
+        approvals.on_after_approval(move |a| into.lock().unwrap().push(a.clone()));
+        let recorder = Recorder {
+            log: FileLog(Mutex::new(File::create(&path).unwrap())),
+            asker: Some(Asker {
+                approvals: approvals.clone(),
+                source: 1,
+                task: "t1".into(),
+                timeout: Duration::from_secs(1),
+            }),
+        };
+        let cut = |answer: Answer| Connection {
+            time_unix: 0,
+            host: "github.com".into(),
+            port: 443,
+            verdict: Verdict::Ask,
+            rules: Vec::new(),
+            outcome: "cut".into(),
+            answer: Some(Answer::Approved),
+            secrets: Vec::new(),
+            cut: Some(format!(
+                "Kule refused a request in it: {}",
+                crate::tls::REFUSED_HELD
+            )),
+            failed: None,
+            refused: None,
+            held: vec![HeldAnswer {
+                request: HeldRequest::Push {
+                    repo: "me/proj".into(),
+                },
+                answer: Some(answer),
+            }],
+        };
+        recorder.record(cut(Answer::Denied));
+        assert!(
+            told.lock().unwrap().is_empty(),
+            "{:?}",
+            told.lock().unwrap()
+        );
+        recorder.record(cut(Answer::TimedOut));
+        let told = told.lock().unwrap().clone();
+        assert_eq!(told.len(), 1, "{told:?}");
+        assert_eq!((told[0].task.as_str(), told[0].port), ("t1", 443));
+        let logged = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(logged.lines().count(), 2, "{logged}");
+    }
+
     #[test]
     fn addresses_on_this_computer_or_its_network_are_not_public() {
         for ip in [
