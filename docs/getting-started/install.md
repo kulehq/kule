@@ -25,7 +25,7 @@ line, only the app, or both.
 :::note A preview
 
 Kule is a **preview**: expect changes from one preview to the next. The
-latest pre-release, [`0.2.0-preview.21`](https://github.com/kulehq/kule/releases/tag/v0.2.0-preview.21), is on the releases page:
+latest pre-release, [`0.2.0-preview.22`](https://github.com/kulehq/kule/releases/tag/v0.2.0-preview.22), is on the releases page:
 [install the command with a script](#install-script),
 [download it](#download-a-preview-release), or
 [build from source](#build-from-source).
@@ -71,7 +71,7 @@ sh install.sh
 
 | Setting | What it does |
 | --- | --- |
-| `KULE_VERSION=0.2.0-preview.21` | Installs that version instead of the newest. |
+| `KULE_VERSION=0.2.0-preview.22` | Installs that version instead of the newest. |
 | `KULE_INSTALL_DIR=DIR` | Installs into `DIR` instead of `~/.local/bin`. |
 | `KULE_NO_MODIFY_PATH=1` | Never touches a startup file. |
 | `KULE_REQUIRE_ATTESTATION=1` | Installs nothing unless the build provenance was checked too. |
@@ -343,7 +343,7 @@ kule --version
 ```
 
 ```text
-kule 0.2.0-preview.21
+kule 0.2.0-preview.22
 ```
 
 (The number is the version you built or downloaded.)
