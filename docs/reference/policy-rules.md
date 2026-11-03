@@ -80,8 +80,10 @@ Not matched by any `auto` permit, and so **waiting** (`no-rule-lets-it-pass`):
 git config changes (anything in `.git` that git does not keep as data:
 objects, refs, the index, logs), staged entries that differ from the files, history
 rewrites, deleted branches, a switched `HEAD`, other refs (tags, notes,
-replacements), and every host not listed above, git hosts included (inside
-TLS a push cannot be told apart from a fetch).
+replacements), and every host not listed above, git hosts included. Inside
+an approved HTTPS connection to a git host, a push and any other write wait
+once more, on their own: see
+[Git hosts](../concepts/network-and-questions.md#git-hosts).
 
 ## Kule's careful policy
 

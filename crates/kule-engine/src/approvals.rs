@@ -32,6 +32,38 @@ pub struct Question {
     /// only tunnels it, seeing the host and port alone.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub inside: Option<Inside>,
+    /// A request inside a connection, held on its own: the connection was
+    /// let through already, and this asks about one thing sent over it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub held: Option<HeldRequest>,
+    /// A git host Kule does not look inside (SSH, say): approving lets a
+    /// push through as well as a fetch.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub push_unseen: bool,
+}
+
+/// A request Kule holds for a person on its own, apart from the connection
+/// it goes over: a push to a git host, or another write to one. One answer
+/// stands for the rest of the run, for that repository or that host, and
+/// none is remembered past it.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum HeldRequest {
+    /// A push to the repository at `repo` on the host (its path there):
+    /// git's `receive-pack`, or an LFS upload.
+    Push { repo: String },
+    /// A write to the host other than a push (its API, say), which could
+    /// carry the work off as well as a push.
+    Write,
+}
+
+/// A request held inside a connection, and how it was decided: `None`
+/// when nobody was there to ask.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HeldAnswer {
+    #[serde(flatten)]
+    pub request: HeldRequest,
+    pub answer: Option<Answer>,
 }
 
 /// What Kule does inside a connection it looks into: the hosts a stored
@@ -45,6 +77,10 @@ pub struct Inside {
     /// A registry Kule lets commands read from, never send to.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub read_only: bool,
+    /// A git host: fetches and reads pass, and a push or any other write
+    /// waits for a person on its own (see [`HeldRequest`]).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub git: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -81,6 +117,9 @@ pub struct Settled {
     /// The question it was, if one was put to the person.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub question: Option<u64>,
+    /// The request it was about, when it was one held inside a connection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub held: Option<HeldRequest>,
     pub answer: Answer,
 }
 
@@ -122,11 +161,15 @@ struct State {
     /// Proxies that stopped: what they ask from now on is denied at once.
     withdrawn: HashSet<u64>,
     /// A person's answers, kept for the rest of the proxy's run: one answer
-    /// per host and port, not one per connection.
-    remembered: HashMap<(u64, String, u16), Answer>,
+    /// per host and port (and held request), not one per connection.
+    remembered: HashMap<Key, Answer>,
     /// Hosts and ports a proxy was refused at once, told once each.
-    refused_told: HashSet<(u64, String, u16)>,
+    refused_told: HashSet<Key>,
 }
+
+/// What one answer stands for: a proxy's host and port, and the request
+/// held inside its connections, if the question is about one.
+type Key = (u64, String, u16, Option<HeldRequest>);
 
 /// The most questions one proxy can have waiting; more are refused at once,
 /// so a task cannot bury the person in them.
@@ -195,10 +238,11 @@ impl Approvals {
         port: u16,
         rules: &[String],
         inside: Option<Inside>,
+        held: Option<HeldRequest>,
         timeout: Duration,
     ) -> Answer {
         let now = unix_now();
-        let key = (source, host.to_owned(), port);
+        let key = (source, host.to_owned(), port, held.clone());
         let refused = |state: &mut State, answer: Answer| {
             // Told once per host and port: a task asking again and again
             // does not bury the person in notes either.
@@ -210,15 +254,17 @@ impl Approvals {
             if state.withdrawn.contains(&source) {
                 let told = refused(&mut state, Answer::Withdrawn);
                 drop(state);
-                return self.refused(task, host, port, told);
+                return self.refused(task, host, port, held, told);
             }
             if let Some(answer) = state.remembered.get(&key) {
                 return *answer;
             }
-            let same = state
-                .waiting
-                .values()
-                .find(|w| w.source == source && w.question.host == host && w.question.port == port);
+            let same = state.waiting.values().find(|w| {
+                w.source == source
+                    && w.question.host == host
+                    && w.question.port == port
+                    && w.question.held == held
+            });
             if let Some(id) = same.map(|w| w.question.id) {
                 (id, false)
             } else if state
@@ -230,7 +276,7 @@ impl Approvals {
             {
                 let told = refused(&mut state, Answer::TooMany);
                 drop(state);
-                return self.refused(task, host, port, told);
+                return self.refused(task, host, port, held, told);
             } else {
                 state.next += 1;
                 let id = state.next;
@@ -242,7 +288,11 @@ impl Approvals {
                     rules: rules.to_vec(),
                     asked_unix: now,
                     deadline_unix: now + timeout.as_secs(),
+                    push_unseen: inside.is_none()
+                        && held.is_none()
+                        && crate::git_http::is_git_host(host),
                     inside,
+                    held,
                 };
                 state.waiting.insert(
                     id,
@@ -264,7 +314,7 @@ impl Approvals {
     /// Waits up to `timeout` for question `id`'s answer. Its `owner` keeps
     /// the answer for `key` and takes the question off the list, under one
     /// lock, so one sharing it finds the answer either way.
-    fn wait(&self, id: u64, key: &(u64, String, u16), timeout: Duration, owner: bool) -> Answer {
+    fn wait(&self, id: u64, key: &Key, timeout: Duration, owner: bool) -> Answer {
         let deadline = Instant::now() + timeout;
         let mut state = lock(&self.inner.state);
         let answer = loop {
@@ -306,6 +356,7 @@ impl Approvals {
                     host: q.host,
                     port: q.port,
                     question: Some(q.id),
+                    held: q.held,
                     answer,
                 });
             }
@@ -319,6 +370,7 @@ impl Approvals {
         task: &str,
         host: &str,
         port: u16,
+        held: Option<HeldRequest>,
         (answer, first): (Answer, bool),
     ) -> Answer {
         if first {
@@ -327,6 +379,7 @@ impl Approvals {
                 host: host.to_owned(),
                 port,
                 question: None,
+                held,
                 answer,
             });
         }
@@ -408,6 +461,136 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 mod tests {
     use super::*;
 
+    /// What `look` finds within five seconds.
+    fn soon<T>(look: impl Fn() -> Option<T>) -> Option<T> {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            if let Some(found) = look() {
+                return Some(found);
+            }
+            if Instant::now() > deadline {
+                return None;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    /// An answer stands for what it was asked about: the connection, a push
+    /// to one repository, or the host's other writes; never for another.
+    #[test]
+    fn an_answer_stands_for_its_connection_or_its_held_request_alone() {
+        let approvals = Approvals::new();
+        let source = approvals.new_source();
+        let push = |repo: &str| {
+            Some(HeldRequest::Push {
+                repo: repo.to_owned(),
+            })
+        };
+        let asked = |held: Option<HeldRequest>| {
+            let (approvals, held) = (approvals.clone(), held.clone());
+            std::thread::spawn(move || {
+                approvals.ask(
+                    source,
+                    "t",
+                    "github.com",
+                    443,
+                    &[],
+                    None,
+                    held,
+                    Duration::from_secs(60),
+                )
+            })
+        };
+        let answered = |held: Option<HeldRequest>, approve: bool| {
+            let waiting = asked(held.clone());
+            let id = soon(|| approvals.waiting().into_iter().find(|q| q.held == held))
+                .unwrap_or_else(|| panic!("{held:?} was never asked"))
+                .id;
+            assert!(approvals.answer(id, approve));
+            waiting.join().unwrap()
+        };
+        assert_eq!(answered(None, true), Answer::Approved);
+        // The approved connection approves no push over it.
+        assert_eq!(answered(push("me/proj"), true), Answer::Approved);
+        // Kept for that repository alone: another one is asked about.
+        assert_eq!(answered(push("them/x"), false), Answer::Denied);
+        assert_eq!(answered(Some(HeldRequest::Write), false), Answer::Denied);
+        for (held, kept) in [
+            (None, Answer::Approved),
+            (push("me/proj"), Answer::Approved),
+            (push("them/x"), Answer::Denied),
+            (Some(HeldRequest::Write), Answer::Denied),
+        ] {
+            assert_eq!(asked(held).join().unwrap(), kept);
+        }
+        assert!(approvals.waiting().is_empty());
+        // Waiting side by side, they are questions of their own.
+        let source = approvals.new_source();
+        let ask = |held: Option<HeldRequest>| {
+            let (approvals, held) = (approvals.clone(), held.clone());
+            std::thread::spawn(move || {
+                approvals.ask(
+                    source,
+                    "t",
+                    "gitlab.com",
+                    443,
+                    &[],
+                    None,
+                    held,
+                    Duration::from_secs(60),
+                )
+            })
+        };
+        let both = [ask(None), ask(push("me/proj"))];
+        assert!(
+            soon(|| (approvals.waiting().len() == 2).then_some(())).is_some(),
+            "{:?}",
+            approvals.waiting()
+        );
+        for q in approvals.waiting() {
+            approvals.answer(q.id, q.held.is_none());
+        }
+        let [connection, pushed] = both.map(|t| t.join().unwrap());
+        assert_eq!((connection, pushed), (Answer::Approved, Answer::Denied));
+    }
+
+    /// A git host Kule does not look inside is asked about saying a push
+    /// could go over it; one it looks inside, or another host, is not.
+    #[test]
+    fn a_git_host_kule_cannot_see_into_says_a_push_could_pass() {
+        let approvals = Approvals::new();
+        let source = approvals.new_source();
+        let unseen = |host: &str, port: u16, inside: Option<Inside>| {
+            let (asking, host) = (approvals.clone(), host.to_owned());
+            let waiting = std::thread::spawn(move || {
+                asking.ask(
+                    source,
+                    "t",
+                    &host,
+                    port,
+                    &[],
+                    inside,
+                    None,
+                    Duration::from_secs(60),
+                )
+            });
+            let q = soon(|| approvals.waiting().pop()).expect("never asked");
+            approvals.answer(q.id, false);
+            waiting.join().unwrap();
+            q.push_unseen
+        };
+        assert!(unseen("github.com", 22, None));
+        assert!(!unseen(
+            "github.com",
+            443,
+            Some(Inside {
+                git: true,
+                ..Inside::default()
+            })
+        ));
+        assert!(!unseen("example.com", 22, None));
+    }
+
     /// A proxy that stopped asks no one: what it asks after is Kule's
     /// refusal, told once per host and port, never a person's.
     #[test]
@@ -426,6 +609,7 @@ mod tests {
                 443,
                 &[],
                 None,
+                None,
                 Duration::from_secs(60),
             );
             assert_eq!(answer, Answer::Withdrawn);
@@ -439,6 +623,7 @@ mod tests {
                 host: "example.com".into(),
                 port: 443,
                 question: None,
+                held: None,
                 answer: Answer::Withdrawn,
             }]
         );

@@ -1009,11 +1009,15 @@ fn relay(app: AppHandle, home: &Path) {
                             tell(&app, vec![alerts.finished(&task, error.as_deref())]);
                         }
                         RunEvent::Answered {
-                            host, port, answer, ..
+                            host,
+                            port,
+                            held,
+                            answer,
+                            ..
                         } => tell(
                             &app,
                             alerts
-                                .answered(&task, host, *port, *answer)
+                                .answered(&task, host, *port, held.as_ref(), *answer)
                                 .into_iter()
                                 .collect(),
                         ),

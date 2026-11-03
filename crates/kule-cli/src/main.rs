@@ -1765,8 +1765,23 @@ fn connection_lines(log: &[Connection]) -> Vec<String> {
     let mut seen: Vec<(&Connection, usize)> = Vec::new();
     for c in log {
         match seen.iter_mut().find(|(s, _)| {
-            (&s.host, s.port, s.verdict, &s.outcome, &s.secrets, s.told())
-                == (&c.host, c.port, c.verdict, &c.outcome, &c.secrets, c.told())
+            (
+                &s.host,
+                s.port,
+                s.verdict,
+                &s.outcome,
+                &s.secrets,
+                s.told(),
+                &s.held,
+            ) == (
+                &c.host,
+                c.port,
+                c.verdict,
+                &c.outcome,
+                &c.secrets,
+                c.told(),
+                &c.held,
+            )
         }) {
             Some((_, n)) => *n += 1,
             None => seen.push((c, 1)),
@@ -1797,8 +1812,30 @@ fn connection_lines(log: &[Connection]) -> Vec<String> {
         } else {
             format!(" · with {}", paint::cyan(&c.secrets.join(", ")))
         };
+        // A push, or another write, held inside it: what, and what became of it.
+        let held: String = c
+            .held
+            .iter()
+            .map(|h| {
+                let what = match &h.request {
+                    kule_engine::HeldRequest::Push { repo } => {
+                        format!("push to {}", paint::plain_line(repo))
+                    }
+                    kule_engine::HeldRequest::Write => "write".to_owned(),
+                };
+                let how = match h.answer {
+                    None => "refused, the command line asks no one",
+                    Some(kule_engine::Answer::Approved) => "approved",
+                    Some(kule_engine::Answer::Denied) => "denied",
+                    Some(kule_engine::Answer::TimedOut) => "refused, nobody answered in time",
+                    Some(kule_engine::Answer::Withdrawn) => "refused, the run ended first",
+                    Some(kule_engine::Answer::TooMany) => "refused, too many were waiting",
+                };
+                format!(" · {what} {}", paint::red(how))
+            })
+            .collect();
         lines.push(format!(
-            "{} {}:{}{times} · {what}{secrets} {}",
+            "{} {}:{}{times} · {what}{secrets}{held} {}",
             paint::dim("net:"),
             c.host,
             c.port,
@@ -3681,6 +3718,7 @@ mod tests {
             cut: None,
             failed: None,
             refused: None,
+            held: Vec::new(),
         }
     }
 
@@ -3714,5 +3752,31 @@ mod tests {
             "{lines:?}"
         );
         assert!(lines[2].contains("tunneled"), "{lines:?}");
+    }
+
+    /// A push held inside a connection is named on its line, with what
+    /// became of it; two connections holding different pushes stay apart.
+    #[test]
+    fn a_held_push_is_printed_on_its_connections_line() {
+        let held = |repo: &str| {
+            let mut c = connection("cut");
+            c.cut = Some(format!(
+                "Kule refused a request in it: {}",
+                "a push or a write to a git host that was not approved"
+            ));
+            c.held = vec![kule_engine::HeldAnswer {
+                request: kule_engine::HeldRequest::Push { repo: repo.into() },
+                answer: None,
+            }];
+            c
+        };
+        let lines = connection_lines(&[held("me/proj"), held("them/x")]);
+        assert_eq!(lines.len(), 2, "{lines:?}");
+        assert!(
+            lines[0].contains("push to me/proj")
+                && lines[0].contains("the command line asks no one"),
+            "{lines:?}"
+        );
+        assert!(lines[1].contains("push to them/x"), "{lines:?}");
     }
 }

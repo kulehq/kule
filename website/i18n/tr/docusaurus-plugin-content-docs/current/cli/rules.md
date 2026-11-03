@@ -160,8 +160,9 @@ kept as 3
 :::warning
 
 Bir bağlantı kuralı, o görevlerdeki yalnızca ajanın değil, *her* komutun o
-host'a ulaşmasına izin verir. Git host'ları sık görülen bir örnektir: TLS
-içinde bir push, bir fetch ile aynı görünür.
+host'a ulaşmasına izin verir. Bir git host'unda HTTPS üzerinden bir push
+yine kendi başına bir kişiyi bekler, komut satırında ise reddedilir; SSH
+üzerinden bir push bağlantıyla birlikte geçer.
 
 :::
 

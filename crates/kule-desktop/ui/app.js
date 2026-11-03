@@ -2958,12 +2958,13 @@ function renderQuestions() {
           h(
             "div",
             { class: "question-text" },
-            h("p", { class: "question-title" }, `The agent wants to connect to ${q.host}:${q.port}`),
-            h("p", { class: "question-inside" }, insideLine(q.inside)),
+            h("p", { class: "question-title" }, questionTitle(q)),
+            h("p", { class: "question-inside" }, questionLine(q)),
             h(
               "p",
               { class: "muted" },
-              `No rule lets it pass on its own (${q.rules.join(", ")}). Unanswered, it is refused at ${clock(q.deadline_unix)} (in `,
+              q.held ? "Unanswered, it is refused at " : `No rule lets it pass on its own (${q.rules.join(", ")}). Unanswered, it is refused at `,
+              `${clock(q.deadline_unix)} (in `,
               h("span", { class: "countdown", "aria-hidden": "true", "data-deadline": q.deadline_unix }, left(q.deadline_unix)),
               ") and the agent goes on without it."
             )
@@ -2973,23 +2974,25 @@ function renderQuestions() {
             { class: "question-actions" },
             h(
               "button",
-              { class: "button ask", type: "button", "data-key": `approve:${q.id}`, "aria-label": `Approve ${q.host}:${q.port}`, onclick: approving(false) },
+              { class: "button ask", type: "button", "data-key": `approve:${q.id}`, "aria-label": `Approve: ${questionTitle(q)}`, onclick: approving(false) },
               "Approve"
             ),
+            rememberable(q)
+              ? h(
+                  "button",
+                  {
+                    class: "button ghost",
+                    type: "button",
+                    "data-key": `remember:${q.id}`,
+                    title: `Let ${q.host}:${q.port} through on this folder from now on, without asking`,
+                    onclick: approving(true),
+                  },
+                  "Approve and remember"
+                )
+              : null,
             h(
               "button",
-              {
-                class: "button ghost",
-                type: "button",
-                "data-key": `remember:${q.id}`,
-                title: `Let ${q.host}:${q.port} through on this folder from now on, without asking`,
-                onclick: approving(true),
-              },
-              "Approve and remember"
-            ),
-            h(
-              "button",
-              { class: "button ghost danger", type: "button", "data-key": `deny:${q.id}`, "aria-label": `Deny ${q.host}:${q.port}`, onclick: (e) => inFlight(e.currentTarget, () => answer(q.id, false)) },
+              { class: "button ghost danger", type: "button", "data-key": `deny:${q.id}`, "aria-label": `Deny: ${questionTitle(q)}`, onclick: (e) => inFlight(e.currentTarget, () => answer(q.id, false)) },
               "Deny"
             )
           )
@@ -3114,7 +3117,7 @@ function streamItem(item) {
         "div",
         { class: `event ${fine ? "done" : "failed"}`, role: item.after ? "alert" : null },
         h("span", { class: "event-mark" }, fine ? "✓" : "✗"),
-        h("span", {}, answeredLine(item.host, item.port, item.answer, item.after))
+        h("span", {}, answeredLine(item.host, item.port, item.answer, item.after, item.held))
       );
     }
     case "finished":
@@ -3279,11 +3282,11 @@ function fold(task, event) {
   } else if (event.type === "preparing" || event.type === "ended") {
     streamOf(task).push({ kind: "note", text: event.text });
   } else if (event.type === "answered") {
-    streamOf(task).push({ kind: "answered", host: event.host, port: event.port, answer: event.answer, after: null });
+    streamOf(task).push({ kind: "answered", host: event.host, port: event.port, held: event.held || null, answer: event.answer, after: null });
   } else if (event.type === "after_approval") {
     // Beside the approval that let it in, while the run is live.
     const items = streamOf(task);
-    const approved = items.findLast((i) => i.kind === "answered" && i.answer === "approved" && i.host === event.host && i.port === event.port && !i.after);
+    const approved = items.findLast((i) => i.kind === "answered" && i.answer === "approved" && i.host === event.host && i.port === event.port && !i.held && !i.after);
     if (approved) approved.after = event.why;
     else items.push({ kind: "answered", host: event.host, port: event.port, answer: "approved", after: event.why });
   } else if (event.type === "resources") {
@@ -7399,8 +7402,12 @@ async function answerFirst(approve, remember) {
     toast(`${q.host}:${q.port} just asked; look at it, then approve`);
     return;
   }
+  if (remember && !rememberable(q)) {
+    toast("A push or a write held inside a connection is approved for its run alone; approve it without remembering");
+    return;
+  }
   await answer(q.id, approve, remember);
-  toast(`${approve ? "Approved" : "Denied"} ${q.host}:${q.port}`);
+  toast(`${approve ? "Approved" : "Denied"}: ${questionTitle(q)}`);
 }
 
 /** Moves to the task `by` places away in the list. */

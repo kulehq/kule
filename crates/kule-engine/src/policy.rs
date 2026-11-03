@@ -53,7 +53,7 @@ const POLICY_CHOICE: &str = "policy-choice";
 /// 0.2.0-preview.11: such a file is that choice, judged by today's rules,
 /// never a policy of the person's own. Choices are no longer kept as text,
 /// so the list does not grow.
-const EARLIER_TEXTS: [(&str, PolicyChoice); 6] = [
+const EARLIER_TEXTS: [(&str, PolicyChoice); 8] = [
     (
         "09832ff8257708d5147645cd0ed832e35744f7db9c5274037261e7744db295ef",
         PolicyChoice::Balanced,
@@ -76,6 +76,14 @@ const EARLIER_TEXTS: [(&str, PolicyChoice); 6] = [
     ),
     (
         "14757aef6b0547e99cfd4d89c0c4aab237a0b5ba766e0eb8b8563d070ee4bccd",
+        PolicyChoice::Careful,
+    ),
+    (
+        "466d032f7b1116259fe4e69365082c1b35cac072a946ed3ef63ae832861194df",
+        PolicyChoice::Balanced,
+    ),
+    (
+        "d72c4fa38b45ab15d5d9d4bebf1d35975877ad809546d6aa883dbe4a89cb7b60",
         PolicyChoice::Careful,
     ),
 ];

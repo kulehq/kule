@@ -56,7 +56,10 @@ git: hook pre-commit changed (it runs on the next matching git command)
   git komutunuzda sizin kimliğinizle çalışırlar.
 
 Git sunucuları paket kayıt deposu değildir: `github.com`'a bir bağlantı
-sizi bekler, çünkü TLS içinde bir push bir fetch'ten ayırt edilemez.
+sizi bir kez bekler; ardından HTTPS üzerinden bir push kendi başına, kendi
+deposu için sizi yeniden bekler, fetch'ler ise geçer (bkz.
+[Git sunucuları](network-and-questions.md#git-hosts)). SSH üzerinden Kule
+ikisini ayırt edemez, bu yüzden bağlantıyı onaylamak bir push'u da geçirir.
 
 ## Kendiliğinden çalışanlar terminalinizi de korur {#what-runs-by-itself-protects-your-terminal-too}
 

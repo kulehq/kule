@@ -160,8 +160,9 @@ kept as 3
 :::warning
 
 A connection rule lets *every* command in those tasks reach that host, not
-only the agent. Git hosts are a common case: inside TLS, a push looks the
-same as a fetch.
+only the agent. On a git host over HTTPS a push still waits for a person
+on its own, and from the command line it is refused; over SSH a push goes
+with the connection.
 
 :::
 

@@ -85,8 +85,10 @@ veri olarak tutmadığı her şey: nesneler, ref'ler, index, log'lar
 dışındakiler), dosyalardan farklı
 olan stage'lenmiş girdiler, geçmişin yeniden yazılması, silinen dallar,
 değiştirilen bir `HEAD`, diğer ref'ler (etiketler, notlar, replacement'lar)
-ve git host'ları dahil yukarıda listelenmeyen her host (TLS içinde bir
-push, bir fetch'ten ayırt edilemez).
+ve git host'ları dahil yukarıda listelenmeyen her host. Bir git host'una
+onaylanmış bir HTTPS bağlantısının içinde bir push ve başka her yazma bir
+kez daha, kendi başına bekler: bkz.
+[Git sunucuları](../concepts/network-and-questions.md#git-hosts).
 
 ## Kule'nin careful politikası {#kules-careful-policy}
 

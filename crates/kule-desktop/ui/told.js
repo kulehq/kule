@@ -86,7 +86,40 @@ function insideLine(inside) {
   const does = [];
   if (inside.fills && inside.fills.length) does.push(`fills ${inside.fills.join(", ")} into its requests`);
   if (inside.read_only) does.push("lets commands read from it, never send to it");
+  if (inside.git) does.push("lets fetches and reads through, and holds a push or any other write for you on its own");
   return `Kule looks inside this connection: it ${does.length ? does.join(" and ") : "reads each request"}. Approving adds nothing to what Kule fills.`;
+}
+
+/**
+ * A question's title: a connection, or a request held inside one (`held`,
+ * from the daemon: a push to a repository, another write to a git host).
+ */
+function questionTitle(q) {
+  if (q.held && q.held.kind === "push") return `The agent wants to push to ${q.host}/${q.held.repo}`;
+  if (q.held) return `The agent wants to write to ${q.host} (not a fetch or a push)`;
+  return `The agent wants to connect to ${q.host}:${q.port}`;
+}
+
+/**
+ * What a card says the person approves: for a held request, that one
+ * thing for the rest of the run; for a connection, what Kule does inside
+ * it, and for a git host Kule cannot see into, that a push could pass.
+ */
+function questionLine(q) {
+  if (q.held && q.held.kind === "push") {
+    return `This run already reaches ${q.host}; Kule held a push to ${q.held.repo} for you. Approving lets this run push to that repository alone, until it ends; any other repository is asked about on its own.`;
+  }
+  if (q.held) {
+    return `This run already reaches ${q.host}; Kule held a request that would change something there (its API, say), not a fetch or a push. Approving lets this run's other writes to ${q.host} through until it ends.`;
+  }
+  const line = insideLine(q.inside);
+  return q.push_unseen ? `${line} This is a git host: approving lets a push through as well as a fetch.` : line;
+}
+
+/** Whether a card offers "Approve and remember": a held request is
+ * approved for its run alone. */
+function rememberable(q) {
+  return !q.held;
 }
 
 /** Why Kule refused a question nobody answered, by its answer. */
@@ -126,8 +159,8 @@ function connectionEnd(c) {
  * for one the person approved that did not go through as approved,
  * `after` (what Kule said then).
  */
-function answeredLine(host, port, answer, after) {
-  const where = `${host}:${port}`;
+function answeredLine(host, port, answer, after, held) {
+  const where = held && held.kind === "push" ? `a push to ${host}/${held.repo}` : held ? `a write to ${host}` : `${host}:${port}`;
   if (answer === "approved") return after ? `You approved ${where}; then ${after}` : `You approved ${where}`;
   if (answer === "denied") return `You denied ${where}`;
   if (answer === "too_many") return `Kule refused ${where} without asking: ${KULE_REFUSED.too_many}`;
@@ -145,12 +178,23 @@ function connectionWhat(c) {
   const end = connectionEnd(c);
   if (c.verdict === "allow") return end || c.outcome;
   if (c.verdict === "ask") {
-    if (c.answer === "approved") return end ? `approved by you; then ${end}` : `approved by you · ${c.outcome}`;
+    if (c.answer === "approved") return (end ? `approved by you; then ${end}` : `approved by you · ${c.outcome}`) + heldWhat(c);
     if (c.answer === "denied") return "denied by you";
     if (refusedByKule(c.answer)) return `refused by Kule: ${KULE_REFUSED[c.answer]}`;
     return "refused, waits for approval";
   }
   return "refused, denied";
+}
+
+/** What became of the requests held inside a connection, for its line. */
+function heldWhat(c) {
+  const said = { approved: "approved by you", denied: "denied by you", ...KULE_REFUSED };
+  return (c.held || [])
+    .map((h) => {
+      const what = h.kind === "push" ? `push to ${h.repo}` : "write";
+      return ` · ${what} ${h.answer ? said[h.answer] || h.answer : "refused: nobody was there to ask"}`;
+    })
+    .join("");
 }
 
 /** The connections the Timeline lists, the same ones once, counted. */
@@ -258,6 +302,10 @@ if (typeof module !== "undefined") {
     terminalText,
     openedNote,
     insideLine,
+    questionTitle,
+    questionLine,
+    rememberable,
+    heldWhat,
     connectionEnd,
     answeredLine,
     refusedByKule,

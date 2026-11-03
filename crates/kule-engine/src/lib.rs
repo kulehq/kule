@@ -33,6 +33,7 @@ mod effects;
 mod error;
 mod fsops;
 mod git;
+mod git_http;
 pub mod grants;
 mod groups;
 mod history;
@@ -78,8 +79,8 @@ mod usage;
 pub mod windows;
 
 pub use approvals::{
-    AfterApproval, Answer, Approvals, DEFAULT_TIMEOUT, Inside, MAX_TIMEOUT, MAX_WAITING,
-    MIN_TIMEOUT, Question, Settled,
+    AfterApproval, Answer, Approvals, DEFAULT_TIMEOUT, HeldAnswer, HeldRequest, Inside,
+    MAX_TIMEOUT, MAX_WAITING, MIN_TIMEOUT, Question, Settled,
 };
 pub use beside::{
     BESIDE_FILE, Beside, add_beside, beside_unopened, besides, remove_beside, suggest_beside,
