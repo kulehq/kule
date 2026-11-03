@@ -89,6 +89,46 @@ test("an approval card says whether Kule looks inside, and what it does there", 
   assert.match(told.insideLine({ fills: [], read_only: true }), /lets commands read from it, never send to it/);
 });
 
+test("a push or a write held inside a connection is asked about as itself, for its run alone", () => {
+  const push = { id: 1, host: "github.com", port: 443, rules: [], held: { kind: "push", repo: "me/proj" } };
+  assert.equal(told.questionTitle(push), "The agent wants to push to github.com/me/proj");
+  assert.match(told.questionLine(push), /push to that repository alone, until it ends; any other repository is asked about on its own/);
+  assert.ok(!told.rememberable(push));
+  const write = { ...push, held: { kind: "write" } };
+  assert.equal(told.questionTitle(write), "The agent wants to write to github.com (not a fetch or a push)");
+  assert.match(told.questionLine(write), /other writes to github\.com through until it ends/);
+  assert.ok(!told.rememberable(write));
+  const connect = { id: 2, host: "github.com", port: 443, rules: ["x"], inside: { fills: [], git: true } };
+  assert.equal(told.questionTitle(connect), "The agent wants to connect to github.com:443");
+  assert.match(told.questionLine(connect), /lets fetches and reads through, and holds a push or any other write for you on its own/);
+  assert.ok(told.rememberable(connect));
+  const ssh = { id: 3, host: "github.com", port: 22, rules: ["x"], inside: null, push_unseen: true };
+  assert.match(told.questionLine(ssh), /This is a git host: approving lets a push through as well as a fetch\.$/);
+  assert.doesNotMatch(told.questionLine({ ...ssh, push_unseen: false }), /git host/);
+});
+
+test("the Timeline says what became of each request held inside a connection", () => {
+  const c = connection({
+    host: "github.com",
+    verdict: "ask",
+    answer: "approved",
+    outcome: "cut",
+    cut: "Kule refused a request in it: a push or a write to a git host that was not approved",
+    held: [
+      { kind: "push", repo: "me/proj", answer: "approved" },
+      { kind: "push", repo: "them/x", answer: "denied" },
+      { kind: "write", answer: null },
+    ],
+  });
+  assert.match(
+    told.connectionWhat(c),
+    / · push to me\/proj approved by you · push to them\/x denied by you · write refused: nobody was there to ask$/
+  );
+  assert.equal(told.heldWhat(connection({})), "");
+  assert.equal(told.answeredLine("github.com", 443, "denied", null, { kind: "push", repo: "me/proj" }), "You denied a push to github.com/me/proj");
+  assert.equal(told.answeredLine("github.com", 443, "timed_out", null, { kind: "write" }), "Kule refused a write to github.com: nobody answered in time");
+});
+
 test("Kule's own refusals are never told as the person's", () => {
   for (const answer of ["timed_out", "withdrawn", "too_many"]) {
     const line = told.answeredLine("api.example", 443, answer, null);

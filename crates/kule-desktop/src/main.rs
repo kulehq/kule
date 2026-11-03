@@ -968,13 +968,13 @@ struct TaskChanged {
     change: TaskChange,
 }
 
-fn relay(app: AppHandle, home: &Path) {
+fn relay<R: tauri::Runtime>(app: AppHandle<R>, home: &Path) {
     let kule = Kule {
         home: home.to_owned(),
         client: Client::new(home),
     };
     let mut alerts = Alerts::new();
-    let tell = |app: &AppHandle, told: Vec<Alert>| {
+    let tell = |app: &AppHandle<R>, told: Vec<Alert>| {
         let in_front = app
             .get_webview_window("main")
             .and_then(|w| w.is_focused().ok())
@@ -1004,24 +1004,7 @@ fn relay(app: AppHandle, home: &Path) {
             }
             let _ = kule.client.subscribe(|notice| match notice {
                 Notice::Run { task, seq, event } => {
-                    match &event {
-                        RunEvent::Finished { error, .. } => {
-                            tell(&app, vec![alerts.finished(&task, error.as_deref())]);
-                        }
-                        RunEvent::Answered {
-                            host, port, answer, ..
-                        } => tell(
-                            &app,
-                            alerts
-                                .answered(&task, host, *port, *answer)
-                                .into_iter()
-                                .collect(),
-                        ),
-                        RunEvent::AfterApproval { host, port, why } => {
-                            tell(&app, vec![alerts.after_approval(&task, host, *port, why)]);
-                        }
-                        _ => {}
-                    }
+                    tell(&app, alerts.run(&task, &event));
                     let _ = app.emit("run", RunMessage { task, seq, event });
                 }
                 Notice::Questions { waiting } => {
@@ -1294,7 +1277,61 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::web_url;
+    use std::sync::mpsc;
+
+    use tauri::Listener;
+
+    use super::*;
+
+    /// The window hears Kule: once the app reaches the daemon it is told to
+    /// load what it shows, and then what changes, such as a new task.
+    #[test]
+    fn the_window_hears_what_kule_tells_once_connected() {
+        // A home with a short path: its socket must bind.
+        let base = concat!(env!("CARGO_MANIFEST_DIR"), "/../../target");
+        std::fs::create_dir_all(base).unwrap();
+        let home = tempfile::TempDir::new_in(base).unwrap();
+        let at = home.path().to_owned();
+        std::thread::spawn(move || kule_daemon::run(&at, Duration::from_secs(60)));
+        // Up before the app looks, or the app would start one itself as
+        // this program, which here is the test.
+        let client = Client::new(home.path());
+        let up = std::time::Instant::now();
+        while client.call::<Hello>(Call::Hello).is_err() {
+            assert!(up.elapsed() < Duration::from_secs(20), "no daemon");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let app = tauri::test::mock_builder()
+            .plugin(tauri_plugin_notification::init())
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .unwrap();
+        let (heard, hear) = mpsc::channel();
+        for event in ["daemon", "task-changed"] {
+            let heard = heard.clone();
+            app.listen_any(event, move |_| {
+                let _ = heard.send(event);
+            });
+        }
+        let (handle, at) = (app.handle().clone(), home.path().to_owned());
+        std::thread::spawn(move || relay(handle, &at));
+        let wait = || hear.recv_timeout(Duration::from_secs(20));
+        assert_eq!(wait(), Ok("daemon"));
+        let ws = tempfile::TempDir::new().unwrap();
+        // Subscribed only once the first answers are in: create until heard.
+        let mut told = Err(mpsc::RecvTimeoutError::Timeout);
+        for _ in 0..20 {
+            client
+                .call::<serde_json::Value>(Call::CreateTask {
+                    workspace: ws.path().to_owned(),
+                })
+                .unwrap();
+            told = hear.recv_timeout(Duration::from_millis(500));
+            if told.is_ok() {
+                break;
+            }
+        }
+        assert_eq!(told, Ok("task-changed"));
+    }
 
     #[test]
     fn only_web_addresses_are_opened() {

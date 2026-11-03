@@ -21,8 +21,10 @@ değerlendirir (bir host ve port taşıyan `net.connect` etki türü):
 | Ajanın kendi model API'si, o ajan çalışırken | **pass** (kendiliğinden geçer) |
 | Git sunucuları dahil diğer her şey | **ask** (onay bekler) |
 
-Git sunucuları onay bekler, çünkü TLS içinde bir push bir fetch'ten ayırt
-edilemez.
+Bir git sunucusu bir kez, bağlantı için onay bekler. Kule ardından HTTPS
+üzerinden ona gideni okur: fetch'ler, clone'lar ve indirmeler geçer; bir
+push ise kendi başına, kendi deposu için sizi bekler (bkz.
+[Git sunucuları](#git-hosts)).
 
 Her bağlantı görevin `network.jsonl` dosyasına yazılır ve bir komuttan sonra
 ekrana basılır:
@@ -71,8 +73,13 @@ Kart, onaylamanın neyi geçireceğini de söyler:
   Kule bağlantıyı onayınızdan sonra keser.
 - **İçine bakılır.** Host, Kule'nin bir gizli değer doldurduğu bir host'tur
   (kart gizli değerlerin adını verir: "fills STRIPE_KEY into its requests")
-  ya da Kule'nin yalnızca okumaya izin verdiği bir paket kayıt deposudur.
-  Bir onay, Kule'nin içine baktığı host'lara asla yeni bir host eklemez.
+  ya da Kule'nin yalnızca okumaya izin verdiği bir paket kayıt deposudur
+  ya da bir git sunucusudur: orada fetch'leri ve okumaları geçirir, bir
+  push'u ya da başka her yazmayı kendi başına sizin için bekletir. Bir
+  onay, Kule'nin içine baktığı host'lara asla yeni bir host eklemez.
+- **Kule'nin içini göremediği bir git sunucusu.** Örneğin SSH (port 22)
+  üzerinden: kart, onaylamanın fetch'in yanında bir push'u da geçireceğini
+  ekler.
 
 Yanıtlandıktan sonra kart, sorulduğu yerde çalıştırmanın bir satırına
 dönüşür: "You approved api.example:443". Kule ardından bağlantıyı keserse ya
@@ -105,6 +112,54 @@ command line asks no one`).
 
 Hatırlanan host'lar [`kule rules`](../cli/rules.md) ile ve *Settings →
 Rules* bölümünde listelenir; orada birini unutturabilirsiniz.
+
+## Git sunucuları {#git-hosts}
+
+Kule, bir görevin HTTPS üzerinden şu git sunucularına gönderdiği istekleri
+okur: `github.com`, `gist.github.com`, `gitlab.com`, `bitbucket.org`,
+`codeberg.org`, `gitea.com` ve `dev.azure.com`. Bağlantı, her host gibi bir
+kez onay bekler. İçinde:
+
+| İstek | Kule ne yapar |
+| --- | --- |
+| Bir fetch ya da clone (`git-upload-pack`) ve başka her okuma: gövdesiz `GET`, `HEAD` ya da `OPTIONS` (release indirmeleri, ham dosyalar) | **Geçer.** |
+| Bir LFS indirmesi (`"operation": "download"` ile `info/lfs/objects/batch`) | **Geçer.** |
+| Bir push (`git-receive-pack`, `info/refs`'i dahil), bir LFS yüklemesi, LFS kilitleri | O depoya bir push olarak **sizi bekler.** |
+| Başka her yazma (`POST`, `PUT`, `PATCH`, `DELETE`, gövdeli bir okuma): örneğin bir API çağrısı | O host'a bir yazma olarak **sizi bekler.** |
+| Kule'nin iki türlü okuyabileceği ya da açıkça gösteremeyeceği bir depoyu adlandıran istek | Sorulmadan **reddedilir.** |
+
+Bir push, istemci önce deponun ref'lerini istesin ya da paketini doğrudan
+göndersin, bekler. Kart **The agent wants to push to
+github.com/you/project** der. Onaylamak, bu çalıştırmanın yalnızca o depoya,
+çalıştırma bitene kadar push etmesine izin verir: başka her depoya bir push
+ayrıca sorulur, push dışındaki yazmalar da host başına bir kez sorulur. Bir
+push ya da yazma asla hatırlanmaz: kartında **Approve and remember** yoktur.
+Reddedilen ya da yanıtlanmayan push `403` ve nedenini alır; bağlantı `cut`
+olarak yazılır, `held` da neyin sorulduğunu ve nasıl yanıtlandığını söyler:
+
+```json
+{"host":"github.com","port":443,"outcome":"cut","answer":"approved",
+ "cut":"Kule refused a request in it: a push or a write to a git host that was not approved",
+ "held":[{"kind":"push","repo":"you/project","answer":"denied"}]}
+```
+
+Bir depo, host'taki yolu olarak gösterilir ve size yalnızca harflerden,
+rakamlardan, `-._~` ile tek eğik çizgilerden oluşanı sorulur: kaçış dizisi,
+boşluk, gizli karakter ya da `..` parçası içeren bir yol reddedilir; böylece
+kartta bir depo başka bir depo gibi görünemez.
+
+- **SSH** (port 22): Kule içini göremez, bu yüzden bağlantı tek karar
+  olarak kalır ve kartı üzerinden bir push'un geçebileceğini söyler.
+- Bir git sunucusuna **düz HTTP** (port 80) yalnızca okumaları geçirir: bir
+  push ya da başka bir yazma reddedilir, çünkü Kule bunları yalnızca HTTPS
+  üzerinde bekletir.
+- **Komut satırında** soracak kimse yoktur, bu yüzden bir push, bir kural
+  bağlantının kendisini geçirse bile reddedilir (`a push to … waits for a
+  person, and no one is there to ask`).
+- Listede olmayan bir git sunucusu (örneğin şirketinizin GitLab'ı) eskisi
+  gibi tek karardır ve bir push bağlantıyla birlikte geçer.
+- `api.github.com` ayrı bir host'tur: onu onaylamak GitHub API'sini ve
+  dolayısıyla onun üzerinden yazmaları geçirir.
 
 ## Ağı kapatmak ya da açmak
 
@@ -149,6 +204,8 @@ bağlantı, `Kule refused a request in it: <why>` ile `cut` olarak günlüğe
 yazılır. Neden bunlardan biridir; isteğin değil, Kule'nin sözleriyle:
 
 - `a write to a host commands may only read from`
+- `a push or a write to a git host that was not approved`
+- `a request to a git host Kule could not read one way only`
 - `a credential Kule does not hold for this host`
 - `a body Kule checks whole that was chunked or over 1 MiB`
 - `a request Kule could not read one way only, or for another host`
@@ -168,7 +225,9 @@ Bunlar [Platformlar](../platforms.md) sayfasında da listelenir:
   gösterdiği kök sertifikaları kullanması söylenir.
 - macOS'ta NuGet'nin ve Maven'ın araçları yalnızca sistemin kök
   sertifikalarına güvenir, bu yüzden kayıt depoları Go'nun modül
-  proxy'si gibi görülmeden geçer.
+  proxy'si gibi görülmeden geçer. Git sunucularının içine her araç için
+  bakılır: yalnızca sistemin kök sertifikalarına güvenen bir araç (macOS'ta
+  .NET, bir JVM) bir görevde onlara HTTPS üzerinden ulaşamaz.
 - Linux'ta ağ kuralları Linux 6.7 veya sonrasını gerektirir.
 
 ## İlgili sayfalar

@@ -20,7 +20,7 @@ use std::collections::{BTreeSet, HashMap};
 use std::io::{self, Cursor, Read, Write};
 use std::net::TcpStream;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use rcgen::{
     BasicConstraints, CertificateParams, DnType, ExtendedKeyUsagePurpose, GeneralSubtree, IsCa,
@@ -31,8 +31,9 @@ use rustls::{
     ClientConfig, ClientConnection, RootCertStore, ServerConfig, ServerConnection, StreamOwned,
 };
 
-use crate::approvals::Inside;
+use crate::approvals::{Answer, HeldRequest, Inside};
 use crate::error::{Error, Result};
+use crate::git_http::Placed;
 use crate::secrets::Vault;
 
 /// The most a request's line and headers may take.
@@ -44,6 +45,12 @@ pub(crate) struct Interceptor {
     /// Hosts looked into to be read alone: package registries, where a
     /// publish would carry the work off.
     read_only: BTreeSet<String>,
+    /// Git hosts, looked into to tell a push (held for a person) from a
+    /// fetch (see [`crate::git_http`]).
+    git: BTreeSet<String>,
+    /// Connects anew to a host, once a request waited for a person long
+    /// enough for the host to have given up on a quiet connection.
+    dial: Dial,
     issuer: Issuer<'static, KeyPair>,
     ca_der: CertificateDer<'static>,
     ca_pem: String,
@@ -53,6 +60,33 @@ pub(crate) struct Interceptor {
     /// How long a client may keep a connection without a request.
     idle: Duration,
 }
+
+/// How the proxy connects to a host on 443 itself.
+type Dial = Box<dyn Fn(&str) -> io::Result<TcpStream> + Send + Sync>;
+
+/// Connects to `host` on 443 at a public address alone, as the proxy's own
+/// checks let a tunnel reach (see `proxy_core::may_reach`).
+fn dial_public(host: &str) -> io::Result<TcpStream> {
+    use std::net::ToSocketAddrs;
+    let mut last = io::Error::new(
+        io::ErrorKind::AddrNotAvailable,
+        "it resolves to no public address",
+    );
+    for address in (host, 443).to_socket_addrs()? {
+        if !crate::network::public_ip(address.ip()) {
+            continue;
+        }
+        match TcpStream::connect_timeout(&address, Duration::from_secs(15)) {
+            Ok(stream) => return Ok(stream),
+            Err(e) => last = e,
+        }
+    }
+    Err(last)
+}
+
+/// How long a request may wait for a person before the proxy connects to
+/// the host anew for it.
+const WAITED: Duration = Duration::from_secs(1);
 
 fn tls_error(e: impl std::fmt::Display) -> Error {
     Error::Invalid(format!("TLS: {e}"))
@@ -70,17 +104,20 @@ pub(crate) fn web_roots() -> RootCertStore {
 }
 
 impl Interceptor {
-    /// An authority for the hosts `vault`'s secrets are for and the
-    /// `read_only` ones, checking real hosts against `roots`.
+    /// An authority for the hosts `vault`'s secrets are for, the
+    /// `read_only` ones and the `git` hosts, checking real hosts against
+    /// `roots`.
     pub fn new(
         vault: Vault,
         roots: RootCertStore,
         read_only: BTreeSet<String>,
+        git: BTreeSet<String>,
     ) -> Result<Interceptor> {
         let hosts: BTreeSet<String> = vault
             .hosts()
             .into_iter()
             .chain(read_only.iter().cloned())
+            .chain(git.iter().cloned())
             .collect();
         let now = time::OffsetDateTime::now_utc();
         let mut params = CertificateParams::default();
@@ -112,6 +149,8 @@ impl Interceptor {
             vault,
             hosts,
             read_only,
+            git,
+            dial: Box::new(dial_public),
             ca_der: cert.der().clone(),
             ca_pem: cert.pem(),
             issuer: Issuer::new(params, key),
@@ -142,6 +181,7 @@ impl Interceptor {
         Some(Inside {
             fills: self.vault.names_going_to(&host),
             read_only: self.read_only.contains(&host),
+            git: self.git.contains(&host),
         })
     }
 
@@ -169,14 +209,17 @@ impl Interceptor {
     /// Serves one tunnel to `host`: TLS with the client under the task's
     /// authority, TLS with the host, each request filled with the secrets
     /// bound there. Notes in `used` the name of each secret as it goes in:
-    /// a connection that ends in an error has still used them. Says
-    /// whether it ended on a request Kule refused, and why, in Kule's own
-    /// words (never the request's).
+    /// a connection that ends in an error has still used them. A request
+    /// to a git host that is not a read waits on `hold`, which puts it to a
+    /// person (`None`: nobody is there to ask), and goes on only once
+    /// approved. Says whether it ended on a request Kule refused, and why,
+    /// in Kule's own words (never the request's).
     pub fn serve_noting(
         &self,
         host: &str,
         tunnel: lonca_net::Tunnel,
         used: &mut BTreeSet<String>,
+        hold: &mut dyn FnMut(&HeldRequest) -> Option<Answer>,
     ) -> Result<Served> {
         let io = |e: io::Error| Error::Invalid(format!("{host}: {e}"));
         tunnel
@@ -208,7 +251,8 @@ impl Interceptor {
             },
         ));
         let name = ServerName::try_from(host.to_owned()).map_err(tls_error)?;
-        let conn = ClientConnection::new(Arc::clone(&self.upstream), name).map_err(tls_error)?;
+        let conn =
+            ClientConnection::new(Arc::clone(&self.upstream), name.clone()).map_err(tls_error)?;
         let mut upstream = Conn::new(StreamOwned::new(conn, tunnel.upstream));
 
         let mut served = 0;
@@ -245,35 +289,71 @@ impl Interceptor {
                 ended = Some(REFUSED_HEAD);
                 break;
             };
+            // To a git host, what is not a read waits for a person: a push
+            // for its repository, any other write for the host.
+            let mut form = None;
+            let mut refused = None;
+            let mut waits = None;
+            if self.git.contains(host) {
+                let bodiless = request.framing == Framing::Empty;
+                let mut placed = crate::git_http::place(&request.method, &request.target, bodiless);
+                if let Placed::LfsBatch { repo } = placed {
+                    placed = match read_form(&mut client, request.framing).map_err(io)? {
+                        Some(body) => {
+                            let read = crate::git_http::lfs_batch(&body);
+                            form = Some(body);
+                            match read {
+                                Ok(true) => Placed::Read,
+                                Ok(false) => Placed::Held(HeldRequest::Push { repo }),
+                                Err(why) => Placed::Refused(why),
+                            }
+                        }
+                        None => Placed::Refused(format!(
+                            "an LFS request is read whole, and this one is chunked or over {MAX_FORM} bytes"
+                        )),
+                    };
+                }
+                match placed {
+                    Placed::Read | Placed::LfsBatch { .. } => {}
+                    Placed::Refused(why) => {
+                        refused =
+                            Some((format!("Kule refused this request: {why}.\n"), REFUSED_GIT));
+                    }
+                    Placed::Held(held) => waits = Some(held),
+                }
+            }
             // Someone else's credentials to the person's host, or anything
             // but a read from a registry: ways the work could be carried
             // off. Answered here, never passed on.
-            let mut refused = if self.read_only.contains(host) && !reads(&request) {
-                Some((
+            if refused.is_none() && self.read_only.contains(host) && !reads(&request) {
+                refused = Some((
                     format!(
                         "Kule refused this request: commands read from {host}, never send to it ({} {}).\n",
                         request.method,
                         request.target.split('?').next().unwrap_or_default()
                     ),
                     REFUSED_WRITE,
-                ))
-            } else {
-                self.vault.foreign_credential(host, &head).map(|header| {
+                ));
+            } else if refused.is_none() {
+                refused = self.vault.foreign_credential(host, &head).map(|header| {
                     (
                         format!("Kule refused this request: its {header} is not a credential Kule holds for {host}.\n"),
                         REFUSED_CREDENTIAL,
                     )
-                })
-            };
+                });
+            }
             // A body with fields to a host Kule keeps credentials for (a
             // form, JSON, a multipart form, text) is read whole first, and
             // its fields checked as the head's are.
-            let mut form = None;
             if refused.is_none()
                 && self.vault.holds_for(host)
                 && let Some(kind) = fielded(&head, request.framing)
             {
-                match read_form(&mut client, request.framing).map_err(io)? {
+                let read = match form.take() {
+                    Some(body) => Some(body),
+                    None => read_form(&mut client, request.framing).map_err(io)?,
+                };
+                match read {
                     Some(body) => {
                         refused = self.vault.foreign_in_body(host, &kind, &body).map(|field| {
                             (
@@ -291,6 +371,32 @@ impl Interceptor {
                             REFUSED_BODY,
                         ));
                     }
+                }
+            }
+            // Put to a person last, once nothing else refuses it.
+            if refused.is_none()
+                && let Some(held) = waits
+            {
+                let asked = Instant::now();
+                let answer = hold(&held);
+                if answer != Some(Answer::Approved) {
+                    refused = Some((
+                        format!(
+                            "Kule refused this request: {}.\n",
+                            held_said(host, &held, answer)
+                        ),
+                        REFUSED_HELD,
+                    ));
+                } else if asked.elapsed() >= WAITED {
+                    // A host gives up on a connection kept quiet for long:
+                    // a fresh one, for this request on.
+                    let stream = (self.dial)(host).map_err(io)?;
+                    stream
+                        .set_read_timeout(Some(Duration::from_secs(600)))
+                        .map_err(io)?;
+                    let conn = ClientConnection::new(Arc::clone(&self.upstream), name.clone())
+                        .map_err(tls_error)?;
+                    upstream = Conn::new(StreamOwned::new(conn, stream));
                 }
             }
             if let Some((said, why)) = refused {
@@ -370,6 +476,29 @@ pub const REFUSED_HEAD: &str = "a request Kule could not read one way only, or f
 pub const REFUSED_WRITE: &str = "a write to a host commands may only read from";
 pub const REFUSED_CREDENTIAL: &str = "a credential Kule does not hold for this host";
 pub const REFUSED_BODY: &str = "a body Kule checks whole that was chunked or over 1 MiB";
+pub const REFUSED_GIT: &str = "a request to a git host Kule could not read one way only";
+pub const REFUSED_HELD: &str = "a push or a write to a git host that was not approved";
+
+/// Why a request held for a person did not go on, for the command to read.
+fn held_said(host: &str, held: &HeldRequest, answer: Option<Answer>) -> String {
+    let what = match held {
+        HeldRequest::Push { repo } => format!("a push to {host}/{repo} waits for a person"),
+        HeldRequest::Write => format!("a write to {host} (not a fetch) waits for a person"),
+    };
+    let why = match answer {
+        None => "and no one is there to ask",
+        Some(Answer::Denied) => "who denied it",
+        Some(Answer::TimedOut) => {
+            "and nobody approved it in time; skip this step and go on without it"
+        }
+        Some(Answer::Withdrawn) => "and the run ended before anyone answered",
+        Some(Answer::TooMany) => {
+            "and too many questions of this run are waiting already; skip this step and go on without it"
+        }
+        Some(Answer::Approved) => "",
+    };
+    format!("{what}, {why}")
+}
 
 /// An error that only means the other side went quiet or away.
 fn quiet(e: &io::Error) -> bool {
@@ -843,12 +972,14 @@ fn authority_is(authority: &str, host: &str, port: u16) -> bool {
 /// `host`, and later ones, which name their host in the request line
 /// (`GET http://host/path`), too. A request for another host behind the
 /// same address is answered here, never passed on; why, returned, apart
-/// from a connection that failed on its own.
+/// from a connection that failed on its own. To a `git` host only reads
+/// go: a push or another write is held for a person over HTTPS alone.
 pub(crate) fn serve_plain(
     host: &str,
     port: u16,
     head: String,
     tunnel: lonca_net::Tunnel,
+    git: bool,
 ) -> std::result::Result<(), Ended> {
     let io = |e: io::Error| Ended::Failed(format!("{host}: {e}"));
     let _ = tunnel
@@ -887,11 +1018,32 @@ pub(crate) fn serve_plain(
                     said.len()
                 );
                 let _ = client.stream.flush();
+                linger(&client.stream.inner);
                 return Err(Ended::Refused(why));
             }
         };
         // Framed two ways, or not at all: never passed on.
         let request = Request::of(&head).map_err(|_| Ended::Refused(REFUSED_HEAD.to_owned()))?;
+        if git
+            && crate::git_http::place(
+                &request.method,
+                &request.target,
+                request.framing == Framing::Empty,
+            ) != Placed::Read
+        {
+            let why = format!(
+                "a push or a write to {host} goes over HTTPS alone, where Kule holds it for a person"
+            );
+            let said = format!("Kule refused this request: {why}.\n");
+            let _ = write!(
+                client.stream,
+                "HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{said}",
+                said.len()
+            );
+            let _ = client.stream.flush();
+            linger(&client.stream.inner);
+            return Err(Ended::Refused(why));
+        }
         upstream
             .stream
             .write_all(forward(&head, request.close).as_bytes())
@@ -912,6 +1064,36 @@ pub(crate) fn serve_plain(
         };
         if last || request.close {
             return Ok(());
+        }
+    }
+}
+
+/// The most a refused client's unread body is read and dropped, and for
+/// how long, before its connection closes.
+const LINGER_BYTES: u64 = 1 << 20;
+const LINGER_FOR: Duration = Duration::from_secs(2);
+
+/// Ends a connection Kule answered with a refusal so the client reads the
+/// answer: closed with what the client sent still unread, it would be reset,
+/// and a reset can drop the answer before the client reads it (Windows does).
+/// So Kule stops sending, then reads what the client is still sending, for
+/// a little while and up to a little, and drops it. It ends when the client
+/// does, at the latest when the while is up.
+fn linger(stream: &TcpStream) {
+    let _ = stream.shutdown(std::net::Shutdown::Write);
+    let until = Instant::now() + LINGER_FOR;
+    let mut from = stream.take(LINGER_BYTES);
+    let mut chunk = [0u8; 16_384];
+    loop {
+        // Each read waits only for what is left of the while; none left,
+        // and the timeout cannot be set (a zero one is an error).
+        let left = until.saturating_duration_since(Instant::now());
+        if stream.set_read_timeout(Some(left)).is_err() {
+            break;
+        }
+        match from.read(&mut chunk) {
+            Ok(n) if n > 0 => {}
+            _ => break,
         }
     }
 }
@@ -1199,23 +1381,33 @@ mod tests {
 
     use super::*;
 
-    const HOST: &str = "api.test.example";
+    pub(super) const HOST: &str = "api.test.example";
 
-    struct Host {
-        port: u16,
-        roots: RootCertStore,
+    /// What a person answers a request held inside a connection.
+    pub(super) type Hold = Box<dyn FnMut(&HeldRequest) -> Option<Answer> + Send>;
+
+    pub(super) struct Host {
+        pub(super) port: u16,
+        pub(super) roots: RootCertStore,
         /// Up once a request head holds the real value.
         saw_real: Arc<AtomicBool>,
-        connections: Arc<AtomicUsize>,
+        pub(super) connections: Arc<AtomicUsize>,
+        /// The request line of each request it received.
+        pub(super) lines: Arc<Mutex<Vec<String>>>,
     }
 
     /// A host with a certificate from a root of its own, answering each
     /// request on a connection with the request it received: sized, or chunked
     /// for `/chunked`, or up to its close for `/close`; nothing for `HEAD`.
-    fn echo_host() -> Host {
+    pub(super) fn echo_host() -> Host {
         let saw_real = Arc::new(AtomicBool::new(false));
         let connections = Arc::new(AtomicUsize::new(0));
-        let (saw, count) = (Arc::clone(&saw_real), Arc::clone(&connections));
+        let lines = Arc::new(Mutex::new(Vec::new()));
+        let (saw, count, seen) = (
+            Arc::clone(&saw_real),
+            Arc::clone(&connections),
+            Arc::clone(&lines),
+        );
         let root_key = KeyPair::generate().unwrap();
         let mut root = CertificateParams::default();
         root.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
@@ -1242,12 +1434,16 @@ mod tests {
         std::thread::spawn(move || {
             for stream in listener.incoming() {
                 count.fetch_add(1, Ordering::SeqCst);
-                let (config, saw) = (Arc::clone(&config), Arc::clone(&saw));
+                let (config, saw, seen) =
+                    (Arc::clone(&config), Arc::clone(&saw), Arc::clone(&seen));
                 std::thread::spawn(move || {
                     let conn = ServerConnection::new(config).unwrap();
                     let mut tls = Conn::new(StreamOwned::new(conn, stream.unwrap()));
                     while let Ok(Some(mut head)) = tls.head() {
                         let text = String::from_utf8_lossy(&head).into_owned();
+                        seen.lock()
+                            .unwrap()
+                            .push(text.split("\r\n").next().unwrap_or_default().to_owned());
                         let framing = Request::of(&text).unwrap().framing;
                         // The body after the head, as it came.
                         if relay(framing, &mut tls, &mut head, false).is_err() {
@@ -1300,6 +1496,7 @@ mod tests {
             roots,
             saw_real,
             connections,
+            lines,
         }
     }
 
@@ -1312,20 +1509,29 @@ mod tests {
         host: &str,
         requests: &str,
     ) -> (io::Result<String>, Vec<String>) {
-        let (reply, _, used) = ask_until(interceptor, up, host, requests, None, false);
+        let (reply, _, used) = ask_until(
+            interceptor,
+            up,
+            host,
+            requests,
+            None,
+            false,
+            Box::new(|_| None),
+        );
         (reply, used)
     }
 
     /// As [`ask`], but with `until`, the client reads only until the reply
     /// holds it, then goes away without a word, as a pool closing an idle
     /// connection does; with `hold`, only once the proxy is done.
-    fn ask_until(
+    pub(super) fn ask_until(
         interceptor: &Arc<Interceptor>,
         up: u16,
         host: &str,
         requests: &str,
         until: Option<&str>,
         hold: bool,
+        mut held: Hold,
     ) -> (io::Result<String>, Result<Served>, Vec<String>) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
@@ -1338,7 +1544,7 @@ mod tests {
         let (served, host_owned) = (Arc::clone(interceptor), host.to_owned());
         let serving = std::thread::spawn(move || {
             let mut used = BTreeSet::new();
-            let served = served.serve_noting(&host_owned, tunnel, &mut used);
+            let served = served.serve_noting(&host_owned, tunnel, &mut used, &mut *held);
             (served, used.into_iter().collect::<Vec<_>>())
         });
         let mut roots = RootCertStore::empty();
@@ -1396,7 +1602,7 @@ mod tests {
         let vault = Vault::load(home.path(), ws.path(), dir.path()).unwrap();
         let placeholder = vault.env()[0].1.clone();
         (
-            Arc::new(Interceptor::new(vault, roots, BTreeSet::new()).unwrap()),
+            Arc::new(Interceptor::new(vault, roots, BTreeSet::new(), BTreeSet::new()).unwrap()),
             placeholder,
         )
     }
@@ -1488,8 +1694,9 @@ mod tests {
         let home = TempDir::new().unwrap();
         let (ws, dir) = (TempDir::new().unwrap(), TempDir::new().unwrap());
         let vault = Vault::load(home.path(), ws.path(), dir.path()).unwrap();
-        let interceptor =
-            Arc::new(Interceptor::new(vault, host.roots, [HOST.to_owned()].into()).unwrap());
+        let interceptor = Arc::new(
+            Interceptor::new(vault, host.roots, [HOST.to_owned()].into(), BTreeSet::new()).unwrap(),
+        );
         assert!(interceptor.wants(HOST, 443));
         let send = |line: &str| {
             let sent = format!(
@@ -1727,6 +1934,7 @@ mod tests {
                 &head,
                 Some("**********\r\n\r\n"),
                 hold,
+                Box::new(|_| None),
             );
             assert!(reply.unwrap().starts_with("HTTP/1.1 200 OK"));
             served.unwrap();
@@ -1758,7 +1966,15 @@ mod tests {
             "GET /v1 HTTP/1.1\r\nHost: {HOST}\r\nx-api-key: {p}\r\n\r\n\
              POST /v1 HTTP/1.1\r\nHost: {HOST}\r\nContent-Length: x\r\n\r\n"
         );
-        let (_, served, used) = ask_until(&interceptor, host.port, HOST, &requests, None, false);
+        let (_, served, used) = ask_until(
+            &interceptor,
+            host.port,
+            HOST,
+            &requests,
+            None,
+            false,
+            Box::new(|_| None),
+        );
         assert_eq!(served.unwrap().refused, Some(REFUSED_HEAD));
         assert_eq!(used, ["API_KEY"]);
     }
@@ -1770,7 +1986,15 @@ mod tests {
     fn a_refused_request_ends_its_tunnel_saying_why() {
         let host = echo_host();
         let refused = |interceptor: &Arc<Interceptor>, sent: String| {
-            let (_, served, _) = ask_until(interceptor, host.port, HOST, &sent, None, false);
+            let (_, served, _) = ask_until(
+                interceptor,
+                host.port,
+                HOST,
+                &sent,
+                None,
+                false,
+                Box::new(|_| None),
+            );
             served.unwrap().refused
         };
         let (ws, dir, home) = (
@@ -1780,7 +2004,13 @@ mod tests {
         );
         let vault = Vault::load(home.path(), ws.path(), dir.path()).unwrap();
         let registry = Arc::new(
-            Interceptor::new(vault, host.roots.clone(), [HOST.to_owned()].into()).unwrap(),
+            Interceptor::new(
+                vault,
+                host.roots.clone(),
+                [HOST.to_owned()].into(),
+                BTreeSet::new(),
+            )
+            .unwrap(),
         );
         let close = "Connection: close\r\n\r\n";
         assert_eq!(
@@ -1906,6 +2136,172 @@ mod tests {
         ] {
             assert!(to_path(&head(line), "a.example", 80).is_err(), "{line}");
         }
+    }
+
+    /// Over plain HTTP a git host gets reads alone: a push, or any other
+    /// write, is refused before a byte of it reaches the host, as Kule
+    /// holds those for a person over HTTPS only. To another host it passes.
+    #[test]
+    fn a_push_over_plain_http_is_refused() {
+        let push = "POST /me/proj/git-receive-pack HTTP/1.1\r\nHost: github.com\r\nContent-Length: 4\r\nConnection: close\r\n\r\n0000";
+        for git in [true, false] {
+            let host = TcpListener::bind("127.0.0.1:0").unwrap();
+            let upstream = TcpStream::connect(host.local_addr().unwrap()).unwrap();
+            let (mut at_host, _) = host.accept().unwrap();
+            let proxy = TcpListener::bind("127.0.0.1:0").unwrap();
+            let mut client = TcpStream::connect(proxy.local_addr().unwrap()).unwrap();
+            let (proxy_end, _) = proxy.accept().unwrap();
+            let (head, body) = push.split_at(push.len() - 4);
+            client.write_all(body.as_bytes()).unwrap();
+            let tunnel = lonca_net::Tunnel {
+                client: proxy_end,
+                upstream,
+                early: Vec::new(),
+            };
+            let serving = std::thread::spawn(move || {
+                serve_plain("github.com", 80, head.to_owned(), tunnel, git)
+            });
+            at_host
+                .set_read_timeout(Some(Duration::from_millis(500)))
+                .unwrap();
+            let mut got = Vec::new();
+            let _ = at_host.read_to_end(&mut got);
+            if git {
+                // Checked before waiting on it: passed on, it would wait
+                // for the host's answer.
+                assert!(got.is_empty(), "{}", String::from_utf8_lossy(&got));
+                let ended = serving.join().unwrap();
+                assert!(
+                    matches!(&ended, Err(Ended::Refused(why)) if why.contains("goes over HTTPS alone")),
+                    "{ended:?}"
+                );
+                assert!(got.is_empty(), "{}", String::from_utf8_lossy(&got));
+                let mut reply = String::new();
+                let _ = client.read_to_string(&mut reply);
+                assert!(reply.starts_with("HTTP/1.1 403 Forbidden"), "{reply}");
+            } else {
+                assert!(got.starts_with(b"POST /me/proj/git-receive-pack"));
+                drop(at_host);
+                let _ = serving.join();
+            }
+        }
+    }
+
+    /// Over plain HTTP a git host's reads pass: a fetch's bodiless GET
+    /// reaches the host. The same GET with a body is not a read.
+    #[test]
+    fn a_read_over_plain_http_reaches_a_git_host_and_one_with_a_body_does_not() {
+        let fetch = "GET /me/proj/info/refs?service=git-upload-pack HTTP/1.1\r\nHost: github.com\r\nConnection: close\r\n\r\n";
+        let with_body = "GET /me/proj/info/refs?service=git-upload-pack HTTP/1.1\r\nHost: github.com\r\nContent-Length: 4\r\nConnection: close\r\n\r\n";
+        for (head, body, passes) in [(fetch, "", true), (with_body, "0000", false)] {
+            let host = TcpListener::bind("127.0.0.1:0").unwrap();
+            let upstream = TcpStream::connect(host.local_addr().unwrap()).unwrap();
+            let (mut at_host, _) = host.accept().unwrap();
+            let proxy = TcpListener::bind("127.0.0.1:0").unwrap();
+            let mut client = TcpStream::connect(proxy.local_addr().unwrap()).unwrap();
+            let (proxy_end, _) = proxy.accept().unwrap();
+            client.write_all(body.as_bytes()).unwrap();
+            let tunnel = lonca_net::Tunnel {
+                client: proxy_end,
+                upstream,
+                early: Vec::new(),
+            };
+            let serving = std::thread::spawn(move || {
+                serve_plain("github.com", 80, head.to_owned(), tunnel, true)
+            });
+            at_host
+                .set_read_timeout(Some(Duration::from_millis(500)))
+                .unwrap();
+            let mut got = vec![0u8; 4096];
+            let n = at_host.read(&mut got).unwrap_or(0);
+            let got = String::from_utf8_lossy(&got[..n]).into_owned();
+            if passes {
+                assert!(got.starts_with("GET /me/proj/info/refs"), "{got}");
+                at_host
+                    .write_all(
+                        b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok",
+                    )
+                    .unwrap();
+                drop(at_host);
+                let mut reply = String::new();
+                let _ = client.read_to_string(&mut reply);
+                assert!(reply.starts_with("HTTP/1.1 200 OK"), "{reply}");
+                assert_eq!(serving.join().unwrap(), Ok(()));
+            } else {
+                assert!(got.is_empty(), "{got}");
+                let mut reply = String::new();
+                let _ = client.read_to_string(&mut reply);
+                assert!(reply.starts_with("HTTP/1.1 403 Forbidden"), "{reply}");
+                drop(client);
+                assert!(matches!(serving.join().unwrap(), Err(Ended::Refused(_))));
+            }
+        }
+    }
+
+    /// A refused plain request's client can finish sending what it was
+    /// sending and then read why: Kule reads and drops it rather than close
+    /// with it unread, which resets the connection (and on Windows can drop
+    /// the answer). Once the client is done, so is Kule, at once.
+    #[cfg(unix)]
+    #[test]
+    fn a_refused_plain_request_lets_its_client_finish_sending_and_read_why() {
+        use std::os::fd::AsRawFd;
+        // Under the most Kule reads, over what the sockets' buffers hold.
+        const BODY: usize = 768 * 1024;
+        let host = TcpListener::bind("127.0.0.1:0").unwrap();
+        let upstream = TcpStream::connect(host.local_addr().unwrap()).unwrap();
+        let (_at_host, _) = host.accept().unwrap();
+        let proxy = TcpListener::bind("127.0.0.1:0").unwrap();
+        let mut client = TcpStream::connect(proxy.local_addr().unwrap()).unwrap();
+        // A small, fixed send buffer: the body cannot wait in it whole, so
+        // the client gets to its end only while Kule reads.
+        let small: libc::c_int = 16 * 1024;
+        // SAFETY: a valid socket, and a c_int option of its own size.
+        let set = unsafe {
+            libc::setsockopt(
+                client.as_raw_fd(),
+                libc::SOL_SOCKET,
+                libc::SO_SNDBUF,
+                (&raw const small).cast(),
+                std::mem::size_of::<libc::c_int>() as libc::socklen_t,
+            )
+        };
+        assert_eq!(set, 0, "{}", io::Error::last_os_error());
+        let (proxy_end, _) = proxy.accept().unwrap();
+        let head = format!(
+            "POST /me/proj/git-receive-pack HTTP/1.1\r\nHost: github.com\r\nContent-Length: {BODY}\r\n\r\n"
+        );
+        let tunnel = lonca_net::Tunnel {
+            client: proxy_end,
+            upstream,
+            early: Vec::new(),
+        };
+        let serving = std::thread::spawn(move || serve_plain("github.com", 80, head, tunnel, true));
+        // Bounded: passed on to a host that never reads, it would wait for
+        // good rather than fail.
+        client
+            .set_write_timeout(Some(Duration::from_secs(10)))
+            .unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_secs(10)))
+            .unwrap();
+        let mut writer = client.try_clone().unwrap();
+        let sending = std::thread::spawn(move || writer.write_all(&vec![b'x'; BODY]));
+        let sent = sending.join().unwrap();
+        assert!(sent.is_ok(), "{sent:?}");
+        let mut reply = String::new();
+        let read = client.read_to_string(&mut reply);
+        assert!(read.is_ok(), "{read:?}: {reply}");
+        assert!(reply.starts_with("HTTP/1.1 403 Forbidden"), "{reply}");
+        let closed = Instant::now();
+        drop(client);
+        let ended = serving.join().unwrap();
+        assert!(
+            closed.elapsed() < LINGER_FOR / 2,
+            "{:?} after the client closed",
+            closed.elapsed()
+        );
+        assert!(matches!(ended, Err(Ended::Refused(_))), "{ended:?}");
     }
 
     /// A secret split between two chunks is blanked as one: the body is
@@ -2051,3 +2447,6 @@ mod tests {
         assert!(relay(Framing::Chunked, &mut from, &mut Vec::new(), true).is_err());
     }
 }
+
+#[cfg(test)]
+mod git_tests;

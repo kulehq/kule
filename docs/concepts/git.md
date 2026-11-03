@@ -56,7 +56,10 @@ With the [balanced policy](policy.md):
   your next git command, as you.
 
 Git hosts are not package registries: a connection to `github.com` waits
-for you, because inside TLS a push cannot be told apart from a fetch.
+for you once, and over HTTPS a push then waits for you on its own, for its
+repository, while fetches pass (see
+[Git hosts](network-and-questions.md#git-hosts)). Over SSH Kule cannot
+tell them apart, so approving the connection lets a push through too.
 
 ## What runs by itself protects your terminal too
 

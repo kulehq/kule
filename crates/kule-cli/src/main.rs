@@ -1,3 +1,4 @@
+mod completion;
 mod paint;
 #[cfg(unix)]
 mod relay;
@@ -583,6 +584,12 @@ enum Cmd {
     History { task: String },
     /// Delete a task and its copy. The workspace is not touched.
     Rm { task: String },
+    /// Print the completion script for a shell: subcommands, options and
+    /// their values, and task ids, agents, groups and extensions from
+    /// Kule's home. bash: eval "$(kule completions bash)"; zsh:
+    /// source <(kule completions zsh); fish: kule completions fish >
+    /// ~/.config/fish/completions/kule.fish
+    Completions { shell: completion::Shell },
     /// Run the Kule daemon in the foreground: it owns agent runs and the
     /// questions they wait on, for the app. The app starts it when needed.
     Daemon {
@@ -613,6 +620,44 @@ fn main() -> ExitCode {
     }
 }
 
+/// `kule __complete <shell> -- <words>`: what the shell may offer, one per
+/// line after a first line saying whether they are values or file names.
+/// Words it cannot read give nothing.
+fn complete(args: &[std::ffi::OsString]) {
+    use clap::{CommandFactory, ValueEnum};
+    let [shell, dashes, words @ ..] = args else {
+        return;
+    };
+    let Some(shell) = shell
+        .to_str()
+        .and_then(|s| completion::Shell::from_str(s, false).ok())
+    else {
+        return;
+    };
+    if dashes != "--" {
+        return;
+    }
+    let words: Vec<String> = words
+        .iter()
+        .map(|w| w.to_string_lossy().into_owned())
+        .collect();
+    let offer = completion::offer(Cli::command(), shell, &words);
+    let mut out = String::new();
+    match offer {
+        completion::Offer::Files => out.push_str("files\n"),
+        completion::Offer::Values(values) => {
+            out.push_str("values\n");
+            for (value, about) in values {
+                match (shell, about.is_empty()) {
+                    (completion::Shell::Bash, _) | (_, true) => out.push_str(&format!("{value}\n")),
+                    _ => out.push_str(&format!("{value}\t{about}\n")),
+                }
+            }
+        }
+    }
+    let _ = std::io::stdout().write_all(out.as_bytes());
+}
+
 /// Makes the task's package caches before its sandbox does, saying so
 /// while that takes a while: copying the person's, or waiting for the app,
 /// which began making them as the task was made.
@@ -637,7 +682,19 @@ fn chained(e: &anyhow::Error) -> String {
 }
 
 fn run() -> Result<ExitCode> {
+    // What a shell asks on each TAB: answered before anything else, from
+    // Kule's home alone, and always quietly.
+    let args: Vec<std::ffi::OsString> = std::env::args_os().collect();
+    if args.get(1).is_some_and(|a| a == "__complete") {
+        complete(&args[2..]);
+        return Ok(ExitCode::SUCCESS);
+    }
     let cli = Cli::parse();
+    // The script holds nothing of the home, and making one is no part of it.
+    if let Cmd::Completions { shell } = cli.command {
+        print!("{}", completion::script(shell));
+        return Ok(ExitCode::SUCCESS);
+    }
     let home = match cli.home {
         Some(home) => home,
         None => kule_daemon::default_home().map_err(|e| anyhow!(e))?,
@@ -1513,6 +1570,8 @@ fn run() -> Result<ExitCode> {
             }
             println!("history verified: {} entries, signed", history.len());
         }
+        // Printed before the home is read.
+        Cmd::Completions { .. } => {}
         Cmd::Daemon { idle_secs } => {
             eprintln!("kule: daemon for {}", home.display());
             kule_daemon::run(&home, std::time::Duration::from_secs(idle_secs))
@@ -1765,8 +1824,23 @@ fn connection_lines(log: &[Connection]) -> Vec<String> {
     let mut seen: Vec<(&Connection, usize)> = Vec::new();
     for c in log {
         match seen.iter_mut().find(|(s, _)| {
-            (&s.host, s.port, s.verdict, &s.outcome, &s.secrets, s.told())
-                == (&c.host, c.port, c.verdict, &c.outcome, &c.secrets, c.told())
+            (
+                &s.host,
+                s.port,
+                s.verdict,
+                &s.outcome,
+                &s.secrets,
+                s.told(),
+                &s.held,
+            ) == (
+                &c.host,
+                c.port,
+                c.verdict,
+                &c.outcome,
+                &c.secrets,
+                c.told(),
+                &c.held,
+            )
         }) {
             Some((_, n)) => *n += 1,
             None => seen.push((c, 1)),
@@ -1797,8 +1871,30 @@ fn connection_lines(log: &[Connection]) -> Vec<String> {
         } else {
             format!(" · with {}", paint::cyan(&c.secrets.join(", ")))
         };
+        // A push, or another write, held inside it: what, and what became of it.
+        let held: String = c
+            .held
+            .iter()
+            .map(|h| {
+                let what = match &h.request {
+                    kule_engine::HeldRequest::Push { repo } => {
+                        format!("push to {}", paint::plain_line(repo))
+                    }
+                    kule_engine::HeldRequest::Write => "write".to_owned(),
+                };
+                let how = match h.answer {
+                    None => "refused, the command line asks no one",
+                    Some(kule_engine::Answer::Approved) => "approved",
+                    Some(kule_engine::Answer::Denied) => "denied",
+                    Some(kule_engine::Answer::TimedOut) => "refused, nobody answered in time",
+                    Some(kule_engine::Answer::Withdrawn) => "refused, the run ended first",
+                    Some(kule_engine::Answer::TooMany) => "refused, too many were waiting",
+                };
+                format!(" · {what} {}", paint::red(how))
+            })
+            .collect();
         lines.push(format!(
-            "{} {}:{}{times} · {what}{secrets} {}",
+            "{} {}:{}{times} · {what}{secrets}{held} {}",
             paint::dim("net:"),
             c.host,
             c.port,
@@ -3681,6 +3777,7 @@ mod tests {
             cut: None,
             failed: None,
             refused: None,
+            held: Vec::new(),
         }
     }
 
@@ -3714,5 +3811,31 @@ mod tests {
             "{lines:?}"
         );
         assert!(lines[2].contains("tunneled"), "{lines:?}");
+    }
+
+    /// A push held inside a connection is named on its line, with what
+    /// became of it; two connections holding different pushes stay apart.
+    #[test]
+    fn a_held_push_is_printed_on_its_connections_line() {
+        let held = |repo: &str| {
+            let mut c = connection("cut");
+            c.cut = Some(format!(
+                "Kule refused a request in it: {}",
+                "a push or a write to a git host that was not approved"
+            ));
+            c.held = vec![kule_engine::HeldAnswer {
+                request: kule_engine::HeldRequest::Push { repo: repo.into() },
+                answer: None,
+            }];
+            c
+        };
+        let lines = connection_lines(&[held("me/proj"), held("them/x")]);
+        assert_eq!(lines.len(), 2, "{lines:?}");
+        assert!(
+            lines[0].contains("push to me/proj")
+                && lines[0].contains("the command line asks no one"),
+            "{lines:?}"
+        );
+        assert!(lines[1].contains("push to them/x"), "{lines:?}");
     }
 }

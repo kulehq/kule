@@ -200,10 +200,10 @@ when { resource.kind == "git.ref" && resource.change == "created" && resource.re
 
 // Network: package registries over HTTPS. A model's API is opened by the
 // agent's profile, for its own runs alone: open to every command, it would
-// carry data to anyone's account there. Anything else, git hosts included
-// (a push cannot be told apart from a fetch inside TLS), waits for a
-// person. Go's module proxy is not here: it fetches from whatever address
-// a request names.
+// carry data to anyone's account there. Anything else, git hosts included,
+// waits for a person; over HTTPS a push to a git host then waits for a
+// person once more, on its own. Go's module proxy is not here: it fetches
+// from whatever address a request names.
 @id("package-registries")
 permit (principal, action == Kule::Action::"auto", resource)
 when {

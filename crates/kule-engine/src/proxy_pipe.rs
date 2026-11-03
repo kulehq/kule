@@ -22,7 +22,7 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
-use crate::approvals::{Answer, Inside};
+use crate::approvals::{Answer, HeldRequest, Inside};
 use crate::error::{Error, Result};
 use crate::network::Connection;
 use crate::proxy_core::{self, Ask, Log, ProxyConfig};
@@ -56,6 +56,9 @@ pub(crate) enum FromProxy {
         rules: Vec<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         inside: Option<Inside>,
+        /// A request inside a connection, held on its own.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        held: Option<HeldRequest>,
     },
     /// A connection that ended, for the task's log.
     Logged { connection: Connection },
@@ -223,7 +226,14 @@ struct PipeAsk {
 }
 
 impl Ask for PipeAsk {
-    fn ask(&self, host: &str, port: u16, rules: &[String], inside: Option<Inside>) -> Answer {
+    fn ask(
+        &self,
+        host: &str,
+        port: u16,
+        rules: &[String],
+        inside: Option<Inside>,
+        held: Option<HeldRequest>,
+    ) -> Answer {
         let id = self.questions.open();
         send(
             &self.output,
@@ -233,6 +243,7 @@ impl Ask for PipeAsk {
                 port,
                 rules: rules.to_vec(),
                 inside,
+                held,
             },
         );
         self.questions.wait(id)
@@ -395,6 +406,7 @@ impl ChildProxy {
                             port,
                             rules,
                             inside,
+                            held,
                         } => {
                             // Each question waits on a thread of its own, as
                             // each connection does in the proxy.
@@ -402,7 +414,7 @@ impl ChildProxy {
                             let ask = ask.clone();
                             std::thread::spawn(move || {
                                 let answer = match &ask {
-                                    Some(ask) => ask.ask(&host, port, &rules, inside),
+                                    Some(ask) => ask.ask(&host, port, &rules, inside, held),
                                     None => Answer::Withdrawn,
                                 };
                                 send(&stdin, &ToProxy::Answer { id, answer });

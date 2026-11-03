@@ -149,6 +149,20 @@ const SWITCHES: [Switch; 2] = [
     },
 ];
 
+/// The settings `kule limits` takes, each with what it limits, for
+/// completion.
+pub(crate) fn setting_keys() -> Vec<(&'static str, String)> {
+    FIELDS
+        .iter()
+        .map(|f| (f.key, format!("{} ({})", f.name, f.unit)))
+        .chain(
+            SWITCHES
+                .iter()
+                .map(|s| (s.key, format!("{}: on or off", s.name))),
+        )
+        .collect()
+}
+
 fn switch_text(switch: &Switch, on: bool) -> &'static str {
     if on { switch.on } else { switch.off }
 }

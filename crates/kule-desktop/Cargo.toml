@@ -35,6 +35,8 @@ objc2-core-text = { version = "0.3.2", default-features = false, features = ["st
 
 [dev-dependencies]
 tempfile.workspace = true
+# Its mock runtime: the app's side of the daemon, run without a window.
+tauri = { version = "2.12.4", features = ["test"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2.190"

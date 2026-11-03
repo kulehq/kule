@@ -427,6 +427,9 @@ pub enum RunEvent {
         question: Option<u64>,
         host: String,
         port: u16,
+        /// The request it was about, when one was held inside a connection.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        held: Option<kule_engine::HeldRequest>,
         answer: Answer,
     },
     /// A connection the person approved did not go through as approved:
@@ -712,6 +715,7 @@ impl Service {
                     question: settled.question,
                     host: settled.host.clone(),
                     port: settled.port,
+                    held: settled.held.clone(),
                     answer: settled.answer,
                 },
             );
@@ -843,9 +847,17 @@ impl Service {
     }
 
     /// [`Service::answer`]; an approval with `remember` lets the host and
-    /// port through on the task's folder from now on.
+    /// port through on the task's folder from now on. A request held inside
+    /// a connection (a push, another write to a git host) is approved for
+    /// its run alone: remembering one is refused, and it stays unanswered.
     pub fn answer_remembering(&self, id: u64, approve: bool, remember: bool) -> Result<()> {
         let question = self.approvals.waiting().into_iter().find(|q| q.id == id);
+        if remember && question.as_ref().is_some_and(|q| q.held.is_some()) {
+            return Err(
+                "a push or a write held inside a connection is approved for its run alone; answer it without remembering"
+                    .to_owned(),
+            );
+        }
         self.answer(id, approve)?;
         if let (true, true, Some(q)) = (approve, remember, question) {
             let task = self.open(&q.task)?;

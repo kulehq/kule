@@ -16,7 +16,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
-use crate::approvals::{Answer, Inside, MAX_WAITING};
+use crate::approvals::{Answer, HeldAnswer, HeldRequest, Inside, MAX_WAITING};
 use crate::error::Result;
 use crate::network::{Connection, normal_host, public_ip};
 use crate::policy::{Judgement, Policy, Verdict};
@@ -36,10 +36,18 @@ pub(crate) struct ProxyConfig {
     pub asks: bool,
 }
 
-/// Where the proxy puts a connection the policy leaves to a person, and
-/// waits for the answer.
+/// Where the proxy puts a connection the policy leaves to a person, or a
+/// request inside one it holds on its own (`held`), and waits for the
+/// answer.
 pub(crate) trait Ask: Send + Sync + 'static {
-    fn ask(&self, host: &str, port: u16, rules: &[String], inside: Option<Inside>) -> Answer;
+    fn ask(
+        &self,
+        host: &str,
+        port: u16,
+        rules: &[String],
+        inside: Option<Inside>,
+        held: Option<HeldRequest>,
+    ) -> Answer;
 }
 
 /// Where the proxy reports how a connection ended.
@@ -69,7 +77,11 @@ pub(crate) fn serve(
 ) -> Result<(lonca_net::Server, String)> {
     let policy = Policy::from_parts(&config.policy)?;
     let read_only = config.read_only.into_iter().collect();
-    let interceptor = Interceptor::new(config.vault, crate::tls::web_roots(), read_only)?;
+    let git = crate::git_http::GIT_HOSTS
+        .iter()
+        .map(|h| (*h).to_owned())
+        .collect();
+    let interceptor = Interceptor::new(config.vault, crate::tls::web_roots(), read_only, git)?;
     let ca_pem = interceptor.ca_pem().to_owned();
     let gate = Arc::new(Gate {
         policy,
@@ -110,6 +122,8 @@ struct Pending {
     failed: Option<String>,
     /// Why Kule refused it before it connected, if it did.
     refused: Option<String>,
+    /// Requests in it held for a person, and their answers.
+    held: Vec<HeldAnswer>,
 }
 
 impl lonca_net::Gate for Gate {
@@ -132,6 +146,7 @@ impl lonca_net::Gate for Gate {
                     self.interceptor
                         .as_ref()
                         .and_then(|i| i.inside(&host, request.port)),
+                    None,
                 ),
             ),
             _ => None,
@@ -184,6 +199,7 @@ impl lonca_net::Gate for Gate {
                 cut: None,
                 failed: None,
                 refused,
+                held: Vec::new(),
             },
         );
         lonca_net::Verdict {
@@ -223,7 +239,14 @@ impl lonca_net::Gate for Gate {
         // passed on half filled.
         // What went in before an error went out all the same.
         let mut used = std::collections::BTreeSet::new();
-        let served = interceptor.serve_noting(&host, tunnel, &mut used);
+        // A push, or another write to a git host, put to the person on its
+        // own; refused when nobody is there to ask.
+        let mut held: Vec<HeldAnswer> = Vec::new();
+        let mut hold = |asked: &HeldRequest| self.hold(&host, request.port, asked, &mut held);
+        let served = interceptor.serve_noting(&host, tunnel, &mut used, &mut hold);
+        if let Some(pending) = lock(&self.pending).get_mut(&request.peer) {
+            pending.held = held;
+        }
         self.record_served(request, served, used);
         None
     }
@@ -244,7 +267,8 @@ impl lonca_net::Gate for Gate {
         }
         // Every request on the connection is read, and each must be for
         // the host it was let through to.
-        match crate::tls::serve_plain(&host, request.port, head, tunnel) {
+        let git = crate::git_http::is_git_host(&host);
+        match crate::tls::serve_plain(&host, request.port, head, tunnel, git) {
             Ok(()) => {}
             Err(crate::tls::Ended::Refused(why)) => self.note_cut(request, why),
             Err(crate::tls::Ended::Failed(why)) => self.note_failed(request, why),
@@ -260,6 +284,7 @@ impl lonca_net::Gate for Gate {
             cut,
             failed,
             refused,
+            held,
         }) = lock(&self.pending).remove(&request.peer)
         else {
             return;
@@ -284,12 +309,37 @@ impl lonca_net::Gate for Gate {
             cut,
             failed,
             refused,
+            held,
         };
         self.log.record(record);
     }
 }
 
 impl Gate {
+    /// Puts `asked`, a request held inside a connection to `host`, to the
+    /// person, and notes it in `held` with its answer, once: `None` when
+    /// nobody is there to ask.
+    fn hold(
+        &self,
+        host: &str,
+        port: u16,
+        asked: &HeldRequest,
+        held: &mut Vec<HeldAnswer>,
+    ) -> Option<Answer> {
+        let answer = self
+            .asker
+            .as_ref()
+            .map(|a| a.ask(host, port, &[], None, Some(asked.clone())));
+        let noted = HeldAnswer {
+            request: asked.clone(),
+            answer,
+        };
+        if !held.contains(&noted) {
+            held.push(noted);
+        }
+        answer
+    }
+
     fn note_cut(&self, request: &lonca_net::Request<'_>, why: String) {
         if let Some(pending) = lock(&self.pending).get_mut(&request.peer) {
             pending.cut = Some(why);
@@ -459,6 +509,77 @@ mod tests {
     use super::*;
     use crate::Error;
 
+    /// A host, a port and the request held there, as asked.
+    type Asked = (String, u16, Option<HeldRequest>);
+
+    /// Answers `answer`, noting what it was asked.
+    struct Person {
+        answer: Answer,
+        asked: Arc<Mutex<Vec<Asked>>>,
+    }
+
+    impl Ask for Person {
+        fn ask(
+            &self,
+            host: &str,
+            port: u16,
+            _: &[String],
+            inside: Option<Inside>,
+            held: Option<HeldRequest>,
+        ) -> Answer {
+            assert!(inside.is_none());
+            lock(&self.asked).push((host.to_owned(), port, held));
+            self.answer
+        }
+    }
+
+    /// A request held inside a connection goes to the person as that
+    /// request, each time it is sent, and is noted once with its answer;
+    /// with nobody to ask it is refused unasked, and noted so.
+    #[test]
+    fn a_held_request_is_put_to_the_person_and_noted_once() {
+        let asked = Arc::new(Mutex::new(Vec::new()));
+        let gate = |asker: Option<Box<dyn Ask>>| Gate {
+            policy: Policy::from_texts(crate::DEFAULT_POLICY, None).unwrap(),
+            log: Box::new(FileLog(Mutex::new(tempfile::tempfile().unwrap()))),
+            pending: Mutex::new(HashMap::new()),
+            asker,
+            interceptor: None,
+        };
+        let push = HeldRequest::Push {
+            repo: "me/proj".into(),
+        };
+        let asking = gate(Some(Box::new(Person {
+            answer: Answer::Approved,
+            asked: Arc::clone(&asked),
+        })));
+        let mut held = Vec::new();
+        for _ in 0..2 {
+            let answer = asking.hold("github.com", 443, &push, &mut held);
+            assert_eq!(answer, Some(Answer::Approved));
+        }
+        assert_eq!(
+            *lock(&asked),
+            vec![("github.com".to_owned(), 443, Some(push.clone())); 2]
+        );
+        assert_eq!(
+            held,
+            [HeldAnswer {
+                request: push.clone(),
+                answer: Some(Answer::Approved)
+            }]
+        );
+        let mut held = Vec::new();
+        assert_eq!(gate(None).hold("github.com", 443, &push, &mut held), None);
+        assert_eq!(
+            held,
+            [HeldAnswer {
+                request: push,
+                answer: None
+            }]
+        );
+    }
+
     /// A tunnel Kule looked into is logged as what became of it: cut, with
     /// why, when Kule refused a request in it; failed, with why, when it
     /// ended in an error; tunneled only when every request went through.
@@ -501,6 +622,7 @@ mod tests {
                     cut: None,
                     failed: None,
                     refused: None,
+                    held: Vec::new(),
                 },
             );
             gate.record_served(&request, served, ["API_KEY".to_owned()].into());
@@ -589,6 +711,7 @@ mod tests {
                     cut: None,
                     failed: None,
                     refused: None,
+                    held: Vec::new(),
                 },
             );
             let tunnel = lonca_net::Tunnel {
@@ -661,6 +784,7 @@ mod tests {
                     cut: None,
                     failed: None,
                     refused: None,
+                    held: Vec::new(),
                 },
             );
             let tunnel = lonca_net::Tunnel {

@@ -18,7 +18,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-use crate::approvals::{AfterApproval, Answer, Approvals, Inside};
+use crate::approvals::{AfterApproval, Answer, Approvals, HeldAnswer, HeldRequest, Inside};
 use crate::error::{Error, IoContext, Result};
 use crate::policy::{Policy, Verdict};
 use crate::proxy_core::{self, Ask, FileLog, Log, ProxyConfig};
@@ -56,9 +56,22 @@ pub struct Connection {
     /// before it connected: the address the host resolves to.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub refused: Option<String>,
+    /// Requests inside it Kule held for a person on their own (a push to a
+    /// git host, another write to one), and how each was decided.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub held: Vec<HeldAnswer>,
 }
 
 impl Connection {
+    /// Whether Kule cut it only for a request held inside it that a person
+    /// denied: their own answer, no news to them.
+    pub(crate) fn cut_by_their_answer(&self) -> bool {
+        self.cut
+            .as_deref()
+            .is_some_and(|c| c.ends_with(crate::tls::REFUSED_HELD))
+            && self.held.iter().any(|h| h.answer == Some(Answer::Denied))
+    }
+
     /// How it ended, in Kule's words, for one that did not go through as
     /// asked; `None` for one that did, or that the policy refused (its
     /// rules say why).
@@ -111,7 +124,14 @@ struct Asker {
 }
 
 impl proxy_core::Ask for Asker {
-    fn ask(&self, host: &str, port: u16, rules: &[String], inside: Option<Inside>) -> Answer {
+    fn ask(
+        &self,
+        host: &str,
+        port: u16,
+        rules: &[String],
+        inside: Option<Inside>,
+        held: Option<HeldRequest>,
+    ) -> Answer {
         self.approvals.ask(
             self.source,
             &self.task,
@@ -119,6 +139,7 @@ impl proxy_core::Ask for Asker {
             port,
             rules,
             inside,
+            held,
             self.timeout,
         )
     }
@@ -133,8 +154,11 @@ struct Recorder {
 
 impl proxy_core::Log for Recorder {
     fn record(&self, record: Connection) {
+        // A push the person denied themselves, after approving the
+        // connection, is no news to them.
+        let theirs = record.cut_by_their_answer();
         let after = match (&self.asker, record.answer, record.told()) {
-            (Some(asker), Some(Answer::Approved), Some(why)) => Some(AfterApproval {
+            (Some(asker), Some(Answer::Approved), Some(why)) if !theirs => Some(AfterApproval {
                 task: asker.task.clone(),
                 host: normal_host(&record.host),
                 port: record.port,
@@ -492,6 +516,101 @@ fn public_v4(ip: Ipv4Addr) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A connection cut for a push the person denied is theirs; one cut for
+    /// a push nobody answered, or for anything else, is news to tell them.
+    #[test]
+    fn a_cut_for_a_push_the_person_denied_is_their_own() {
+        let push = HeldRequest::Push {
+            repo: "me/proj".into(),
+        };
+        let connection = |cut: &str, answer: Option<Answer>| Connection {
+            time_unix: 0,
+            host: "github.com".into(),
+            port: 443,
+            verdict: Verdict::Ask,
+            rules: Vec::new(),
+            outcome: "cut".into(),
+            answer: Some(Answer::Approved),
+            secrets: Vec::new(),
+            cut: Some(format!("Kule refused a request in it: {cut}")),
+            failed: None,
+            refused: None,
+            held: vec![HeldAnswer {
+                request: push.clone(),
+                answer,
+            }],
+        };
+        assert!(connection(crate::tls::REFUSED_HELD, Some(Answer::Denied)).cut_by_their_answer());
+        assert!(
+            !connection(crate::tls::REFUSED_HELD, Some(Answer::TimedOut)).cut_by_their_answer()
+        );
+        assert!(!connection(crate::tls::REFUSED_HELD, None).cut_by_their_answer());
+        assert!(!connection(crate::tls::REFUSED_GIT, Some(Answer::Denied)).cut_by_their_answer());
+        // Logged with the request and its answer side by side.
+        let line = serde_json::to_value(connection(crate::tls::REFUSED_HELD, Some(Answer::Denied)))
+            .unwrap();
+        assert_eq!(
+            line["held"],
+            serde_json::json!([{"kind": "push", "repo": "me/proj", "answer": "denied"}])
+        );
+    }
+
+    /// The task's log keeps every approved connection that did not go
+    /// through as approved; the person is told of it unless it was cut for
+    /// a push they denied themselves.
+    #[test]
+    fn an_approved_connection_cut_for_a_push_they_denied_is_logged_untold() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("network.jsonl");
+        let approvals = Approvals::new();
+        let told = std::sync::Arc::new(Mutex::new(Vec::new()));
+        let into = std::sync::Arc::clone(&told);
+        approvals.on_after_approval(move |a| into.lock().unwrap().push(a.clone()));
+        let recorder = Recorder {
+            log: FileLog(Mutex::new(File::create(&path).unwrap())),
+            asker: Some(Asker {
+                approvals: approvals.clone(),
+                source: 1,
+                task: "t1".into(),
+                timeout: Duration::from_secs(1),
+            }),
+        };
+        let cut = |answer: Answer| Connection {
+            time_unix: 0,
+            host: "github.com".into(),
+            port: 443,
+            verdict: Verdict::Ask,
+            rules: Vec::new(),
+            outcome: "cut".into(),
+            answer: Some(Answer::Approved),
+            secrets: Vec::new(),
+            cut: Some(format!(
+                "Kule refused a request in it: {}",
+                crate::tls::REFUSED_HELD
+            )),
+            failed: None,
+            refused: None,
+            held: vec![HeldAnswer {
+                request: HeldRequest::Push {
+                    repo: "me/proj".into(),
+                },
+                answer: Some(answer),
+            }],
+        };
+        recorder.record(cut(Answer::Denied));
+        assert!(
+            told.lock().unwrap().is_empty(),
+            "{:?}",
+            told.lock().unwrap()
+        );
+        recorder.record(cut(Answer::TimedOut));
+        let told = told.lock().unwrap().clone();
+        assert_eq!(told.len(), 1, "{told:?}");
+        assert_eq!((told[0].task.as_str(), told[0].port), ("t1", 443));
+        let logged = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(logged.lines().count(), 2, "{logged}");
+    }
 
     #[test]
     fn addresses_on_this_computer_or_its_network_are_not_public() {

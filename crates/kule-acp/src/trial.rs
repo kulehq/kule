@@ -344,6 +344,7 @@ mod tests {
             cut: None,
             failed: None,
             refused: None,
+            held: Vec::new(),
         }
     }
 

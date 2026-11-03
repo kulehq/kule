@@ -162,6 +162,31 @@ TASK=$(kule new ~/code/app | awk '{print $2}')
 | --- | --- |
 | [`kule daemon`](daemon.md) | Run the background service the app talks to. The app starts it for you. |
 
+## Shell completion
+
+`kule completions bash|zsh|fish` prints a completion script. Turn it on
+where your shell loads it from:
+
+```sh
+# bash: in ~/.bashrc
+eval "$(kule completions bash)"
+# zsh: in ~/.zshrc, after compinit
+source <(kule completions zsh)
+# fish: once
+kule completions fish > ~/.config/fish/completions/kule.fish
+```
+
+TAB then completes subcommands, options and their values (`kule limits
+memory=`, `--group`, `kule completions zsh`), and the task ids, agents,
+group ids and extension ids in Kule's home; zsh and fish show each task's
+name beside its id. Kule's installers never write to your shell's files:
+you add the line yourself.
+
+The script holds nothing of your home: on each TAB it calls `kule` again,
+which only reads Kule's home. It starts no daemon, no agent and no network
+call, never makes the home, and prints no secret or path. A home it cannot
+read gives no completions, without an error.
+
 ## Scripting with kule
 
 **Exit codes.** Kule uses a small, fixed set:

@@ -4,9 +4,9 @@
 
 use std::collections::HashSet;
 
-use kule_engine::{Answer, BudgetScope, Money, Question};
+use kule_engine::{Answer, BudgetScope, HeldRequest, Money, Question};
 
-use crate::service::{SharedBudget, TaskView};
+use crate::service::{RunEvent, SharedBudget, TaskView};
 
 /// One thing to tell.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -42,7 +42,20 @@ impl Alerts {
             .filter(|q| self.asked.insert(q.id))
             .map(|q| Alert {
                 title: format!("Task {} waits for you", q.task),
-                body: format!("Its agent wants to reach {}:{}.", q.host, q.port),
+                body: match &q.held {
+                    Some(HeldRequest::Push { repo }) => {
+                        format!(
+                            "Its agent wants to push to {}/{}.",
+                            plain(&q.host),
+                            plain(repo)
+                        )
+                    }
+                    Some(HeldRequest::Write) => format!(
+                        "Its agent wants to write to {} (not a fetch or a push).",
+                        plain(&q.host)
+                    ),
+                    None => format!("Its agent wants to reach {}:{}.", q.host, q.port),
+                },
             })
             .collect()
     }
@@ -50,16 +63,33 @@ impl Alerts {
     /// A connection of task `task`'s run that Kule refused without the
     /// person answering it: nobody did in time, the run ended first, or too
     /// many were waiting. `None` for the person's own answer.
-    pub fn answered(&self, task: &str, host: &str, port: u16, answer: Answer) -> Option<Alert> {
+    pub fn answered(
+        &self,
+        task: &str,
+        host: &str,
+        port: u16,
+        held: Option<&HeldRequest>,
+        answer: Answer,
+    ) -> Option<Alert> {
         let why = match answer {
             Answer::Approved | Answer::Denied => return None,
             Answer::TimedOut => "nobody answered in time",
             Answer::Withdrawn => "the run ended before anyone answered",
             Answer::TooMany => "too many of its questions were waiting already",
         };
-        Some(Alert {
-            title: format!("Task {task}: Kule refused a connection"),
-            body: format!("{}:{port}, as {why}.", plain(host)),
+        Some(match held {
+            Some(HeldRequest::Push { repo }) => Alert {
+                title: format!("Task {task}: Kule refused a push"),
+                body: format!("To {}/{}, as {why}.", plain(host), plain(repo)),
+            },
+            Some(HeldRequest::Write) => Alert {
+                title: format!("Task {task}: Kule refused a write"),
+                body: format!("To {}, as {why}.", plain(host)),
+            },
+            None => Alert {
+                title: format!("Task {task}: Kule refused a connection"),
+                body: format!("{}:{port}, as {why}.", plain(host)),
+            },
         })
     }
 
@@ -72,6 +102,28 @@ impl Alerts {
                 .chars()
                 .take(200)
                 .collect(),
+        }
+    }
+
+    /// What an event of task `task`'s run tells: that it is over, a
+    /// connection Kule refused unanswered, one approved that ended.
+    pub fn run(&self, task: &str, event: &RunEvent) -> Vec<Alert> {
+        match event {
+            RunEvent::Finished { error, .. } => vec![self.finished(task, error.as_deref())],
+            RunEvent::Answered {
+                host,
+                port,
+                held,
+                answer,
+                ..
+            } => self
+                .answered(task, host, *port, held.as_ref(), *answer)
+                .into_iter()
+                .collect(),
+            RunEvent::AfterApproval { host, port, why } => {
+                vec![self.after_approval(task, host, *port, why)]
+            }
+            _ => Vec::new(),
         }
     }
 
@@ -360,9 +412,23 @@ mod tests {
             asked_unix: 0,
             deadline_unix: 0,
             inside: None,
+            held: None,
+            push_unseen: false,
         };
         assert_eq!(alerts.questions(std::slice::from_ref(&q)).len(), 1);
-        assert!(alerts.questions(&[q]).is_empty());
+        assert!(alerts.questions(std::slice::from_ref(&q)).is_empty());
+        // A push held inside a connection is told as one, for its repository.
+        let push = Question {
+            id: 8,
+            held: Some(HeldRequest::Push {
+                repo: "me/proj".into(),
+            }),
+            ..q
+        };
+        assert_eq!(
+            alerts.questions(&[push])[0].body,
+            "Its agent wants to push to example.com/me/proj."
+        );
     }
 
     /// What Kule refused without the person's answer is told, saying why;
@@ -370,7 +436,7 @@ mod tests {
     #[test]
     fn a_connection_kule_refused_unanswered_is_told_with_why() {
         let alerts = Alerts::new();
-        let told = |answer| alerts.answered("a", "example.com", 443, answer);
+        let told = |answer| alerts.answered("a", "example.com", 443, None, answer);
         assert_eq!(told(Answer::Approved), None);
         assert_eq!(told(Answer::Denied), None);
         for (answer, why) in [
@@ -385,8 +451,70 @@ mod tests {
                 "{alert:?}"
             );
         }
+        let push = HeldRequest::Push {
+            repo: "me/proj".into(),
+        };
+        let held = alerts
+            .answered("a", "example.com", 443, Some(&push), Answer::TimedOut)
+            .unwrap();
+        assert_eq!(held.title, "Task a: Kule refused a push");
+        assert_eq!(
+            held.body,
+            "To example.com/me/proj, as nobody answered in time."
+        );
+        assert_eq!(
+            alerts.answered("a", "example.com", 443, Some(&push), Answer::Denied),
+            None
+        );
         let cut = alerts.after_approval("a", "example.com", 443, "cut by Kule: another host");
         assert!(cut.body.contains("cut by Kule: another host"), "{cut:?}");
+    }
+
+    /// A run's events that tell something: its end, what Kule refused
+    /// unanswered (a held push with its repository), an approved connection
+    /// that ended. The rest tell nothing.
+    #[test]
+    fn a_run_s_events_tell_its_end_and_its_connections() {
+        let alerts = Alerts::new();
+        let finished = RunEvent::Finished {
+            error: None,
+            denials: Vec::new(),
+            unreported: false,
+            incomplete: false,
+            lost: None,
+            notes: Vec::new(),
+        };
+        assert_eq!(alerts.run("a", &finished), [alerts.finished("a", None)]);
+        let answered = |answer| RunEvent::Answered {
+            question: Some(1),
+            host: "github.com".into(),
+            port: 443,
+            held: Some(HeldRequest::Push {
+                repo: "me/proj".into(),
+            }),
+            answer,
+        };
+        let told = alerts.run("a", &answered(Answer::TimedOut));
+        assert_eq!(told.len(), 1, "{told:?}");
+        assert_eq!(told[0].title, "Task a: Kule refused a push");
+        assert_eq!(
+            told[0].body,
+            "To github.com/me/proj, as nobody answered in time."
+        );
+        assert_eq!(alerts.run("a", &answered(Answer::Denied)), []);
+        let after = RunEvent::AfterApproval {
+            host: "example.com".into(),
+            port: 443,
+            why: "cut by Kule".into(),
+        };
+        assert_eq!(
+            alerts.run("a", &after),
+            [alerts.after_approval("a", "example.com", 443, "cut by Kule")]
+        );
+        let quiet = RunEvent::Preparing {
+            text: "copying".into(),
+        };
+        assert_eq!(alerts.run("a", &quiet), []);
     }
 
     #[test]

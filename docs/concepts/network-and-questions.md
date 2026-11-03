@@ -21,7 +21,9 @@ files (the effect kind `net.connect`, with a host and a port):
 | The agent's own model API, while that agent runs | **pass** |
 | Anything else, git hosts included | **ask** |
 
-Git hosts ask because, inside TLS, a push cannot be told apart from a fetch.
+A git host asks once, for the connection. Over HTTPS Kule then reads what
+goes to it: fetches, clones and downloads pass, and a push waits for you
+on its own, for its repository (see [Git hosts](#git-hosts)).
 
 Every connection lands in the task's `network.jsonl` and is printed after a
 command:
@@ -70,9 +72,12 @@ The card also says what approving lets through:
   only state the rule: if the hello asks for another host or hides its
   name, Kule cuts the connection after your approval.
 - **Looked into.** The host is one Kule fills a secret for (the card names
-  the secrets, as in "fills STRIPE_KEY into its requests") or a package
-  registry it holds to reads. An approval never adds a host to the ones
-  Kule looks into.
+  the secrets, as in "fills STRIPE_KEY into its requests"), a package
+  registry it holds to reads, or a git host, where it lets fetches and
+  reads through and holds a push or any other write for you on its own.
+  An approval never adds a host to the ones Kule looks into.
+- **A git host Kule cannot see into.** Over SSH (port 22), say: the card
+  adds that approving lets a push through as well as a fetch.
 
 Once answered, the card becomes a line in the run, where it was asked:
 "You approved api.example:443". If Kule then cuts the connection, or refuses
@@ -103,6 +108,54 @@ command line asks no one`).
 
 Remembered hosts are listed by [`kule rules`](../cli/rules.md) and in
 *Settings → Rules*, where you can forget one.
+
+## Git hosts
+
+Kule reads the requests a task sends over HTTPS to these git hosts:
+`github.com`, `gist.github.com`, `gitlab.com`, `bitbucket.org`,
+`codeberg.org`, `gitea.com` and `dev.azure.com`. The connection asks once,
+as any other host does. Inside it:
+
+| Request | What Kule does |
+| --- | --- |
+| A fetch or a clone (`git-upload-pack`), and any other read: `GET`, `HEAD` or `OPTIONS` without a body (release downloads, raw files) | **Passes.** |
+| An LFS download (`info/lfs/objects/batch` with `"operation": "download"`) | **Passes.** |
+| A push (`git-receive-pack`, its `info/refs` included), an LFS upload, LFS locks | **Waits for you**, as a push to that repository. |
+| Any other write (`POST`, `PUT`, `PATCH`, `DELETE`, a read with a body): an API call, say | **Waits for you**, as a write to that host. |
+| A request Kule could read two ways, or that names a repository it cannot show plainly | **Refused**, without asking. |
+
+A push waits whether the client asks for the repository's refs first or
+posts its pack straight away. The card says **The agent wants to push to
+github.com/you/project**. Approving lets this run push to that repository
+alone, until it ends: a push to any other repository is asked about on its
+own, and writes other than pushes are asked about once per host. A push
+or a write is never remembered: its card has no **Approve and remember**.
+Denied, or unanswered, the push gets `403` and the reason, and the
+connection is logged as `cut` with `held` saying what was asked and how it
+was answered:
+
+```json
+{"host":"github.com","port":443,"outcome":"cut","answer":"approved",
+ "cut":"Kule refused a request in it: a push or a write to a git host that was not approved",
+ "held":[{"kind":"push","repo":"you/project","answer":"denied"}]}
+```
+
+A repository is shown as its path on the host, and only one made of
+letters, digits, `-._~` and single slashes is put to you: a path with an
+escape, a space, a hidden character or a `..` part is refused, so that one
+repository cannot look like another on the card.
+
+- **SSH** (port 22): Kule cannot see inside, so the connection stays one
+  decision, and its card says a push could go over it.
+- **Plain HTTP** (port 80) to a git host gets reads alone: a push or any
+  other write is refused, as Kule holds those over HTTPS only.
+- **From the command line**, nobody is there to ask, so a push is refused
+  (`a push to … waits for a person, and no one is there to ask`), even
+  where a rule lets the connection itself through.
+- Another git host (your company's GitLab, say) is not on the list: its
+  connection is one decision, as before, and a push goes with it.
+- `api.github.com` is a host of its own: approving it lets the GitHub API,
+  and so writes through it, pass.
 
 ## Shutting or opening the network
 
@@ -146,6 +199,8 @@ connection is logged as `cut`, with `Kule refused a request in it: <why>`.
 The why is one of these, in Kule's words, never the request's:
 
 - `a write to a host commands may only read from`
+- `a push or a write to a git host that was not approved`
+- `a request to a git host Kule could not read one way only`
 - `a credential Kule does not hold for this host`
 - `a body Kule checks whole that was chunked or over 1 MiB`
 - `a request Kule could not read one way only, or for another host`
@@ -163,7 +218,10 @@ These are listed in [Platforms](../platforms.md) too:
   one. pip 24.2 and later works with `--use-deprecated=legacy-certs`. Go
   is told to use the roots `SSL_CERT_FILE` names.
 - NuGet's and Maven's tools on macOS trust the system's roots alone, so
-  their registries pass through unseen, as Go's module proxy does. JVMs
+  their registries pass through unseen, as Go's module proxy does. Git
+  hosts are looked into for every tool: one that trusts the system's
+  roots alone (.NET, a JVM, on macOS) cannot reach them over HTTPS in a
+  task. JVMs
   are pointed at the proxy with `JAVA_TOOL_OPTIONS`, since Java reads none
   of the `*_PROXY` variables.
 - On Linux, network rules need Linux 6.7 or later.

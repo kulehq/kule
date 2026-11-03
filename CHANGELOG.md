@@ -11,6 +11,33 @@
   provenance, runs it once before installing it, and puts it in
   `~/.local/bin` and on `PATH`. Nothing is installed when a check fails;
   `KULE_REQUIRE_ATTESTATION=1` makes the provenance check required.
+- A push to a git host waits for you on its own, apart from fetches
+  (#50). Over HTTPS Kule reads what a task sends to `github.com`,
+  `gist.github.com`, `gitlab.com`, `bitbucket.org`, `codeberg.org`,
+  `gitea.com` and `dev.azure.com`: once the connection is approved,
+  fetches, clones, downloads and LFS downloads pass, while a push (its
+  `info/refs` included, and LFS uploads) waits for you as a push to that
+  repository, and any other write (an API call) as a write to that host.
+  An approval holds for that repository, or that host's writes, until the
+  run ends, and is never remembered. Unanswered, denied, or with nobody to
+  ask (the command line), the push gets `403` and the reason, and
+  `network.jsonl` says what was held and how it was answered. A request
+  Kule could read two ways, or a repository path it cannot show plainly,
+  is refused. Over SSH the connection stays one decision, and its card
+  says a push could go over it; over plain HTTP a git host gets reads
+  alone.
+- Shell completion (#29): `kule completions bash|zsh|fish` prints a
+  script that completes subcommands, options and their values, and the
+  task ids (with their names in zsh and fish), agents, group ids and
+  extension ids in Kule's home. On each TAB it only reads Kule's home:
+  no daemon, agent or network call, the home never made, nothing printed
+  that is not plain. A home it cannot read gives no completions, quietly.
+
+### Changed
+
+- Git hosts are looked into on HTTPS for every tool: one that trusts the
+  system's roots alone (.NET, a JVM, on macOS) can no longer reach them in
+  a task.
 
 ## 0.2.0-preview.21
 
