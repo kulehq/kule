@@ -169,6 +169,31 @@ TASK=$(kule new ~/code/app | awk '{print $2}')
 | --- | --- |
 | [`kule daemon`](daemon.md) | Uygulamanın konuştuğu arka plan servisini çalıştırır. Uygulama onu sizin için başlatır. |
 
+## Kabuk tamamlama {#shell-completion}
+
+`kule completions bash|zsh|fish` bir tamamlama betiği yazdırır. Kabuğunuzun
+onu yüklediği yerde açın:
+
+```sh
+# bash: ~/.bashrc içinde
+eval "$(kule completions bash)"
+# zsh: ~/.zshrc içinde, compinit'ten sonra
+source <(kule completions zsh)
+# fish: bir kez
+kule completions fish > ~/.config/fish/completions/kule.fish
+```
+
+Ardından TAB alt komutları, seçenekleri ve aldıkları değerleri (`kule limits
+memory=`, `--group`, `kule completions zsh`), Kule'nin ev dizinindeki görev
+id'lerini, ajanları, grup id'lerini ve eklenti id'lerini tamamlar; zsh ve
+fish her görevin adını id'sinin yanında gösterir. Kule'nin kurulumları
+kabuğunuzun dosyalarına asla kendiliğinden yazmaz: satırı kendiniz eklersiniz.
+
+Betik ev dizininizden hiçbir şey taşımaz: her TAB'da `kule`'yi yeniden
+çağırır, o da yalnızca Kule'nin ev dizinini okur. Daemon, ajan ya da ağ
+çağrısı başlatmaz, ev dizinini hiç oluşturmaz, gizli bir değer ya da yol
+yazdırmaz. Okuyamadığı bir ev dizini hata vermeden hiçbir tamamlama vermez.
+
 ## kule ile betik yazmak
 
 **Çıkış kodları.** Kule küçük ve sabit bir küme kullanır:

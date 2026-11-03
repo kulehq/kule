@@ -26,6 +26,12 @@
   is refused. Over SSH the connection stays one decision, and its card
   says a push could go over it; over plain HTTP a git host gets reads
   alone.
+- Shell completion (#29): `kule completions bash|zsh|fish` prints a
+  script that completes subcommands, options and their values, and the
+  task ids (with their names in zsh and fish), agents, group ids and
+  extension ids in Kule's home. On each TAB it only reads Kule's home:
+  no daemon, agent or network call, the home never made, nothing printed
+  that is not plain. A home it cannot read gives no completions, quietly.
 
 ### Changed
 

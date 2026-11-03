@@ -1,3 +1,4 @@
+mod completion;
 mod paint;
 #[cfg(unix)]
 mod relay;
@@ -583,6 +584,12 @@ enum Cmd {
     History { task: String },
     /// Delete a task and its copy. The workspace is not touched.
     Rm { task: String },
+    /// Print the completion script for a shell: subcommands, options and
+    /// their values, and task ids, agents, groups and extensions from
+    /// Kule's home. bash: eval "$(kule completions bash)"; zsh:
+    /// source <(kule completions zsh); fish: kule completions fish >
+    /// ~/.config/fish/completions/kule.fish
+    Completions { shell: completion::Shell },
     /// Run the Kule daemon in the foreground: it owns agent runs and the
     /// questions they wait on, for the app. The app starts it when needed.
     Daemon {
@@ -613,6 +620,47 @@ fn main() -> ExitCode {
     }
 }
 
+/// `kule __complete <shell> -- <words>`: what the shell may offer, one per
+/// line after a first line saying whether they are values or file names.
+/// Words it cannot read give nothing.
+fn complete(args: &[std::ffi::OsString]) {
+    use clap::{CommandFactory, ValueEnum};
+    let [shell, dashes, words @ ..] = args else {
+        return;
+    };
+    let Some(shell) = shell
+        .to_str()
+        .and_then(|s| completion::Shell::from_str(s, false).ok())
+    else {
+        return;
+    };
+    if dashes != "--" {
+        return;
+    }
+    let words: Vec<String> = words
+        .iter()
+        .map(|w| w.to_string_lossy().into_owned())
+        .collect();
+    let home = std::env::var_os("KULE_HOME")
+        .filter(|h| !h.is_empty())
+        .map(PathBuf::from);
+    let offer = completion::offer(Cli::command(), shell, &words, home);
+    let mut out = String::new();
+    match offer {
+        completion::Offer::Files => out.push_str("files\n"),
+        completion::Offer::Values(values) => {
+            out.push_str("values\n");
+            for (value, about) in values {
+                match (shell, about.is_empty()) {
+                    (completion::Shell::Bash, _) | (_, true) => out.push_str(&format!("{value}\n")),
+                    _ => out.push_str(&format!("{value}\t{about}\n")),
+                }
+            }
+        }
+    }
+    let _ = std::io::stdout().write_all(out.as_bytes());
+}
+
 /// Makes the task's package caches before its sandbox does, saying so
 /// while that takes a while: copying the person's, or waiting for the app,
 /// which began making them as the task was made.
@@ -637,7 +685,19 @@ fn chained(e: &anyhow::Error) -> String {
 }
 
 fn run() -> Result<ExitCode> {
+    // What a shell asks on each TAB: answered before anything else, from
+    // Kule's home alone, and always quietly.
+    let args: Vec<std::ffi::OsString> = std::env::args_os().collect();
+    if args.get(1).is_some_and(|a| a == "__complete") {
+        complete(&args[2..]);
+        return Ok(ExitCode::SUCCESS);
+    }
     let cli = Cli::parse();
+    // The script holds nothing of the home, and making one is no part of it.
+    if let Cmd::Completions { shell } = cli.command {
+        print!("{}", completion::script(shell));
+        return Ok(ExitCode::SUCCESS);
+    }
     let home = match cli.home {
         Some(home) => home,
         None => kule_daemon::default_home().map_err(|e| anyhow!(e))?,
@@ -1513,6 +1573,8 @@ fn run() -> Result<ExitCode> {
             }
             println!("history verified: {} entries, signed", history.len());
         }
+        // Printed before the home is read.
+        Cmd::Completions { .. } => {}
         Cmd::Daemon { idle_secs } => {
             eprintln!("kule: daemon for {}", home.display());
             kule_daemon::run(&home, std::time::Duration::from_secs(idle_secs))

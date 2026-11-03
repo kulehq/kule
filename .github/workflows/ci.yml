@@ -142,6 +142,16 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev
+      # The completion tests load each shell's script in that shell, and
+      # fail where it is missing rather than pass unseen.
+      - name: Shells for the completion tests (zsh, fish)
+        if: needs.changes.outputs.code != 'false' && runner.os != 'Windows'
+        run: |
+          if [ "$RUNNER_OS" = Linux ]; then
+            sudo apt-get install -y zsh fish
+          else
+            command -v fish >/dev/null || brew install fish
+          fi
       - name: Unprivileged user namespaces (the sandbox's own network)
         if: needs.changes.outputs.code != 'false' && (runner.os == 'Linux')
         run: |
@@ -233,6 +243,16 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev
+      # The completion tests load each shell's script in that shell, and
+      # fail where it is missing rather than pass unseen.
+      - name: Shells for the completion tests (zsh, fish)
+        if: needs.changes.outputs.code != 'false' && runner.os != 'Windows'
+        run: |
+          if [ "$RUNNER_OS" = Linux ]; then
+            sudo apt-get install -y zsh fish
+          else
+            command -v fish >/dev/null || brew install fish
+          fi
       - name: Unprivileged user namespaces (the sandbox's own network)
         if: needs.changes.outputs.code != 'false' && (runner.os == 'Linux')
         run: |
