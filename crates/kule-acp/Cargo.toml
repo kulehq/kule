@@ -11,7 +11,7 @@ rust-version.workspace = true
 [dependencies]
 # The tokens of a turn, at its end, are still marked unstable in ACP; an
 # agent that sends something else is read as sending nothing.
-agent-client-protocol = { version = "3.4.0", features = ["stdio", "unstable_end_turn_token_usage"] }
+agent-client-protocol = { version = "5.0.0", features = ["stdio", "unstable_end_turn_token_usage"] }
 async-process = "2.5.0"
 # A contained agent's pipes (Windows) read on the blocking pool.
 blocking = "1.7.0"
