@@ -144,6 +144,14 @@ applied ~/.gitconfig
 what they replaced is kept in ~/.kule/tasks/1046fb30/home-kept/00000001792506123456
 ```
 
+Bir bağlantı yalnızca ev dizininizdeki kendi dosyalarınıza çıkıyorsa
+uygulanır: dışına değil, Kule'nin ev klasörüne ya da Kule'nin ajanlar için
+tuttuğu klasörlere değil (bir görevin sonraki çalıştırmaları oraya yazar),
+sizin hiçbir yere çıkmayan bir bağlantınızın içinden değil; ve bir kabuk ya
+da araç başlarken çalışan bir dosya olarak asla, çünkü bir bağlantının
+incelenmesi içeriğini göstermez. Böyle bir bağlantıyı istiyorsanız kendiniz
+yapın.
+
 Son satır yalnızca uygulama sizin bir şeyinizin yerine geçtiyse ya da onu
 kaldırdıysa görünür. Her uygulama orada, ne zaman yapıldığına göre
 adlandırılmış kendi klasörünü alır.
@@ -210,6 +218,7 @@ the changes wait for review again
 | `kule: the home changes are not the ones you reviewed any more; review them again` | `kule home` digest'i yazdırdığından beri değiştiler. Yeniden bakın, sonra yenisiyle uygulayın. |
 | `kule: no terminal to ask on; review with `kule status` and pass the digest it prints with --reviewed` | `kule home`'un yazdırdığı digest'i `--reviewed` ile verin. |
 | `kule: ~/<path> would run as its owner or group (setuid or setgid), …` | Kule bunu ev dizininize asla getirmez. Değişikliği atın. |
+| `kule: ~/<path> is a link to <target>, <why>: Kule does not apply it; …` | Bağlantı ev dizininizin dışına, Kule'nin ve görevlerinin yazdığı yere ya da Kule'nin bilemediği bir yere çıkardı, veya bir şey başlarken çalışan bir dosya. Atın ya da bağlantıyı kendiniz yapın. |
 | `kule: nothing applied from this task's home to undo` | Geri alınacak bir uygulama yok. |
 | `kule: a terminal is open on this task's copy (in Kule's app, or kule shell); close it first, then apply its home changes` | Görevin terminalini kapatın (uygulamadaki sekmeyi ya da `kule shell`'den `exit` ile çıkın), sonra uygulayın. |
 | `kule: a terminal is open on this task's copy (in Kule's app, or kule shell); close it first, then undo its home changes` | `undo` için de aynısı. |

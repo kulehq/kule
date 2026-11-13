@@ -49,7 +49,10 @@ Windows. The grants, each shown with its source by [`kule tools`](../cli/tools.m
 - the **system**: `/usr`, `/bin`, `/System/Library`, `/Library/Developer`,
   Homebrew, Xcode, and `/etc` whole but for a few credential files denied
   by name (`pip.conf`, `docker/config.json`, `rclone.conf`,
-  `samba/smb.conf`, `environment`, `profile.d`). On Linux also `/proc`,
+  `samba/smb.conf`, `environment`, `profile.d`). On macOS, of the
+  system's databases under `/private/var/db` only the time zones and the
+  developer folder link `xcode-select` sets (never the unified log's store
+  or the rest). On Linux also `/proc`,
   `/sys`, the resolver's files under `/run` and narrow places under `/var`
   and `/tmp`; never `/opt`, `/tmp` or `/run` whole;
 - **where your tools are**, as the variables passed to commands say: each
@@ -60,7 +63,10 @@ Windows. The grants, each shown with its source by [`kule tools`](../cli/tools.m
 - **where toolchains keep their own files in your home**: `~/.cargo`,
   `~/.rustup`, `~/.npm`, `~/.m2`, `~/.gradle`, `~/.nuget` (not NuGet's
   settings in it, which can hold feed credentials), `~/.dotnet`,
-  `~/go`, `~/.cache`, `~/.local/bin`, what uv, pipx, mise, pnpm and fnm
+  `~/go`, the toolchains' own caches in `~/.cache` (pip, uv, Go, Poetry,
+  Pipenv, pre-commit, node-gyp, Corepack, Deno, Yarn, pnpm, Playwright,
+  Puppeteer, Cypress, Coursier, Zig; never `~/.cache` whole, where apps
+  keep theirs), `~/.local/bin`, what uv, pipx, mise, pnpm and fnm
   keep in `~/.local/share` (and pipx's home wherever pipx keeps it:
   `~/.local/pipx` from before pipx 1.5, on macOS
   `~/Library/Application Support/pipx`), the settings of git, jj, uv, pip, Poetry (not
@@ -75,8 +81,11 @@ Windows. The grants, each shown with its source by [`kule tools`](../cli/tools.m
   for one command.
 
 Inside a granted root, credentials stay denied by name:
-`~/.cargo/credentials.toml`, `~/.m2/settings.xml`, `~/.gradle/gradle.properties`,
-`~/.nuget/NuGet/NuGet.Config`, and the folder `CARGO_HOME` names. The
+`~/.cargo/credentials.toml`, `~/.m2/settings.xml`, `~/.m2/settings-security.xml`,
+`~/.gradle/gradle.properties`, Develocity's access keys in `~/.gradle` and
+`~/.m2`, `~/.nuget/NuGet/NuGet.Config`, uv's logins
+(`~/.local/share/uv/credentials`), zsh's and Nushell's history in their
+settings folders, and the folder `CARGO_HOME` names. The
 folders on the way to a grant are listed, not read, so paths resolve.
 
 Everything else is not there for a command: your home itself, Documents,

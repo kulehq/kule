@@ -139,6 +139,13 @@ applied ~/.gitconfig
 what they replaced is kept in ~/.kule/tasks/1046fb30/home-kept/00000001792506123456
 ```
 
+A link is applied only where it leads to your own files in your home: not
+outside it, not into Kule's home or the folders Kule keeps for agents
+(where a task's later runs write), not through a link of yours that leads
+nowhere, and never as a file that runs as a shell or tool starts, whose
+content a review of a link does not show. Make such a link yourself if you
+want it.
+
 The last line shows only when the apply replaced or removed something of
 yours. Each apply gets its own folder there, named by when it happened.
 
@@ -202,6 +209,7 @@ the changes wait for review again
 | `kule: the home changes are not the ones you reviewed any more; review them again` | They changed since `kule home` printed the digest. Look again, then apply with the new one. |
 | `kule: no terminal to ask on; review with `kule status` and pass the digest it prints with --reviewed` | Pass `--reviewed` with the digest `kule home` printed. |
 | `kule: ~/<path> would run as its owner or group (setuid or setgid), …` | Kule never brings that into your home. Discard the change. |
+| `kule: ~/<path> is a link to <target>, <why>: Kule does not apply it; …` | The link would lead outside your home, to where Kule and its tasks write, somewhere Kule cannot tell, or it is a file that runs as something starts. Discard it, or make the link yourself. |
 | `kule: nothing applied from this task's home to undo` | There is no apply to take back. |
 | `kule: a terminal is open on this task's copy (in Kule's app, or kule shell); close it first, then apply its home changes` | Close the task's terminal (the app's tab, or `exit` in `kule shell`), then apply. |
 | `kule: ~/<folder> is no longer a folder in the task's home, so nothing under it is touched; discard ~/<folder> first` | The task replaced that folder with a link or a file. Discard the folder's change together with the one under it (or `--all`). |

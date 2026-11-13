@@ -43,7 +43,13 @@ duyduğu için bkz. [Ajanlar](../using-agents.md).
   kutuları olarak listeler: yazmak istediği dizinler ve erişmek istediği
   host'lar. Almasını istediklerinizi işaretleyin (bir telemetri host'u
   dışarıda kalabilir). Linux reddedilen dosyaları bildirmez; bu yüzden
-  orada yalnızca host'lar önerilir.
+  orada yalnızca host'lar önerilir. Profili şimdiki haliyle onaylayana
+  kadar bir deneme değişkenlerinizden, anahtarlarınızdan ya da
+  oturumlarınızdan hiçbirini almaz ve onun için gizli hiçbir şey açılmaz;
+  sonuç neyin verilmediğini söyler. Bir profilin açtığı ama formda alanı
+  olmayan şeyler (anahtar zincirinden ya da bir oturum dosyasından
+  anahtarlar, kendi evine taşınan ayarlar, macOS'ta açılanlar, cihazlar)
+  formun altında kaydedildiği gibi gösterilir.
 - Eklediğiniz bir ajan yalnızca, açtığı şeyleri (kendi klasörleri, host'ları
   ve anahtarları) siz **onayladıktan** sonra ve üzerinde yapılan her
   değişiklikten sonra yeniden onayladığınızda çalışır.

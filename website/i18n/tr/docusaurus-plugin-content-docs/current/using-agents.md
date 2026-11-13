@@ -132,10 +132,17 @@ dizinindedir.
 
 ### npx ile getirilen paketler {#packages-fetched-with-npx}
 
-`npx`'in getirdiği bir ajan (Claude Code'un ve Codex'in bağdaştırıcıları)
-**her sürüm için bir kez**, sandbox'ın dışında ve paketin kurulum
-betikleri çalıştırılmadan, Kule'nin taşıdığı bir lockfile'dan, her
-bağımlılık kendi bütünlük (integrity) hash'iyle kurulur. Şuraya kurulur:
+`npx`'in getirdiği bir ajan **her sürüm için bir kez**, sandbox'ın dışında,
+paketin kurulum betikleri çalıştırılmadan ve yalnızca paket kayıt
+deposundan kurulur (npm'e bir depodan, bir URL'den, bir dosyadan ya da bir
+klasörden hiçbir şey almaması söylenir). Claude Code'un ve Codex'in
+bağdaştırıcıları Kule'nin taşıdığı bir lockfile'dan, her bağımlılık kendi
+bütünlük (integrity) hash'iyle kurulur; başka bir paket için (sizin bir
+ajanınız, bir eklentinin MCP sunucusu) yalnızca adını verdiğiniz sürüm
+sabittir, bağımlılıkları ise o gün kayıt deposunun sunduğudur ve sizin npm
+ayarlarınızla okunur. Sürüm SemVer dilbilgisinde tek bir sürüm olmalıdır
+(`1.2.3`, `1.2.3-beta.1`, `1.2.3+build.5`): ardından başka bir şey gelen
+bir sürüm reddedilir. Şuraya kurulur:
 
 - macOS: `~/Library/Application Support/Kule/packages`
 - Linux: `~/.local/share/kule/packages`
@@ -167,6 +174,14 @@ listeler: yazmak istediği dizinler ve erişmek istediği host'lar. `--apply`
 bunları profile ekler; profil de ardından her değişiklik gibi onayınızı
 bekler. Linux reddedilen dosyaları bildirmez; bu yüzden orada yalnızca
 host'lar önerilir.
+
+Denemek onaylamak değildir: profil şimdiki haliyle onaylanana kadar bir
+deneme sizin değerlerinizden hiçbirini almaz. `pass_env` içinde adı geçen
+değişkenler, `keys`, `keychain` ve `login_file` arkasındaki anahtarlar,
+`carry` ile taşıyacağı ayarlar, `login`'i, `reveal_on_macos`'un açtıkları
+ve `devices` dışarıda kalır; deneme hangilerinin kaldığını söyler
+(`withheld until approved: …`). Onayladığınızda deneme bunları bir
+çalıştırma gibi alır.
 
 Uygulamada *Settings → Agents* aynı şeyi yapar: **Add from the ACP
 registry**, ardından **Try it**; bir telemetri host'u dışarıda kalabilsin

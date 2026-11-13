@@ -51,7 +51,10 @@ yerleri** okur. Verilenler, her biri kaynağıyla birlikte
 - **sistem**: `/usr`, `/bin`, `/System/Library`, `/Library/Developer`,
   Homebrew, Xcode ve bütünüyle `/etc`; ancak orada adıyla kapatılan birkaç
   kimlik dosyası dışında (`pip.conf`, `docker/config.json`, `rclone.conf`,
-  `samba/smb.conf`, `environment`, `profile.d`). Linux'ta ayrıca `/proc`,
+  `samba/smb.conf`, `environment`, `profile.d`). macOS'ta sistemin
+  `/private/var/db` altındaki veritabanlarından yalnızca saat dilimleri ve
+  `xcode-select`'in ayarladığı geliştirici klasörü bağlantısı (birleşik
+  günlüğün deposu ya da geri kalanı asla). Linux'ta ayrıca `/proc`,
   `/sys`, `/run` altındaki çözücü dosyaları ve `/var` ile `/tmp` altında dar
   yerler; `/opt`, `/tmp` ya da `/run` asla bütünüyle değil;
 - komutlara aktarılan değişkenlerin söylediği **araçlarınızın yerleri**: her
@@ -63,7 +66,11 @@ yerleri** okur. Verilenler, her biri kaynağıyla birlikte
 - **araç zincirlerinin ev dizininizde kendi dosyalarını tuttuğu yerler**:
   `~/.cargo`, `~/.rustup`, `~/.npm`, `~/.m2`, `~/.gradle`, `~/.nuget`
   (içindeki NuGet ayarları hariç; kimlik bilgisi taşıyabilir),
-  `~/.dotnet`, `~/go`, `~/.cache`, `~/.local/bin`, uv, pipx, mise, pnpm ve
+  `~/.dotnet`, `~/go`, araç zincirlerinin `~/.cache` içindeki kendi
+  önbellekleri (pip, uv, Go, Poetry, Pipenv, pre-commit, node-gyp, Corepack,
+  Deno, Yarn, pnpm, Playwright, Puppeteer, Cypress, Coursier, Zig;
+  uygulamaların da kendi önbelleklerini tuttuğu `~/.cache` asla bütünüyle
+  değil), `~/.local/bin`, uv, pipx, mise, pnpm ve
   fnm'nin `~/.local/share` içinde tuttukları (ve pipx'in evi nerede
   tutuyorsa orası: pipx 1.5 öncesinden kalan `~/.local/pipx`, macOS'ta
   `~/Library/Application Support/pipx`); git, jj, uv, pip, Poetry
@@ -77,8 +84,11 @@ yerleri** okur. Verilenler, her biri kaynağıyla birlikte
   yanındaki bir proje**, ve `kule exec --reveal`'in tek bir komut için açtığı.
 
 Verilen bir kökün içinde kimlik dosyaları adıyla kapalı kalır:
-`~/.cargo/credentials.toml`, `~/.m2/settings.xml`, `~/.gradle/gradle.properties`,
-`~/.nuget/NuGet/NuGet.Config` ve `CARGO_HOME`'un gösterdiği klasör. Verilen
+`~/.cargo/credentials.toml`, `~/.m2/settings.xml`, `~/.m2/settings-security.xml`,
+`~/.gradle/gradle.properties`, Develocity'nin `~/.gradle` ve `~/.m2`
+içindeki erişim anahtarları, `~/.nuget/NuGet/NuGet.Config`, uv'nin oturum
+bilgileri (`~/.local/share/uv/credentials`), zsh ile Nushell'in ayar
+klasörlerindeki geçmişi ve `CARGO_HOME`'un gösterdiği klasör. Verilen
 bir yere giden yol üstündeki klasörler listelenir, okunmaz; böylece yollar
 çözülür.
 

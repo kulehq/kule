@@ -20,6 +20,28 @@
   settings in the home, and in the copy's `.git/config`.
 - Plain HTTP sent through a tunnel to a port other than 443 is read as a
   plain request: each must name the host the tunnel goes to.
+- Commands read the toolchains' own caches in `~/.cache` by name instead
+  of `~/.cache` whole, and on macOS only the time zones and the developer
+  folder link under `/private/var/db`. uv's logins, Develocity's access
+  keys, Maven's `settings-security.xml` and zsh's and Nushell's history
+  in their settings folders are not read.
+- Trying an agent whose profile is not approved as it stands runs it
+  without your values: no variables from `pass_env`, no keys (`keys`,
+  `keychain`, `login_file`), no `carry`, `login`, `reveal_on_macos` or
+  `devices`; the trial says what it withheld. The app's agent form shows
+  what a profile opens beyond its fields, and keeps a profile's devices
+  when it is saved.
+- A package started with `npx`, `uvx` or `pipx` must name one release in
+  SemVer's grammar, its name as the registry or the index has it: a
+  version with anything else after it, or a name that is a URL or a
+  path, is refused in profiles, in what Kule installs itself and in an
+  extension's MCP servers. npm installs Kule makes take packages from the
+  registry only, and a package's folder is named only from the characters
+  a registry spec has.
+- A link the task made in its home is applied only where it leads to your
+  own files in your home: not outside it, not to where Kule and its tasks
+  write, not through a link that leads nowhere, and never as a file that
+  runs as a shell or tool starts.
 
 ### Fixed
 
