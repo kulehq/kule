@@ -600,8 +600,11 @@ mod tests {
                     Some(src.as_bytes()),
                 )
             });
+            // Memory is the measure: unbounded, the deep file held ten times
+            // this. The clock only catches what never ends, on the slowest
+            // machine the tests run on (an unoptimised build in a VM).
             let took = start.elapsed();
-            assert!(took < std::time::Duration::from_secs(5), "{took:?}");
+            assert!(took < std::time::Duration::from_secs(30), "{took:?}");
             assert!(held < 64 << 20, "held {} MiB", held >> 20);
             outline
         };
