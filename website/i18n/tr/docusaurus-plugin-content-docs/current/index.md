@@ -27,7 +27,7 @@ karar verirsiniz.
 
 Kule **macOS, Linux ve Windows 11**'de çalışır. En son
 ön sürüm
-[`0.2.0-preview.22`](https://github.com/kulehq/kule/releases/tag/v0.2.0-preview.22):
+[`0.2.0-preview.23`](https://github.com/kulehq/kule/releases/tag/v0.2.0-preview.23):
 [tek satırla kurun, indirin ya da Kule'yi kaynak koddan derleyin](getting-started/install.md).
 
 :::
