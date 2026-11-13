@@ -26,6 +26,10 @@
 - Applying a change to a package index's settings (`pip.conf`) puts its
   URL's token back in your file, not the task's placeholder.
 
+### Dependencies
+
+- rustix 1.1.6, for RUSTSEC-2026-0486.
+
 ### Documentation
 
 - The default policy's package registries that Kule does not look into
