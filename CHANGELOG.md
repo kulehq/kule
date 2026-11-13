@@ -78,6 +78,20 @@
   string to the terminal, change or report the window, or any OSC but the
   few that only show. On a terminal, `kule exec` gives the command one of
   its own and passes its output on through that filter.
+- A profile's devices are listed, each with a warning, where you approve
+  it (`kule agents show`, the app), as are keys from the keychain or a
+  login file; only sound, cameras, serial ports and GPUs may be named, and
+  a profile naming another device is held.
+- A git hook written under another case of the hooks folder
+  (`.git/HOOKS/`), a submodule's or a worktree's included, is denied as a
+  hook.
+- An office document whose parts are listed inconsistently (a part named
+  twice, local headers that disagree with the central directory) does not
+  open with its app.
+- On Linux, a task's proxy serves only programs running as you; another
+  user's connection is refused and logged nowhere in the task.
+- In Live, Kule's own notes carry Kule's name and mark, which no line an
+  agent names gets; a step Kule could not record is said as Kule's note.
 
 ### Fixed
 
@@ -87,6 +101,10 @@
 ### Dependencies
 
 - rustix 1.1.6, for RUSTSEC-2026-0486.
+- Claude Code's ACP adapter installs from a lockfile with hono 4.13.16,
+  @hono/node-server 2.1.6, body-parser 2.4.0 and fast-uri 3.1.9, each
+  with its known advisories fixed. The release gate's `deps` step scans
+  the adapters' lockfiles Kule ships, which it did not read before.
 
 ### Documentation
 

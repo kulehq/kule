@@ -38,6 +38,9 @@ yapmayan dosyaları açar ve her birini önce kontrol eder:
   bir çalışma kitabı, veri bağlantısı); bir şey getiren, içeri alan ya da
   çalıştıran bir Word alanı; ağa ya da başka bir programa ulaşan bir formül;
   ve bir hesap tablosu uygulamasının formül olarak okuyacağı bir CSV hücresi.
+  Parçaları tutarsız listelenmiş (iki kez adı geçen bir parça, uyuşmayan
+  başlıklar) bir Word, Excel, PowerPoint ya da OpenDocument dosyası da
+  reddedilir.
   Bir PDF'te, sıkıştırılmış akışlara konmuş olanlar da dahil her nesne
   okunur: betik, başlatılacak bir program, kendini bir yere gönderen bir
   form, başka bir belge ya da taşıdığı bir dosya, çalışan bir medya ya da

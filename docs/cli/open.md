@@ -37,7 +37,9 @@ each one first:
   an email address you would click (a template, a picture, another workbook,
   a data connection); a Word field that fetches, includes or runs something;
   a formula that reaches the network or another program; and a CSV cell
-  that a spreadsheet app would read as a formula. In a PDF, every object is
+  that a spreadsheet app would read as a formula. A Word, Excel,
+  PowerPoint or OpenDocument file whose parts are listed inconsistently (a
+  part named twice, headers that disagree) is refused too. In a PDF, every object is
   read, those packed into compressed streams too: one with a script, a
   program to start, a form that sends itself, another document or a file
   it carries, media that runs, or an action that runs by itself as it opens

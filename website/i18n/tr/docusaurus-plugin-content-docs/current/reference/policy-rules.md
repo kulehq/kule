@@ -77,7 +77,7 @@ Varsayılan budur. Geçerliyken `kule policy` ile yazdırın.
 | `branch-forward` | permit `auto` | İleri taşınan (fast-forward) bir dal (`refs/heads/*`). | **Kendiliğinden geçer.** |
 | `branch-created` | permit `auto` | Yeni bir dal. | **Kendiliğinden geçer.** Yeni bir etiket (tag), not ya da replacement onay bekler. |
 | `package-registries` | permit `auto` | `registry.npmjs.org`, `registry.yarnpkg.com`, `crates.io`, `index.crates.io`, `static.crates.io`, `static.rust-lang.org`, `api.nuget.org`, `globalcdn.nuget.org`, `pypi.org`, `files.pythonhosted.org`, `rubygems.org`, `repo.maven.apache.org`, `repo1.maven.org` adreslerine HTTPS (443 numaralı port). Kule npm, crates.io, PyPI ve RubyGems host'larının içine bakar ve yalnızca okumaları geçirir; diğerleri görülmeden geçer (bkz. [Bilinen sınırlar](../concepts/network-and-questions.md#known-limits)). | **Kendiliğinden geçer.** |
-| `git-hooks` | forbid all | Oluşturulan ya da değiştirilen bir git hook'u. Hook'lar bir sonraki git komutunuzda, sizin yetkilerinizle çalışır. | **Reddedilir.** |
+| `git-hooks` | forbid all | Hook klasöründe, adı nasıl yazılırsa yazılsın (büyük/küçük harfe bakmayan bir diskte git `.git/HOOKS/`'u açar), bir alt modülün ve bir worktree'nin klasörü dahil, oluşturulan ya da değiştirilen bir git hook'u. Hook'lar bir sonraki git komutunuzda, sizin yetkilerinizle çalışır. | **Reddedilir.** |
 
 Hiçbir `auto` permit ile eşleşmeyen ve bu yüzden **onay bekleyenler**
 (`no-rule-lets-it-pass`): git config değişiklikleri (`.git` içinde git'in

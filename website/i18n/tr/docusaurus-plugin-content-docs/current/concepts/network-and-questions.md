@@ -245,6 +245,12 @@ Bunlar [Platformlar](../platforms.md) sayfasında da listelenir:
   sunucularının içine her araç için bakılır: yalnızca sistemin kök sertifikalarına güvenen bir araç (macOS'ta
   .NET, bir JVM) bir görevde onlara HTTPS üzerinden ulaşamaz.
 - Linux'ta ağ kuralları Linux 6.7 veya sonrasını gerektirir.
+- Bir görevin proxy'si `127.0.0.1` üzerinde dinler. Linux'ta yalnızca sizin
+  kullanıcınızla çalışan programların bağlantılarına hizmet eder: bilgisayardaki
+  başka bir kullanıcının programı reddedilir ve ondan hiçbir şey görevin
+  kaydına ya da sorularınıza ulaşmaz. macOS'ta ve Windows'ta bilgisayardaki
+  her program ona ulaşabilir; orada yapabileceği, görevin kendi komutlarının
+  yapabildiğidir.
 
 ## İlgili sayfalar
 

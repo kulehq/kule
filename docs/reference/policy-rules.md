@@ -74,7 +74,7 @@ This is the default. Print it with `kule policy` while it holds.
 | `branch-forward` | permit `auto` | A branch (`refs/heads/*`) moved forward (fast-forward). | **Passes.** |
 | `branch-created` | permit `auto` | A new branch. | **Passes.** A new tag, note or replacement waits. |
 | `package-registries` | permit `auto` | HTTPS (port 443) to `registry.npmjs.org`, `registry.yarnpkg.com`, `crates.io`, `index.crates.io`, `static.crates.io`, `static.rust-lang.org`, `api.nuget.org`, `globalcdn.nuget.org`, `pypi.org`, `files.pythonhosted.org`, `rubygems.org`, `repo.maven.apache.org`, `repo1.maven.org`. Kule looks inside the npm, crates.io, PyPI and RubyGems hosts and lets reads alone through; the others pass unseen (see [Known limits](../concepts/network-and-questions.md#known-limits)). | **Passes.** |
-| `git-hooks` | forbid all | A git hook created or changed. Hooks run on your next git command, as you. | **Denied.** |
+| `git-hooks` | forbid all | A git hook created or changed, in the hooks folder however it is cased (`.git/HOOKS/` is the folder git opens on a disk that ignores case), a submodule's and a worktree's included. Hooks run on your next git command, as you. | **Denied.** |
 
 Not matched by any `auto` permit, and so **waiting** (`no-rule-lets-it-pass`):
 git config changes (anything in `.git` that git does not keep as data:

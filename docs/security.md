@@ -119,7 +119,8 @@ Every change follows these rules:
 
 Before a release, besides CI, `scripts/release-gate.sh` runs on macOS and
 on Linux: the workflows through actionlint and zizmor, the lockfiles
-through osv-scanner (accepted advisories in `osv-scanner.toml`, as in
+through osv-scanner, the adapters' lockfiles Kule installs agents from
+included (accepted advisories in `osv-scanner.toml`, as in
 `deny.toml`), the kule binary through `cargo audit bin` (the release
 builds carry their dependency tree, with cargo-auditable, and a binary
 without one is refused, as cargo audit would read only part of it), and

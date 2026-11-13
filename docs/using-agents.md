@@ -220,7 +220,7 @@ relative to your home directory.
 | `own_home` | variable name | A home of its own in Kule, for an agent that reads where its state lives from a variable (`CODEX_HOME`, `CLAUDE_CONFIG_DIR`, `GEMINI_CLI_HOME`, or `HOME` itself). Kule points the variable at a folder of the agent's own, where what it writes in Kule stays, across tasks, and never reaches it outside. Give it your settings with `carry`; sign it in there once, or through `login_file`. Not `PATH`, `TMPDIR`, `TMP`, `TEMP`, `PWD` or `SHELL`. |
 | `reveal_on_macos` | list of paths | Default-hidden paths it needs to read on macOS. Only `Library/Keychains` may be revealed. |
 | `mode` | string | The ACP session mode to start in, when the agent offers one: for an agent whose own sandbox cannot start inside Kule's. |
-| `devices` | list of paths | Linux: devices under `/dev` the agent and its commands need beyond those every command gets, such as `/dev/snd`, `/dev/video0` or a serial port. Kule refuses those that reach what is yours: disks, memory, keyboard and mouse, consoles and terminals. |
+| `devices` | list of paths | Linux: devices under `/dev` the agent and its commands need beyond those every command gets, of the kinds Kule gives alone: sound (`/dev/snd`), cameras (`/dev/video0`), serial ports (`/dev/ttyUSB0`) and GPUs (`/dev/dri`). A profile naming any other (a USB bus, `/dev/kvm`, a disk, a keyboard) is held. `kule agents show` and the app list each device, with a warning, before you approve it. |
 
 Own home folders live outside Kule's home, which the sandbox hides whole:
 `~/Library/Application Support/Kule/agents` on macOS and

@@ -121,7 +121,7 @@ Her değişiklik şu kurallara uyar:
 
 Bir sürümden önce, CI'ın yanı sıra `scripts/release-gate.sh` macOS'ta ve
 Linux'ta çalışır: workflow'lar actionlint ve zizmor'dan, lockfile'lar
-osv-scanner'dan (kabul edilen tavsiyeler (advisory), `deny.toml`'daki gibi
+(Kule'nin ajanları kurduğu bağdaştırıcı lockfile'ları dahil) osv-scanner'dan (kabul edilen tavsiyeler (advisory), `deny.toml`'daki gibi
 `osv-scanner.toml`'da), derlenen ikili dosya `cargo audit bin`'den
 (cargo-auditable ile derlenmiş) geçer; ayrıca bir çalışma klasörünün env
 dosyalarına yerleştirilen kanarya gizli değerler, bir görevde maskelenmiş

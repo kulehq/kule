@@ -107,8 +107,16 @@ workflows() {
 deps() {
   need osv-scanner "$OSV_SCANNER" "go install github.com/google/osv-scanner/v2/cmd/osv-scanner@v$OSV_SCANNER"
   # One config for every lockfile, the docs site's (website/) included;
-  # what npm installed beside it is not scanned.
-  osv-scanner scan source --config osv-scanner.toml --recursive --experimental-exclude target --experimental-exclude node_modules .
+  # what npm installed beside it is not scanned. The lockfiles Kule ships
+  # for its own agents' adapters are named after their package, which
+  # osv-scanner does not take for lockfiles: each is named to it, every
+  # one in that folder (a test holds that Kule installs from no other).
+  set --
+  for lock in crates/kule-acp/src/locks/*.json; do
+    [ -f "$lock" ] || fail "no adapter lockfiles in crates/kule-acp/src/locks"
+    set -- "$@" -L "package-lock.json:$lock"
+  done
+  osv-scanner scan source --config osv-scanner.toml "$@" --recursive --experimental-exclude target --experimental-exclude node_modules .
   say "deps: ok"
 }
 

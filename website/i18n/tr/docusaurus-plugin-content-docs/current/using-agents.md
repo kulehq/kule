@@ -235,7 +235,7 @@ ev dizininize göredir.
 | `own_home` | değişken adı | Durumunun nerede olduğunu bir değişkenden okuyan bir ajan için Kule'de kendine ait bir ev dizini (`CODEX_HOME`, `CLAUDE_CONFIG_DIR`, `GEMINI_CLI_HOME` ya da `HOME`'un kendisi). Kule değişkeni ajanın kendine ait bir klasörüne yönlendirir; Kule'de yazdığı şey görevler boyunca orada kalır ve dışarıda ona hiç ulaşmaz. Ayarlarınızı ona `carry` ile verin; oturumu orada bir kez ya da `login_file` ile açın. `PATH`, `TMPDIR`, `TMP`, `TEMP`, `PWD` ya da `SHELL` olamaz. |
 | `reveal_on_macos` | yol listesi | macOS'ta okuması gereken, varsayılan olarak gizli yollar. Yalnızca `Library/Keychains` açılabilir. |
 | `mode` | string | Ajan sunuyorsa başlanacak ACP oturum modu: kendi sandbox'ı Kule'ninkinin içinde başlayamayan bir ajan için. |
-| `devices` | yol listesi | Linux: ajanın ve komutlarının, her komutun aldıklarının ötesinde ihtiyaç duyduğu `/dev` altındaki aygıtlar; örneğin `/dev/snd`, `/dev/video0` ya da bir seri port. Kule size ait olana ulaşanları reddeder: diskler, bellek, klavye ve fare, konsollar ve terminaller. |
+| `devices` | yol listesi | Linux: ajanın ve komutlarının, her komutun aldıklarının ötesinde ihtiyaç duyduğu, `/dev` altındaki ve Kule'nin yalnızca verdiği türlerden aygıtlar: ses (`/dev/snd`), kameralar (`/dev/video0`), seri portlar (`/dev/ttyUSB0`) ve GPU'lar (`/dev/dri`). Başka bir aygıt (bir USB veri yolu, `/dev/kvm`, bir disk, bir klavye) adını veren bir profil bekletilir. `kule agents show` ve uygulama, onaylamadan önce her aygıtı bir uyarıyla listeler. |
 
 Kendi ev dizini klasörleri, sandbox'ın tamamen gizlediği Kule ev dizininin
 dışında durur: macOS'ta `~/Library/Application Support/Kule/agents`, Linux'ta

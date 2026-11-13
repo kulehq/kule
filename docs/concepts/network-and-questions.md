@@ -240,6 +240,11 @@ These are listed in [Platforms](../platforms.md) too:
   are pointed at the proxy with `JAVA_TOOL_OPTIONS`, since Java reads none
   of the `*_PROXY` variables.
 - On Linux, network rules need Linux 6.7 or later.
+- A task's proxy listens on `127.0.0.1`. On Linux it serves only
+  connections from programs running as you: another user's program on
+  the computer is refused and nothing of it reaches the task's log or
+  your questions. On macOS and Windows any program on the computer can
+  reach it; what it can do there is what the task's own commands may.
 
 ## Related
 
