@@ -1,6 +1,13 @@
 # Changes
 
-## Unreleased
+## 0.2.0-preview.23
+
+A security release: the fixes for a review of the whole of Kule. What a
+task's commands read, run, keep and show is narrowed further on every
+platform (home layer, grants, the Linux sandbox, the proxy, PDF and
+office checks, the terminal), more of what tools run on their own waits
+for you, and a profile shows everything it opens before you approve it.
+Upgrade.
 
 ### Security
 
