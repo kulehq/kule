@@ -42,7 +42,10 @@ yapmayan dosyaları açar ve her birini önce kontrol eder:
   okunur: betik, başlatılacak bir program, kendini bir yere gönderen bir
   form, başka bir belge ya da taşıdığı bir dosya, çalışan bir medya ya da
   açılırken kendiliğinden çalışan bir eylem içeren bir PDF reddedilir;
-  şifreli bir PDF de öyle. Tıkladığınız bağlantılar kalır.
+  şifreli bir PDF de öyle. Kule PDF'in çapraz başvuru tablosunu da bir
+  okuyucu gibi izler: tablosu Kule'nin başladığı yerde okumadığı bir
+  nesneye (bir akışın verisinin içine, bir yorumun ardına) götüren ya da
+  tablosu izlenemeyen bir PDF reddedilir. Tıkladığınız bağlantılar kalır.
 - **Bir bağlantı üzerinden değil,** kopyanın içinden ulaşılır ve diskte
   yalnızca bir adı vardır.
 - **Görevde çalışan bir ajan yoktur.**

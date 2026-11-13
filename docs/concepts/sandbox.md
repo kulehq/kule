@@ -49,7 +49,7 @@ Windows. The grants, each shown with its source by [`kule tools`](../cli/tools.m
 - the **system**: `/usr`, `/bin`, `/System/Library`, `/Library/Developer`,
   Homebrew, Xcode, and `/etc` whole but for a few credential files denied
   by name (`pip.conf`, `docker/config.json`, `rclone.conf`,
-  `samba/smb.conf`, `environment`, `profile.d`). On macOS, of the
+  `samba/smb.conf`, `environment`, `profile.d`, and those only root reads: `shadow`, `sudoers`, the SSH host keys, …). On macOS, of the
   system's databases under `/private/var/db` only the time zones and the
   developer folder link `xcode-select` sets (never the unified log's store
   or the rest). On Linux also `/proc`,
@@ -285,7 +285,11 @@ session keyring of its own (a user namespace keeps the person's), and its
 seccomp filter refuses the kernel's key calls (`keyctl`, `add_key`,
 `request_key`) with `EPERM`, `io_uring` as not there, and a socket in any
 family but Unix, IPv4, IPv6 and netlink with `EAFNOSUPPORT`: no virtual
-machine's `vsock`, no raw packets.
+machine's `vsock`, no raw packets. Before it starts, it gives up every
+capability for good (none held, an empty bounding set, root's way back
+locked), so a command of Kule run as root is root without root's powers;
+running as root is still a gap to accept (see
+[`kule isolation`](../cli/isolation.md)).
 
 ## Related
 

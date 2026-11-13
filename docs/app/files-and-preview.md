@@ -79,7 +79,8 @@ files must keep to themselves: no macros, controls or embedded objects, no
 link to anything outside the file but a web page or an email address, no
 field or formula that fetches or runs something. A PDF must hold no script,
 no program to start, no form that sends itself, no other document or
-attached file, and nothing that runs as it opens; an encrypted one is not
+attached file, and nothing that runs as it opens, and its cross-reference
+table must lead only to objects Kule read; an encrypted one is not
 opened. And it waits while the agent is at work.
 
 :::

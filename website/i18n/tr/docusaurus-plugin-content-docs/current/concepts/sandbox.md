@@ -51,7 +51,7 @@ yerleri** okur. Verilenler, her biri kaynağıyla birlikte
 - **sistem**: `/usr`, `/bin`, `/System/Library`, `/Library/Developer`,
   Homebrew, Xcode ve bütünüyle `/etc`; ancak orada adıyla kapatılan birkaç
   kimlik dosyası dışında (`pip.conf`, `docker/config.json`, `rclone.conf`,
-  `samba/smb.conf`, `environment`, `profile.d`). macOS'ta sistemin
+  `samba/smb.conf`, `environment`, `profile.d` ve yalnızca root'un okuduğu `shadow`, `sudoers`, SSH host anahtarları, …). macOS'ta sistemin
   `/private/var/db` altındaki veritabanlarından yalnızca saat dilimleri ve
   `xcode-select`'in ayarladığı geliştirici klasörü bağlantısı (birleşik
   günlüğün deposu ya da geri kalanı asla). Linux'ta ayrıca `/proc`,
@@ -300,7 +300,12 @@ başlar (bir kullanıcı ad alanı kişininkini korur) ve seccomp filtresi
 çekirdeğin anahtar çağrılarını (`keyctl`, `add_key`, `request_key`) `EPERM`
 ile, `io_uring`'i yokmuş gibi, Unix, IPv4, IPv6 ve netlink dışındaki her
 ailede bir soketi `EAFNOSUPPORT` ile reddeder: bir sanal makinenin
-`vsock`'u da, ham paketler de yoktur.
+`vsock`'u da, ham paketler de yoktur. Başlamadan önce bütün
+yeteneklerinden kalıcı olarak vazgeçer (hiçbiri elinde kalmaz, sınırlama
+kümesi boşalır, root'un geri dönüş yolu kilitlenir); böylece root olarak
+çalışan Kule'nin bir komutu root'un güçleri olmayan bir root'tur. Root olarak
+çalışmak yine de kabul edilmesi gereken bir eksiktir (bkz.
+[`kule isolation`](../cli/isolation.md)).
 
 ## İlgili
 

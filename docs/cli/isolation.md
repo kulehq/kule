@@ -23,6 +23,12 @@ available. The common case is Linux without unprivileged user namespaces
 (Ubuntu 24.04 refuses them by default), which Kule uses to give each command
 a network, a `/tmp`, processes and shared memory of its own.
 
+Kule run as root on Linux (`sudo kule`, a container or a CI job as root) is
+a gap too: its commands give up every capability before they start (none
+held, none they could get back), but they are root, and own the system's
+files, which only the grants and the names Kule closes keep from them
+(`/etc/shadow`, `sudoers`, the SSH host keys, …). Run Kule as yourself.
+
 While anything is missing and you have not accepted it, Kule refuses to run
 commands and agents, and says what is missing. `kule isolation` shows the
 gaps, and `--accept-weaker on` lets commands run with what the computer

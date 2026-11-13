@@ -59,6 +59,25 @@
 - `kule status` and the commit listing write out control characters in
   every name that comes from the task: names inside files, git hooks,
   staged and changed git paths, branches and merged files.
+- Before opening a PDF with its app, Kule follows its cross-reference
+  table as a reader does: a PDF whose table leads to an object Kule did
+  not read where it starts, or whose table cannot be followed, does not
+  open.
+- On Linux a command gives up every capability before it starts (its
+  sets and bounding set emptied, root's way back locked), and Kule run as
+  root is listed by `kule isolation` as a gap to accept. `/etc/shadow`,
+  `gshadow`, `sudoers`, the SSH host keys and the like are closed by name.
+- Outlining a source file costs about what its size does: code nested more
+  than 64 entities deep is not outlined, and a shown name keeps the last
+  512 characters of its parents' names and its own.
+- The docs site is published only after a job that runs none of its npm
+  code finds every `install.sh` in it to be the reviewed file, byte for
+  byte; Dependabot's version updates wait a week after a release.
+- What a task's commands write to your terminal (`kule exec`, `kule
+  shell`) reaches it without the sequences that set the clipboard, pass a
+  string to the terminal, change or report the window, or any OSC but the
+  few that only show. On a terminal, `kule exec` gives the command one of
+  its own and passes its output on through that filter.
 
 ### Fixed
 
