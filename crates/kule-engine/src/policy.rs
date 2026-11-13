@@ -964,7 +964,7 @@ pub fn dotted(path: &str) -> bool {
 /// further: compatibility forms taken apart (`ſ` is `s`, `ﬆ` is `st`, the
 /// Kelvin sign is `k`), accents dropped, lower case. A name that folds to
 /// a listed one is judged as that one; folding too far only asks more.
-fn fold(text: &str) -> String {
+pub(crate) fn fold(text: &str) -> String {
     use unicode_normalization::UnicodeNormalization;
     use unicode_normalization::char::is_combining_mark;
     text.nfkd()

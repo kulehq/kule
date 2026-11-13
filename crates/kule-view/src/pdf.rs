@@ -5,6 +5,14 @@
 //! object streams too, each inflated through a cap; names are read as PDF
 //! spells them (`/J#61vaScript` is `/JavaScript`). What cannot be read to
 //! tell, an encrypted file among them, counts as reaching out.
+//!
+//! A reader finds the objects through the cross-reference table at the
+//! end, not by reading from the top: so the table is followed too (its
+//! sections, streams and `/Prev` chain), and every object it leads to must
+//! be one this reading found where it starts. One it leads to elsewhere (in
+//! a stream's data, after a comment) would be read only by the app, and the
+//! file does not open; nor does one whose table cannot be followed, which a
+//! reader would rebuild its own way.
 
 use std::io::Read;
 use std::time::{Duration, Instant};
@@ -306,7 +314,15 @@ struct Seen {
     names: Vec<String>,
     left: u64,
     until: Instant,
+    /// Where each object of the file itself starts (its number).
+    starts: Vec<usize>,
+    /// The file's cross-reference streams: where each starts, its
+    /// dictionary, and where its data is.
+    xref_streams: Vec<(usize, Value, (usize, usize))>,
 }
+
+/// The most sections of cross-references a file may chain.
+const MAX_SECTIONS: usize = 64;
 
 /// `Ok` when the PDF in `bytes` reaches nothing outside itself once its
 /// app opens it; what it would reach otherwise.
@@ -316,6 +332,8 @@ pub fn opens_nothing_else(bytes: &[u8]) -> Result<(), String> {
         names: Vec::new(),
         left: MAX_TOTAL,
         until: Instant::now() + TIME,
+        starts: Vec::new(),
+        xref_streams: Vec::new(),
     };
     let encrypted = || "it is encrypted, so Kule cannot look inside".to_owned();
     if let Err(()) = read_objects(bytes, &mut read, true) {
@@ -333,6 +351,15 @@ pub fn opens_nothing_else(bytes: &[u8]) -> Result<(), String> {
     }
     if read.names.iter().any(|n| n == "Encrypt") {
         return Err(encrypted());
+    }
+    match xref_agrees(bytes, &mut read) {
+        Ok(true) => {}
+        Ok(false) => {
+            return Err(
+                "its cross-reference table leads to an object where Kule read none".to_owned(),
+            );
+        }
+        Err(()) => return Err("Kule could not follow its cross-reference table".to_owned()),
     }
     // What it does as it opens: a page to show, never an address to go to.
     for (_, object) in &read.objects {
@@ -377,16 +404,22 @@ fn read_objects(bytes: &[u8], read: &mut Seen, top: bool) -> Result<(), ()> {
         at: 0,
         names: &mut names,
     };
-    // The last two integers seen: an object's number and generation.
-    let mut last: [Option<i64>; 2] = [None, None];
+    // The last two integers seen, with where each starts: an object's
+    // number and generation.
+    let mut last: [Option<(i64, usize)>; 2] = [None, None];
     let mut streams = Vec::new();
-    while let Some(token) = lexer.token()? {
+    loop {
+        lexer.skip_white();
+        let at = lexer.at;
+        let Some(token) = lexer.token()? else {
+            break;
+        };
         if Instant::now() > read.until {
             return Err(());
         }
         match token {
             Token::Word(w) if w == b"obj" => {
-                let number = last[0].ok_or(())?;
+                let (number, start) = last[0].ok_or(())?;
                 last = [None, None];
                 let first = lexer.token()?.ok_or(())?;
                 let value = lexer.value(first, 0)?;
@@ -398,14 +431,20 @@ fn read_objects(bytes: &[u8], read: &mut Seen, top: bool) -> Result<(), ()> {
                     if object_stream(&value) {
                         streams.push((value.clone(), data));
                     }
+                    if top && value.get("Type").and_then(Value::name) == Some("XRef") {
+                        read.xref_streams.push((start, value.clone(), data));
+                    }
                 } else {
                     lexer.at = back;
+                }
+                if top {
+                    read.starts.push(start);
                 }
                 read.objects.push((number, value));
             }
             Token::Word(w) => {
                 let n = std::str::from_utf8(&w).ok().and_then(|s| s.parse().ok());
-                last = [last[1], n];
+                last = [last[1], n.map(|n| (n, at))];
                 if n.is_none() {
                     last = [None, None];
                 }
@@ -422,6 +461,197 @@ fn read_objects(bytes: &[u8], read: &mut Seen, top: bool) -> Result<(), ()> {
     for (dict, data) in streams {
         let inflated = inflate(&dict, &bytes[data.0..data.1], read)?;
         read_object_stream(&dict, &inflated, read)?;
+    }
+    Ok(())
+}
+
+/// Whether the cross-reference table at the end of `bytes` leads only to
+/// objects the reading from the top found, each where it starts, and its
+/// packed objects only to object streams found: `Err` where the table
+/// cannot be followed (no `startxref`, a section that is not one, a chain
+/// that loops or runs too long).
+fn xref_agrees(bytes: &[u8], read: &mut Seen) -> Result<bool, ()> {
+    let tail = bytes.len().saturating_sub(4096);
+    let at = bytes[tail..]
+        .windows(9)
+        .rposition(|w| w == b"startxref")
+        .map(|p| tail + p + 9)
+        .ok_or(())?;
+    let mut scratch = Vec::new();
+    let mut lexer = Lexer {
+        bytes,
+        at,
+        names: &mut scratch,
+    };
+    let first = int_token(&mut lexer)?;
+    let mut queue = vec![first];
+    let mut sections = std::collections::BTreeSet::new();
+    let mut offsets = Vec::new();
+    let mut packed = Vec::new();
+    while let Some(off) = queue.pop() {
+        if !sections.insert(off) || sections.len() > MAX_SECTIONS || Instant::now() > read.until {
+            return Err(());
+        }
+        let at = skip_white_at(bytes, off).ok_or(())?;
+        if bytes[at..].starts_with(b"xref") {
+            xref_table(bytes, at + 4, &mut offsets, &mut queue)?;
+        } else {
+            let Some((_, dict, data)) = read
+                .xref_streams
+                .iter()
+                .find(|(start, _, _)| *start == at)
+                .cloned()
+            else {
+                // Neither a table nor a stream of them where it says: a
+                // reader would rebuild its own.
+                return Err(());
+            };
+            let inflated = inflate(&dict, &bytes[data.0..data.1], read)?;
+            xref_stream_entries(&dict, &inflated, &mut offsets, &mut packed)?;
+            if let Some(prev) = dict.get("Prev") {
+                queue.push(offset_of(prev)?);
+            }
+        }
+    }
+    let starts: std::collections::BTreeSet<usize> = read.starts.iter().copied().collect();
+    // Offset 0 is the header, where no object can be read: an entry there
+    // (macOS's own writer leaves some) leads a reader nowhere.
+    for off in offsets.into_iter().filter(|off| *off != 0) {
+        match skip_white_at(bytes, off) {
+            Some(at) if starts.contains(&at) => {}
+            _ => return Ok(false),
+        }
+    }
+    for number in packed {
+        if !read
+            .objects
+            .iter()
+            .any(|(n, v)| *n == number && object_stream(v))
+        {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+/// The first byte at or after `at` that is not white space.
+fn skip_white_at(bytes: &[u8], at: usize) -> Option<usize> {
+    let rest = bytes.get(at..)?;
+    let skip = rest.iter().position(|b| !white(*b))?;
+    Some(at + skip)
+}
+
+/// The next token as a non-negative integer.
+fn int_token(lexer: &mut Lexer) -> Result<usize, ()> {
+    match lexer.token()? {
+        Some(Token::Word(w)) => std::str::from_utf8(&w)
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .ok_or(()),
+        _ => Err(()),
+    }
+}
+
+fn offset_of(value: &Value) -> Result<usize, ()> {
+    match value {
+        Value::Int(n) => usize::try_from(*n).map_err(|_| ()),
+        _ => Err(()),
+    }
+}
+
+/// A classic cross-reference section from `at` (just past `xref`): the
+/// offsets of the objects in use, and from its trailer the sections it
+/// chains (`/Prev`, a hybrid file's `/XRefStm`).
+fn xref_table(
+    bytes: &[u8],
+    at: usize,
+    offsets: &mut Vec<usize>,
+    queue: &mut Vec<usize>,
+) -> Result<(), ()> {
+    let mut scratch = Vec::new();
+    let mut lexer = Lexer {
+        bytes,
+        at,
+        names: &mut scratch,
+    };
+    loop {
+        match lexer.token()?.ok_or(())? {
+            Token::Word(w) if w == b"trailer" => break,
+            Token::Word(w) => {
+                let _start: usize = std::str::from_utf8(&w)
+                    .ok()
+                    .and_then(|s| s.parse().ok())
+                    .ok_or(())?;
+                let count = int_token(&mut lexer)?;
+                // Each entry takes 20 bytes: no count larger than the file.
+                if count > bytes.len() / 18 {
+                    return Err(());
+                }
+                for _ in 0..count {
+                    let offset = int_token(&mut lexer)?;
+                    let _generation = int_token(&mut lexer)?;
+                    match lexer.token()?.ok_or(())? {
+                        Token::Word(k) if k == b"n" => offsets.push(offset),
+                        Token::Word(k) if k == b"f" => {}
+                        _ => return Err(()),
+                    }
+                }
+            }
+            _ => return Err(()),
+        }
+    }
+    let first = lexer.token()?.ok_or(())?;
+    let trailer = lexer.value(first, 0)?;
+    for key in ["Prev", "XRefStm"] {
+        if let Some(value) = trailer.get(key) {
+            queue.push(offset_of(value)?);
+        }
+    }
+    Ok(())
+}
+
+/// The entries of a cross-reference stream, read by its `/W` widths over
+/// its `/Index` ranges: the offsets of the objects in use, and the object
+/// streams that hold packed ones.
+fn xref_stream_entries(
+    dict: &Value,
+    data: &[u8],
+    offsets: &mut Vec<usize>,
+    packed: &mut Vec<i64>,
+) -> Result<(), ()> {
+    let ints = |value: Option<&Value>| -> Result<Vec<usize>, ()> {
+        match value {
+            Some(Value::Array(items)) => items.iter().map(offset_of).collect(),
+            _ => Err(()),
+        }
+    };
+    let widths = ints(dict.get("W"))?;
+    let [w0, w1, w2] = widths[..] else {
+        return Err(());
+    };
+    if w0 > 8 || w1 > 8 || w2 > 8 {
+        return Err(());
+    }
+    let row = w0 + w1 + w2;
+    let count: usize = match dict.get("Index") {
+        Some(_) => ints(dict.get("Index"))?
+            .chunks(2)
+            .map(|pair| pair.get(1).copied().ok_or(()))
+            .sum::<Result<usize, ()>>()?,
+        None => offset_of(dict.get("Size").ok_or(())?)?,
+    };
+    if row == 0 || count.checked_mul(row).is_none_or(|n| n > data.len()) {
+        return Err(());
+    }
+    let field = |bytes: &[u8]| bytes.iter().fold(0u64, |n, b| (n << 8) | u64::from(*b));
+    for entry in data.chunks_exact(row).take(count) {
+        let kind = if w0 == 0 { 1 } else { field(&entry[..w0]) };
+        let second = field(&entry[w0..w0 + w1]);
+        match kind {
+            1 => offsets.push(usize::try_from(second).map_err(|_| ())?),
+            2 => packed.push(i64::try_from(second).map_err(|_| ())?),
+            _ => {}
+        }
     }
     Ok(())
 }
@@ -622,14 +852,63 @@ mod tests {
 
     use super::opens_nothing_else;
 
-    /// A PDF of `objects` (their bodies, numbered from 1), with a trailer.
-    fn pdf(objects: &[&str]) -> Vec<u8> {
+    /// `body` with the cross-reference table a writer puts at its end:
+    /// every object that starts a line, at its offset, then `trailer`.
+    fn with_xref(body: Vec<u8>, trailer: &str) -> Vec<u8> {
+        with_xref_at(body, trailer, &[])
+    }
+
+    /// [`with_xref`], with `extra` objects at offsets of the test's own.
+    fn with_xref_at(mut body: Vec<u8>, trailer: &str, extra: &[(usize, usize)]) -> Vec<u8> {
+        let mut at = std::collections::BTreeMap::new();
+        let mut start = 0;
+        for line in body.split(|b| *b == b'\n') {
+            let text = String::from_utf8_lossy(line);
+            let words: Vec<&str> = text.split_whitespace().collect();
+            if let [n, g, "obj", ..] = words[..]
+                && let (Ok(n), Ok(_)) = (n.parse::<usize>(), g.parse::<usize>())
+            {
+                at.insert(n, start);
+            }
+            start += line.len() + 1;
+        }
+        at.extend(extra.iter().copied());
+        let xref = body.len();
+        let size = at.keys().max().map_or(1, |m| m + 1);
+        let mut table = format!("xref\n0 {size}\n0000000000 65535 f \n");
+        for n in 1..size {
+            match at.get(&n) {
+                Some(off) => table.push_str(&format!("{off:010} 00000 n \n")),
+                None => table.push_str("0000000000 00000 f \n"),
+            }
+        }
+        body.extend_from_slice(table.as_bytes());
+        body.extend_from_slice(
+            format!("trailer\n{trailer}\nstartxref\n{xref}\n%%EOF\n").as_bytes(),
+        );
+        body
+    }
+
+    /// Where `pattern` first is in `bytes`.
+    fn find(bytes: &[u8], pattern: &[u8]) -> usize {
+        bytes
+            .windows(pattern.len())
+            .position(|w| w == pattern)
+            .unwrap()
+    }
+
+    /// The objects of a PDF (their bodies, numbered from 1), without its end.
+    fn body(objects: &[&str]) -> Vec<u8> {
         let mut out = b"%PDF-1.7\n%\xe2\xe3\xcf\xd3\n".to_vec();
         for (i, body) in objects.iter().enumerate() {
             out.extend_from_slice(format!("{} 0 obj\n{body}\nendobj\n", i + 1).as_bytes());
         }
-        out.extend_from_slice(b"trailer\n<< /Root 1 0 R >>\n%%EOF\n");
         out
+    }
+
+    /// A PDF of `objects`, numbered from 1, with its table and trailer.
+    fn pdf(objects: &[&str]) -> Vec<u8> {
+        with_xref(body(objects), "<< /Root 1 0 R >>")
     }
 
     const PAGES: &str = "<< /Type /Pages /Kids [3 0 R] /Count 1 >>";
@@ -670,8 +949,8 @@ mod tests {
             .as_bytes(),
         );
         out.extend_from_slice(&data);
-        out.extend_from_slice(b"\nendstream\nendobj\ntrailer\n<< /Root 1 0 R >>\n%%EOF\n");
-        out
+        out.extend_from_slice(b"\nendstream\nendobj\n");
+        with_xref(out, "<< /Root 1 0 R >>")
     }
 
     #[test]
@@ -683,14 +962,17 @@ mod tests {
         ]);
         assert_eq!(opens_nothing_else(&bytes), Ok(()));
         // A stream whose data says anything at all is not read as names.
-        let mut drawn = pdf(&["<< /Type /Catalog /Pages 2 0 R >>", PAGES, PAGE]);
+        let mut drawn = body(&["<< /Type /Catalog /Pages 2 0 R >>", PAGES, PAGE]);
         let content = b"BT /F1 12 Tf (JavaScript) Tj ET /JS /Launch";
         drawn.extend_from_slice(
             format!("5 0 obj\n<< /Length {} >>\nstream\n", content.len()).as_bytes(),
         );
         drawn.extend_from_slice(content);
         drawn.extend_from_slice(b"\nendstream\nendobj\n");
-        assert_eq!(opens_nothing_else(&drawn), Ok(()));
+        assert_eq!(
+            opens_nothing_else(&with_xref(drawn, "<< /Root 1 0 R >>")),
+            Ok(())
+        );
     }
 
     #[test]
@@ -773,7 +1055,8 @@ mod tests {
             &[(5, "<< /S /URI /URI (https://example.com) >>")],
             "",
         ))
-        .replace("/Type /ObjStm ", "")
+        // Its type taken out, the offsets left as they were.
+        .replace("/Type /ObjStm ", "              ")
         .into_bytes();
         assert!(opens_nothing_else(&untyped).is_err());
     }
@@ -807,7 +1090,7 @@ mod tests {
         );
         bytes.extend_from_slice(&data);
         bytes.extend_from_slice(b"\nendstream\nendobj\n");
-        let why = opens_nothing_else(&bytes).unwrap_err();
+        let why = opens_nothing_else(&with_xref(bytes, "<< /Root 1 0 R >>")).unwrap_err();
         assert!(why.contains("JavaScript"), "{why}");
     }
 
@@ -841,11 +1124,106 @@ mod tests {
         );
         bomb.extend_from_slice(&data);
         bomb.extend_from_slice(b"\nendstream\nendobj\n");
+        let bomb = with_xref(bomb, "<< /Root 1 0 R >>");
         assert!(bomb.len() < 1 << 20);
         assert!(opens_nothing_else(&bomb).is_err());
         assert!(
             opens_nothing_else(b"%PDF-1.7\n1 0 obj\n<< /Type /Catalog (unclosed >>\nendobj\n")
                 .is_err()
         );
+    }
+
+    /// A reader finds the objects through the table at the end: a catalog
+    /// it leads to inside a stream's data, or after a comment, where the
+    /// reading from the top does not look, does not open.
+    #[test]
+    fn an_object_only_the_table_leads_to_does_not_open() {
+        let script =
+            "<< /Type /Catalog /Pages 2 0 R /OpenAction << /S /JavaScript /JS (app.alert(1)) >> >>";
+        // In a stream whose length is another object: read up to the first
+        // endstream, as data.
+        let mut inside = body(&["<< /Type /Catalog /Pages 2 0 R >>", PAGES, PAGE]);
+        inside.extend_from_slice(b"4 0 obj\n<< /Length 5 0 R >>\nstream\n");
+        let hidden_at = inside.len();
+        inside.extend_from_slice(format!("6 0 obj\n{script}\nendobj\n").as_bytes());
+        inside.extend_from_slice(b"endstream\nendobj\n5 0 obj\n40\nendobj\n");
+        let inside = with_xref(inside, "<< /Root 6 0 R >>");
+        find(&inside, format!("{hidden_at:010} 00000 n").as_bytes());
+        assert_eq!(
+            opens_nothing_else(&inside),
+            Err("its cross-reference table leads to an object where Kule read none".to_owned())
+        );
+        // After a comment, which the reading from the top skips to the end
+        // of its line.
+        let mut commented = body(&["<< /Type /Catalog /Pages 2 0 R >>", PAGES, PAGE]);
+        commented.extend_from_slice(format!("%x 6 0 obj {script} endobj\n").as_bytes());
+        // The writer's table names it where the comment's line goes on.
+        let at = find(&commented, b"%x 6 0 obj") + 3;
+        let fixed = with_xref_at(commented, "<< /Root 6 0 R >>", &[(6, at)]);
+        assert_eq!(
+            opens_nothing_else(&fixed),
+            Err("its cross-reference table leads to an object where Kule read none".to_owned())
+        );
+    }
+
+    /// A file that is written as readers expect opens with a table or a
+    /// cross-reference stream; one whose table cannot be followed does not.
+    #[test]
+    fn the_table_is_followed_or_the_file_does_not_open() {
+        let plain = pdf(&["<< /Type /Catalog /Pages 2 0 R >>", PAGES, PAGE]);
+        assert_eq!(opens_nothing_else(&plain), Ok(()));
+        // No table at all.
+        let mut bare = body(&["<< /Type /Catalog /Pages 2 0 R >>", PAGES, PAGE]);
+        bare.extend_from_slice(b"trailer\n<< /Root 1 0 R >>\n%%EOF\n");
+        assert_eq!(
+            opens_nothing_else(&bare),
+            Err("Kule could not follow its cross-reference table".to_owned())
+        );
+        // A chain that comes back to itself.
+        let text = String::from_utf8_lossy(&plain).into_owned();
+        let xref = text.rfind("xref\n").unwrap();
+        let looped = text.replace(
+            "<< /Root 1 0 R >>",
+            &format!("<< /Root 1 0 R /Prev {xref} >>"),
+        );
+        assert!(opens_nothing_else(looped.as_bytes()).is_err());
+        // A cross-reference stream (1-byte type, 2-byte offset, 1-byte
+        // generation), its objects where it says.
+        let mut streamed = body(&["<< /Type /Catalog /Pages 2 0 R >>", PAGES, PAGE]);
+        let offsets: Vec<usize> = (1..=3)
+            .map(|n| find(&streamed, format!("\n{n} 0 obj").as_bytes()) + 1)
+            .collect();
+        let at = streamed.len();
+        let mut rows = vec![0u8, 0, 0, 255];
+        for off in offsets.iter().chain([&at]) {
+            rows.extend_from_slice(&[1, (off >> 8) as u8, *off as u8, 0]);
+        }
+        let data = deflated(&rows);
+        streamed.extend_from_slice(
+            format!(
+                "4 0 obj\n<< /Type /XRef /Size 5 /W [1 2 1] /Root 1 0 R /Filter /FlateDecode /Length {} >>\nstream\n",
+                data.len()
+            )
+            .as_bytes(),
+        );
+        streamed.extend_from_slice(&data);
+        streamed
+            .extend_from_slice(format!("\nendstream\nendobj\nstartxref\n{at}\n%%EOF\n").as_bytes());
+        assert_eq!(opens_nothing_else(&streamed), Ok(()));
+        // The same stream naming an offset no object starts at.
+        let mut wrong = rows.clone();
+        wrong[6] = wrong[6].wrapping_add(3);
+        let data = deflated(&wrong);
+        let mut bad = body(&["<< /Type /Catalog /Pages 2 0 R >>", PAGES, PAGE]);
+        bad.extend_from_slice(
+            format!(
+                "4 0 obj\n<< /Type /XRef /Size 5 /W [1 2 1] /Root 1 0 R /Filter /FlateDecode /Length {} >>\nstream\n",
+                data.len()
+            )
+            .as_bytes(),
+        );
+        bad.extend_from_slice(&data);
+        bad.extend_from_slice(format!("\nendstream\nendobj\nstartxref\n{at}\n%%EOF\n").as_bytes());
+        assert!(opens_nothing_else(&bad).is_err());
     }
 }

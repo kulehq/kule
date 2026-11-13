@@ -58,7 +58,8 @@ You pick one on the first-run screen, in *Settings → Policy*, or with
   `requirements*.txt`, `*.csproj`, `pom.xml`, `build.gradle` and the rest;
 - what runs code on its own or steers an agent: CI (`.github`,
   `.gitlab-ci*`, …), editor settings (`.vscode`, `.idea`), dev containers,
-  hook managers (`.husky`, `lefthook.yml`), toolchain and package manager
+  hook managers (`.husky`, `lefthook.yml`), the JavaScript configs editor
+  extensions run (`eslint.config.js`), toolchain and package manager
   settings (`.npmrc`, `rust-toolchain.toml`, `build.rs`), an agent's
   settings, instructions and MCP servers (`.claude`, `CLAUDE.md`,
   `AGENTS.md`, `.mcp.json`, …) and Kule's own `.kule/`;

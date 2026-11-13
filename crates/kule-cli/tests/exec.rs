@@ -491,3 +491,154 @@ fn a_traced_run_carries_the_commands_exit_code_or_is_refused() {
         assert!(err.contains("--trace needs strace"), "{err}");
     }
 }
+
+/// On the person's terminal, a command still writes to a terminal of its
+/// own (colours, sizes), but no sequence that sets the clipboard, or that
+/// the terminal answers by typing, reaches the person's: not through its
+/// output, its errors, nor its input, which a terminal also writes to.
+#[cfg(unix)]
+#[test]
+fn a_commands_output_never_sets_the_clipboard() {
+    use std::io::Read;
+    use std::os::fd::{FromRawFd, OwnedFd};
+    let (home, ws) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+    fs::write(ws.path().join("a.txt"), "a\n").unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_kule"))
+        .args(["new", ws.path().to_str().unwrap()])
+        .env("KULE_HOME", home.path())
+        .output()
+        .unwrap();
+    let id = String::from_utf8_lossy(&out.stdout)
+        .split_whitespace()
+        .nth(1)
+        .unwrap()
+        .to_owned();
+    let (mut leader, mut follower) = (0, 0);
+    // SAFETY: openpty fills the two descriptors.
+    let made = unsafe {
+        libc::openpty(
+            &mut leader,
+            &mut follower,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        )
+    };
+    assert_eq!(made, 0);
+    // SAFETY: openpty made both.
+    let (leader, follower) =
+        unsafe { (OwnedFd::from_raw_fd(leader), OwnedFd::from_raw_fd(follower)) };
+    let script = r#"printf 'a\033]52;c;a3VsZS1wcm9iZQ==\007b\033[1mbold\033[0m'
+printf 'c\033]52;c;eA==\033\\d' >&2
+printf 'e\033[21tf\033Ptmux;\033\033]52;c;eA==\007\033\\g' >&0
+test -t 1 && printf ' on-a-terminal'"#;
+    let io = || std::process::Stdio::from(follower.try_clone().unwrap());
+    let mut child = Command::new(env!("CARGO_BIN_EXE_kule"))
+        .args(["exec", &id, "--no-network", "--", "sh", "-c", script])
+        .env("KULE_HOME", home.path())
+        .stdin(io())
+        .stdout(io())
+        .stderr(io())
+        .spawn()
+        .unwrap();
+    drop(follower);
+    let mut leader = std::fs::File::from(leader);
+    let reader = std::thread::spawn(move || {
+        let mut seen = Vec::new();
+        let mut buf = [0u8; 4096];
+        // Ends with an error (Linux) or nothing more (macOS) once every
+        // end of the terminal is closed.
+        while let Ok(n) = leader.read(&mut buf) {
+            if n == 0 {
+                break;
+            }
+            seen.extend_from_slice(&buf[..n]);
+        }
+        seen
+    });
+    assert!(child.wait().unwrap().success());
+    let seen = String::from_utf8_lossy(&reader.join().unwrap()).into_owned();
+    assert!(!seen.contains("]52"), "{seen:?}");
+    assert!(
+        !seen.contains("\x1b[21t") && !seen.contains("\x1bP"),
+        "{seen:?}"
+    );
+    for kept in ["ab\x1b[1mbold\x1b[0m", "cd", "efg", " on-a-terminal"] {
+        assert!(seen.contains(kept), "{kept:?} in {seen:?}");
+    }
+}
+
+/// On the person's terminal, what they type reaches the command once, a
+/// line at a time as the terminal edits it, and Ctrl-D ends its input.
+#[cfg(unix)]
+#[test]
+fn what_is_typed_reaches_the_command_and_ctrl_d_ends_it() {
+    use std::io::{Read, Write};
+    use std::os::fd::{FromRawFd, OwnedFd};
+    let (home, ws) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+    fs::write(ws.path().join("a.txt"), "a\n").unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_kule"))
+        .args(["new", ws.path().to_str().unwrap()])
+        .env("KULE_HOME", home.path())
+        .output()
+        .unwrap();
+    let id = String::from_utf8_lossy(&out.stdout)
+        .split_whitespace()
+        .nth(1)
+        .unwrap()
+        .to_owned();
+    let (mut leader, mut follower) = (0, 0);
+    // SAFETY: openpty fills the two descriptors.
+    let made = unsafe {
+        libc::openpty(
+            &mut leader,
+            &mut follower,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        )
+    };
+    assert_eq!(made, 0);
+    // SAFETY: openpty made both.
+    let (leader, follower) =
+        unsafe { (OwnedFd::from_raw_fd(leader), OwnedFd::from_raw_fd(follower)) };
+    let io = || std::process::Stdio::from(follower.try_clone().unwrap());
+    let mut child = Command::new(env!("CARGO_BIN_EXE_kule"))
+        .args([
+            "exec",
+            &id,
+            "--no-network",
+            "--",
+            "sh",
+            "-c",
+            "read x; echo got:$x; cat; echo done",
+        ])
+        .env("KULE_HOME", home.path())
+        .stdin(io())
+        .stdout(io())
+        .stderr(io())
+        .spawn()
+        .unwrap();
+    drop(follower);
+    let mut leader = std::fs::File::from(leader);
+    let mut typing = leader.try_clone().unwrap();
+    let reader = std::thread::spawn(move || {
+        let mut seen = Vec::new();
+        let mut buf = [0u8; 4096];
+        while let Ok(n) = leader.read(&mut buf) {
+            if n == 0 {
+                break;
+            }
+            seen.extend_from_slice(&buf[..n]);
+        }
+        String::from_utf8_lossy(&seen).into_owned()
+    });
+    std::thread::sleep(std::time::Duration::from_secs(3));
+    typing.write_all(b"hello\nmore\n\x04").unwrap();
+    assert!(child.wait().unwrap().success());
+    let seen = reader.join().unwrap();
+    assert!(seen.contains("got:hello"), "{seen:?}");
+    assert!(seen.contains("done"), "{seen:?}");
+    // Echoed by the person's terminal alone.
+    assert_eq!(seen.matches("hello").count(), 2, "{seen:?}");
+}

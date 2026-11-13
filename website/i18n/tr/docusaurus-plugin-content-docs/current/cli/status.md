@@ -153,12 +153,18 @@ policy: passes on its own
 
 ## Çıktı
 
+Görevden gelen her ad (yollar, dosyaların içindeki adlar, git hook'ları,
+dallar, birleştirilen dosyalar) denetim karakterleri ve görünmez işaretler
+`\u{1b}` gibi yazılı hâle getirilerek basılır: bir görevin yazdığı hiçbir
+şey siz incelerken terminalinizin imlecini oynatmaz, bir satırı silmez ya da
+başlığını değiştirmez.
+
 | Satır | Anlamı |
 | --- | --- |
 | `no changes` | Kopya, çalışma klasöründekinin aynısını tutuyor. |
 | `N file changes: +a ~m -d »v` | Sayılar: oluşturulan, değiştirilen, silinen, taşınan. |
 | `+ path`, `~ path`, `- path` | Oluşturulan, değiştirilen ya da silinen bir dosya veya klasör (`/` ile biter). |
-| `» from → to` | Bir taşıma ya da yeniden adlandırma. Klasörüyle birlikte taşınan bir dosya ayrıca listelenmez. |
+| `» from → to` | Aynı baytlarla bir taşıma ya da yeniden adlandırma (adı değişip yeniden yazılan bir dosya `-` ve `+` olarak listelenir). Klasörüyle birlikte taşınan bir dosya ayrıca listelenmez. |
 | girintili `+`/`~`/`-` satırları | Üstteki dosyanın içinde neyin değiştiği: `function main`, `method Task::commit`, `section Plan › Later`, `key dependencies`. Dosyadaki her değişiklik bunlardan birinin ya da dosyanın üst düzeyinin altında listelenir. |
 | `(… not outlined)` | Kule bu dosyanın içine bakamadı ve nedenini söylüyor (örneğin çalışma klasörü de onu değiştirdi). |
 | `N ignored by the workspace, …` | Çalışma klasörünün `.gitignore`'unun dışarıda bıraktığı yollar. Düz bir commit bunları kopyada bırakır. |

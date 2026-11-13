@@ -37,11 +37,17 @@ each one first:
   an email address you would click (a template, a picture, another workbook,
   a data connection); a Word field that fetches, includes or runs something;
   a formula that reaches the network or another program; and a CSV cell
-  that a spreadsheet app would read as a formula. In a PDF, every object is
+  that a spreadsheet app would read as a formula. A Word, Excel,
+  PowerPoint or OpenDocument file whose parts are listed inconsistently (a
+  part named twice, headers that disagree) is refused too. In a PDF, every object is
   read, those packed into compressed streams too: one with a script, a
   program to start, a form that sends itself, another document or a file
   it carries, media that runs, or an action that runs by itself as it opens
-  is refused, as is an encrypted PDF. Links you click stay.
+  is refused, as is an encrypted PDF. Kule also follows the PDF's
+  cross-reference table, as a reader does: one whose table leads to an
+  object Kule did not read where it starts (inside a stream's data, after a
+  comment), or whose table cannot be followed, is refused. Links you click
+  stay.
 - **It is reached without a link,** inside the copy, and has only one name on
   disk.
 - **No agent is at work** in the task.

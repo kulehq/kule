@@ -1319,3 +1319,77 @@ fn a_task_whose_record_cannot_be_read_can_be_removed() {
     assert!(folder.path().is_dir());
     assert!(Task::open(home.path(), &id).is_ok());
 }
+
+/// A move is one only while the file still holds what it held: renamed,
+/// rewritten at the same size and given its old time back, it is a deletion
+/// and a creation, each shown; a plain rename stays a move.
+#[cfg(unix)]
+#[test]
+fn a_renamed_file_with_new_bytes_is_no_move() {
+    use std::os::unix::fs::MetadataExt;
+    let s = Setup::new();
+    let copy = s.copy();
+    let before = fs::metadata(copy.join("src/lib.rs")).unwrap();
+    fs::rename(copy.join("src/lib.rs"), copy.join("src/access.rs")).unwrap();
+    // The same size, other bytes, the old time.
+    write(
+        &copy.join("src/access.rs"),
+        "pub fn add(a: u8, b: u8) -> u8 { a - b }\n",
+    );
+    let file = fs::File::options()
+        .write(true)
+        .open(copy.join("src/access.rs"))
+        .unwrap();
+    file.set_modified(before.modified().unwrap()).unwrap();
+    drop(file);
+    let after = fs::metadata(copy.join("src/access.rs")).unwrap();
+    assert_eq!((after.ino(), after.size()), (before.ino(), before.size()));
+    // A plain rename beside it.
+    fs::rename(copy.join("src/main.rs"), copy.join("src/start.rs")).unwrap();
+
+    let set = s.task.effects().unwrap();
+    let moved: Vec<(&str, &str)> = set
+        .moves
+        .iter()
+        .map(|m| (m.from.as_str(), m.to.as_str()))
+        .collect();
+    assert_eq!(moved, [("src/main.rs", "src/start.rs")], "{set:#?}");
+    assert!(set.deleted().any(|e| e.path == "src/lib.rs"), "{set:#?}");
+}
+
+/// macOS: what a command sets as a file's flags (hidden, immutable) stays
+/// in the copy; the workspace gets the file as the review showed it.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_files_flags_never_reach_the_workspace() {
+    use std::os::macos::fs::MetadataExt;
+    let s = Setup::new();
+    let copy = s.copy();
+    write(&copy.join("hidden.txt"), "h\n");
+    write(&copy.join("locked.txt"), "l\n");
+    let flag = |path: &Path, flags: &str| {
+        let out = std::process::Command::new("chflags")
+            .args([flags, path.to_str().unwrap()])
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{out:?}");
+    };
+    flag(&copy.join("hidden.txt"), "hidden");
+    flag(&copy.join("locked.txt"), "uchg");
+    let committed = s.task.commit();
+    // The copy's own file can go again once the test is done.
+    flag(&copy.join("locked.txt"), "nouchg");
+    committed.unwrap().expect("a checkpoint");
+    for name in ["hidden.txt", "locked.txt"] {
+        let meta = fs::symlink_metadata(s.work().join(name)).unwrap();
+        assert_eq!(meta.st_flags(), 0, "{name}");
+    }
+    // Nothing left half made beside them.
+    let left: Vec<String> = fs::read_dir(s.work())
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| n.starts_with(".kule-tmp"))
+        .collect();
+    assert!(left.is_empty(), "{left:?}");
+}

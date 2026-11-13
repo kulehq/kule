@@ -671,12 +671,14 @@ impl Vault {
             task.save(dir, home)?;
         }
         for (placeholder, m) in &task.masked {
-            // A masked value has no hosts of its own; it goes where a kept
-            // secret holding the same value goes.
+            // A masked value goes where a kept secret holding the same value
+            // goes; the password of a URL, else, to that URL's host alone,
+            // as the file it was in sent it.
             let hosts = held
                 .iter()
                 .find(|h| h.env && h.value == m.value)
                 .map(|h| h.hosts.clone())
+                .or_else(|| url_host(&m.key).map(|host| vec![host.to_owned()]))
                 .unwrap_or_default();
             held.push(Held {
                 name: format!("{}:{}", m.path, m.key),
@@ -1608,8 +1610,8 @@ fn closing_quote(text: &str, quote: char) -> Option<usize> {
 
 /// Masks `text`, the settings file at `path`, with the placeholders of
 /// `task` (new ones made as needed) and of `vault`'s kept secrets: the
-/// settings that look like secrets, then every kept secret left wherever
-/// it is (see [`mask_lines`]).
+/// settings that look like secrets, then, line by line, every other value
+/// that is one wherever it is (see [`mask_lines`]).
 pub(crate) fn mask_with(
     path: &str,
     text: &str,
@@ -1617,28 +1619,38 @@ pub(crate) fn mask_with(
     vault: &Vault,
 ) -> Result<String> {
     let settings = mask_settings(path, text, task, vault)?;
-    Ok(mask_lines(path, &settings, task, vault))
+    mask_lines(path, &settings, task, vault)
 }
 
-/// `text` with each kept secret in it (inside a value, an alias, a
-/// comment) replaced by its placeholder. Each line that changed is kept
-/// with what it was, as many times as the file holds it, for
-/// [`Vault::unmask`] to put back; a placeholder already there is left as
-/// it is.
-fn mask_lines(path: &str, text: &str, task: &mut TaskSecrets, vault: &Vault) -> String {
+/// `text` with, in each line, every value that is a secret replaced by a
+/// placeholder: a kept secret wherever it is (inside a value, an alias, a
+/// comment), and what [`found_in`] finds in the forms shells and tools
+/// write settings in. Each line that changed is kept with what it was, as
+/// many times as the file holds it, for [`Vault::unmask`] to put back; a
+/// placeholder already there is left as it is.
+fn mask_lines(path: &str, text: &str, task: &mut TaskSecrets, vault: &Vault) -> Result<String> {
     let forms = vault.kept_forms();
-    if forms.is_empty() {
-        return text.to_owned();
-    }
     let mut out = String::with_capacity(text.len());
     let mut found: Vec<Place> = Vec::new();
     for line in text.split_inclusive('\n') {
         let body = line.trim_end_matches(['\n', '\r']);
+        let mut spans = Vec::new();
+        for f in found_in(body) {
+            let value = &body[f.start..f.end];
+            let p = placeholder_for(path, &f.key, value, task, vault)?;
+            spans.push((f.start, f.end, p));
+        }
         let mut masked = String::with_capacity(body.len());
-        let mut first = None;
+        let mut first: Option<String> = None;
         let mut at = 0;
         'scan: while at < body.len() {
             let rest = &body[at..];
+            if let Some((_, end, p)) = spans.iter().find(|(start, _, _)| *start == at) {
+                masked.push_str(p);
+                first.get_or_insert_with(|| p.clone());
+                at = *end;
+                continue;
+            }
             if rest.starts_with(PLACEHOLDER_PREFIX) {
                 let end = rest
                     .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
@@ -1648,9 +1660,16 @@ fn mask_lines(path: &str, text: &str, task: &mut TaskSecrets, vault: &Vault) -> 
                 continue;
             }
             for (form, placeholder) in &forms {
-                if rest.starts_with(form.as_str()) {
+                // A kept secret never runs into a value found here.
+                let next = spans
+                    .iter()
+                    .map(|(start, _, _)| *start)
+                    .filter(|start| *start > at)
+                    .min()
+                    .unwrap_or(body.len());
+                if rest.starts_with(form.as_str()) && at + form.len() <= next {
                     masked.push_str(placeholder);
-                    first.get_or_insert(*placeholder);
+                    first.get_or_insert_with(|| (*placeholder).to_owned());
                     at += form.len();
                     continue 'scan;
                 }
@@ -1666,7 +1685,7 @@ fn mask_lines(path: &str, text: &str, task: &mut TaskSecrets, vault: &Vault) -> 
         out.push_str(&masked);
         out.push_str(&line[body.len()..]);
         found.push(Place {
-            placeholder: placeholder.to_owned(),
+            placeholder,
             masked: Masked {
                 path: path.to_owned(),
                 key: String::new(),
@@ -1680,6 +1699,292 @@ fn mask_lines(path: &str, text: &str, task: &mut TaskSecrets, vault: &Vault) -> 
         let kept = task.also.iter().filter(|p| *p == place).count();
         if kept < wanted {
             task.also.push(place.clone());
+        }
+    }
+    Ok(out)
+}
+
+/// A secret [`found_in`] a line: where it is, and what it is kept under.
+#[derive(Debug, PartialEq, Eq)]
+struct Found {
+    start: usize,
+    end: usize,
+    /// The setting's name; for the password of a URL, [`url_key`] of its
+    /// host, so the proxy puts it back toward that host alone; else what
+    /// it was found as.
+    key: String,
+}
+
+/// The key a URL's password is kept under: its host, so it goes back
+/// into requests to that host alone (see [`Vault::load`]).
+fn url_key(host: &str) -> String {
+    format!("url@{host}")
+}
+
+/// The host a value kept under `key` was the password of a URL for.
+fn url_host(key: &str) -> Option<&str> {
+    key.strip_prefix("url@").filter(|h| plain_host(h))
+}
+
+/// Prefixes that make a word a token, whatever it is next to: the
+/// services' own marks on their keys.
+const TOKEN_PREFIXES: &[&str] = &[
+    "ghp_",
+    "gho_",
+    "ghu_",
+    "ghs_",
+    "ghr_",
+    "github_pat_",
+    "glpat-",
+    "gldt-",
+    "glrt-",
+    "xoxb-",
+    "xoxp-",
+    "xoxa-",
+    "xoxs-",
+    "xapp-",
+    "sk-",
+    "sk_live_",
+    "sk_test_",
+    "rk_live_",
+    "rk_test_",
+    "npm_",
+    "pypi-",
+    "hf_",
+    "AKIA",
+    "ASIA",
+    "AIza",
+    "ya29.",
+    "dop_v1_",
+    "shpat_",
+    "shpss_",
+    "glc_",
+    "SG.",
+];
+
+/// Whether `word` carries one of [`TOKEN_PREFIXES`] and enough after it to
+/// be a key, not a name that starts the same way.
+fn prefixed_token(word: &str) -> bool {
+    TOKEN_PREFIXES.iter().any(|p| {
+        word.strip_prefix(p).is_some_and(|rest| {
+            rest.len() >= 16
+                && rest.chars().any(|c| c.is_ascii_digit())
+                && rest.chars().any(|c| c.is_ascii_alphabetic())
+        })
+    })
+}
+
+/// What a token is made of.
+fn token_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | '=' | '/' | '+' | '~')
+}
+
+/// The secrets in `line` that are not settings of the `KEY=value` form
+/// ([`mask_settings`] masks those): the value of a setting a shell writes
+/// otherwise (`set -x NAME value`, `setenv NAME value`, `$env.NAME =
+/// "value"`, `typeset -x NAME=value`, a second `NAME=value` on an `export`
+/// line) whose name or value looks secret; the password in a URL
+/// (`https://user:token@host`) or a token standing for the user; the
+/// credential after `Authorization:`; and any word with a service's token
+/// prefix. Placeholders are never found; the spans are in order and apart.
+fn found_in(line: &str) -> Vec<Found> {
+    let mut found: Vec<Found> = Vec::new();
+    let mut add = |start: usize, end: usize, key: String| {
+        let value = &line[start..end];
+        if value.is_empty() || value.starts_with(PLACEHOLDER_PREFIX) {
+            return;
+        }
+        found.push(Found { start, end, key });
+    };
+    for (start, end, key) in shell_settings(line) {
+        let value = &line[start..end];
+        // A command's output or another variable (`(gh auth token)`,
+        // `$(…)`, `$TOKEN`) holds no secret here; masked, it would break
+        // the line.
+        if !value.starts_with(['$', '(', '`']) && looks_secret(&key, value) {
+            add(start, end, key);
+        }
+    }
+    for (start, end, host) in url_secrets(line) {
+        add(start, end, url_key(&host));
+    }
+    for (start, end) in authorization_values(line) {
+        add(start, end, "authorization".to_owned());
+    }
+    let mut at = 0;
+    for word in line.split(|c: char| !token_char(c)) {
+        let start = line[at..].find(word).map_or(at, |i| at + i);
+        at = start + word.len();
+        if prefixed_token(word) {
+            add(start, start + word.len(), "token".to_owned());
+        }
+    }
+    found.sort_by_key(|f| (f.start, std::cmp::Reverse(f.end)));
+    let mut apart: Vec<Found> = Vec::new();
+    for f in found {
+        if apart.last().is_none_or(|last| f.start >= last.end) {
+            apart.push(f);
+        }
+    }
+    apart
+}
+
+/// Where a value starting at `from` in `line` is: inside its quotes, or up
+/// to the first blank or `;` (or a ` #` comment) when it has none.
+fn value_span(line: &str, from: usize) -> Option<(usize, usize)> {
+    let rest = &line[from..];
+    match rest.chars().next()? {
+        q @ ('"' | '\'') => {
+            let end = closing_quote(&rest[1..], q)?;
+            Some((from + 1, from + 1 + end))
+        }
+        _ => {
+            let end = rest
+                .find(|c: char| c.is_whitespace() || c == ';')
+                .unwrap_or(rest.len());
+            Some((from, from + end))
+        }
+    }
+}
+
+/// The settings in `line` written as shells other than `sh` write them, and
+/// every `NAME=value` after the first on a line that sets several: each
+/// value's span with its setting's name.
+fn shell_settings(line: &str) -> Vec<(usize, usize, String)> {
+    let mut out = Vec::new();
+    let trimmed = line.trim_start();
+    if trimmed.starts_with('#') {
+        return out;
+    }
+    let lead = line.len() - trimmed.len();
+    let words: Vec<(usize, &str)> = trimmed
+        .split_whitespace()
+        .scan(0, |at, w| {
+            let start = trimmed[*at..].find(w).map_or(*at, |i| *at + i);
+            *at = start + w.len();
+            Some((lead + start, w))
+        })
+        .collect();
+    let Some(&(_, first)) = words.first() else {
+        return out;
+    };
+    let name_then_value = |i: usize, out: &mut Vec<(usize, usize, String)>| {
+        if let (Some(&(_, name)), Some(&(at, _))) = (words.get(i), words.get(i + 1))
+            && is_name(name)
+            && let Some((start, end)) = value_span(line, at)
+        {
+            out.push((start, end, name.to_owned()));
+        }
+    };
+    match first {
+        // fish: `set -gx NAME value`.
+        "set" => {
+            let i = 1 + words[1..]
+                .iter()
+                .take_while(|(_, w)| w.starts_with('-'))
+                .count();
+            name_then_value(i, &mut out);
+        }
+        // csh: `setenv NAME value`.
+        "setenv" => name_then_value(1, &mut out),
+        // bash, zsh, ksh: every `NAME=value` on the line; the first one
+        // after `export` is masked as a setting already.
+        "export" | "typeset" | "declare" | "readonly" | "local" | "set-env" => {
+            for &(at, word) in words[1..].iter().filter(|(_, w)| !w.starts_with('-')) {
+                if let Some((name, _)) = word.split_once('=')
+                    && is_name(name)
+                    && let Some((start, end)) = value_span(line, at + name.len() + 1)
+                {
+                    out.push((start, end, name.to_owned()));
+                }
+            }
+        }
+        _ => {}
+    }
+    // nushell `$env.NAME = value`, PowerShell `$env:NAME = value`.
+    if let Some(rest) = trimmed
+        .strip_prefix("$env.")
+        .or_else(|| trimmed.strip_prefix("$env:"))
+    {
+        let name_end = rest
+            .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+            .unwrap_or(rest.len());
+        let name = &rest[..name_end];
+        let after = &rest[name_end..];
+        if is_name(name)
+            && let Some(eq) = after.trim_start().strip_prefix('=')
+        {
+            let value = eq.trim_start();
+            let from = line.len() - value.len();
+            if let Some((start, end)) = value_span(line, from) {
+                out.push((start, end, name.to_owned()));
+            }
+        }
+    }
+    out
+}
+
+/// The passwords of the URLs in `line` (`scheme://user:password@host`), and
+/// a token that stands for the user alone (`https://token@host`), each
+/// with the URL's host.
+fn url_secrets(line: &str) -> Vec<(usize, usize, String)> {
+    let mut out = Vec::new();
+    let mut from = 0;
+    while let Some(i) = line[from..].find("://") {
+        let auth = from + i + 3;
+        from = auth;
+        let rest = &line[auth..];
+        let span = rest
+            .find(|c: char| matches!(c, '/' | '?' | '#' | '"' | '\'' | '`') || c.is_whitespace())
+            .unwrap_or(rest.len());
+        let Some(at) = rest[..span].rfind('@') else {
+            continue;
+        };
+        let userinfo = &rest[..at];
+        let host_part = &rest[at + 1..span];
+        let host = host_part
+            .split(':')
+            .next()
+            .unwrap_or_default()
+            .trim_end_matches(['.', ']'])
+            .to_ascii_lowercase();
+        let (start, end) = match userinfo.find(':') {
+            Some(colon) => (auth + colon + 1, auth + at),
+            // A user alone is a secret when it is shaped as one.
+            None if prefixed_token(userinfo) || token_shaped(userinfo) => (auth, auth + at),
+            None => continue,
+        };
+        if end > start {
+            out.push((start, end, host));
+        }
+    }
+    out
+}
+
+/// The credentials after each `Authorization:` in `line` (git's
+/// `http.extraHeader`, a `curl -H`), past a scheme word such as `Bearer`.
+fn authorization_values(line: &str) -> Vec<(usize, usize)> {
+    let lower = line.to_ascii_lowercase();
+    let mut out = Vec::new();
+    let mut from = 0;
+    while let Some(i) = lower[from..].find("authorization:") {
+        let mut at = from + i + "authorization:".len();
+        from = at;
+        let skip = |at: usize| at + line[at..].len() - line[at..].trim_start().len();
+        at = skip(at);
+        let word_end = |at: usize| {
+            line[at..]
+                .find(|c: char| c.is_whitespace() || matches!(c, '"' | '\'' | '`'))
+                .map_or(line.len(), |e| at + e)
+        };
+        let end = word_end(at);
+        let word = &lower[at..end];
+        if ["bearer", "token", "basic", "digest", "bot"].contains(&word) {
+            at = skip(end);
+        }
+        let end = word_end(at);
+        if end > at {
+            out.push((at, end));
         }
     }
     out
@@ -1697,20 +2002,37 @@ fn mask_settings(path: &str, text: &str, task: &mut TaskSecrets, vault: &Vault) 
         if value.starts_with(PLACEHOLDER_PREFIX) {
             return Ok(None);
         }
-        // A package index URL with a token in it: the token alone is
-        // masked, so the tool still reaches the index, with the proxy
-        // putting the token back in the credentials it sends there.
-        if kept.is_none()
-            && crate::home::is_index_setting(path)
-            && let Some((before, password, after)) = url_password(value)
-            && password.len() >= 8
-            && !password.starts_with(PLACEHOLDER_PREFIX)
-        {
-            let p = placeholder_for(path, key, password, task, vault)?;
-            return Ok(Some(format!("{before}{p}{after}")));
+        // A package index's or a git remote's URL with a token in it: the
+        // token alone is masked, line by line (see [`url_secrets`]), so the
+        // tool still reaches the host, with the proxy putting the token back
+        // in the credentials it sends there.
+        if kept.is_none() && url_token_alone(path) && url_password(value).is_some() {
+            return Ok(None);
         }
         placeholder_for(path, key, value, task, vault).map(Some)
     })
+}
+
+/// Whether the settings file at `path` names hosts by URLs a tool reaches
+/// with the token in them: a package index's settings, git's. There the
+/// token alone is masked, not the URL.
+fn url_token_alone(path: &str) -> bool {
+    crate::home::is_index_setting(path) || is_git_config(path)
+}
+
+/// Whether `path` is git's own settings: the person's, or a repository's.
+pub(crate) fn is_git_config(path: &str) -> bool {
+    matches!(
+        path,
+        ".gitconfig" | ".config/git/config" | ".git/config" | ".git/config.worktree"
+    )
+}
+
+/// Whether Kule masks the file at `path` in a task's copy: its env files,
+/// and the repository's own settings, where a remote's URL may hold a
+/// token.
+pub(crate) fn masked_in_copy(path: &str) -> bool {
+    is_env_file(path) || matches!(path, ".git/config" | ".git/config.worktree")
 }
 
 /// A URL value with a password in its userinfo (`https://me:token@host/`),
@@ -1909,7 +2231,7 @@ mod tests {
         let vault = Vault::default();
         let mut task = TaskSecrets::default();
         let text = "[global]\nindex-url = https://me:ghp_abcdefgh12345678@pypi.example.com/simple\ntimeout = 60\n";
-        let masked = mask_settings(".config/pip/pip.conf", text, &mut task, &vault).unwrap();
+        let masked = mask_with(".config/pip/pip.conf", text, &mut task, &vault).unwrap();
         assert!(
             masked.contains("index-url = https://me:kule_secret_"),
             "{masked}"
@@ -1920,6 +2242,8 @@ mod tests {
         );
         let (_, kept) = task.masked.iter().next().unwrap();
         assert_eq!(kept.value, "ghp_abcdefgh12345678");
+        // Kept to go to that host alone.
+        assert_eq!(kept.key, "url@pypi.example.com");
         // Elsewhere the whole value goes, as before.
         let mut task = TaskSecrets::default();
         let masked = mask_settings(
@@ -2191,6 +2515,137 @@ mod tests {
         let vault = Vault::load(home.path(), ws.path(), dir.path()).unwrap();
         let out = mask_with(".zshrc", "PATH=/opt/hunter2/bin\n", &mut task, &vault).unwrap();
         assert!(!out.contains("hunter2"), "{out}");
+    }
+
+    /// The forms shells, git and other tools write a token in: each value
+    /// found alone, never a placeholder, and the rest of the line kept.
+    #[test]
+    fn tokens_are_found_in_the_forms_tools_write_them() {
+        let found = |line: &str| -> Vec<(String, String)> {
+            found_in(line)
+                .into_iter()
+                .map(|f| (line[f.start..f.end].to_owned(), f.key))
+                .collect()
+        };
+        let pair = |v: &str, k: &str| vec![(v.to_owned(), k.to_owned())];
+        let tok = "ghp_FAKE0123456789abcdefABCDEF";
+        assert_eq!(
+            found(&format!("set -x GITHUB_TOKEN {tok}")),
+            pair(tok, "GITHUB_TOKEN")
+        );
+        assert_eq!(
+            found(&format!("set -gx API_KEY 'abc{tok}'")),
+            pair(&format!("abc{tok}"), "API_KEY")
+        );
+        assert_eq!(
+            found(&format!("setenv GITHUB_TOKEN {tok}")),
+            pair(tok, "GITHUB_TOKEN")
+        );
+        assert_eq!(
+            found(&format!("$env.GITHUB_TOKEN = \"{tok}\"")),
+            pair(tok, "GITHUB_TOKEN")
+        );
+        assert_eq!(
+            found(&format!("$env:API_KEY = '{tok}'")),
+            pair(tok, "API_KEY")
+        );
+        assert_eq!(
+            found(&format!("typeset -x NPM_SECRET={tok}")),
+            pair(tok, "NPM_SECRET")
+        );
+        assert_eq!(
+            found("export EDITOR=vi OPENAI_API_KEY=sk-FAKEMULTI0123456789abcd"),
+            pair("sk-FAKEMULTI0123456789abcd", "OPENAI_API_KEY")
+        );
+        assert_eq!(
+            found(&format!(
+                "[url \"https://x-access-token:{tok}@github.com/\"]"
+            )),
+            pair(tok, "url@github.com")
+        );
+        assert_eq!(
+            found(&format!("\turl = https://{tok}@GitHub.com:443/x/y.git")),
+            pair(tok, "url@github.com")
+        );
+        assert_eq!(
+            found(&format!("\textraheader = AUTHORIZATION: bearer {tok}")),
+            pair(tok, "authorization")
+        );
+        assert_eq!(
+            found(&format!("alias gh2='GH_HOST=x {tok} gh'")),
+            pair(tok, "token")
+        );
+        // Not secrets: names, paths, switches, a user alone, placeholders.
+        for line in [
+            "set -x EDITOR nvim",
+            "set -gx PATH $HOME/.cargo/bin $PATH",
+            "setenv LANG en_US.UTF-8",
+            "export A=1 AUTH_ENABLED=true",
+            "url = https://github.com/kulehq/kule.git",
+            "url = https://me@github.com/kulehq/kule.git",
+            "export GITHUB_TOKEN=kule_secret_0123456789abcdef0123456789abcdef",
+            "url = https://x:kule_secret_0123456789abcdef0123456789abcdef@github.com/",
+            "# set -x GITHUB_TOKEN ghp_FAKE0123456789abcdefABCDEF in a comment",
+            "zstyle ':completion:*' matcher-list 'm:{a-zA-Z}={A-Za-z}'",
+            "alias sk-learn='python -m sklearn'",
+            "set -gx GITHUB_TOKEN (gh auth token)",
+            "export A=1 GH_TOKEN=$(gh auth token)",
+            "$env.API_KEY = $env.OTHER_KEY",
+        ] {
+            let all = found(line);
+            assert!(
+                all.is_empty() || line.starts_with('#') && all == pair(tok, "token"),
+                "{line}: {all:?}"
+            );
+        }
+    }
+
+    /// Masked, each goes back to the file only in its own line, as it was;
+    /// a URL's token goes to that URL's host alone.
+    #[test]
+    fn a_token_found_in_a_line_goes_back_there_and_to_its_host_alone() {
+        let (home, ws, dir) = (
+            TempDir::new().unwrap(),
+            TempDir::new().unwrap(),
+            TempDir::new().unwrap(),
+        );
+        let tok = "ghp_FAKEURLTOKEN0123456789abcdef";
+        let text = format!(
+            "[url \"https://x-access-token:{tok}@github.com/\"]\n\tinsteadOf = https://github.com/\n[http]\n\textraheader = AUTHORIZATION: bearer ghp_FAKEHEADER0123456789abcdef\n"
+        );
+        let mut task = TaskSecrets::default();
+        let masked = mask_with(".gitconfig", &text, &mut task, &Vault::default()).unwrap();
+        assert!(!masked.contains("ghp_"), "{masked}");
+        assert!(
+            masked.contains("https://x-access-token:kule_secret_"),
+            "{masked}"
+        );
+        assert!(masked.contains("@github.com/\"]\n\tinsteadOf"), "{masked}");
+        task.save(dir.path(), home.path()).unwrap();
+        let vault = Vault::load(home.path(), ws.path(), dir.path()).unwrap();
+        assert_eq!(vault.unmask(".gitconfig", &masked), text);
+        assert_eq!(vault.unmask(".zshrc", &masked), masked);
+        // The URL's token fills git's credentials to github.com, and to
+        // nowhere else; the header's goes nowhere.
+        let p = masked
+            .split(':')
+            .find_map(|part| part.strip_prefix("kule_secret_").map(|_| part))
+            .and_then(|p| p.split('@').next())
+            .unwrap()
+            .to_owned();
+        let basic = base64::engine::general_purpose::STANDARD.encode(format!("x-access-token:{p}"));
+        let head =
+            format!("GET /x/y.git/info/refs HTTP/1.1\r\nAuthorization: Basic {basic}\r\n\r\n");
+        let (filled, used) = vault.fill("github.com", &head);
+        let real =
+            base64::engine::general_purpose::STANDARD.encode(format!("x-access-token:{tok}"));
+        assert!(filled.contains(&real), "{filled}");
+        assert_eq!(used.len(), 1);
+        assert_eq!(
+            vault.fill("evil.example.com", &head),
+            (head.clone(), Vec::new())
+        );
+        assert_eq!(vault.hosts(), BTreeSet::from(["github.com".to_owned()]));
     }
 
     #[test]

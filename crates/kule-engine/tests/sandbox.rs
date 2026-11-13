@@ -28,6 +28,19 @@ impl Setup {
         let ws = TempDir::new().unwrap();
         fs::write(ws.path().join("README.md"), "hello\n").unwrap();
         let task = Task::create(home.path(), ws.path()).unwrap();
+        // Run as root (a container's CI job), Kule asks for weaker isolation
+        // to be accepted; these tests are what it then gives.
+        #[cfg(target_os = "linux")]
+        // SAFETY: a plain system call.
+        if unsafe { libc::geteuid() } == 0 {
+            kule_engine::set_isolation(
+                home.path(),
+                &kule_engine::Isolation {
+                    accept_weaker: true,
+                },
+            )
+            .unwrap();
+        }
         Setup {
             _home: home,
             _ws: ws,
@@ -2426,7 +2439,7 @@ fn the_persons_package_caches_are_read_only() {
         ".cargo/git",
         ".npm",
         ".nuget/packages",
-        ".cache",
+        ".cache/pip",
         "Library/Caches/pip",
     ];
     for cache in caches {
@@ -3202,6 +3215,8 @@ fn an_open_device_not_given() -> Option<PathBuf> {
         .filter(|e| fs::metadata(e.path()).is_ok_and(|m| m.file_type().is_char_device()))
         .filter(|e| !given.iter().any(|g| e.file_name() == *g))
         .map(|e| e.path())
+        // One a profile may be given.
+        .filter(|p| p.to_str().is_some_and(kule_engine::device_kind_allowed))
         .filter(|p| {
             fs::OpenOptions::new()
                 .read(true)
@@ -3305,6 +3320,13 @@ fn devices_that_reach_what_is_the_persons_are_never_given() {
         "/dev/../etc/passwd",
         "/etc/passwd",
         "dev/null",
+        // None of the kinds Kule gives (sound, cameras, serial ports, GPUs).
+        "/dev/bus/usb",
+        "/dev/kvm",
+        "/dev/fuse",
+        "/dev/net/tun",
+        "/dev/vhost-net",
+        "/dev/sg0",
     ] {
         let refused = s.sandbox().allow_device(Path::new(path));
         assert!(refused.is_err(), "{path} was given");
@@ -3844,4 +3866,148 @@ fn a_command_starting_for_another_task_is_not_its_stray() {
     let status = slow.wait().unwrap();
     assert_eq!(status.signal(), Some(libc::SIGKILL), "{status:?}");
     drop(held);
+}
+
+/// Linux, in every isolation mode: a command neither reads nor replaces a
+/// key in the person's session keyring (a user namespace keeps it), and
+/// makes sockets only in the families a command needs: no virtual
+/// machine's `vsock`, no raw packets.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_command_has_no_keys_of_the_persons_and_no_sockets_beyond_the_network() {
+    use std::ffi::CString;
+    const KEY_SPEC_SESSION_KEYRING: libc::c_long = -3;
+    const KEYCTL_READ: libc::c_long = 11;
+    const KEYCTL_UNLINK: libc::c_long = 9;
+    let read = |id: libc::c_long| {
+        let mut buf = [0u8; 64];
+        // SAFETY: reads the key into buf, at most its length.
+        let n = unsafe {
+            libc::syscall(
+                libc::SYS_keyctl,
+                KEYCTL_READ,
+                id,
+                buf.as_mut_ptr(),
+                buf.len(),
+            )
+        };
+        (n >= 0).then(|| String::from_utf8_lossy(&buf[..n as usize]).into_owned())
+    };
+    let name = format!("kule_probe_{}", std::process::id());
+    let (kind, desc) = (
+        CString::new("user").unwrap(),
+        CString::new(name.clone()).unwrap(),
+    );
+    let secret = b"outside-secret-123";
+    // SAFETY: adds a user key to this process's session keyring.
+    let id = unsafe {
+        libc::syscall(
+            libc::SYS_add_key,
+            kind.as_ptr(),
+            desc.as_ptr(),
+            secret.as_ptr(),
+            secret.len(),
+            KEY_SPEC_SESSION_KEYRING,
+        )
+    };
+    // Where keyrings are refused around the tests (a container's own
+    // filter) there is nothing to plant; the calls inside are tried all
+    // the same.
+    let planted = id >= 0;
+    if planted {
+        assert_eq!(read(id).as_deref(), Some("outside-secret-123"));
+    } else {
+        eprintln!(
+            "no session keyring to plant in here: {}",
+            std::io::Error::last_os_error()
+        );
+    }
+    let s = Setup::new();
+    let sandbox = s.sandbox();
+    let script = format!(
+        r#"
+import ctypes, errno, socket
+libc = ctypes.CDLL(None, use_errno=True)
+buf = ctypes.create_string_buffer(64)
+def call(*args):
+    r = libc.syscall(*args)
+    return "ok" if r >= 0 else errno.errorcode[ctypes.get_errno()]
+print("read", call({keyctl}, 11, {id}, buf, 64), buf.value.decode())
+print("add", call({add_key}, b"user", b"{name}", b"overwritten-from-task", 21, -3))
+print("search", call({keyctl}, 10, -3, b"user", b"{name}", 0))
+for family in (40, 17):
+    try:
+        socket.socket(family, socket.SOCK_DGRAM if family == 17 else socket.SOCK_STREAM)
+        print("socket", family, "ok")
+    except OSError as e:
+        print("socket", family, errno.errorcode[e.errno])
+for family in (socket.AF_UNIX, socket.AF_INET, socket.AF_INET6):
+    socket.socket(family, socket.SOCK_STREAM).close()
+print("everyday sockets ok")
+"#,
+        keyctl = libc::SYS_keyctl,
+        add_key = libc::SYS_add_key,
+        id = id.max(0),
+        name = name,
+    );
+    let out = sandbox
+        .command("python3", &["-I".to_owned(), "-c".to_owned(), script])
+        .unwrap()
+        .output()
+        .unwrap();
+    let said = text(&out);
+    assert!(ok(&out), "{out:?}");
+    assert!(said.contains("read EPERM"), "{said}");
+    assert!(!said.contains("outside-secret"), "{said}");
+    assert!(said.contains("add EPERM"), "{said}");
+    assert!(said.contains("search EPERM"), "{said}");
+    assert!(said.contains("socket 40 EAFNOSUPPORT"), "{said}");
+    assert!(said.contains("socket 17 EAFNOSUPPORT"), "{said}");
+    assert!(said.contains("everyday sockets ok"), "{said}");
+    if planted {
+        assert_eq!(read(id).as_deref(), Some("outside-secret-123"));
+        // SAFETY: takes the test's key out of the session keyring again.
+        unsafe {
+            libc::syscall(
+                libc::SYS_keyctl,
+                KEYCTL_UNLINK,
+                id,
+                KEY_SPEC_SESSION_KEYRING,
+            )
+        };
+    }
+}
+
+/// Linux: a command holds no capability, and none it could get back by
+/// `exec` (an empty bounding set), whoever runs Kule: run as root, its
+/// commands are root without root's powers, and make no raw socket.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_command_holds_no_capability_whoever_runs_kule() {
+    let s = Setup::new();
+    let sandbox = s.sandbox();
+    let out = sh(
+        &sandbox,
+        "grep -E '^(CapEff|CapPrm|CapBnd|CapAmb):' /proc/self/status",
+    );
+    let said = text(&out);
+    assert!(ok(&out), "{out:?}");
+    for line in said.lines() {
+        let value = line.split_whitespace().nth(1).unwrap_or_default();
+        assert!(value.chars().all(|c| c == '0'), "{said}");
+    }
+    assert_eq!(said.lines().count(), 4, "{said}");
+    let out = sandbox
+        .command(
+            "python3",
+            &[
+                "-I".to_owned(),
+                "-c".to_owned(),
+                "import socket\ntry:\n    socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_ICMP)\n    print('raw made')\nexcept OSError as e:\n    print('raw refused', e.errno)".to_owned(),
+            ],
+        )
+        .unwrap()
+        .output()
+        .unwrap();
+    assert!(text(&out).contains("raw refused"), "{out:?}");
 }

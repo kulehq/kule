@@ -109,35 +109,16 @@ fn npm_spec(spec: &str) -> Result<(), String> {
             "npx {spec}: name a registry package with one exact version, like name@1.2.3"
         ))
     };
-    let Some((name, version)) = spec.rsplit_once('@').filter(|(n, _)| !n.is_empty()) else {
-        return refuse();
-    };
-    let plain = |part: &str| {
-        !part.is_empty()
-            && part
-                .bytes()
-                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b"-._~".contains(&b))
-    };
-    let name_ok = match name.strip_prefix('@') {
-        Some(scoped) => scoped
-            .split_once('/')
-            .is_some_and(|(scope, n)| plain(scope) && plain(n)),
-        None => plain(name),
-    };
-    if !name_ok || !crate::profile::exact_version(version) {
-        return refuse();
+    match crate::profile::npm_registry_spec(spec) {
+        Some(_) => Ok(()),
+        None => refuse(),
     }
-    Ok(())
 }
 
 /// `name==1.2.3`, from the index, without extras.
 fn pypi_spec(spec: &str) -> Result<(), String> {
     let ok = spec.split_once("==").is_some_and(|(name, version)| {
-        !name.is_empty()
-            && name
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b"-._".contains(&b))
-            && crate::profile::exact_version(version)
+        crate::profile::pypi_name(name) && crate::profile::exact_version(version)
     });
     if ok {
         Ok(())
@@ -181,6 +162,10 @@ mod tests {
             ("uvx", vec!["tool[extra]==1.0.0"]),
             ("uvx", vec!["tool>=1.0.0"]),
             ("uvx", vec!["tool@https://evil"]),
+            ("npx", vec!["-y", "tool@1.2.3-x || >=0.0.0"]),
+            ("npx", vec!["-y", "tool@1.2.3-0 - 9"]),
+            ("npx", vec!["-y", "tool@1.2.3-x.tgz"]),
+            ("uvx", vec!["tool==1.2.3-x || >=0"]),
             ("bash", vec!["-c", "x"]),
         ] {
             assert!(pinned(command, &args(&a)).is_err(), "{command} {a:?}");

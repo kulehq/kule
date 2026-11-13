@@ -47,7 +47,10 @@ Geldikçe şunlar görünür:
 - **Ajanın yanıtı**, Markdown olarak düzenlenmiş; kod blokları bir
   editördeki gibi renklendirilmiş.
 - Ajan paylaştığında, daha sönük bir stilde **düşünmesi**.
-- **Araç çağrıları**, her biri bir satır: çalışırken `·`, bittiğinde `✓`,
+- **Kule'nin kendi notları** (neyi sonlandırdığı, kestiği ya da
+  kaydedemediği) önlerinde `◆ Kule:` taşır; bir ajanın adını verdiği hiçbir
+  satır bunu almaz.
+- **Araç çağrıları**, her biri bir satır: çalışırken `›`, bittiğinde `✓`,
   başarısız olduğunda `✗`; okun ardından da çağrının değiştirdiği dosyalar.
   Bir şeyi değiştiren her çağrı, bakabileceğiniz ve geri dönebileceğiniz
   bir **adımdır** (bkz. [Timeline](timeline.md)).

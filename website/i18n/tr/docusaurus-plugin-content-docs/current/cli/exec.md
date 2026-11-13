@@ -186,7 +186,7 @@ kule exec "$TASK" --reveal ~/Library/Keychains \
 
 | Satır | Anlamı |
 | --- | --- |
-| komutun kendi çıktısı | Çalışırken yazdırılır. |
+| komutun kendi çıktısı | Çalışırken yazdırılır. Terminalinizde komut kendine ait bir terminal alır (renkler ve boyutlar sizinkinde olduğu gibi çalışır); Kule onun yazdıklarını sizinkine, panonuzu ayarlayacak (OSC 52), terminale bir dize iletecek (DCS, APC, tmux'un passthrough'u), pencereyi değiştirecek ya da bildirecek dizileri ve başlıklar, renkler, klasör, bağlantılar ve istem işaretleri dışındaki her OSC'yi çıkararak iletir. Windows'ta komutun çıktısı o zaman Kule'ye konsol değil bir boru üzerinden gelir. `--no-sandbox` terminali olduğu gibi bırakır. |
 | `N file changes: +a ~m -d` ve liste | Kopyada olup çalışma klasöründe olmayan her şey, [kule status](status.md)'un gösterdiği gibi. |
 | `N ignored by the workspace, staying in the copy …` | Çalışma klasörünün `.gitignore`'unun dışarıda bıraktığı yollar (derleme çıktısı, `.env`). `--include-ignored` vermezseniz bir commit bunları geride bırakır. |
 | `git:` | Depo değişiklikleri. Bkz. [Git](../concepts/git.md). |

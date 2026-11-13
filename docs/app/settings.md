@@ -39,7 +39,12 @@ Kule's own agents (Claude Code, Codex, Gemini) and yours from
   draft, and lists what the sandbox refused it as checkboxes: the
   directories it wanted to write to and the hosts it wanted to reach. Tick
   what it should get (a telemetry host can stay out). Linux does not report
-  refused files, so there only hosts are suggested.
+  refused files, so there only hosts are suggested. Until you approve the
+  profile as it stands, a trial gets none of your variables, keys or
+  logins, and nothing hidden is revealed for it; the result says what was
+  withheld. What a profile opens that the form has no field for (keys from
+  the keychain or a login file, settings carried into its home, what macOS
+  reveals, devices) is shown under the form as saved.
 - An agent you add runs only once you **approve** what it opens (its own
   folders, hosts and keys), and again after any change to it.
 

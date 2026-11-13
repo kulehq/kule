@@ -367,6 +367,69 @@ pub(crate) fn clone_entry(from: &Path, to: &Path) -> Result<Option<Stamp>> {
     Ok(None)
 }
 
+/// [`clone_entry`] into the open folder `dir`, as `name`, which must not
+/// exist: written through `dir`'s descriptor only, so a link a sandbox put
+/// in `dir`'s place, or on its way, takes nothing elsewhere. `from`'s own
+/// last component is not followed either. `shown` names it in errors.
+pub(crate) fn clone_entry_into(
+    from: &Path,
+    dir: &File,
+    name: &str,
+    shown: &Path,
+) -> Result<Option<Stamp>> {
+    const ATTEMPTS: usize = 5;
+    let cname = plain_name(name).at(shown)?;
+    for attempt in 1..=ATTEMPTS {
+        let Some(before) = Stamp::of(from)? else {
+            return Ok(None);
+        };
+        let cloned = match before.kind {
+            Kind::Dir => mkdir_at(dir, name).at(shown),
+            Kind::Symlink => {
+                let target = Path::new(before.link.as_deref().unwrap_or_default());
+                at::symlink_at(dir, &cname, target).at(shown)
+            }
+            Kind::File => match open_file_nofollow(from).at(from)? {
+                Some(file) => at::copy_into(&file, dir, &cname)
+                    .and_then(|()| finish_at(dir, name, &before))
+                    .at(shown),
+                None => Err(Error::Invalid(format!(
+                    "{} changed while it was being copied",
+                    from.display()
+                ))),
+            },
+        };
+        if let Err(e) = cloned {
+            remove_tree_at(dir, name).at(shown)?;
+            if is_vanished(&e) || Stamp::of(from)?.is_none() {
+                return Ok(None);
+            }
+            if cfg!(windows) && is_denied(&e) && attempt < ATTEMPTS {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+                continue;
+            }
+            return Err(e);
+        }
+        match Stamp::of(from)? {
+            Some(after) if before.unchanged(&after) => return Ok(Some(before)),
+            Some(_) if attempt == ATTEMPTS => return Ok(Some(before)),
+            _ => remove_tree_at(dir, name).at(shown)?,
+        }
+    }
+    Ok(None)
+}
+
+/// The regular file at `path`, opened without following a link as its
+/// last component; `None` when it is a link or not a regular file.
+fn open_file_nofollow(path: &Path) -> io::Result<Option<File>> {
+    let (Some(parent), Some(name)) = (path.parent(), path.file_name().and_then(|n| n.to_str()))
+    else {
+        return Ok(None);
+    };
+    let dir = osfs::open_dir(parent)?;
+    at::open_file_at(&dir, &plain_name(name)?)
+}
+
 fn is_denied(e: &Error) -> bool {
     matches!(e, Error::Io { source, .. } if source.kind() == io::ErrorKind::PermissionDenied)
 }
@@ -588,6 +651,8 @@ fn place_at(
 /// [`finish`] for the entry `name` in `dir`, not following a link.
 fn finish_at(dir: &File, name: &str, stamp: &Stamp) -> io::Result<()> {
     let cname = plain_name(name)?;
+    // First: an immutable flag a clone carried would refuse the rest.
+    at::clear_flags_at(dir, &cname)?;
     at::set_mtime_at(dir, Some(&cname), stamp.mtime)?;
     at::set_mode_at(dir, &cname, stamp.mode)
 }
@@ -862,6 +927,12 @@ fn file_xattrs(_file: &File) -> io::Result<BTreeMap<String, String>> {
 }
 
 fn finish(path: &Path, stamp: &Stamp) -> Result<()> {
+    // First, as in `finish_at`: an immutable flag would refuse the rest.
+    #[cfg(target_os = "macos")]
+    if let (Some(dir), Some(name)) = (path.parent(), path.file_name().and_then(|n| n.to_str())) {
+        let dir = osfs::open_dir(dir).at(path)?;
+        at::clear_flags_at(&dir, &plain_name(name).at(path)?).at(path)?;
+    }
     osfs::set_mtime(path, stamp.mtime).at(path)?;
     osfs::set_mode(path, stamp.mode).at(path)
 }
@@ -1064,6 +1135,12 @@ const KEPT_TRIES: usize = 8;
 /// there is none.
 pub(crate) fn entry_at(dir: &File, name: &str) -> io::Result<Option<Kind>> {
     Ok(at::stat_at(dir, &plain_name(name)?)?.map(|(kind, _)| kind))
+}
+
+/// The regular file `name` in `dir`, opened for reading without following
+/// a link; `None` for a link or anything but a regular file.
+pub(crate) fn file_at(dir: &File, name: &str) -> io::Result<Option<File>> {
+    at::open_file_at(dir, &plain_name(name)?)
 }
 
 /// Removes the entry `name` in `dir` that is not a folder (a file, a link,

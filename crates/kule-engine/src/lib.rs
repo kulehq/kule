@@ -13,6 +13,8 @@
 //! operating system. Policy over the effect set arrives later in M1.
 
 mod approvals;
+#[cfg(target_os = "linux")]
+mod base_filter;
 mod beside;
 #[cfg(target_os = "linux")]
 mod bind_filter;
@@ -130,10 +132,10 @@ pub use remembered::{
 #[cfg(target_os = "macos")]
 pub use sandbox::ProcessFinder;
 pub use sandbox::{
-    Denial, Ended, HIDDEN_IN_HOME, INCOMPLETE, Io, Network, PASSED_ENV, PASSED_ENV_WINDOWS,
-    PERSONAL_IN_HOME, Process, Refusals, Sandbox, Start, UNREPORTED, check_hints,
-    checked_read_hint, denials, isolates_network, own_processes, protects_in_place, record_denials,
-    traced_denials,
+    DEVICE_KINDS, Denial, Ended, HIDDEN_IN_HOME, INCOMPLETE, Io, Network, PASSED_ENV,
+    PASSED_ENV_WINDOWS, PERSONAL_IN_HOME, Process, Refusals, Sandbox, Start, UNREPORTED,
+    check_hints, checked_read_hint, denials, device_kind_allowed, isolates_network, own_processes,
+    protects_in_place, record_denials, traced_denials,
 };
 #[cfg(windows)]
 pub use sandbox::{Terminal, TerminalInput, TerminalStart};

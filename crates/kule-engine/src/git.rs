@@ -58,6 +58,19 @@ fn within(parts: &[&str]) -> Option<Part> {
     if parts.last().is_some_and(|p| p.ends_with(".lock")) {
         return Some(Part::Lock);
     }
+    // The folders whose content runs code, under whatever case a disk that
+    // ignores it (macOS's) opens them by: `.git/HOOKS/post-commit` is the
+    // hook git runs there.
+    let first = parts.first().map(|p| crate::policy::fold(p));
+    match (first.as_deref(), parts) {
+        (Some("hooks"), [name, ..]) if *name != "hooks" => return Some(Part::Hook),
+        (Some("modules" | "worktrees"), [name, inner @ ..])
+            if !matches!(*name, "modules" | "worktrees") && !inner.is_empty() =>
+        {
+            return Some(nested(inner));
+        }
+        _ => {}
+    }
     Some(match parts {
         // Alternates point the repository at another object store.
         ["objects", "info", "alternates" | "http-alternates"] => Part::Config,
@@ -110,7 +123,11 @@ fn nested(inner: &[&str]) -> Part {
 /// Whether git keeps `name` at the top of a repository's directory
 /// (gitrepository-layout), as data or not.
 fn at_top(name: &str) -> bool {
-    name.ends_with(".lock")
+    // The folders whose content runs code, under any case (see `within`).
+    matches!(
+        crate::policy::fold(name).as_str(),
+        "hooks" | "modules" | "worktrees"
+    ) || name.ends_with(".lock")
         || name.starts_with("BISECT_")
         || name.starts_with("sharedindex.")
         || matches!(
@@ -451,9 +468,15 @@ pub(crate) fn summarize(
                 summary.config = true;
             }
             Some(Part::Hook) if effect.kind != Kind::Dir => {
-                summary
-                    .hooks
-                    .push(effect.path.trim_start_matches(".git/hooks/").to_owned());
+                // By its name in the hooks folder, however that is cased;
+                // a submodule's or worktree's by its whole path.
+                let name = effect
+                    .path
+                    .strip_prefix(".git/")
+                    .and_then(|rest| rest.split_once('/'))
+                    .filter(|(dir, _)| crate::policy::fold(dir) == "hooks")
+                    .map_or(effect.path.as_str(), |(_, name)| name);
+                summary.hooks.push(name.to_owned());
             }
             Some(Part::Other) => summary.other.push(effect.path.clone()),
             _ => {}
@@ -715,6 +738,11 @@ mod tests {
             (".git/MERGE_MSG", Part::Other),
             (".git/config", Part::Config),
             (".git/hooks/pre-commit", Part::Hook),
+            // As a disk that ignores case opens them.
+            (".git/HOOKS/post-commit", Part::Hook),
+            (".git/Hooks/pre-push", Part::Hook),
+            (".git/Modules/sub/HOOKS/post-checkout", Part::Hook),
+            (".git/WORKTREES/wt/hooks/post-commit", Part::Hook),
             // Read to find config and hooks, or holding commands, or unknown.
             (".git/commondir", Part::Config),
             (".git/info/attributes", Part::Config),

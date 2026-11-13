@@ -287,6 +287,20 @@ function terminalEnd(notes, lost) {
   ].join("");
 }
 
+/**
+ * How Live marks one line: whose it is, and the mark before it. Kule's
+ * own notes alone carry Kule's name and the class for it; a line an agent
+ * names (a tool call's title) never does, whatever it says, so a sentence
+ * in Kule's voice from an agent still reads as the agent's.
+ */
+function liveLine(item) {
+  if (item.kind === "note") {
+    return { who: "Kule", classes: item.quiet ? "event kule-note quiet" : "event kule-note", mark: "◆" };
+  }
+  const state = item.done ? (item.failed ? "failed" : "done") : "";
+  return { who: null, classes: `event tool ${state}`.trim(), mark: item.done ? (item.failed ? "✗" : "✓") : "›" };
+}
+
 if (typeof module !== "undefined") {
   module.exports = {
     spinnerLine,
@@ -316,5 +330,6 @@ if (typeof module !== "undefined") {
     frameContext,
     QUESTION_GUARD_MS,
     answerableYet,
+    liveLine,
   };
 }

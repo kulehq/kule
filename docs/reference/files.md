@@ -119,7 +119,7 @@ used.
 
 | Path | What it holds |
 | --- | --- |
-| `~/Library/Application Support/Kule/packages` (macOS), `~/.local/share/kule/packages` (Linux and Windows, under your profile) | Agents that Kule installs with npm (Claude Code's and Codex's ACP adapters), one folder per exact version, installed without running install scripts. No sandbox can write here. |
+| `~/Library/Application Support/Kule/packages` (macOS), `~/.local/share/kule/packages` (Linux and Windows, under your profile) | Agents that `npx` fetches, which Kule installs with npm (Claude Code's and Codex's ACP adapters, and yours), one folder per exact version, installed from the registry only, without running install scripts. No sandbox can write here. |
 | `~/Library/Application Support/Kule/agents/<name>` (macOS), `~/.local/share/kule/agents/<name>` (Linux and Windows) | A **home of its own** for an agent whose profile sets `own_home`, as Kule's own agents do: its settings, history and transcripts in Kule, kept across tasks. Kule copies your settings and instructions in at every start (`carry`). |
 | `%LOCALAPPDATA%\Kule` (Windows) | Kule's programs, as the installer puts them: the app, `kule.exe`, `kule-proxy.exe` and `kule-pty-helper.exe`. Not Kule's home, and never to be made it. |
 | `<workspace>/.kule/policy.cedar` | A repository's own **forbid** rules. It may only tighten the policy. Kule reads it from your real folder, never from a task's copy, and every change to anything under `.kule/` waits for a person. **Edit: yes.** |

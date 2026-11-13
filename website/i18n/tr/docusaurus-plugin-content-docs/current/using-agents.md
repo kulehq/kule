@@ -132,10 +132,17 @@ dizinindedir.
 
 ### npx ile getirilen paketler {#packages-fetched-with-npx}
 
-`npx`'in getirdiği bir ajan (Claude Code'un ve Codex'in bağdaştırıcıları)
-**her sürüm için bir kez**, sandbox'ın dışında ve paketin kurulum
-betikleri çalıştırılmadan, Kule'nin taşıdığı bir lockfile'dan, her
-bağımlılık kendi bütünlük (integrity) hash'iyle kurulur. Şuraya kurulur:
+`npx`'in getirdiği bir ajan **her sürüm için bir kez**, sandbox'ın dışında,
+paketin kurulum betikleri çalıştırılmadan ve yalnızca paket kayıt
+deposundan kurulur (npm'e bir depodan, bir URL'den, bir dosyadan ya da bir
+klasörden hiçbir şey almaması söylenir). Claude Code'un ve Codex'in
+bağdaştırıcıları Kule'nin taşıdığı bir lockfile'dan, her bağımlılık kendi
+bütünlük (integrity) hash'iyle kurulur; başka bir paket için (sizin bir
+ajanınız, bir eklentinin MCP sunucusu) yalnızca adını verdiğiniz sürüm
+sabittir, bağımlılıkları ise o gün kayıt deposunun sunduğudur ve sizin npm
+ayarlarınızla okunur. Sürüm SemVer dilbilgisinde tek bir sürüm olmalıdır
+(`1.2.3`, `1.2.3-beta.1`, `1.2.3+build.5`): ardından başka bir şey gelen
+bir sürüm reddedilir. Şuraya kurulur:
 
 - macOS: `~/Library/Application Support/Kule/packages`
 - Linux: `~/.local/share/kule/packages`
@@ -167,6 +174,14 @@ listeler: yazmak istediği dizinler ve erişmek istediği host'lar. `--apply`
 bunları profile ekler; profil de ardından her değişiklik gibi onayınızı
 bekler. Linux reddedilen dosyaları bildirmez; bu yüzden orada yalnızca
 host'lar önerilir.
+
+Denemek onaylamak değildir: profil şimdiki haliyle onaylanana kadar bir
+deneme sizin değerlerinizden hiçbirini almaz. `pass_env` içinde adı geçen
+değişkenler, `keys`, `keychain` ve `login_file` arkasındaki anahtarlar,
+`carry` ile taşıyacağı ayarlar, `login`'i, `reveal_on_macos`'un açtıkları
+ve `devices` dışarıda kalır; deneme hangilerinin kaldığını söyler
+(`withheld until approved: …`). Onayladığınızda deneme bunları bir
+çalıştırma gibi alır.
 
 Uygulamada *Settings → Agents* aynı şeyi yapar: **Add from the ACP
 registry**, ardından **Try it**; bir telemetri host'u dışarıda kalabilsin
@@ -220,7 +235,7 @@ ev dizininize göredir.
 | `own_home` | değişken adı | Durumunun nerede olduğunu bir değişkenden okuyan bir ajan için Kule'de kendine ait bir ev dizini (`CODEX_HOME`, `CLAUDE_CONFIG_DIR`, `GEMINI_CLI_HOME` ya da `HOME`'un kendisi). Kule değişkeni ajanın kendine ait bir klasörüne yönlendirir; Kule'de yazdığı şey görevler boyunca orada kalır ve dışarıda ona hiç ulaşmaz. Ayarlarınızı ona `carry` ile verin; oturumu orada bir kez ya da `login_file` ile açın. `PATH`, `TMPDIR`, `TMP`, `TEMP`, `PWD` ya da `SHELL` olamaz. |
 | `reveal_on_macos` | yol listesi | macOS'ta okuması gereken, varsayılan olarak gizli yollar. Yalnızca `Library/Keychains` açılabilir. |
 | `mode` | string | Ajan sunuyorsa başlanacak ACP oturum modu: kendi sandbox'ı Kule'ninkinin içinde başlayamayan bir ajan için. |
-| `devices` | yol listesi | Linux: ajanın ve komutlarının, her komutun aldıklarının ötesinde ihtiyaç duyduğu `/dev` altındaki aygıtlar; örneğin `/dev/snd`, `/dev/video0` ya da bir seri port. Kule size ait olana ulaşanları reddeder: diskler, bellek, klavye ve fare, konsollar ve terminaller. |
+| `devices` | yol listesi | Linux: ajanın ve komutlarının, her komutun aldıklarının ötesinde ihtiyaç duyduğu, `/dev` altındaki ve Kule'nin yalnızca verdiği türlerden aygıtlar: ses (`/dev/snd`), kameralar (`/dev/video0`), seri portlar (`/dev/ttyUSB0`) ve GPU'lar (`/dev/dri`). Başka bir aygıt (bir USB veri yolu, `/dev/kvm`, bir disk, bir klavye) adını veren bir profil bekletilir. `kule agents show` ve uygulama, onaylamadan önce her aygıtı bir uyarıyla listeler. |
 
 Kendi ev dizini klasörleri, sandbox'ın tamamen gizlediği Kule ev dizininin
 dışında durur: macOS'ta `~/Library/Application Support/Kule/agents`, Linux'ta

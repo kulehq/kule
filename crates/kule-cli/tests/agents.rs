@@ -73,6 +73,56 @@ fn a_profile_of_your_own_runs_once_approved() {
     assert!(list.contains("opencode         yours, held"), "{list}");
 }
 
+/// Trying a profile is not approving it: one not approved as it stands
+/// runs without the person's variables and keys, and is told so; approved,
+/// the same profile gets them.
+#[cfg(unix)]
+#[test]
+fn a_trial_before_approval_gets_none_of_your_values() {
+    let home = TempDir::new().unwrap();
+    let person = TempDir::new_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
+    fs::write(
+        home.path().join("agents.toml"),
+        r#"
+[[agent]]
+name = "probe"
+command = ["/bin/sh", "-c", "echo seen=$KULE_CANARY key=$KULE_KEY >&2"]
+pass_env = ["KULE_CANARY"]
+keys = { KULE_KEY = ["example.invalid"] }
+"#,
+    )
+    .unwrap();
+    let try_it = || {
+        let out = Command::new(env!("CARGO_BIN_EXE_kule"))
+            .args(["agents", "try", "probe"])
+            .env("KULE_HOME", home.path())
+            .env("HOME", person.path())
+            .env("KULE_CANARY", "fake-canary-value-123")
+            .env("KULE_KEY", "fake-key-value-456")
+            .output()
+            .unwrap();
+        stdout(&out)
+    };
+    let held = try_it();
+    assert!(held.contains("log      seen= key=\n"), "{held}");
+    assert!(!held.contains("fake-"), "{held}");
+    assert!(
+        held.contains("withheld until approved: pass_env: KULE_CANARY; keys: KULE_KEY"),
+        "{held}"
+    );
+
+    stdout(&kule(home.path(), &["agents", "approve", "probe"]));
+    let approved = try_it();
+    assert!(
+        approved.contains("log      seen=fake-canary-value-123 key="),
+        "{approved}"
+    );
+    // The key itself stays with the proxy: the agent sees a placeholder.
+    assert!(!approved.contains("fake-key-value-456"), "{approved}");
+    assert!(!approved.contains("key=\n"), "{approved}");
+    assert!(!approved.contains("withheld"), "{approved}");
+}
+
 #[test]
 fn a_profile_that_opens_too_much_cannot_be_approved() {
     let home = TempDir::new().unwrap();

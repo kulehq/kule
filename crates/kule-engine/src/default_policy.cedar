@@ -77,19 +77,26 @@ when {
   resource.dotted
 };
 
-// ...except the ones that decide what gets installed, built or run.
+// ...except the ones that decide what gets installed, built or run, with
+// the workspace and index settings of the package managers that read them
+// and Gradle's version catalogs.
 @id("manifests-and-lockfiles")
 forbid (principal, action == Kule::Action::"auto", resource)
 when {
   resource.kind like "fs.*" &&
-  [
+  ([
     "package.json", "package-lock.json", "npm-shrinkwrap.json", "yarn.lock", "pnpm-lock.yaml", "bun.lockb", "bun.lock",
+    "pnpm-workspace.yaml", "deno.json", "deno.jsonc", "deno.lock",
     "cargo.toml", "cargo.lock",
     "directory.packages.props", "directory.build.props", "directory.build.targets", "nuget.config", "packages.lock.json", "global.json",
     "go.mod", "go.sum",
-    "pyproject.toml", "setup.py", "setup.cfg", "poetry.lock", "uv.lock", "pipfile", "pipfile.lock",
-    "gemfile", "gemfile.lock", "build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts", "pom.xml"
-  ].contains(resource.folded_name)
+    "pyproject.toml", "setup.py", "setup.cfg", "poetry.lock", "uv.lock", "uv.toml", "pipfile", "pipfile.lock",
+    "gemfile", "gemfile.lock", "build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts",
+    "gradle.properties", "pom.xml",
+    "composer.json", "composer.lock", "pubspec.yaml", "pubspec.lock", "package.swift", "package.resolved",
+    "podfile", "podfile.lock", "mix.exs", "mix.lock", "build.sbt", "vcpkg.json", "conanfile.txt", "conanfile.py"
+  ].contains(resource.folded_name) ||
+   resource.folded_path like "gradle/*.toml" || resource.folded_path like "*/gradle/*.toml")
 };
 
 @id("project-files")
@@ -97,12 +104,15 @@ forbid (principal, action == Kule::Action::"auto", resource)
 when { resource.kind like "fs.*" && (resource.folded_name like "*.csproj" || resource.folded_name like "*.fsproj" || resource.folded_name like "requirements*.txt") };
 
 // What runs code, or steers an agent, without anyone running the project:
-// CI, editor tasks, dev containers, git hooks managers, toolchain and
-// package manager settings and the version pins a shell prompt reads on
-// entering a folder, build scripts an editor runs on opening, an agent's
-// settings, instructions and servers, and Kule's own rules. In any folder,
-// as the tools look for them. Kule's terminal and editor refuse a copy
-// where one of these changed.
+// CI, editor tasks, dev containers, git hooks managers (in every spelling
+// they read, with their local files), toolchain and package manager
+// settings and the version pins a shell prompt reads on entering a folder,
+// build scripts an editor runs on opening (Gradle's buildSrc among them),
+// the JavaScript configs editor extensions evaluate as the folder opens
+// (`*.config.js`, `.eslintrc.js`, …), an agent's settings, instructions and
+// servers, and Kule's own rules. In any folder, as the tools look for
+// them. Kule's terminal and editor refuse a copy where one of these
+// changed.
 @id("automation")
 forbid (principal, action == Kule::Action::"auto", resource)
 when {
@@ -111,11 +121,20 @@ when {
      ".github", ".circleci", ".devcontainer", ".vscode", ".idea", ".zed", ".kule",
      ".husky", ".claude", ".cursor", ".gemini", ".codex", ".cargo", ".mvn", ".yarn",
      ".buildkite", ".gitea", ".forgejo", ".woodpecker",
-     ".windsurf", ".continue", ".roo", ".clinerules", ".mise"
+     ".windsurf", ".continue", ".roo", ".clinerules", ".mise", "buildsrc"
    ]) ||
    resource.folded_path like "gradle/wrapper/*" || resource.folded_path like "*/gradle/wrapper/*" ||
-   resource.folded_path like "mise/config.toml" || resource.folded_path like "*/mise/config.toml" ||
+   resource.folded_path like "*mise/config*.toml" ||
    resource.folded_path like ".config/mise.toml" || resource.folded_path like "*/.config/mise.toml" ||
+   resource.folded_name like "mise.*.toml" || resource.folded_name like ".mise.*.toml" ||
+   resource.folded_name like "lefthook*" || resource.folded_name like ".lefthook*" ||
+   resource.folded_name like "*simple-git-hooks*" ||
+   resource.folded_name like "*.config.js" || resource.folded_name like "*.config.cjs" ||
+   resource.folded_name like "*.config.mjs" || resource.folded_name like "*.config.ts" ||
+   resource.folded_name like "*.config.cts" || resource.folded_name like "*.config.mts" ||
+   resource.folded_name like ".*rc.js" || resource.folded_name like ".*rc.cjs" ||
+   resource.folded_name like ".*rc.mjs" || resource.folded_name like ".*rc.ts" ||
+   resource.folded_name like ".*rc.cts" || resource.folded_name like ".*rc.mts" ||
    resource.folded_name like ".gitlab-ci*" ||
    resource.folded_name like "*.code-workspace" ||
    [
@@ -124,7 +143,7 @@ when {
      "mise.local.toml", ".mise.local.toml", ".rtx.toml",
      ".nvmrc", ".node-version", ".python-version", ".ruby-version", ".java-version",
      ".go-version", ".sdkmanrc", ".terraform-version",
-     ".pre-commit-config.yaml", "lefthook.yml", ".lefthook.yml",
+     ".pre-commit-config.yaml", ".pre-commit-config.yml",
      ".mcp.json", "claude.md", "claude.local.md", "agents.md", "gemini.md", ".cursorrules", ".windsurfrules",
      ".devcontainer.json", "rust-toolchain", "rust-toolchain.toml", "mvnw", "mvnw.cmd", "bunfig.toml",
      "dotnet-tools.json", "azure-pipelines.yml", ".travis.yml", "jenkinsfile", "bitbucket-pipelines.yml",

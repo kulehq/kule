@@ -24,6 +24,14 @@ bir kısmı kullanılamaz. Yaygın durum, ayrıcalıksız kullanıcı ad alanlar
 varsayılan olarak reddeder). Kule bunları her komuta kendine ait bir ağ,
 bir `/tmp`, süreçler ve paylaşılan bellek vermek için kullanır.
 
+Linux'ta root olarak çalışan Kule (`sudo kule`, root olarak çalışan bir
+container ya da CI işi) de bir eksiktir: komutları başlamadan önce bütün
+yeteneklerinden (capabilities) vazgeçer (hiçbiri elinde kalmaz, hiçbirini
+geri alamaz), ama root'turlar ve sistemin dosyalarının sahibidirler; onları
+bu dosyalardan yalnızca izinler ve Kule'nin adıyla kapattıkları
+(`/etc/shadow`, `sudoers`, SSH host anahtarları, …) uzak tutar. Kule'yi
+kendi kullanıcınızla çalıştırın.
+
 Bir şey eksikken ve siz bunu kabul etmediyseniz Kule komutları ve ajanları
 çalıştırmayı reddeder ve neyin eksik olduğunu söyler. `kule isolation`
 eksikleri gösterir; `--accept-weaker on` komutların bilgisayarın

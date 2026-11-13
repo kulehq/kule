@@ -2,7 +2,9 @@
 //! container on a pseudo console that Kule's helper opens inside it, and
 //! Kule passes the person's keys in and the console's output back. The
 //! person's own console stays out of the container's reach: nothing in
-//! there can type into it or read it.
+//! there can type into it or read it. What the console writes reaches the
+//! person's through [`crate::term::Filter`], as what `kule exec` runs on a
+//! console does (see [`filtered`]).
 
 use std::io::{Read, Write};
 use std::path::Path;
@@ -143,11 +145,12 @@ pub fn run(home: &Path, task: &str, shell: &str) -> Result<(Option<i32>, ShellEn
     std::thread::spawn(move || {
         let mut from_shell = output;
         let mut stdout = std::io::stdout();
+        let mut filter = crate::term::Filter::new();
         let mut buf = [0u8; 16 * 1024];
         while let Ok(n) = from_shell.read(&mut buf) {
             if n == 0
                 || stdout
-                    .write_all(&buf[..n])
+                    .write_all(&filter.feed(&buf[..n]))
                     .and_then(|()| stdout.flush())
                     .is_err()
             {
@@ -157,10 +160,73 @@ pub fn run(home: &Path, task: &str, shell: &str) -> Result<(Option<i32>, ShellEn
         let _ = read_out.send(());
     });
     std::thread::spawn(move || {
-        let _ = std::io::copy(&mut { errors }, &mut std::io::stderr());
+        let _ = filter_into(errors, std::io::stderr());
     });
     let status = process.wait()?;
     let _ = all_read.recv_timeout(Duration::from_millis(300));
     drop(raw);
     Ok((status.code(), sandboxed.end()))
+}
+
+/// Copies `from` to `to` through [`crate::term::Filter`], until it ends.
+fn filter_into(mut from: impl Read, mut to: impl Write) -> std::io::Result<()> {
+    let mut filter = crate::term::Filter::new();
+    let mut buf = [0u8; 16 * 1024];
+    loop {
+        let n = from.read(&mut buf)?;
+        if n == 0 {
+            return Ok(());
+        }
+        to.write_all(&filter.feed(&buf[..n]))?;
+        to.flush()?;
+    }
+}
+
+/// Runs `start` (`kule exec`'s command) with its output and errors read by
+/// Kule where they are the person's console, and passed on to it through
+/// [`crate::term::Filter`]: no sequence that sets the clipboard or types
+/// into the console reaches it. The command then writes to a pipe, not a
+/// console. `None` where neither is a console: nothing to pass through.
+pub fn filtered(start: &mut kule_engine::Start) -> Result<Option<std::process::ExitStatus>> {
+    use std::io::IsTerminal;
+    let (out, err) = (
+        std::io::stdout().is_terminal(),
+        std::io::stderr().is_terminal(),
+    );
+    if !out && !err {
+        return Ok(None);
+    }
+    if out {
+        start.stdout(kule_engine::Io::Piped);
+    }
+    if err {
+        start.stderr(kule_engine::Io::Piped);
+    }
+    let mut process = start.spawn()?;
+    let (done, all_read) = mpsc::channel::<()>();
+    let mut passing = 0;
+    if let Some(s) = process.stdout.take() {
+        let done = done.clone();
+        passing += 1;
+        std::thread::spawn(move || {
+            let _ = filter_into(s, std::io::stdout());
+            let _ = done.send(());
+        });
+    }
+    if let Some(s) = process.stderr.take() {
+        let done = done.clone();
+        passing += 1;
+        std::thread::spawn(move || {
+            let _ = filter_into(s, std::io::stderr());
+            let _ = done.send(());
+        });
+    }
+    let status = process.wait()?;
+    // What it wrote last; what it left running may hold the pipe on.
+    for _ in 0..passing {
+        if all_read.recv_timeout(Duration::from_millis(300)).is_err() {
+            break;
+        }
+    }
+    Ok(Some(status))
 }

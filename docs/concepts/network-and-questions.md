@@ -70,7 +70,12 @@ The card also says what approving lets through:
   port, not what goes over the connection, and checks that its TLS hello
   asks for this host. Approving comes before the hello, so the card can
   only state the rule: if the hello asks for another host or hides its
-  name, Kule cuts the connection after your approval.
+  name, Kule cuts the connection after your approval. Inside TLS, each
+  request names its site again, where Kule cannot see it: a host whose
+  servers (a CDN) serve many sites may serve another of them through the
+  connection. Approve such a host knowingly, the more so with **Approve
+  and remember**. On a port other than 443, plain HTTP sent through the
+  connection is read as any plain request: each must name this host.
 - **Looked into.** The host is one Kule fills a secret for (the card names
   the secrets, as in "fills STRIPE_KEY into its requests"), a package
   registry it holds to reads, or a git host, where it lets fetches and
@@ -218,13 +223,28 @@ These are listed in [Platforms](../platforms.md) too:
   one. pip 24.2 and later works with `--use-deprecated=legacy-certs`. Go
   is told to use the roots `SSL_CERT_FILE` names.
 - NuGet's and Maven's tools on macOS trust the system's roots alone, so
-  their registries pass through unseen, as Go's module proxy does. Git
+  their registries pass through unseen, as Go's module proxy does. So
+  does `static.rust-lang.org`, which `rustup` on macOS reaches the same
+  way. These hosts pass without asking, by the default policy's
+  `package-registries` rule, and Kule sees only the name each connection
+  asks for: which site a request inside it names is left to the host's
+  servers. Those of NuGet and Maven answer only for their own site;
+  `static.rust-lang.org`'s servers carry other sites as well, which a
+  command can reach through it. A host that holds one of your secrets, or
+  a token Kule found in a URL (see [Secrets](secrets.md)), is looked into
+  instead, and a tool that trusts the system's roots alone cannot reach
+  it over HTTPS in a task. Git
   hosts are looked into for every tool: one that trusts the system's
   roots alone (.NET, a JVM, on macOS) cannot reach them over HTTPS in a
   task. JVMs
   are pointed at the proxy with `JAVA_TOOL_OPTIONS`, since Java reads none
   of the `*_PROXY` variables.
 - On Linux, network rules need Linux 6.7 or later.
+- A task's proxy listens on `127.0.0.1`. On Linux it serves only
+  connections from programs running as you: another user's program on
+  the computer is refused and nothing of it reaches the task's log or
+  your questions. On macOS and Windows any program on the computer can
+  reach it; what it can do there is what the task's own commands may.
 
 ## Related
 

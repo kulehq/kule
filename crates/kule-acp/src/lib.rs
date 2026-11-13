@@ -1211,10 +1211,19 @@ impl Watcher {
                 failed,
                 step: Some(step),
             }),
-            Err(e) => self.send(Event::Message {
-                text: format!("\n[kule: could not record the step: {e}]\n"),
-                id: None,
-            }),
+            // Said as Kule's own note, never in the agent's words; the call
+            // is done all the same.
+            Err(e) => {
+                self.send(Event::ToolDone {
+                    id,
+                    title,
+                    failed,
+                    step: None,
+                });
+                self.send(Event::Note {
+                    text: format!("Kule could not record the step: {e}"),
+                });
+            }
         }
     }
 

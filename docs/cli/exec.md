@@ -182,7 +182,7 @@ kule exec "$TASK" --reveal ~/Library/Keychains \
 
 | Line | Meaning |
 | --- | --- |
-| the command's own output | Printed as it runs. |
+| the command's own output | Printed as it runs. On your terminal the command gets a terminal of its own (colours and sizes work as on yours), and Kule passes what it writes on to yours without the sequences that would set your clipboard (OSC 52), pass a string to the terminal (DCS, APC, tmux's passthrough), change or report the window, or any other OSC but titles, colours, the folder, links and prompt marks. On Windows the command's output then goes to Kule through a pipe, not a console. `--no-sandbox` leaves the terminal as it is. |
 | `N file changes: +a ~m -d` and the list | Everything the copy holds that the workspace does not, as [kule status](status.md) shows it. |
 | `N ignored by the workspace, staying in the copy …` | Paths the workspace's `.gitignore` excludes (build output, `.env`). A commit leaves them behind unless you pass `--include-ignored`. |
 | `git:` | Repository changes. See [Git](../concepts/git.md). |

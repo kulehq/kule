@@ -31,6 +31,23 @@ use crate::usage::Money;
 /// The largest settings file Kule masks secrets in.
 const MAX_SETTINGS: u64 = 1024 * 1024;
 
+/// The settings file `rel` of the copy `copy`, with its permission bits,
+/// read through every folder on the way without following a link (the
+/// task's commands write there); `None` when it is not a regular file
+/// there, is larger than [`MAX_SETTINGS`], or is not UTF-8.
+fn read_in_copy(copy: &Path, rel: &str) -> Option<(String, u32)> {
+    let (dir, name) = fsops::open_parent(copy, rel).ok()?;
+    let file = fsops::file_at(&dir, name).ok()??;
+    let mode = crate::osfs::mode_of(&file.metadata().ok()?);
+    let mut bytes = Vec::new();
+    std::io::Read::read_to_end(&mut std::io::Read::take(file, MAX_SETTINGS + 1), &mut bytes)
+        .ok()?;
+    if bytes.len() as u64 > MAX_SETTINGS {
+        return None;
+    }
+    String::from_utf8(bytes).ok().map(|text| (text, mode))
+}
+
 /// The built-in policy's rules for files that run by themselves where a
 /// tool finds them, without anyone running the project.
 const RUNS_BY_ITSELF: [&str; 4] = [
@@ -523,7 +540,7 @@ impl Task {
         baseline
             .entries
             .iter()
-            .filter(|(path, e)| e.copy.kind == Kind::File && secrets::is_env_file(path))
+            .filter(|(path, e)| e.copy.kind == Kind::File && secrets::masked_in_copy(path))
             .filter_map(|(path, _)| {
                 let Ok(fsops::Beneath::File(file)) = fsops::beneath(&copy, path) else {
                     return None;
@@ -556,7 +573,7 @@ impl Task {
         let candidates: Vec<String> = baseline
             .entries
             .iter()
-            .filter(|(path, e)| e.copy.kind == Kind::File && secrets::is_env_file(path))
+            .filter(|(path, e)| e.copy.kind == Kind::File && secrets::masked_in_copy(path))
             .map(|(path, _)| path.clone())
             .collect();
         if candidates.is_empty() {
@@ -573,13 +590,16 @@ impl Task {
             if stamp.size > MAX_SETTINGS {
                 continue;
             }
-            let Ok(text) = fs::read_to_string(&full) else {
+            // Read, and later written, through the folders on the way,
+            // opened without following a link: one the task swapped for a
+            // link is no longer the copy's, and is skipped.
+            let Some((text, mode)) = read_in_copy(&copy, &path) else {
                 continue;
             };
             let masked = secrets::mask_with(&path, &text, &mut kept, &vault)?;
             if masked != text {
                 let synced = baseline.entries.get(&path).is_some_and(|e| e.copy == stamp);
-                writes.push((path, masked, synced));
+                writes.push((path, masked, mode, synced));
             }
         }
         if writes.is_empty() {
@@ -590,9 +610,12 @@ impl Task {
         kept.save(&self.dir, &self.home())?;
         let mut latest = (i64::MIN, 0);
         let mut moved = Vec::new();
-        for (path, masked, synced) in writes {
+        for (path, masked, mode, synced) in writes {
             let full = copy.join(&path);
-            fsops::replace_file(&full, masked.as_bytes())?;
+            let Ok((dir, name)) = fsops::open_parent(&copy, &path) else {
+                continue;
+            };
+            fsops::put_at(&dir, name, masked.as_bytes(), mode, &full)?;
             if let (true, Some(now)) = (synced, Stamp::of(&full)?) {
                 latest = latest.max(now.ctime);
                 moved.push((path, now));
@@ -619,12 +642,13 @@ impl Task {
         let mut real_hashes = Vec::new();
         // A merged file holds the real values already (see `merge`).
         let paths = set.effects.iter().map(|e| &e.path);
-        for path in paths.filter(|p| secrets::is_env_file(p) && !merged.contains(p)) {
-            let full = self.copy().join(path);
+        for path in paths.filter(|p| secrets::masked_in_copy(p) && !merged.contains(p)) {
+            let copy = self.copy();
+            let full = copy.join(path);
             if Stamp::of(&full)?.is_none_or(|s| s.kind != Kind::File || s.size > MAX_SETTINGS) {
                 continue;
             }
-            let now = fsops::content_hash(&self.copy(), path)?;
+            let now = fsops::content_hash(&copy, path)?;
             if set
                 .contents
                 .get(path)
@@ -634,7 +658,9 @@ impl Task {
                     "{path} changed since it was reviewed; nothing was committed"
                 )));
             }
-            let Ok(text) = fs::read_to_string(&full) else {
+            // Through the folders on the way, as `mask_copy` reads and
+            // writes: the real values go nowhere but the copy's own file.
+            let Some((text, mode)) = read_in_copy(&copy, path) else {
                 continue;
             };
             if vault.is_none() {
@@ -645,8 +671,9 @@ impl Task {
                 .map(|v| v.unmask(path, &text))
                 .unwrap_or_default();
             if real != text {
-                fsops::replace_file(&full, real.as_bytes())?;
-                real_hashes.push((path.clone(), fsops::content_hash(&self.copy(), path)?));
+                let (dir, name) = fsops::open_parent(&copy, path)?;
+                fsops::put_at(&dir, name, real.as_bytes(), mode, &full)?;
+                real_hashes.push((path.clone(), fsops::content_hash(&copy, path)?));
             }
         }
         Ok(real_hashes)
@@ -1142,7 +1169,7 @@ impl Task {
         }
         // Merged with the real values: masked ones would read as changes to
         // every secret line.
-        if secrets::is_env_file(&effect.path)
+        if secrets::masked_in_copy(&effect.path)
             && let Ok(text) = std::str::from_utf8(&ours)
         {
             ours = self.vault()?.unmask(&effect.path, text).into_bytes();

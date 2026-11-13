@@ -363,6 +363,104 @@ fn settings_and_app_data_are_hidden_but_for_what_toolchains_read() {
     }
 }
 
+/// Inside the folders granted to toolchains, what is not theirs stays
+/// unread: a login kept beside a toolchain's files, what the person typed
+/// into a shell whose settings folder is read, and the caches of apps that
+/// are not toolchains (a browser's pages, pictures of hidden files).
+#[test]
+fn what_lies_beside_a_toolchains_files_is_not_read() {
+    let hidden = [
+        ".local/share/uv/credentials/credentials.toml",
+        ".config/zsh/.zsh_history",
+        ".config/zsh/.zhistory",
+        ".config/zsh/.zsh_sessions/A1.session",
+        ".config/nushell/history.txt",
+        ".config/nushell/history.sqlite3",
+        ".cache/mozilla/firefox/x.default/cache2/entries/AB12",
+        ".cache/google-chrome/Default/Cache/Cache_Data/data_0",
+        ".cache/thumbnails/large/0a1b.png",
+        ".cache/huggingface/stored_tokens",
+        ".cache/some-app/session",
+        ".gradle/develocity/keys.properties",
+        ".gradle/enterprise/keys.properties",
+        ".m2/.develocity/keys.properties",
+        ".m2/.gradle-enterprise/keys.properties",
+        ".m2/settings-security.xml",
+    ];
+    let read = [
+        ".local/share/uv/python/marker",
+        ".config/zsh/.zshrc",
+        ".config/nushell/config.nu",
+        ".cache/pip/http-v2/0/a",
+        ".cache/uv/wheels-v5/a",
+        ".cache/go-build/00/a",
+        ".gradle/caches/modules-2/a",
+        ".m2/repository/a",
+    ];
+    let (_home, home) = home_with(&[hidden.as_slice(), read.as_slice()].concat());
+    let s = Setup::new();
+    let sandbox = Sandbox::for_task_with(&s.task, Some(sources(&home))).unwrap();
+    for path in hidden {
+        assert!(!reads(&sandbox, &home.join(path)), "{path} was read");
+    }
+    for path in read {
+        assert!(reads(&sandbox, &home.join(path)), "{path} was not read");
+    }
+}
+
+/// On macOS the system's own databases lie under `/private/var/db`, among
+/// them the unified log's store with other programs' log lines: a command
+/// reads what toolchains need there (the time zones, the developer folder
+/// the system names) and nothing else.
+#[cfg(target_os = "macos")]
+#[test]
+fn the_systems_databases_are_read_only_where_toolchains_need_them() {
+    let (_home, home) = home_with(&[".zshrc"]);
+    let s = Setup::new();
+    let sandbox = Sandbox::for_task_with(&s.task, Some(sources(&home))).unwrap();
+    let first = |dir: &str, name: &str| {
+        let out = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(format!(
+                "find {dir} -type f -name '{name}' -perm -o+r 2>/dev/null | head -1"
+            ))
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&out.stdout).trim().to_owned()
+    };
+    let readable = |path: &str| {
+        sh(&sandbox, &format!("head -c1 '{path}' >/dev/null"))
+            .status
+            .success()
+    };
+    let log = first("/private/var/db/diagnostics", "*.tracev3");
+    let uuidtext = first("/private/var/db/uuidtext", "*");
+    for path in [&log, &uuidtext] {
+        if path.is_empty() {
+            continue;
+        }
+        // Outside Kule it reads.
+        assert!(
+            std::process::Command::new("head")
+                .args(["-c1", path])
+                .output()
+                .unwrap()
+                .status
+                .success(),
+            "{path}"
+        );
+        assert!(!readable(path), "{path} was read");
+    }
+    assert!(!log.is_empty(), "no log store to try");
+    let zone = first("/private/var/db/timezone", "Istanbul");
+    assert!(readable(&zone), "{zone} was not read");
+    let out = sh(&sandbox, "readlink /private/var/db/xcode_select_link");
+    assert!(
+        out.status.success() || !Path::new("/private/var/db/xcode_select_link").exists(),
+        "{out:?}"
+    );
+}
+
 #[cfg(unix)]
 /// A tool on `PATH` whose program is a link into where apps keep their
 /// data (Claude Code's native install, uv's tools) still runs: what the

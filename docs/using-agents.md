@@ -122,10 +122,16 @@ Kule.
 
 ### Packages fetched with npx
 
-An agent that `npx` fetches (Claude Code's and Codex's adapters) is installed
-**once per version**, outside the sandbox and without running the package's
-install scripts, from a lockfile Kule carries, every dependency at its
-integrity hash. It goes under:
+An agent that `npx` fetches is installed **once per version**, outside the
+sandbox and without running the package's install scripts, from the package
+registry only (npm is told to take nothing from a repository, a URL, a file
+or a folder). Claude Code's and Codex's adapters install from a lockfile
+Kule carries, every dependency at its integrity hash; for any other
+package (an agent of yours, an extension's MCP server) only the version
+you named is fixed, and its dependencies are what the registry serves that
+day, read with your own npm settings. The version must be one release in
+SemVer's grammar (`1.2.3`, `1.2.3-beta.1`, `1.2.3+build.5`): a version
+with anything else after it is refused. It goes under:
 
 - macOS: `~/Library/Application Support/Kule/packages`
 - Linux: `~/.local/share/kule/packages`
@@ -156,6 +162,13 @@ than its draft, then lists what the sandbox refused it: the directories it
 wanted to write to and the hosts it wanted to reach. `--apply` adds those to
 the profile, which then waits for your approval like any change. Linux does
 not report refused files, so there only hosts are suggested.
+
+Trying is not approving: until the profile is approved as it stands, a
+trial gets none of your values. The variables it names in `pass_env`, the
+keys behind `keys`, `keychain` and `login_file`, the settings it would
+`carry`, its `login`, what `reveal_on_macos` opens and its `devices` are
+left out, and the trial says which (`withheld until approved: …`). Once you
+approve it, a trial gets them as a run does.
 
 In the app, *Settings → Agents* does the same: **Add from the ACP registry**,
 then **Try it**, with checkboxes so a telemetry host can stay out.
@@ -207,7 +220,7 @@ relative to your home directory.
 | `own_home` | variable name | A home of its own in Kule, for an agent that reads where its state lives from a variable (`CODEX_HOME`, `CLAUDE_CONFIG_DIR`, `GEMINI_CLI_HOME`, or `HOME` itself). Kule points the variable at a folder of the agent's own, where what it writes in Kule stays, across tasks, and never reaches it outside. Give it your settings with `carry`; sign it in there once, or through `login_file`. Not `PATH`, `TMPDIR`, `TMP`, `TEMP`, `PWD` or `SHELL`. |
 | `reveal_on_macos` | list of paths | Default-hidden paths it needs to read on macOS. Only `Library/Keychains` may be revealed. |
 | `mode` | string | The ACP session mode to start in, when the agent offers one: for an agent whose own sandbox cannot start inside Kule's. |
-| `devices` | list of paths | Linux: devices under `/dev` the agent and its commands need beyond those every command gets, such as `/dev/snd`, `/dev/video0` or a serial port. Kule refuses those that reach what is yours: disks, memory, keyboard and mouse, consoles and terminals. |
+| `devices` | list of paths | Linux: devices under `/dev` the agent and its commands need beyond those every command gets, of the kinds Kule gives alone: sound (`/dev/snd`), cameras (`/dev/video0`), serial ports (`/dev/ttyUSB0`) and GPUs (`/dev/dri`). A profile naming any other (a USB bus, `/dev/kvm`, a disk, a keyboard) is held. `kule agents show` and the app list each device, with a warning, before you approve it. |
 
 Own home folders live outside Kule's home, which the sandbox hides whole:
 `~/Library/Application Support/Kule/agents` on macOS and
