@@ -3554,69 +3554,116 @@ fn agents_cmd(home: &Path, action: AgentsCmd) -> Result<()> {
 
 /// A profile as the person approves it: what it runs and what it opens.
 fn print_profile(profile: &kule_acp::Profile) {
+    println!("[[agent]]  {}", profile.name);
+    for (label, value) in profile_rows(profile) {
+        println!("{label:<18}{value}");
+    }
+}
+
+/// What `profile` opens, a row each, as `kule agents show` lists it for
+/// the person to approve: every field that opens something has its row
+/// (a test holds it so).
+fn profile_rows(profile: &kule_acp::Profile) -> Vec<(&'static str, String)> {
     let list = |items: &[String]| {
         if items.is_empty() {
             "nothing".to_owned()
         } else {
-            items.join(", ")
+            paint::plain_line(&items.join(", "))
         }
     };
-    println!("[[agent]]  {}", profile.name);
-    println!("runs              {}", profile.command.join(" "));
-    if profile.state.is_empty() {
-        println!("writes in ~/      nothing");
-    } else {
-        println!(
-            "writes in ~/      {} (in the task's copy of your home, never your own)",
-            list(&profile.state)
-        );
-    }
-    println!("its login         {}", list(&profile.login));
+    let mut rows = vec![("runs", paint::plain_line(&profile.command.join(" ")))];
+    rows.push((
+        "writes in ~/",
+        if profile.state.is_empty() {
+            "nothing".to_owned()
+        } else {
+            format!(
+                "{} (in the task's copy of your home, never your own)",
+                list(&profile.state)
+            )
+        },
+    ));
+    rows.push(("its login", list(&profile.login)));
     if !profile.outside.is_empty() {
-        println!(
-            "hidden from it    {} (only Kule reads there)",
-            list(&profile.outside)
-        );
+        rows.push((
+            "hidden from it",
+            format!("{} (only Kule reads there)", list(&profile.outside)),
+        ));
     }
     if !profile.carry.is_empty() {
         let carried: Vec<String> = profile.carry.values().cloned().collect();
-        println!(
-            "copied in         {} (at every start, read-only)",
-            list(&carried)
-        );
+        rows.push((
+            "copied in",
+            format!("{} (at every start, read-only)", list(&carried)),
+        ));
     }
     if !profile.protected.is_empty() {
-        println!(
-            "protected         {} (no longer needed: nothing it writes reaches your home)",
-            list(&profile.protected)
-        );
+        rows.push((
+            "protected",
+            format!(
+                "{} (no longer needed: nothing it writes reaches your home)",
+                list(&profile.protected)
+            ),
+        ));
     }
     if !profile.reveal_on_macos.is_empty() {
-        println!("reveals (macOS)   {}", list(&profile.reveal_on_macos));
+        rows.push(("reveals (macOS)", list(&profile.reveal_on_macos)));
     }
-    println!("sees your env     {}", list(&profile.pass_env));
+    rows.push(("sees your env", list(&profile.pass_env)));
+    if !profile.keys.is_empty() {
+        let keys: Vec<String> = profile
+            .keys
+            .iter()
+            .map(|(name, hosts)| format!("{name} → {}", hosts.join(" ")))
+            .collect();
+        rows.push(("keys it never sees", list(&keys)));
+    }
+    if !profile.keychain.is_empty() {
+        let keys: Vec<String> = profile
+            .keychain
+            .iter()
+            .map(|(name, key)| format!("{name} ← keychain \"{}\"", key.service))
+            .collect();
+        rows.push(("keys (keychain)", list(&keys)));
+    }
+    if !profile.login_file.is_empty() {
+        let keys: Vec<String> = profile
+            .login_file
+            .iter()
+            .map(|(name, key)| format!("{name} ← ~/{} at {}", key.path, key.json))
+            .collect();
+        rows.push(("keys (login file)", list(&keys)));
+    }
     let env: Vec<String> = profile
         .env
         .iter()
         .map(|(k, v)| format!("{k}={v}"))
         .collect();
     if !env.is_empty() {
-        println!("sets env          {}", env.join(" "));
+        rows.push(("sets env", paint::plain_line(&env.join(" "))));
     }
     let hosts: Vec<String> = profile
         .hosts
         .iter()
         .map(|h| format!("https://{h}"))
         .collect();
-    println!("also connects to  {}", list(&hosts));
+    rows.push(("also connects to", list(&hosts)));
+    if !profile.devices.is_empty() {
+        rows.push(("devices (Linux)", list(&profile.devices)));
+    }
     if let Some(mode) = &profile.mode {
-        println!("session mode      {mode}");
+        rows.push(("session mode", paint::plain_line(mode)));
     }
     if let Some(var) = &profile.own_home {
-        println!(
-            "home of its own   ${var} points at Kule's folder for it: what it writes in Kule stays there"
-        );
+        rows.push((
+            "home of its own",
+            format!(
+                "${} points at Kule's folder for it: what it writes in Kule stays there",
+                paint::plain_line(var)
+            ),
+        ));
     }
+    rows
 }
 
 /// What the workspace changed since the task's last sync, and how to bring
@@ -3805,6 +3852,68 @@ mod tests {
             failed: None,
             refused: None,
             held: Vec::new(),
+        }
+    }
+
+    /// Every field of a profile that opens something has a row where the
+    /// person approves it: a field added to the profile without one fails
+    /// here.
+    #[test]
+    fn every_field_that_opens_something_is_shown() {
+        let profile = kule_acp::parse_profiles(
+            r#"
+[[agent]]
+name = "all"
+command = ["all-agent", "acp"]
+state = [".all"]
+protected = [".all/p"]
+outside = [".all-out"]
+carry = { "settings.json" = ".all-out/settings.json" }
+login = [".all/login.json"]
+reveal_on_macos = ["Library/Keychains"]
+mode = "bypass"
+env = { A = "1" }
+pass_env = ["ALL_KEY"]
+keys = { ALL_API_KEY = ["api.example.com"] }
+keychain = { ALL_TOKEN = { service = "all", hosts = ["api.example.com"] } }
+login_file = { ALL_LOGIN = { path = ".all-out/auth.json", json = "token", hosts = ["api.example.com"] } }
+hosts = ["api.example.com"]
+own_home = "ALL_HOME"
+devices = ["/dev/snd"]
+"#,
+        )
+        .unwrap()
+        .remove(0);
+        let shown = |field: &str| -> &'static str {
+            match field {
+                "name" => "[[agent]]",
+                "command" => "runs",
+                "state" => "writes in ~/",
+                "login" => "its login",
+                "outside" => "hidden from it",
+                "carry" => "copied in",
+                "protected" => "protected",
+                "reveal_on_macos" => "reveals (macOS)",
+                "pass_env" => "sees your env",
+                "keys" => "keys it never sees",
+                "keychain" => "keys (keychain)",
+                "login_file" => "keys (login file)",
+                "env" => "sets env",
+                "hosts" => "also connects to",
+                "devices" => "devices (Linux)",
+                "mode" => "session mode",
+                "own_home" => "home of its own",
+                other => panic!("the profile's field {other} is shown nowhere"),
+            }
+        };
+        let rows = profile_rows(&profile);
+        let fields = serde_json::to_value(&profile).unwrap();
+        for field in fields.as_object().unwrap().keys() {
+            let label = shown(field);
+            assert!(
+                label == "[[agent]]" || rows.iter().any(|(l, _)| *l == label),
+                "{field} has no row: {rows:?}"
+            );
         }
     }
 

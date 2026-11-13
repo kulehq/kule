@@ -421,6 +421,34 @@ mod tests {
         assert!(err.to_string().contains("could not install"), "{err}");
     }
 
+    /// Every lockfile Kule installs from lies in `src/locks`, which the
+    /// release gate's `deps` step hands to osv-scanner file by file: no
+    /// adapter's tree goes unscanned.
+    #[test]
+    fn every_shipped_lockfile_is_scanned() {
+        let gate = include_str!("../../../scripts/release-gate.sh");
+        assert!(
+            gate.contains("for lock in crates/kule-acp/src/locks/*.json")
+                && gate.contains("-L \"package-lock.json:$lock\""),
+            "the gate no longer names the adapter lockfiles to osv-scanner"
+        );
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/locks");
+        let on_disk: std::collections::BTreeSet<String> = std::fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        for (spec, lock) in LOCKS {
+            let name = format!("{}.json", spec.rsplit('/').next().unwrap());
+            assert!(on_disk.contains(&name), "{spec}: no {name} in src/locks");
+            let text = std::fs::read_to_string(dir.join(&name)).unwrap();
+            assert_eq!(
+                &text, lock,
+                "{spec}: shipped from another file than src/locks/{name}"
+            );
+        }
+    }
+
     /// Every package Kule's own agents run comes with a lockfile for its
     /// pinned version, and every dependency in it with its registry and
     /// integrity hash.

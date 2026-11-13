@@ -633,6 +633,40 @@ mod tests {
         assert!(why.contains("https://example.com/t.dotm"), "{why}");
     }
 
+    /// A part named twice is not read as one of its copies: the document
+    /// does not open, whichever copy its app would read.
+    #[test]
+    fn a_part_named_twice_is_refused() {
+        let template = rels(
+            r#"<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/attachedTemplate" Target="https://example.com/t.dotm" TargetMode="External"/>"#,
+        );
+        let empty = rels("");
+        // Written under a name of the same length, then given the other's
+        // name in its local header and the central directory.
+        let mut bytes = docx(
+            &[
+                ("word/_rels/settings.xml.rels", &template),
+                ("word/_rels/settings.xml.relX", &empty),
+            ],
+            "",
+        );
+        let (from, to) = (
+            b"word/_rels/settings.xml.relX",
+            b"word/_rels/settings.xml.rels",
+        );
+        let mut at = 0;
+        let mut renamed = 0;
+        while let Some(found) = bytes[at..].windows(from.len()).position(|w| w == from) {
+            let start = at + found;
+            bytes[start..start + to.len()].copy_from_slice(to);
+            at = start + to.len();
+            renamed += 1;
+        }
+        assert_eq!(renamed, 2, "the local header and the central directory");
+        let why = opens_nothing_else("docx", &bytes).unwrap_err();
+        assert!(why.contains("named twice"), "{why}");
+    }
+
     #[test]
     fn a_picture_from_elsewhere_is_refused() {
         let picture = rels(

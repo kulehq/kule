@@ -3215,6 +3215,8 @@ fn an_open_device_not_given() -> Option<PathBuf> {
         .filter(|e| fs::metadata(e.path()).is_ok_and(|m| m.file_type().is_char_device()))
         .filter(|e| !given.iter().any(|g| e.file_name() == *g))
         .map(|e| e.path())
+        // One a profile may be given.
+        .filter(|p| p.to_str().is_some_and(kule_engine::device_kind_allowed))
         .filter(|p| {
             fs::OpenOptions::new()
                 .read(true)
@@ -3318,6 +3320,13 @@ fn devices_that_reach_what_is_the_persons_are_never_given() {
         "/dev/../etc/passwd",
         "/etc/passwd",
         "dev/null",
+        // None of the kinds Kule gives (sound, cameras, serial ports, GPUs).
+        "/dev/bus/usb",
+        "/dev/kvm",
+        "/dev/fuse",
+        "/dev/net/tun",
+        "/dev/vhost-net",
+        "/dev/sg0",
     ] {
         let refused = s.sandbox().allow_device(Path::new(path));
         assert!(refused.is_err(), "{path} was given");

@@ -1542,6 +1542,11 @@ impl Sandbox {
         {
             return refuse("through it a command reaches what is yours");
         }
+        if !path.to_str().is_some_and(device_kind_allowed) {
+            return refuse(
+                "it is none of the kinds Kule gives: sound, cameras, serial ports, GPUs",
+            );
+        }
         let kind = std::fs::symlink_metadata(path).at(path)?.file_type();
         if kind.is_symlink() {
             return refuse("it is a link");
@@ -2831,6 +2836,29 @@ fn here(path: &Path) -> Result<PathBuf> {
 const ALWAYS_HIDDEN: usize = 2;
 
 /// Devices under `/dev` never given to a task's commands (see
+/// The kinds of device a profile may give an agent and its commands, by
+/// the start of their name under `/dev` (Linux): sound (`snd`, `dsp`),
+/// cameras and capture (`video`, `media`, `v4l`), serial ports (`ttyUSB`,
+/// `ttyACM`, `ttyS`, `ttyAMA`, `serial`) and GPUs and accelerators (`dri`,
+/// `nvidia`, `kfd`, `accel`). Nothing else: not a USB bus, keyboards, a
+/// virtual machine's device, FUSE or a network tunnel.
+pub const DEVICE_KINDS: &[&str] = &[
+    "snd", "dsp", "video", "media", "v4l", "ttyUSB", "ttyACM", "ttyS", "ttyAMA", "serial", "dri",
+    "nvidia", "kfd", "accel",
+];
+
+/// Whether `path` names a device of one of the [`DEVICE_KINDS`]: under
+/// `/dev`, never going back up.
+pub fn device_kind_allowed(path: &str) -> bool {
+    let Some(rest) = path.strip_prefix("/dev/") else {
+        return false;
+    };
+    !rest
+        .split('/')
+        .any(|p| p == ".." || p == "." || p.is_empty())
+        && DEVICE_KINDS.iter().any(|k| rest.starts_with(k))
+}
+
 /// [`Sandbox::allow_device`]): memory and the kernel's log, keyboards and
 /// mice (to read or to type), the console, terminals and Kule's own
 /// handling of them, shared memory.

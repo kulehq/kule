@@ -3080,10 +3080,12 @@ function streamItem(item) {
     case "thought":
       return h("div", { class: "msg thought" }, item.text);
     case "tool": {
+      // The agent's line: never marked as Kule's (see `liveLine`).
+      const look = liveLine(item);
       const line = h(
         "div",
-        { class: `event ${item.done ? (item.failed ? "failed" : "done") : ""}` },
-        h("span", { class: "event-mark" }, item.done ? (item.failed ? "✗" : "✓") : "·"),
+        { class: look.classes },
+        h("span", { class: "event-mark" }, look.mark),
         h("span", {}, item.title),
         item.files && item.files.length
           ? h("span", { class: "event-files" }, `→ ${item.files.join(", ")}`)
@@ -3107,8 +3109,17 @@ function streamItem(item) {
       );
       return output;
     }
-    case "note":
-      return h("div", { class: item.quiet ? "event quiet" : "event" }, h("span", { class: "event-mark" }, "·"), h("span", {}, item.text));
+    case "note": {
+      // Kule's own: its name and mark, which no agent line gets.
+      const look = liveLine(item);
+      return h(
+        "div",
+        { class: look.classes },
+        h("span", { class: "event-mark", "aria-hidden": "true" }, look.mark),
+        h("span", { class: "event-who" }, `${look.who}:`),
+        h("span", {}, item.text)
+      );
+    }
     case "answered": {
       // Approved and through: done; refused, by the person or by Kule, or
       // approved and then cut: said as what it is.
@@ -4479,6 +4490,9 @@ function opens(profile, ownHome) {
     ...row("Reveals (macOS)", profile.reveal_on_macos),
     ...row("Sees your env", profile.pass_env),
     ...row("Keys it never sees", Object.entries(profile.keys || {}).map(([k, hosts]) => `${k} → ${hosts.join(", ")}`)),
+    ...row("Keys from the keychain", Object.entries(profile.keychain || {}).map(([k, key]) => `${k} ← "${key.service}" → ${(key.hosts || []).join(", ")}`)),
+    ...row("Keys from a login file", Object.entries(profile.login_file || {}).map(([k, key]) => `${k} ← ~/${key.path} → ${(key.hosts || []).join(", ")}`)),
+    ...row("Devices (Linux)", profile.devices),
     ...row("Sets env", env),
     ...row("Also connects to", (profile.hosts || []).map((host) => `https://${host}`)),
     ...row("Session mode", profile.mode ? [profile.mode] : []),

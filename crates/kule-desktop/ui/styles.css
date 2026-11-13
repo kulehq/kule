@@ -1174,6 +1174,15 @@ select:focus-visible {
   overflow-wrap: anywhere;
 }
 
+.event-who {
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.kule-note .event-mark {
+  color: var(--accent);
+}
+
 .event-mark {
   flex: none;
   width: 14px;

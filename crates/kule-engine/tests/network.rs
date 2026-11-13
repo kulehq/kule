@@ -44,6 +44,19 @@ impl Setup {
         let ws = TempDir::new().unwrap();
         fs::write(ws.path().join("README.md"), "hello\n").unwrap();
         let task = Task::create(home.path(), ws.path()).unwrap();
+        // Run as root (a container's CI job), Kule asks for weaker isolation
+        // to be accepted; these tests are what it then gives.
+        #[cfg(target_os = "linux")]
+        // SAFETY: a plain system call.
+        if unsafe { libc::geteuid() } == 0 {
+            kule_engine::set_isolation(
+                home.path(),
+                &kule_engine::Isolation {
+                    accept_weaker: true,
+                },
+            )
+            .unwrap();
+        }
         let proxy = Proxy::start(&task, policy()).unwrap();
         let mut sandbox = Sandbox::new(&task).unwrap();
         sandbox.set_network(Network::Proxy(proxy.port()));
@@ -1085,4 +1098,61 @@ fn plain_http_in_a_tunnel_is_read_as_any_plain_request() {
     let mut echo = Vec::new();
     let _ = s.read_to_end(&mut echo);
     assert_eq!(String::from_utf8_lossy(&echo), "EHLO x\r\n");
+}
+
+/// Linux: the proxy serves the task's own commands, which run as the
+/// person Kule runs as. Another user's program on this computer gets
+/// nothing through it, and nothing of it is logged in the task. Run as
+/// root (a container's CI job), the test is that other user.
+#[cfg(target_os = "linux")]
+#[test]
+fn another_users_program_gets_nothing_through_the_proxy() {
+    use std::os::unix::process::CommandExt;
+    // SAFETY: a plain system call.
+    if unsafe { libc::geteuid() } != 0 {
+        eprintln!("skipped: only root can run a program as another user here");
+        return;
+    }
+    let s = Setup::new();
+    let up = upstream();
+    let target = format!("127.0.0.1:{up}");
+    let script = format!(
+        r#"
+import socket, sys
+s = socket.create_connection(("127.0.0.1", int(sys.argv[1])), timeout=5)
+s.sendall(b"CONNECT {target} HTTP/1.1\r\nHost: {target}\r\n\r\n")
+data = b""
+try:
+    while True:
+        chunk = s.recv(4096)
+        if not chunk:
+            break
+        data += chunk
+except OSError:
+    pass
+print(data.decode(errors="replace"))
+"#
+    );
+    let port = s._proxy.port().to_string();
+    let out = std::process::Command::new("python3")
+        .args(["-c", &script, &port])
+        .uid(65534)
+        .gid(65534)
+        .output()
+        .unwrap();
+    let reply = String::from_utf8_lossy(&out.stdout);
+    assert!(!reply.contains("hello from upstream"), "{reply}");
+    assert!(!reply.contains("200"), "{reply}");
+    // The task's own command still gets through, and only it is logged.
+    let own = s.connect_via_proxy(&target);
+    assert!(own.contains("hello from upstream"), "{own}");
+    let log = s.logged("127.0.0.1", 1);
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    assert_eq!(
+        connections(&s.task).unwrap().len(),
+        log.len(),
+        "{:?}",
+        connections(&s.task).unwrap()
+    );
+    assert_eq!(log.len(), 1, "{log:?}");
 }

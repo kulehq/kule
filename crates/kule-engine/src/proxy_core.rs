@@ -128,6 +128,16 @@ struct Pending {
 
 impl lonca_net::Gate for Gate {
     fn decide(&self, request: &lonca_net::Request<'_>) -> lonca_net::Verdict {
+        // Only the task's own commands, which run as the person Kule runs
+        // as: a connection another user's program makes is refused, and
+        // neither judged, asked about nor logged in the task.
+        if !from_this_user(request.peer, request.local) {
+            return lonca_net::Verdict {
+                allow: false,
+                allow_private: false,
+                reason: "this proxy serves its task's own commands".to_owned(),
+            };
+        }
         // `Host.` and `HOST` are the host: judged, asked about and looked
         // into as one.
         let host = normal_host(request.host);
@@ -315,6 +325,59 @@ impl lonca_net::Gate for Gate {
         };
         self.log.record(record);
     }
+}
+
+/// Whether the connection from `peer` to the proxy at `local` is a socket
+/// of the user Kule runs as (Linux: as `/proc/net/tcp` and `tcp6` list it).
+/// One not found there, or another user's, is not.
+#[cfg(target_os = "linux")]
+fn from_this_user(peer: SocketAddr, local: SocketAddr) -> bool {
+    // SAFETY: a plain system call.
+    let me = unsafe { libc::geteuid() };
+    ["/proc/net/tcp", "/proc/net/tcp6"].iter().any(|table| {
+        std::fs::read_to_string(table)
+            .is_ok_and(|text| socket_owner(&text, peer, local) == Some(me))
+    })
+}
+
+/// Elsewhere every local connection is taken as the person's (see the
+/// network's known limits).
+#[cfg(not(target_os = "linux"))]
+fn from_this_user(_peer: SocketAddr, _local: SocketAddr) -> bool {
+    true
+}
+
+/// The owner of the socket at `from` connected to `to`, read from the text
+/// of `/proc/net/tcp` or `tcp6`: each address in hex, as the kernel keeps
+/// it (each 32-bit word in this machine's order), then its port.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn socket_owner(text: &str, from: SocketAddr, to: SocketAddr) -> Option<u32> {
+    let hex = |addr: SocketAddr| -> Vec<String> {
+        let words = |octets: &[u8]| -> String {
+            octets
+                .chunks(4)
+                .map(|w| format!("{:08X}", u32::from_ne_bytes([w[0], w[1], w[2], w[3]])))
+                .collect()
+        };
+        let port = addr.port();
+        match addr.ip() {
+            std::net::IpAddr::V4(v4) => vec![
+                format!("{}:{port:04X}", words(&v4.octets())),
+                // As a socket of both families lists it.
+                format!("{}:{port:04X}", words(&v4.to_ipv6_mapped().octets())),
+            ],
+            std::net::IpAddr::V6(v6) => vec![format!("{}:{port:04X}", words(&v6.octets()))],
+        }
+    };
+    let (from, to) = (hex(from), hex(to));
+    text.lines().skip(1).find_map(|line| {
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        let (local, remote, uid) = (fields.get(1)?, fields.get(2)?, fields.get(7)?);
+        (from.iter().any(|f| f.eq_ignore_ascii_case(local))
+            && to.iter().any(|t| t.eq_ignore_ascii_case(remote)))
+        .then(|| uid.parse().ok())
+        .flatten()
+    })
 }
 
 impl Gate {
@@ -602,6 +665,36 @@ fn loopback_by_name(host: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The owner of a connection is read from the kernel's table as it
+    /// writes it, in either family: another user's connection has another
+    /// owner, one not listed none.
+    #[test]
+    fn a_connections_owner_is_read_from_the_kernels_table() {
+        let tcp = "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode
+   0: 0100007F:C350 0100007F:E1B4 01 00000000:00000000 00:00000000 00000000   501        0 1 1 0000000000000000 20 4 30 10 -1
+   1: 0100007F:D431 0100007F:C350 01 00000000:00000000 00:00000000 00000000  1001        0 2 1 0000000000000000 20 4 30 10 -1
+";
+        let addr = |port: u16| std::net::SocketAddr::from(([127, 0, 0, 1], port));
+        if cfg!(target_endian = "little") {
+            assert_eq!(
+                super::socket_owner(tcp, addr(0xD431), addr(0xC350)),
+                Some(1001)
+            );
+            assert_eq!(
+                super::socket_owner(tcp, addr(0xC350), addr(0xE1B4)),
+                Some(501)
+            );
+            assert_eq!(super::socket_owner(tcp, addr(0xD432), addr(0xC350)), None);
+            let tcp6 = "  sl  local_address                         remote_address                        st
+   0: 0000000000000000FFFF00000100007F:D431 0000000000000000FFFF00000100007F:C350 01 00000000:00000000 00:00000000 00000000  1002        0 3
+";
+            assert_eq!(
+                super::socket_owner(tcp6, addr(0xD431), addr(0xC350)),
+                Some(1002)
+            );
+        }
+    }
     use crate::Error;
 
     /// An HTTP request is known by its first line, however it arrives;

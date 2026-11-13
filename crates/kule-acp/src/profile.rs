@@ -933,6 +933,12 @@ impl Profile {
         for name in &self.pass_env {
             warnings.push(format!("{} sees your {name} as it is.", self.name));
         }
+        for device in &self.devices {
+            warnings.push(format!(
+                "On Linux, {} and its commands open {device} (sound, a camera, a serial port or a GPU).",
+                self.name
+            ));
+        }
         warnings
     }
 
@@ -1152,6 +1158,13 @@ impl Profile {
             if path != KEYCHAIN {
                 return Err(format!(
                     "reveal_on_macos {path:?}: only {KEYCHAIN} may be revealed"
+                ));
+            }
+        }
+        for device in &self.devices {
+            if !kule_engine::device_kind_allowed(device) {
+                return Err(format!(
+                    "devices {device:?}: only sound, cameras, serial ports and GPUs under /dev may be given"
                 ));
             }
         }
@@ -3040,5 +3053,35 @@ own_home = "TOOL_HOME"
         }
         assert!(uvx("acme-web==2.0.0").is_ok());
         assert!(uvx("acme_web@2.0.0").is_ok());
+    }
+
+    /// A profile names only the kinds of device Kule gives: one that names
+    /// another is held before it can be approved, and each it names is
+    /// said where it is approved.
+    #[test]
+    fn a_profile_gives_only_the_devices_kule_gives() {
+        let with = |devices: &str| {
+            let text =
+                format!("[[agent]]\nname = \"d\"\ncommand = [\"d-agent\"]\ndevices = {devices}\n");
+            crate::parse_profiles(&text).unwrap().remove(0)
+        };
+        for refused in [
+            "[\"/dev/bus/usb\"]",
+            "[\"/dev/kvm\"]",
+            "[\"/dev/input/event0\"]",
+            "[\"/dev/snd/../mem\"]",
+            "[\"/etc/passwd\"]",
+        ] {
+            assert!(with(refused).check(&[], None).is_err(), "{refused}");
+        }
+        let given = with("[\"/dev/snd\", \"/dev/video0\", \"/dev/ttyUSB0\", \"/dev/dri\"]");
+        assert_eq!(given.check(&[], None), Ok(()));
+        let warned = given.warnings();
+        for device in ["/dev/snd", "/dev/video0", "/dev/ttyUSB0", "/dev/dri"] {
+            assert!(
+                warned.iter().any(|w| w.contains(device)),
+                "{device}: {warned:?}"
+            );
+        }
     }
 }

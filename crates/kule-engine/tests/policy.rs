@@ -662,6 +662,28 @@ fn git_moves_are_judged_by_what_they_mean() {
     assert_eq!(ruling.verdict, Verdict::Deny);
 }
 
+/// A hook written under another case of the hooks folder (in a repository
+/// that has none, on a disk that ignores case: the one git runs) is
+/// denied as a hook, never taken for config.
+#[test]
+fn a_hook_under_another_case_of_its_folder_is_a_hook() {
+    let s = Setup::new(PROJECT, true);
+    let copy = s.copy();
+    fs::remove_dir_all(copy.join(".git/hooks")).unwrap();
+    write(
+        &copy.join(".git/HOOKS/post-commit"),
+        "#!/bin/sh\necho pwned\n",
+    );
+    write(&copy.join(".git/Hooks/pre-push"), "#!/bin/sh\necho pwned\n");
+    let ruling = s.judged();
+    assert_eq!(
+        on(&ruling, "git hook post-commit"),
+        (Verdict::Deny, rules(&["git-hooks"]))
+    );
+    assert_eq!(on(&ruling, "git hook pre-push").0, Verdict::Deny);
+    assert_eq!(ruling.verdict, Verdict::Deny);
+}
+
 /// What new commits carry is judged as files are, though the files are
 /// gone from the folder: a workflow committed and then deleted still waits
 /// with the branch that brings it.
