@@ -757,7 +757,9 @@ impl Policy {
                 }
             })
             .collect();
+        // A rule may be written as several policies under one id.
         rules.sort();
+        rules.dedup();
         Ok(Answer {
             allowed: response.decision() == Decision::Allow,
             rules,
