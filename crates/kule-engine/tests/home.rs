@@ -749,6 +749,153 @@ fn a_token_in_a_shell_startup_file_is_masked_in_the_layer() {
     assert!(!layer.contains("export B=2"), "{layer}");
 }
 
+/// The person's fish settings with a token, and a folder outside every task
+/// holding a file of the same name; the task then swaps its `.config/fish`
+/// for a link to `target` (`$TMPDIR` in it is the task's own tmp).
+fn fish_swapped_for_a_link(s: &Setup, token: &str, target: &str) {
+    let p = s.person.path();
+    fs::create_dir_all(p.join(".config/fish")).unwrap();
+    fs::write(
+        p.join(".config/fish/config.fish"),
+        format!("export API_TOKEN={token}\n"),
+    )
+    .unwrap();
+    let seen = s.run("cat \"$HOME/.config/fish/config.fish\"");
+    assert!(seen.contains("API_TOKEN=kule_secret_"), "{seen}");
+    s.run(&format!(
+        "mv \"$HOME/.config/fish\" \"$HOME/.config/fish.old\" && ln -s \"{target}\" \"$HOME/.config/fish\""
+    ));
+    let changes = s.task.home_changes().unwrap();
+    assert!(
+        changes.iter().any(|c| c.path == ".config/fish/config.fish"),
+        "{changes:?}"
+    );
+}
+
+/// Discarding a change under a folder the task swapped for a link leads
+/// Kule nowhere else: nothing where the link points is removed or written,
+/// and the discard is refused, naming the folder. Discarded with the
+/// folder's own change, the file comes back in the layer, masked.
+#[test]
+fn a_discard_never_follows_a_link_the_task_put_in_its_home() {
+    let s = Setup::new();
+    let token = "ghp_k3yL1ke0nlyF0rTest1ngDiscard";
+    let outside = TempDir::new_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
+    fs::write(outside.path().join("config.fish"), "theirs\n").unwrap();
+    fish_swapped_for_a_link(&s, token, &outside.path().display().to_string());
+
+    let refused = s
+        .task
+        .discard_home(&[".config/fish/config.fish".to_owned()]);
+    assert_eq!(
+        fs::read_to_string(outside.path().join("config.fish")).unwrap_or_default(),
+        "theirs\n"
+    );
+    assert_eq!(fs::read_dir(outside.path()).unwrap().count(), 1);
+    let refused = refused.unwrap_err().to_string();
+    assert!(
+        refused.contains("~/.config/fish is no longer a folder"),
+        "{refused}"
+    );
+
+    s.task
+        .discard_home(&[
+            ".config/fish".to_owned(),
+            ".config/fish/config.fish".to_owned(),
+        ])
+        .unwrap();
+    assert_eq!(
+        fs::read_to_string(outside.path().join("config.fish")).unwrap(),
+        "theirs\n"
+    );
+    let layer = s.task.home_layer().join(".config/fish");
+    assert!(fs::symlink_metadata(&layer).unwrap().is_dir());
+    let back = fs::read_to_string(layer.join("config.fish")).unwrap();
+    assert!(
+        back.contains("API_TOKEN=kule_secret_") && !back.contains(token),
+        "{back}"
+    );
+}
+
+/// What still runs in the sandbox, out of its command's session, is ended
+/// before a discard writes in the layer, and the person is told, so nothing
+/// swaps a folder on the way meanwhile.
+#[test]
+fn what_still_runs_in_the_sandbox_is_ended_before_a_discard() {
+    let s = Setup::new();
+    let code = "import os, time\nif os.fork(): os._exit(0)\nos.setsid()\nif os.fork(): os._exit(0)\nopen(os.environ['HOME'] + '/stray.txt','w').write(str(os.getpid()))\nwhile True: time.sleep(0.05)";
+    s.run(&format!(
+        "python3 -I -c \"{code}\" </dev/null >/dev/null 2>&1; true"
+    ));
+    let mut pid = None;
+    for _ in 0..200 {
+        if let Ok(text) = fs::read_to_string(s.task.home_layer().join("stray.txt"))
+            && let Ok(n) = text.trim().parse::<i32>()
+        {
+            pid = Some(n);
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    // SAFETY: probing a pid; signal 0 sends nothing.
+    let alive = |pid: i32| unsafe { libc::kill(pid, 0) == 0 };
+    // On Linux what a command leaves ends with its PID namespace.
+    let Some(pid) = pid.filter(|&pid| alive(pid)) else {
+        if cfg!(target_os = "macos") {
+            panic!("the stray never started");
+        }
+        eprintln!("the stray ended with its command here; nothing left to end");
+        return;
+    };
+    let gone = s.task.discard_home(&[".stray.txt".to_owned()]);
+    let told = s.task.take_ended();
+    let mut ended = false;
+    for _ in 0..100 {
+        if !alive(pid) {
+            ended = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    if !ended {
+        // SAFETY: ending the test's own stray.
+        unsafe { libc::kill(pid, libc::SIGKILL) };
+    }
+    gone.unwrap();
+    assert!(ended, "the stray still runs after a discard");
+    assert!(
+        told.len() == 1 && told[0].to_lowercase().contains("python"),
+        "{told:?}"
+    );
+}
+
+/// The same with the link pointing at a folder of the task's own tmp that
+/// the task made append-only, so Kule could not take back what it wrote
+/// there: the person's real value never lands where the task reads it.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_discard_never_leaves_a_real_value_where_the_task_reads() {
+    let s = Setup::new();
+    let token = "ghp_k3yL1ke0nlyF0rTest1ngAppend";
+    let tmp = s.run("printf %s \"$TMPDIR\"");
+    let drop = Path::new(tmp.trim()).join("drop");
+    s.run("mkdir -p \"$TMPDIR/drop\" && chflags uappnd \"$TMPDIR/drop\"");
+    fish_swapped_for_a_link(&s, token, &drop.display().to_string());
+
+    let done = s
+        .task
+        .discard_home(&[".config/fish/config.fish".to_owned()]);
+    let seen = s.run("cat \"$TMPDIR/drop/config.fish\" 2>/dev/null; echo end");
+    std::process::Command::new("chflags")
+        .arg("nouappnd")
+        .arg(&drop)
+        .status()
+        .unwrap();
+    assert!(done.is_err(), "{done:?}");
+    assert!(!seen.contains(token), "{seen}");
+    assert!(fs::read_dir(&drop).unwrap().next().is_none());
+}
+
 /// A startup file Kule cannot mask (not UTF-8) is withheld from the
 /// commands, there and at its real path, rather than shown with its token:
 /// Kule says which file and why, offers no change for it, and the real file
@@ -970,4 +1117,131 @@ fn the_layer_carries_nugets_migration_marker_as_kules_own() {
         "{changes:?}"
     );
     assert!(!s.person.path().join(".local/share/NuGet").exists());
+}
+
+/// Tokens written the ways other shells, zsh with `ZDOTDIR`, git and
+/// several settings on one line write them: each reads as a placeholder in
+/// the task, in the layer and at its real path, and an applied change puts
+/// the real values back in the person's file, as they were.
+#[test]
+fn tokens_in_every_form_a_shell_or_git_writes_are_masked() {
+    let s = Setup::new();
+    let p = s.person.path();
+    let files: &[(&str, &str, &str)] = &[
+        (
+            ".config/zsh/.zshrc",
+            "export GITHUB_TOKEN=",
+            "ghp_FAKEZDOTDIRrc0123456789abcd",
+        ),
+        (
+            ".config/fish/config.fish",
+            "set -x GITHUB_TOKEN ",
+            "ghp_FAKEFISHsetx0123456789abcd",
+        ),
+        (
+            ".config/nushell/env.nu",
+            "$env.GITHUB_TOKEN = ",
+            "\"ghp_FAKENUENV0123456789abcdef\"",
+        ),
+        (
+            ".cshrc",
+            "setenv GITHUB_TOKEN ",
+            "ghp_FAKECSHRC0123456789abcdefg",
+        ),
+        (
+            ".zshrc",
+            "export EDITOR=vi OPENAI_API_KEY=",
+            "sk-FAKEMULTI0123456789abcdefgh",
+        ),
+        (
+            ".bashrc",
+            "typeset -x NPM_SECRET=",
+            "npm_FAKETYPESET0123456789abcde",
+        ),
+        (
+            ".gitconfig",
+            "[url \"https://x-access-token:",
+            "ghp_FAKEURLTOKEN0123456789abcd@github.com/\"]\n\tinsteadOf = https://github.com/",
+        ),
+        (
+            ".config/git/config",
+            "[http]\n\textraheader = AUTHORIZATION: bearer ",
+            "ghp_FAKEHEADER0123456789abcdef",
+        ),
+    ];
+    let mut script = String::new();
+    for (rel, before, value) in files {
+        let path = p.join(rel);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, format!("{before}{value}\n")).unwrap();
+        script.push_str(&format!(
+            "cat \"$HOME/{rel}\" '{}' 2>/dev/null; ",
+            path.display()
+        ));
+    }
+    let seen = s.run(&format!("{script}echo done"));
+    assert!(seen.ends_with("done\n"), "{seen}");
+    for fake in [
+        "FAKEZDOTDIR",
+        "FAKEFISH",
+        "FAKENUENV",
+        "FAKECSHRC",
+        "FAKEMULTI",
+        "FAKETYPESET",
+        "FAKEURLTOKEN",
+        "FAKEHEADER",
+    ] {
+        assert!(!seen.contains(fake), "{fake} read in the task:\n{seen}");
+    }
+    assert_eq!(seen.matches("kule_secret_").count(), files.len(), "{seen}");
+    assert!(
+        seen.contains("export EDITOR=vi OPENAI_API_KEY=kule_secret_"),
+        "{seen}"
+    );
+    assert!(seen.contains("@github.com/\"]"), "{seen}");
+
+    // A change applied keeps every real value in the person's files.
+    s.run("for f in .gitconfig .config/fish/config.fish .zshrc; do echo '# more' >> \"$HOME/$f\"; done");
+    let all: Vec<String> = s
+        .task
+        .home_changes()
+        .unwrap()
+        .into_iter()
+        .map(|c| c.path)
+        .collect();
+    s.task.apply_reviewed(&all).unwrap();
+    for (rel, before, value) in files {
+        let real = s.real(rel);
+        assert!(
+            real.starts_with(&format!("{before}{value}\n")),
+            "{rel}: {real}"
+        );
+        assert!(!real.contains("kule_secret_"), "{rel}: {real}");
+    }
+}
+
+/// A package index's URL keeps its host and user, with the token alone
+/// masked, and an applied change puts the token back in the person's file.
+#[test]
+fn an_index_urls_token_goes_back_when_its_file_is_applied() {
+    let s = Setup::new();
+    let p = s.person.path();
+    fs::create_dir_all(p.join(".config/pip")).unwrap();
+    let text = "[global]\nindex-url = https://me:ghp_abcdefgh12345678@pypi.example.com/simple\n";
+    fs::write(p.join(".config/pip/pip.conf"), text).unwrap();
+    let seen = s.run(
+        "cat \"$HOME/.config/pip/pip.conf\"; echo 'timeout = 60' >> \"$HOME/.config/pip/pip.conf\"",
+    );
+    assert!(
+        seen.contains("index-url = https://me:kule_secret_"),
+        "{seen}"
+    );
+    assert!(seen.contains("@pypi.example.com/simple"), "{seen}");
+    s.task
+        .apply_reviewed(&[".config/pip/pip.conf".to_owned()])
+        .unwrap();
+    assert_eq!(
+        s.real(".config/pip/pip.conf"),
+        format!("{text}timeout = 60\n")
+    );
 }

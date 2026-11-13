@@ -1406,7 +1406,10 @@ impl Service {
     /// Throws the home changes at `paths` away.
     pub fn discard_home(&self, id: &str, paths: &[String]) -> Result<Vec<String>> {
         self.not_at_work(id)?;
-        let gone = self.open(id)?.discard_home(paths).map_err(text)?;
+        let task = self.open(id)?;
+        let gone = task.discard_home(paths);
+        self.tell_ended(&task);
+        let gone = gone.map_err(text)?;
         notify(&self.subscribers, Notice::Tasks);
         Ok(gone)
     }

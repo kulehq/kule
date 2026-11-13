@@ -967,7 +967,8 @@ fn authority_is(authority: &str, host: &str, port: u16) -> bool {
 }
 
 /// Serves plain HTTP to `host` on `port` over a connection the proxy let
-/// through, `head` its first request with the target cut to the path:
+/// through, `head` its first request with the target cut to the path (or,
+/// without one, read from the client like the rest, as in a tunnel):
 /// each request on it, read as [`plain_head`] reads one, must be for
 /// `host`, and later ones, which name their host in the request line
 /// (`GET http://host/path`), too. A request for another host behind the
@@ -977,7 +978,7 @@ fn authority_is(authority: &str, host: &str, port: u16) -> bool {
 pub(crate) fn serve_plain(
     host: &str,
     port: u16,
-    head: String,
+    head: Option<String>,
     tunnel: lonca_net::Tunnel,
     git: bool,
 ) -> std::result::Result<(), Ended> {
@@ -993,7 +994,7 @@ pub(crate) fn serve_plain(
         inner: tunnel.client,
     });
     let mut upstream = Conn::new(tunnel.upstream);
-    let mut next = Some(head.into_bytes());
+    let mut next = head.map(String::into_bytes);
     loop {
         let head = match next.take() {
             Some(head) => head,
@@ -2159,7 +2160,7 @@ mod tests {
                 early: Vec::new(),
             };
             let serving = std::thread::spawn(move || {
-                serve_plain("github.com", 80, head.to_owned(), tunnel, git)
+                serve_plain("github.com", 80, Some(head.to_owned()), tunnel, git)
             });
             at_host
                 .set_read_timeout(Some(Duration::from_millis(500)))
@@ -2207,7 +2208,7 @@ mod tests {
                 early: Vec::new(),
             };
             let serving = std::thread::spawn(move || {
-                serve_plain("github.com", 80, head.to_owned(), tunnel, true)
+                serve_plain("github.com", 80, Some(head.to_owned()), tunnel, true)
             });
             at_host
                 .set_read_timeout(Some(Duration::from_millis(500)))
@@ -2276,7 +2277,8 @@ mod tests {
             upstream,
             early: Vec::new(),
         };
-        let serving = std::thread::spawn(move || serve_plain("github.com", 80, head, tunnel, true));
+        let serving =
+            std::thread::spawn(move || serve_plain("github.com", 80, Some(head), tunnel, true));
         // Bounded: passed on to a host that never reads, it would wait for
         // good rather than fail.
         client

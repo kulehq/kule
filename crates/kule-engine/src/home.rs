@@ -107,8 +107,12 @@ const STARTUP: &[&str] = &[
     ".bash_logout",
     ".profile",
     ".kshrc",
+    ".mkshrc",
     ".cshrc",
     ".tcshrc",
+    ".login",
+    ".logout",
+    ".xonshrc",
     ".xprofile",
     ".xinitrc",
     ".xsession",
@@ -116,6 +120,12 @@ const STARTUP: &[&str] = &[
     ".vimrc",
     ".config/git/config",
     ".config/fish/",
+    // zsh with `ZDOTDIR` there, nushell, xonsh, PowerShell, elvish.
+    ".config/zsh/",
+    ".config/nushell/",
+    ".config/xonsh/",
+    ".config/powershell/",
+    ".config/elvish/",
     ".config/nvim/",
     ".config/autostart/",
     ".config/systemd/user/",
@@ -1004,8 +1014,6 @@ impl Task {
         })
     }
 
-    /// Throws the changes at `paths` away: the layer gets back what the
-    /// real home holds there.
     /// Masks, in the layer, the settings that look like secrets in the files
     /// [`masks_home`] names (all, or those in `only`), as the copy's `.env`
     /// files are masked: each placeholder is kept with the path the value
@@ -1030,12 +1038,15 @@ impl Task {
         let mut writes = Vec::new();
         for rel in candidates {
             let file = dir.join(&rel);
-            let text = match read_settings(&dir, &rel) {
-                Ok(text) => text,
+            // Written and removed through the folders on the way, as in
+            // [`Task::discard_home`]: nothing the task put there is followed.
+            let (in_dir, name) = open_in_layer(&dir, &rel)?;
+            let (text, mode) = match read_settings(&dir, &rel) {
+                Ok(read) => read,
                 Err(why) => {
                     // Its values would be read in the clear: neither the
                     // clone nor the real file is shown.
-                    fsops::remove(&file)?;
+                    fsops::remove_tree_at(&in_dir, name).at(&file)?;
                     layer.entries.remove(&rel);
                     layer.withheld.insert(rel, why.to_owned());
                     continue;
@@ -1044,7 +1055,7 @@ impl Task {
             let real = layer.real.join(&rel).display().to_string();
             let masked = secrets::mask_with(&real, &text, &mut kept, &vault)?;
             if masked != text {
-                writes.push((rel, file, masked));
+                writes.push((rel, file, masked, mode));
             }
         }
         if writes.is_empty() {
@@ -1053,8 +1064,9 @@ impl Task {
         // The values first: a masked file whose values were lost could only
         // ever be applied as placeholders.
         kept.save(self.dir(), &self.home())?;
-        for (rel, file, masked) in writes {
-            fsops::replace_file(&file, masked.as_bytes())?;
+        for (rel, file, masked, mode) in writes {
+            let (in_dir, name) = open_in_layer(&dir, &rel)?;
+            fsops::put_at(&in_dir, name, masked.as_bytes(), mode, &file)?;
             if let (Some(entry), Some(now)) = (layer.entries.get_mut(&rel), Stamp::of(&file)?) {
                 entry.copy = now;
             }
@@ -1121,10 +1133,21 @@ impl Task {
         Ok(self.vault()?.unmask(&path, &text).into_bytes())
     }
 
+    /// Throws the changes at `paths` away: the layer gets back what the
+    /// real home holds there.
+    ///
+    /// The layer is where the task's commands write, so every removal and
+    /// write in it goes through the folders on the way, opened without
+    /// following a link, with nothing left running in the sandbox: a folder
+    /// the task swapped for a link leads nothing elsewhere. A change under
+    /// such a folder is refused until the folder's own change is discarded
+    /// with it.
     pub fn discard_home(&self, paths: &[String]) -> Result<Vec<String>> {
+        let _lock = self.lock()?;
         let Some(mut layer) = self.load_layer()? else {
             return Ok(Vec::new());
         };
+        self.quiet_sandbox("discard its home changes")?;
         let dir = self.home_layer();
         let mut wanted: Vec<HomeChange> = self
             .home_changes()?
@@ -1135,15 +1158,23 @@ impl Task {
         // first for what comes back.
         wanted.sort_by(|a, b| a.path.cmp(&b.path));
         for c in wanted.iter().rev().filter(|c| c.change == Change::Created) {
-            fsops::remove(&dir.join(&c.path))?;
+            let (in_dir, name) = open_in_layer(&dir, &c.path)?;
+            fsops::remove_tree_at(&in_dir, name).at(&dir.join(&c.path))?;
         }
         for c in wanted.iter().filter(|c| c.change != Change::Created) {
             let (real, to) = (layer.real.join(&c.path), dir.join(&c.path));
-            fsops::remove(&to)?;
-            if let Some(work) = fsops::clone_entry(&real, &to)?
-                && let Some(copy) = Stamp::of(&to)?
-            {
-                layer.entries.insert(c.path.clone(), Entry { work, copy });
+            let (in_dir, name) = open_in_layer(&dir, &c.path)?;
+            fsops::remove_tree_at(&in_dir, name).at(&to)?;
+            match fsops::clone_entry_into(&real, &in_dir, name, &to)? {
+                Some(work) => {
+                    if let Some(copy) = Stamp::of(&to)? {
+                        layer.entries.insert(c.path.clone(), Entry { work, copy });
+                    }
+                }
+                // Nothing there in the real home either: nothing to offer.
+                None => {
+                    layer.entries.remove(&c.path);
+                }
             }
         }
         // What came back from the real home is masked again.
@@ -1427,15 +1458,48 @@ fn capturable(dir: &Path) -> bool {
 
 /// The layer's settings file `rel` under `dir` as text, read without
 /// following a link; why not, where it cannot be masked.
-fn read_settings(dir: &Path, rel: &str) -> std::result::Result<String, &'static str> {
+fn read_settings(dir: &Path, rel: &str) -> std::result::Result<(String, u32), &'static str> {
     let Ok(fsops::Beneath::File(file)) = fsops::beneath(dir, rel) else {
         return Err("unreadable");
     };
+    let mode = file
+        .metadata()
+        .map(|m| crate::osfs::mode_of(&m))
+        .map_err(|_| "unreadable")?;
     let mut bytes = Vec::new();
     std::io::Read::read_to_end(&mut std::io::Read::take(file, MAX_MASKED + 1), &mut bytes)
         .map_err(|_| "unreadable")?;
     if bytes.len() as u64 > MAX_MASKED {
         return Err("larger than 1 MB");
     }
-    String::from_utf8(bytes).map_err(|_| "not UTF-8")
+    String::from_utf8(bytes)
+        .map(|text| (text, mode))
+        .map_err(|_| "not UTF-8")
+}
+
+/// The folder of the task's home layer `layer` that holds `rel`, opened
+/// through every folder on the way without following a link, and `rel`'s
+/// name in it. A folder on the way that is no longer one (the task put a
+/// link or a file in its place) is refused, naming it.
+fn open_in_layer<'a>(layer: &Path, rel: &'a str) -> Result<(fs::File, &'a str)> {
+    fsops::open_parent(layer, rel).map_err(|e| {
+        let mut at = String::new();
+        for part in Path::new(rel)
+            .parent()
+            .into_iter()
+            .flat_map(Path::components)
+        {
+            if !at.is_empty() {
+                at.push('/');
+            }
+            at.push_str(&part.as_os_str().to_string_lossy());
+            if !fs::symlink_metadata(layer.join(&at)).is_ok_and(|m| m.is_dir()) {
+                return Error::Invalid(format!(
+                    "~/{at} is no longer a folder in the task's home, so nothing under it \
+                     is touched; discard ~/{at} first"
+                ));
+            }
+        }
+        e
+    })
 }

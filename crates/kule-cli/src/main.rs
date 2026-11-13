@@ -2228,8 +2228,9 @@ fn home_cmd(home: &Path, task: &str, action: HomeCmd) -> Result<()> {
             }
         }
         HomeCmd::Discard { paths, all } => {
-            let gone = task.discard_home(&pick(paths, all)?)?;
-            println!("discarded {} changes", gone.len());
+            let gone = task.discard_home(&pick(paths, all)?);
+            tell_ended(&task);
+            println!("discarded {} changes", gone?.len());
         }
         HomeCmd::Diff { path } => {
             let path = home_relative(&path, &person)?;

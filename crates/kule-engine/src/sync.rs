@@ -486,7 +486,7 @@ impl Task {
         let Some(mut ours) = outline::read_file(&self.copy(), path)? else {
             return Ok(None);
         };
-        if secrets::is_env_file(path)
+        if secrets::masked_in_copy(path)
             && let Ok(text) = std::str::from_utf8(&ours)
         {
             ours = self.vault()?.unmask(path, text).into_bytes();
