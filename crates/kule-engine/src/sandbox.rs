@@ -3324,9 +3324,18 @@ impl Sandbox {
                 Ok(())
             });
         }
+        // In every mode: a session keyring of the command's own, no key
+        // calls, sockets in the families a command needs (see
+        // `base_filter`); after Landlock, which set no_new_privs, as seccomp
+        // needs.
+        let base = crate::base_filter::program();
+        // SAFETY: enter only makes system calls on data prepared before the
+        // fork.
+        unsafe {
+            command.pre_exec(move || crate::base_filter::enter(&base));
+        }
         // Without a network of its own, the command's servers are held to
-        // loopback by Kule doing their binds (see `bind_filter`); after
-        // Landlock, which set no_new_privs, as seccomp needs.
+        // loopback by Kule doing their binds (see `bind_filter`).
         if network_shared && crate::bind_filter::available() {
             let filter = crate::bind_filter::BindFilter::new().at(Path::new("/proc/self"))?;
             // SAFETY: enter only makes system calls on data prepared

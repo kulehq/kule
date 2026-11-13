@@ -1453,7 +1453,7 @@ fn run() -> Result<ExitCode> {
                     if !cp.merged.is_empty() {
                         println!(
                             "merged with what the folder changed meanwhile: {}",
-                            cp.merged.join(", ")
+                            paint::plain_line(&cp.merged.join(", "))
                         );
                     }
                     for allowance in keep {
@@ -3688,7 +3688,12 @@ fn print_entity_changes(changes: &[EntityChange]) {
         let mark = coloured(mark);
         match change.name.as_str() {
             "" => println!("      {mark} {kind}"),
-            name => println!("      {mark} {kind} {}", paint::bold(name)),
+            // Named in the task's files: written out, never a sequence the
+            // terminal acts on.
+            name => println!(
+                "      {mark} {kind} {}",
+                paint::bold(&paint::plain_line(name))
+            ),
         }
     }
     if changes.len() > SHOWN {
@@ -3724,34 +3729,38 @@ fn print_git(git: &GitSummary) {
         println!("git: config changed (it can make the next git command run code)");
     }
     for hook in &git.hooks {
-        println!("git: hook {hook} changed (it runs on the next matching git command)");
+        println!(
+            "git: hook {} changed (it runs on the next matching git command)",
+            paint::plain_line(hook)
+        );
     }
     for path in &git.staged {
         println!(
-            "git: {path} is staged unlike the file (the next git commit records what you did not review)"
+            "git: {} is staged unlike the file (the next git commit records what you did not review)",
+            paint::plain_line(path)
         );
     }
     for path in &git.other {
-        println!("git: {path} changed");
+        println!("git: {} changed", paint::plain_line(path));
     }
 }
 
 fn describe_ref(change: &RefChange) -> String {
-    let name = change
-        .name
-        .strip_prefix("refs/heads/")
-        .unwrap_or(&change.name);
-    let short = |value: &str| match value.strip_prefix("ref: ") {
-        Some(target) => target
+    // Ref names and what they hold come from the task's repository.
+    let name = paint::plain_line(
+        change
+            .name
             .strip_prefix("refs/heads/")
-            .unwrap_or(target)
-            .to_owned(),
-        None => value.chars().take(7).collect(),
+            .unwrap_or(&change.name),
+    );
+    let short = |value: &str| match value.strip_prefix("ref: ") {
+        Some(target) => paint::plain_line(target.strip_prefix("refs/heads/").unwrap_or(target)),
+        None => paint::plain_line(&value.chars().take(7).collect::<String>()),
     };
     match (&change.old, &change.new) {
         (None, Some(new)) => format!("new {name} at {}", short(new)),
         (Some(old), None) => format!("deleted {name} (was {})", short(old)),
-        (None, None) => name.to_owned(),
+        (None, None) => name.clone(),
         (Some(old), Some(new)) => {
             let mut line = format!("{name} {} → {}", short(old), short(new));
             match change.fast_forward {
@@ -3786,6 +3795,24 @@ mod tests {
             refused: None,
             held: Vec::new(),
         }
+    }
+
+    /// A reference's name and what it points to come from the task's
+    /// repository: written out, never a sequence the terminal acts on.
+    #[test]
+    fn a_references_name_is_written_out() {
+        let change = RefChange {
+            name: "refs/heads/x\x1b]0;title\x07".into(),
+            old: Some("ref: refs/heads/a\x1b[2K".into()),
+            new: Some("0123456789abcdef".into()),
+            fast_forward: None,
+            commits: None,
+            paths: None,
+            carried: Vec::new(),
+        };
+        let line = describe_ref(&change);
+        assert!(!line.contains('\x1b') && !line.contains('\x07'), "{line:?}");
+        assert!(line.starts_with("x\\u{1b}]0;title"), "{line}");
     }
 
     /// An agent may label a refusal "Allow": the kind decides what is said.

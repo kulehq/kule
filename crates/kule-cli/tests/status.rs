@@ -275,3 +275,51 @@ fn an_error_cannot_drive_the_terminal() {
     assert!(said.contains("abc\\u{1b}]0;owned\\u{7}"), "{said}");
     assert!(!said.contains(['\x1b', '\x07', '\u{E0072}']), "{said}");
 }
+
+/// What `kule status` names from the task (a heading in a file, a git
+/// hook, a branch) is written out: none of it is a sequence the terminal
+/// acts on (moving the cursor, erasing a line, setting the title).
+#[cfg(unix)]
+#[test]
+fn names_from_the_task_never_drive_the_terminal() {
+    let (home, ws) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+    let git = |dir: &Path, args: &[&str]| {
+        let out = Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{out:?}");
+    };
+    fs::write(ws.path().join("notes.md"), "# Notes\n").unwrap();
+    git(ws.path(), &["init", "-q", "-b", "main"]);
+    git(ws.path(), &["add", "notes.md"]);
+    git(
+        ws.path(),
+        &[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@localhost",
+            "commit",
+            "-qm",
+            "x",
+        ],
+    );
+    let created = kule(home.path(), &["new", ws.path().to_str().unwrap()]);
+    let copy = copy_in(&created);
+    let id = created.split_whitespace().nth(1).unwrap().to_owned();
+    fs::write(
+        copy.join("notes.md"),
+        "# Notes\n\n## Later\x1b[3A\x1b[2K  fake line\x1b[1B\x1b]0;title\x07\n",
+    )
+    .unwrap();
+    fs::write(copy.join(".git/hooks/pre\x1b[2Kcommit"), "#!/bin/sh\n").unwrap();
+    let head = fs::read_to_string(copy.join(".git/refs/heads/main")).unwrap();
+    fs::write(copy.join(".git/refs/heads/x\x1b]0;t\x07"), head).unwrap();
+    let said = kule(home.path(), &["status", &id]);
+    assert!(!said.contains('\x1b') && !said.contains('\x07'), "{said:?}");
+    assert!(said.contains("Later\\u{1b}[3A"), "{said}");
+    assert!(said.contains("git: hook pre\\u{1b}[2Kcommit"), "{said}");
+}

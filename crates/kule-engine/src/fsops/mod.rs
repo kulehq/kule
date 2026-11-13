@@ -651,6 +651,8 @@ fn place_at(
 /// [`finish`] for the entry `name` in `dir`, not following a link.
 fn finish_at(dir: &File, name: &str, stamp: &Stamp) -> io::Result<()> {
     let cname = plain_name(name)?;
+    // First: an immutable flag a clone carried would refuse the rest.
+    at::clear_flags_at(dir, &cname)?;
     at::set_mtime_at(dir, Some(&cname), stamp.mtime)?;
     at::set_mode_at(dir, &cname, stamp.mode)
 }
@@ -925,6 +927,12 @@ fn file_xattrs(_file: &File) -> io::Result<BTreeMap<String, String>> {
 }
 
 fn finish(path: &Path, stamp: &Stamp) -> Result<()> {
+    // First, as in `finish_at`: an immutable flag would refuse the rest.
+    #[cfg(target_os = "macos")]
+    if let (Some(dir), Some(name)) = (path.parent(), path.file_name().and_then(|n| n.to_str())) {
+        let dir = osfs::open_dir(dir).at(path)?;
+        at::clear_flags_at(&dir, &plain_name(name).at(path)?).at(path)?;
+    }
     osfs::set_mtime(path, stamp.mtime).at(path)?;
     osfs::set_mode(path, stamp.mode).at(path)
 }

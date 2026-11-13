@@ -819,6 +819,11 @@ fn clone_extents(from: &File, to: &File, size: u64) -> io::Result<()> {
     .map_err(io_error)
 }
 
+/// Windows keeps no file flags a clone carries: nothing to take off.
+pub(crate) fn clear_flags_at(_dir: &File, _name: &Name) -> io::Result<()> {
+    Ok(())
+}
+
 /// Gives the entry `name` in `dir` the permission bits `mode`, as Windows
 /// keeps them (see `osfs::set_mode`), not following a link.
 pub(crate) fn set_mode_at(dir: &File, name: &Name, mode: u32) -> io::Result<()> {

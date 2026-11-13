@@ -13,6 +13,8 @@
 //! operating system. Policy over the effect set arrives later in M1.
 
 mod approvals;
+#[cfg(target_os = "linux")]
+mod base_filter;
 mod beside;
 #[cfg(target_os = "linux")]
 mod bind_filter;

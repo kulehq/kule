@@ -299,6 +299,48 @@ pub(crate) fn copy_into(file: &File, dir: &File, name: &Name) -> io::Result<()> 
     Ok(())
 }
 
+/// The file flags a person or a program sets on their own files (macOS:
+/// `hidden`, `uchg`, `uappnd`, `nodump`, `opaque`); never the system's.
+#[cfg(target_os = "macos")]
+const USER_FLAGS: u32 =
+    libc::UF_NODUMP | libc::UF_IMMUTABLE | libc::UF_APPEND | libc::UF_OPAQUE | libc::UF_HIDDEN;
+
+/// Takes the flags in [`USER_FLAGS`] off the entry `name` in `dir`, not
+/// following a link: a clone carries them along, and none of them is part
+/// of what a review shows. Elsewhere there are none to take.
+#[cfg(target_os = "macos")]
+pub(crate) fn clear_flags_at(dir: &File, name: &Name) -> io::Result<()> {
+    // For its facts alone: no read permission needed, a link not followed.
+    let flags = libc::O_EVTONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC;
+    // SAFETY: openat reads the name and returns a new descriptor or -1.
+    let fd = unsafe { libc::openat(dir.as_raw_fd(), name.as_ptr(), flags) };
+    if fd == -1 {
+        let e = io::Error::last_os_error();
+        // A link has no flags of its own to carry here.
+        return if e.raw_os_error() == Some(libc::ELOOP) {
+            Ok(())
+        } else {
+            Err(e)
+        };
+    }
+    // SAFETY: fd was just opened and is owned by nothing else.
+    let file = unsafe { File::from_raw_fd(fd) };
+    let had = std::os::macos::fs::MetadataExt::st_flags(&file.metadata()?);
+    if had & USER_FLAGS == 0 {
+        return Ok(());
+    }
+    // SAFETY: a descriptor we own.
+    if unsafe { libc::fchflags(file.as_raw_fd(), had & !USER_FLAGS) } == -1 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn clear_flags_at(_dir: &File, _name: &Name) -> io::Result<()> {
+    Ok(())
+}
+
 /// Gives the entry `name` in `dir` the permission bits `mode`, not
 /// following a link.
 pub(crate) fn set_mode_at(dir: &File, name: &Name, mode: u32) -> io::Result<()> {

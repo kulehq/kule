@@ -419,6 +419,81 @@ fn what_runs_on_its_own_waits_wherever_and_however_it_is_named() {
     assert_eq!(on(&s.judged(), "src/lib.rs").0, Verdict::Allow);
 }
 
+/// Every spelling a tool reads of what runs code, or decides what gets
+/// installed, waits as the listed one does: a hook manager's other names and
+/// local files, a version manager's local and per-environment settings, a
+/// package manager's workspace and index settings, the configs editor
+/// extensions evaluate as the folder opens, and a build's own code.
+#[test]
+fn what_a_tool_reads_by_another_name_waits_too() {
+    let s = Setup::new(PROJECT, false);
+    let waiting = [
+        "lefthook.yaml",
+        ".lefthook.yaml",
+        "lefthook.toml",
+        "lefthook.json",
+        "lefthook-local.yml",
+        ".lefthook-local.yml",
+        ".config/lefthook.yml",
+        ".pre-commit-config.yml",
+        ".simple-git-hooks.json",
+        "mise/config.local.toml",
+        ".config/mise/config.toml",
+        "mise.dev.toml",
+        ".mise.dev.local.toml",
+        "uv.toml",
+        "pnpm-workspace.yaml",
+        "deno.json",
+        "deno.jsonc",
+        "deno.lock",
+        "gradle/libs.versions.toml",
+        "gradle.properties",
+        "buildSrc/src/main/kotlin/conventions.gradle.kts",
+        "composer.json",
+        "pubspec.yaml",
+        "Package.swift",
+        "Podfile",
+        "mix.exs",
+        "build.sbt",
+        "vcpkg.json",
+        "eslint.config.js",
+        "web/tailwind.config.js",
+        "vite.config.ts",
+        "vitest.config.mts",
+        "next.config.mjs",
+        "jest.config.cjs",
+        ".eslintrc.js",
+        ".prettierrc.cjs",
+        ".babelrc.js",
+        ".lintstagedrc.mjs",
+    ];
+    for path in waiting {
+        write(&s.copy().join(path), "x\n");
+    }
+    let ruling = s.judged();
+    for path in waiting {
+        assert_eq!(on(&ruling, path).0, Verdict::Ask, "{path}");
+    }
+    // Plain code and data beside them still pass.
+    for path in [
+        "src/config.rs",
+        "web/app.config.json",
+        "docs/eslint.md",
+        "src/mise.rs",
+    ] {
+        write(&s.copy().join(path), "x\n");
+    }
+    let ruling = s.judged();
+    for path in [
+        "src/config.rs",
+        "web/app.config.json",
+        "docs/eslint.md",
+        "src/mise.rs",
+    ] {
+        assert_eq!(on(&ruling, path).0, Verdict::Allow, "{path}");
+    }
+}
+
 /// A repository without `.git` in its path (a bare one) is judged as a
 /// `.git` is: its config waits, its hooks never pass.
 #[test]
