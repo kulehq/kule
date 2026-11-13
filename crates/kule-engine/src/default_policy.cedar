@@ -123,18 +123,6 @@ when {
      ".buildkite", ".gitea", ".forgejo", ".woodpecker",
      ".windsurf", ".continue", ".roo", ".clinerules", ".mise", "buildsrc"
    ]) ||
-   resource.folded_path like "gradle/wrapper/*" || resource.folded_path like "*/gradle/wrapper/*" ||
-   resource.folded_path like "*mise/config*.toml" ||
-   resource.folded_path like ".config/mise.toml" || resource.folded_path like "*/.config/mise.toml" ||
-   resource.folded_name like "mise.*.toml" || resource.folded_name like ".mise.*.toml" ||
-   resource.folded_name like "lefthook*" || resource.folded_name like ".lefthook*" ||
-   resource.folded_name like "*simple-git-hooks*" ||
-   resource.folded_name like "*.config.js" || resource.folded_name like "*.config.cjs" ||
-   resource.folded_name like "*.config.mjs" || resource.folded_name like "*.config.ts" ||
-   resource.folded_name like "*.config.cts" || resource.folded_name like "*.config.mts" ||
-   resource.folded_name like ".*rc.js" || resource.folded_name like ".*rc.cjs" ||
-   resource.folded_name like ".*rc.mjs" || resource.folded_name like ".*rc.ts" ||
-   resource.folded_name like ".*rc.cts" || resource.folded_name like ".*rc.mts" ||
    resource.folded_name like ".gitlab-ci*" ||
    resource.folded_name like "*.code-workspace" ||
    [
@@ -149,6 +137,45 @@ when {
      "dotnet-tools.json", "azure-pipelines.yml", ".travis.yml", "jenkinsfile", "bitbucket-pipelines.yml",
      ".clinerules", "opencode.json", ".aider.conf.yml"
    ].contains(resource.folded_name))
+};
+
+// The same rule, by the shapes of names and paths its tools read: each
+// part kept short, as Cedar's evaluation must fit a small stack (a
+// program's main thread on Windows).
+@id("automation")
+forbid (principal, action == Kule::Action::"auto", resource)
+when {
+  resource.kind like "fs.*" &&
+  (resource.folded_path like "gradle/wrapper/*" || resource.folded_path like "*/gradle/wrapper/*" ||
+   resource.folded_path like "*mise/config*.toml" ||
+   resource.folded_path like ".config/mise.toml" || resource.folded_path like "*/.config/mise.toml" ||
+   resource.folded_name like "mise.*.toml" || resource.folded_name like ".mise.*.toml")
+};
+
+@id("automation")
+forbid (principal, action == Kule::Action::"auto", resource)
+when {
+  resource.kind like "fs.*" &&
+  (resource.folded_name like "lefthook*" || resource.folded_name like ".lefthook*" ||
+   resource.folded_name like "*simple-git-hooks*")
+};
+
+@id("automation")
+forbid (principal, action == Kule::Action::"auto", resource)
+when {
+  resource.kind like "fs.*" &&
+  (resource.folded_name like "*.config.js" || resource.folded_name like "*.config.cjs" ||
+   resource.folded_name like "*.config.mjs" || resource.folded_name like "*.config.ts" ||
+   resource.folded_name like "*.config.cts" || resource.folded_name like "*.config.mts")
+};
+
+@id("automation")
+forbid (principal, action == Kule::Action::"auto", resource)
+when {
+  resource.kind like "fs.*" &&
+  (resource.folded_name like ".*rc.js" || resource.folded_name like ".*rc.cjs" ||
+   resource.folded_name like ".*rc.mjs" || resource.folded_name like ".*rc.ts" ||
+   resource.folded_name like ".*rc.cts" || resource.folded_name like ".*rc.mts")
 };
 
 // Another version control system's repository, at any depth: its config

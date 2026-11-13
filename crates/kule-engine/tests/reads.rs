@@ -452,8 +452,9 @@ fn the_systems_databases_are_read_only_where_toolchains_need_them() {
         assert!(!readable(path), "{path} was read");
     }
     assert!(!log.is_empty(), "no log store to try");
-    let zone = first("/private/var/db/timezone", "Istanbul");
-    assert!(readable(&zone), "{zone} was not read");
+    // The time zone, wherever this system keeps the file `/etc/localtime`
+    // leads to.
+    assert!(readable("/etc/localtime"), "the time zone was not read");
     let out = sh(&sandbox, "readlink /private/var/db/xcode_select_link");
     assert!(
         out.status.success() || !Path::new("/private/var/db/xcode_select_link").exists(),
