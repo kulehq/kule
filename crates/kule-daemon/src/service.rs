@@ -3136,7 +3136,7 @@ mod tests {
         let s = Setup::new();
         let (id, copy) = s.task();
         fs::write(copy.join("b.txt"), "b\n").unwrap();
-        fs::write(copy.join("summary.pdf"), "%PDF-1.7\n").unwrap();
+        fs::write(copy.join("summary.pdf"), b"%PDF-1.7\n1 0 obj\n<< /Type /Catalog >>\nendobj\nxref\n0 2\n0000000000 65535 f \n0000000009 00000 n \ntrailer\n<< /Root 1 0 R /Size 2 >>\nstartxref\n45\n%%EOF\n").unwrap();
         assert!(s.app.openable(&id, "summary.pdf").is_ok());
         s.app
             .running

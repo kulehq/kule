@@ -6,6 +6,7 @@ mod relay;
 #[path = "relay_windows.rs"]
 mod relay;
 mod scopes;
+mod term;
 
 use std::collections::HashMap;
 use std::io::Write;
@@ -962,10 +963,20 @@ fn run() -> Result<ExitCode> {
                 used = Some(sandbox);
                 child
             };
-            let status = child
-                .env("KULE_TASK", task.id())
-                .status()
-                .with_context(|| format!("could not run {}", command[0]))?;
+            child.env("KULE_TASK", task.id());
+            // On the person's terminal, through a terminal of its own whose
+            // output Kule filters (see `term`); --no-sandbox as it asked.
+            let passed = if no_sandbox {
+                None
+            } else {
+                relay::filtered(&mut child)?
+            };
+            let status = match passed {
+                Some(status) => status,
+                None => child
+                    .status()
+                    .with_context(|| format!("could not run {}", command[0]))?,
+            };
             // What it left running, however it left, ends with it; what
             // cannot be ended now, a commit ends or refuses over.
             if let Some(sandbox) = &used {

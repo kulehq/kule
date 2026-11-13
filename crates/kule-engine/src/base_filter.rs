@@ -10,6 +10,11 @@
 //! which makes sockets without a system call, is refused, and so are system
 //! calls of another architecture, which have their own numbers.
 //!
+//! Before the filter, the command gives up every capability, for good:
+//! none in its sets, none it could get back by `exec` (the bounding set
+//! emptied, and the securebits that keep root from regaining them locked).
+//! Run as root, Kule's commands are root without root's powers.
+//!
 //! The filter only refuses: it hands nothing to Kule (see `bind_filter` for
 //! the one that does, on this computer's network). Installed after
 //! Landlock, which sets no_new_privs, as seccomp needs.
@@ -92,9 +97,90 @@ pub(crate) fn program() -> Vec<libc::sock_filter> {
     program
 }
 
+/// Gives up every capability, for this process and what it runs: the
+/// securebits locked that would let root regain them on `exec`, the
+/// bounding and ambient sets emptied, the process's own sets cleared. A
+/// process that holds none (an ordinary user without namespaces) cannot
+/// change its securebits or bounding set and has nothing to give up; one
+/// running as root that cannot is refused.
+fn drop_capabilities() -> io::Result<()> {
+    // SAFETY: plain system calls on values.
+    let root = unsafe { libc::geteuid() } == 0;
+    let refused = |e: io::Error| -> io::Result<()> {
+        if root || e.raw_os_error() != Some(libc::EPERM) {
+            Err(e)
+        } else {
+            Ok(())
+        }
+    };
+    // SECBIT_NOROOT, SECBIT_NO_SETUID_FIXUP, SECBIT_NO_CAP_AMBIENT_RAISE and
+    // SECBIT_KEEP_CAPS left off, each with its lock.
+    const SECUREBITS: libc::c_ulong = 0b1110_1111;
+    // SAFETY: as above.
+    if unsafe { libc::prctl(libc::PR_SET_SECUREBITS, SECUREBITS, 0, 0, 0) } == -1 {
+        refused(io::Error::last_os_error())?;
+    }
+    for cap in 0..64 {
+        // SAFETY: as above.
+        if unsafe { libc::prctl(libc::PR_CAPBSET_DROP, cap, 0, 0, 0) } == -1 {
+            let e = io::Error::last_os_error();
+            // Past the last capability this kernel knows.
+            if e.raw_os_error() == Some(libc::EINVAL) {
+                break;
+            }
+            refused(e)?;
+            break;
+        }
+    }
+    // SAFETY: as above; a kernel without ambient capabilities has none.
+    if unsafe {
+        libc::prctl(
+            libc::PR_CAP_AMBIENT,
+            libc::PR_CAP_AMBIENT_CLEAR_ALL,
+            0,
+            0,
+            0,
+        )
+    } == -1
+    {
+        let e = io::Error::last_os_error();
+        if e.raw_os_error() != Some(libc::EINVAL) {
+            return Err(e);
+        }
+    }
+    #[repr(C)]
+    struct Header {
+        version: u32,
+        pid: i32,
+    }
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct Data {
+        effective: u32,
+        permitted: u32,
+        inheritable: u32,
+    }
+    const LINUX_CAPABILITY_VERSION_3: u32 = 0x2008_0522;
+    let mut header = Header {
+        version: LINUX_CAPABILITY_VERSION_3,
+        pid: 0,
+    };
+    let data = [Data {
+        effective: 0,
+        permitted: 0,
+        inheritable: 0,
+    }; 2];
+    // SAFETY: a version 3 header and its two data words, alive for the call.
+    if unsafe { libc::syscall(libc::SYS_capset, &mut header as *mut Header, data.as_ptr()) } == -1 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
 /// Runs in the child, between fork and exec, after no_new_privs: only
-/// system calls. Joins a session keyring of the command's own, then puts
-/// `program` in place. A system without keyrings has none to join.
+/// system calls. Joins a session keyring of the command's own, gives up
+/// every capability, then puts `program` in place. A system without
+/// keyrings has none to join.
 pub(crate) fn enter(program: &[libc::sock_filter]) -> io::Result<()> {
     const KEYCTL_JOIN_SESSION_KEYRING: libc::c_long = 1;
     // SAFETY: joins a new anonymous session keyring; a null name is allowed.
@@ -113,6 +199,7 @@ pub(crate) fn enter(program: &[libc::sock_filter]) -> io::Result<()> {
             return Err(e);
         }
     }
+    drop_capabilities()?;
     let prog = libc::sock_fprog {
         len: program.len() as u16,
         filter: program.as_ptr().cast_mut(),

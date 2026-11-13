@@ -246,6 +246,23 @@ fn parse(lang: Lang, src: &[u8]) -> Result<tree_sitter::Tree, Skip> {
         .ok_or(Skip::Unparsed)
 }
 
+/// How deep entities may nest in one file (a module in a module in …):
+/// more than any code a person reads, which is outlined no further.
+const MAX_DEPTH: usize = 64;
+/// The most of an entity's shown name, its parents' names and its own:
+/// a longer one keeps its end, the part that tells it from its siblings.
+const MAX_QUALIFIED: usize = 512;
+
+/// `name` cut to its last [`MAX_QUALIFIED`] characters.
+fn qualified_cut(name: String) -> String {
+    let chars = name.chars().count();
+    if chars <= MAX_QUALIFIED {
+        return name;
+    }
+    let tail: String = name.chars().skip(chars - MAX_QUALIFIED).collect();
+    format!("…{tail}")
+}
+
 pub(crate) fn entities(lang: Lang, src: &[u8]) -> Result<Vec<Entity>, Skip> {
     let tree = parse(lang, src)?;
 
@@ -267,6 +284,8 @@ pub(crate) fn entities(lang: Lang, src: &[u8]) -> Result<Vec<Entity>, Skip> {
     // Each node comes with the entity it is in and whether that is (in) a
     // function, where variables are locals rather than entities.
     let mut stack: Vec<(Node, usize, bool)> = vec![(tree.root_node(), 0, false)];
+    // How deep each entity is: the top level 0.
+    let mut depths: Vec<usize> = vec![0];
     let mut cursor = tree.walk();
     while let Some((node, parent, in_function)) = stack.pop() {
         let mut inside = (parent, in_function);
@@ -274,15 +293,17 @@ pub(crate) fn entities(lang: Lang, src: &[u8]) -> Result<Vec<Entity>, Skip> {
             let kind = kind(lang, rule, node, &spanned[parent], in_function);
             let name = kind.and_then(|_| name(rule.name, node, src));
             if let (Some(kind), Some(name)) = (kind, name) {
-                if spanned.len() > MAX_ENTITIES {
+                let depth = depths[parent] + 1;
+                if spanned.len() > MAX_ENTITIES || depth > MAX_DEPTH {
                     return Err(Skip::TooMany);
                 }
                 let outer = wrapped(node);
                 let start = leading(lang, outer, src);
                 let qualified = match &spanned[parent] {
                     p if p.kind == Kind::TopLevel => name,
-                    p => format!("{}{}{name}", p.name, lang.separator()),
+                    p => qualified_cut(format!("{}{}{name}", p.name, lang.separator())),
                 };
+                depths.push(depth);
                 spanned.push(Spanned {
                     kind,
                     name: qualified,

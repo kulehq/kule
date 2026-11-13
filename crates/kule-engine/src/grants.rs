@@ -302,6 +302,22 @@ pub const ETC_HIDDEN: &[&str] = &[
     // tokens: the real files stay closed (see `sandbox::use_home`).
     "environment",
     "profile.d",
+    // Readable by root alone: closed by name all the same, for Kule run
+    // as root, whose commands own them (see `base_filter`).
+    "shadow",
+    "shadow-",
+    "gshadow",
+    "gshadow-",
+    "sudoers",
+    "sudoers.d",
+    "security/opasswd",
+    "krb5.keytab",
+    "ssl/private",
+    "ssh/ssh_host_rsa_key",
+    "ssh/ssh_host_ecdsa_key",
+    "ssh/ssh_host_ed25519_key",
+    "ssh/ssh_host_dsa_key",
+    "master.passwd",
 ];
 
 /// The folders a `PATH` entry stands for: its own root where it is a

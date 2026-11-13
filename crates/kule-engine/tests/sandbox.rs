@@ -28,6 +28,19 @@ impl Setup {
         let ws = TempDir::new().unwrap();
         fs::write(ws.path().join("README.md"), "hello\n").unwrap();
         let task = Task::create(home.path(), ws.path()).unwrap();
+        // Run as root (a container's CI job), Kule asks for weaker isolation
+        // to be accepted; these tests are what it then gives.
+        #[cfg(target_os = "linux")]
+        // SAFETY: a plain system call.
+        if unsafe { libc::geteuid() } == 0 {
+            kule_engine::set_isolation(
+                home.path(),
+                &kule_engine::Isolation {
+                    accept_weaker: true,
+                },
+            )
+            .unwrap();
+        }
         Setup {
             _home: home,
             _ws: ws,
@@ -3954,4 +3967,38 @@ print("everyday sockets ok")
             )
         };
     }
+}
+
+/// Linux: a command holds no capability, and none it could get back by
+/// `exec` (an empty bounding set), whoever runs Kule: run as root, its
+/// commands are root without root's powers, and make no raw socket.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_command_holds_no_capability_whoever_runs_kule() {
+    let s = Setup::new();
+    let sandbox = s.sandbox();
+    let out = sh(
+        &sandbox,
+        "grep -E '^(CapEff|CapPrm|CapBnd|CapAmb):' /proc/self/status",
+    );
+    let said = text(&out);
+    assert!(ok(&out), "{out:?}");
+    for line in said.lines() {
+        let value = line.split_whitespace().nth(1).unwrap_or_default();
+        assert!(value.chars().all(|c| c == '0'), "{said}");
+    }
+    assert_eq!(said.lines().count(), 4, "{said}");
+    let out = sandbox
+        .command(
+            "python3",
+            &[
+                "-I".to_owned(),
+                "-c".to_owned(),
+                "import socket\ntry:\n    socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_ICMP)\n    print('raw made')\nexcept OSError as e:\n    print('raw refused', e.errno)".to_owned(),
+            ],
+        )
+        .unwrap()
+        .output()
+        .unwrap();
+    assert!(text(&out).contains("raw refused"), "{out:?}");
 }

@@ -506,4 +506,133 @@ mod tests {
         let long = "x".repeat(MAX_NAME + 5);
         assert_eq!(tidy(&long).chars().count(), MAX_NAME + 1);
     }
+
+    /// Memory allocated on this thread, counted so a test can see the most
+    /// a call held at once (as `kule-view`'s tests do).
+    mod memory {
+        use std::alloc::{GlobalAlloc, Layout, System};
+        use std::cell::Cell;
+
+        thread_local! {
+            static LIVE: Cell<isize> = const { Cell::new(0) };
+            static PEAK: Cell<isize> = const { Cell::new(0) };
+        }
+
+        fn grew(by: isize) {
+            let _ = LIVE.try_with(|live| {
+                let now = live.get() + by;
+                live.set(now);
+                let _ = PEAK.try_with(|peak| peak.set(peak.get().max(now)));
+            });
+        }
+
+        struct Counting;
+
+        // SAFETY: every call is passed on to the system allocator as is;
+        // only the sizes are counted.
+        unsafe impl GlobalAlloc for Counting {
+            unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+                let p = unsafe { System.alloc(layout) };
+                if !p.is_null() {
+                    grew(layout.size() as isize);
+                }
+                p
+            }
+
+            unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
+                let p = unsafe { System.alloc_zeroed(layout) };
+                if !p.is_null() {
+                    grew(layout.size() as isize);
+                }
+                p
+            }
+
+            unsafe fn dealloc(&self, p: *mut u8, layout: Layout) {
+                unsafe { System.dealloc(p, layout) };
+                grew(-(layout.size() as isize));
+            }
+
+            unsafe fn realloc(&self, p: *mut u8, layout: Layout, size: usize) -> *mut u8 {
+                let q = unsafe { System.realloc(p, layout, size) };
+                if !q.is_null() {
+                    grew(size as isize - layout.size() as isize);
+                }
+                q
+            }
+        }
+
+        #[global_allocator]
+        static COUNTING: Counting = Counting;
+
+        /// What `f` returns, and the most memory it held at once beyond
+        /// what was held before it.
+        pub(crate) fn peak<T>(f: impl FnOnce() -> T) -> (T, usize) {
+            let before = LIVE.with(Cell::get);
+            PEAK.with(|p| p.set(before));
+            let out = f();
+            (out, (PEAK.with(Cell::get) - before).max(0) as usize)
+        }
+    }
+
+    /// Code nested as deep as a file at the caps allows costs about what
+    /// its size does to outline, not the square of its depth: a module in
+    /// a module thousands deep is not outlined, and names deep inside the
+    /// depth that is are cut.
+    #[test]
+    fn deep_nesting_costs_no_more_than_the_files_size() {
+        let name = "m".repeat(45);
+        let deep = |depth: usize, inner: &str| {
+            let mut src = String::new();
+            for _ in 0..depth {
+                src.push_str(&format!("mod {name} {{\n"));
+            }
+            src.push_str(inner);
+            src.push_str(&"}\n".repeat(depth));
+            src
+        };
+        let bounded = |before: Option<String>, src: String| {
+            assert!(src.len() <= MAX_BYTES, "{}", src.len());
+            let start = std::time::Instant::now();
+            let (outline, held) = memory::peak(|| {
+                diff(
+                    "a.rs",
+                    before.as_deref().map(str::as_bytes),
+                    Some(src.as_bytes()),
+                )
+            });
+            let took = start.elapsed();
+            assert!(took < std::time::Duration::from_secs(5), "{took:?}");
+            assert!(held < 64 << 20, "held {} MiB", held >> 20);
+            outline
+        };
+        // Thousands deep: not outlined, said why.
+        assert_eq!(
+            bounded(None, deep(4000, "")),
+            Outline::Skipped {
+                reason: Skip::TooMany
+            }
+        );
+        // As deep as is outlined, with as many functions inside as the caps
+        // allow: each name cut to the end that tells it apart.
+        let long = "f".repeat(110);
+        let mut fns = String::new();
+        let mut n = 0;
+        while fns.len() < 800_000 && n < MAX_ENTITIES - 100 {
+            fns.push_str(&format!("fn {long}{n}() {{}}\n"));
+            n += 1;
+        }
+        let Outline::Changes { changes } = bounded(Some(deep(60, "")), deep(60, &fns)) else {
+            panic!("not outlined");
+        };
+        assert!(
+            changes.iter().all(|c| c.name.chars().count() <= 513),
+            "a name was not cut"
+        );
+        assert!(changes.len() > 1000, "{}", changes.len());
+        assert!(
+            changes
+                .iter()
+                .any(|c| c.name.starts_with('…') && c.name.ends_with(&format!("{long}0")))
+        );
+    }
 }
