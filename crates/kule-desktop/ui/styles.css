@@ -1860,6 +1860,15 @@ h3.agent-card-head {
   font-size: calc(13px * var(--text-scale));
 }
 
+.agent-saved-only {
+  margin: 0;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: var(--sunken);
+  font: calc(12px * var(--code-scale)) var(--mono);
+  white-space: pre-wrap;
+}
+
 .agent-trial pre {
   max-height: 240px;
   padding: 8px;

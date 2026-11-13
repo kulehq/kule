@@ -980,8 +980,42 @@ impl Profile {
         Ok(Some(dir))
     }
 
+    /// The profile as a trial runs it while it is not approved as it
+    /// stands: none of the person's values reach it (variables passed as
+    /// they are, keys from the environment, the keychain or a login file,
+    /// settings carried into its home of its own), and nothing hidden is
+    /// opened for it (a login, what macOS reveals, devices). With what was
+    /// left out, one line each, to tell the person.
+    pub fn withheld_for_trial(&self) -> (Profile, Vec<String>) {
+        let mut bare = self.clone();
+        let mut withheld = Vec::new();
+        let mut note = |field: &str, items: Vec<String>| {
+            if !items.is_empty() {
+                withheld.push(format!("{field}: {}", items.join(", ")));
+            }
+        };
+        note("pass_env", std::mem::take(&mut bare.pass_env));
+        note("keys", std::mem::take(&mut bare.keys).into_keys().collect());
+        note(
+            "keychain",
+            std::mem::take(&mut bare.keychain).into_keys().collect(),
+        );
+        note(
+            "login_file",
+            std::mem::take(&mut bare.login_file).into_keys().collect(),
+        );
+        note("login", std::mem::take(&mut bare.login));
+        note("reveal_on_macos", std::mem::take(&mut bare.reveal_on_macos));
+        note("devices", std::mem::take(&mut bare.devices));
+        note(
+            "carry",
+            std::mem::take(&mut bare.carry).into_keys().collect(),
+        );
+        (bare, withheld)
+    }
+
     /// What approval pins: the profile exactly as written.
-    fn digest(&self) -> String {
+    pub(crate) fn digest(&self) -> String {
         let bytes = serde_json::to_vec(self).unwrap_or_default();
         blake3::hash(&bytes).to_hex().to_string()
     }
@@ -1544,26 +1578,23 @@ pub(crate) fn check_pinned(program: &str, args: &[String]) -> std::result::Resul
         ));
     }
     let pinned = match launcher {
-        "npx" | "bunx" | "pnpx" => words.next().map(|p| {
-            // `@scope/name@1.2.3` or `name@1.2.3`.
-            let version = p
-                .rsplit_once('@')
-                .filter(|(name, _)| !name.is_empty())
-                .map(|(_, v)| v);
-            (p.clone(), version.is_some_and(exact_version))
-        }),
+        // `@scope/name@1.2.3` or `name@1.2.3`, from the registry.
+        "npx" | "bunx" | "pnpx" => words
+            .next()
+            .map(|p| (p.clone(), npm_registry_spec(p).is_some())),
         "uvx" | "pipx" => {
             let mut word = words.next();
             if launcher == "pipx" && word.is_some_and(|w| w == "run") {
                 word = words.next();
             }
             word.map(|p| {
-                // `name==1.2.3`, or `name@1.2.3` as uvx also takes it.
-                let version = p
+                // `name==1.2.3`, or `name@1.2.3` as uvx also takes it,
+                // from the index.
+                let pinned = p
                     .split_once("==")
                     .or_else(|| p.split_once('@'))
-                    .map(|(_, v)| v);
-                (p.clone(), version.is_some_and(exact_version))
+                    .is_some_and(|(name, version)| pypi_name(name) && exact_version(version));
+                (p.clone(), pinned)
             })
         }
         _ => None,
@@ -1576,15 +1607,69 @@ pub(crate) fn check_pinned(program: &str, args: &[String]) -> std::result::Resul
     }
 }
 
-/// `1.2.3`, with an optional pre-release or build: nothing that matches
-/// more than one release.
+/// `1.2.3`, with an optional pre-release or build, in SemVer's grammar and
+/// nothing after it: nothing that matches more than one release, names a
+/// tag, or reads as a file (`.tgz`). The one check of a version wherever a
+/// package is named (profiles, Kule's own installs, MCP servers).
 pub(crate) fn exact_version(version: &str) -> bool {
-    let core = version.split(['-', '+']).next().unwrap_or("");
+    let lower = version.to_ascii_lowercase();
+    if [".tgz", ".tar.gz", ".tar"]
+        .iter()
+        .any(|s| lower.ends_with(s))
+    {
+        return false;
+    }
+    let (rest, build) = match version.split_once('+') {
+        Some((rest, build)) => (rest, Some(build)),
+        None => (version, None),
+    };
+    let (core, pre) = match rest.split_once('-') {
+        Some((core, pre)) => (core, Some(pre)),
+        None => (rest, None),
+    };
+    let numeric = |p: &str| {
+        !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()) && (p == "0" || !p.starts_with('0'))
+    };
+    let word = |p: &str| !p.is_empty() && p.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-');
     let parts: Vec<&str> = core.split('.').collect();
     parts.len() == 3
-        && parts
-            .iter()
-            .all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()))
+        && parts.iter().all(|p| numeric(p))
+        && pre.is_none_or(|pre| {
+            pre.split('.')
+                .all(|p| word(p) && (!p.bytes().all(|b| b.is_ascii_digit()) || numeric(p)))
+        })
+        && build.is_none_or(|build| build.split('.').all(word))
+}
+
+/// `name@1.2.3` or `@scope/name@1.2.3`: one release of a registry
+/// package, its name as the registry has them (lower case), split into
+/// name and version. Never a range, a tag, an alias, a URL, a repository
+/// or a file.
+pub(crate) fn npm_registry_spec(spec: &str) -> Option<(&str, &str)> {
+    let (name, version) = spec.rsplit_once('@').filter(|(n, _)| !n.is_empty())?;
+    let part = |p: &str| {
+        !p.is_empty()
+            && !p.starts_with('.')
+            && !p.starts_with('_')
+            && p.bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b"-._~".contains(&b))
+    };
+    let name_ok = match name.strip_prefix('@') {
+        Some(scoped) => scoped
+            .split_once('/')
+            .is_some_and(|(scope, rest)| part(scope) && part(rest)),
+        None => part(name),
+    };
+    (name_ok && exact_version(version)).then_some((name, version))
+}
+
+/// A package's name on the Python index, without extras, a URL or a path.
+pub(crate) fn pypi_name(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"-._".contains(&b))
+        && name.as_bytes()[0].is_ascii_alphanumeric()
 }
 
 /// An agent ready to start, and the sandbox it runs in, which reports what
@@ -2906,5 +2991,54 @@ own_home = "TOOL_HOME"
                 "{state}"
             );
         }
+    }
+
+    /// A version with something after its last part is one release only
+    /// in SemVer's grammar: anything else (a range after a dash, a file
+    /// name) is refused, as npm would read it as more than one release.
+    #[test]
+    fn a_version_with_a_tail_is_one_release_or_refused() {
+        let npx = |spec: &str| check_pinned("npx", &["-y".to_owned(), spec.to_owned()]);
+        for spec in [
+            "sometool@1.2.3-x || >=0.0.0",
+            "sometool@1.2.3-0 - 9",
+            "sometool@1.2.3-x.tgz",
+            "sometool@1.2.3.tar.gz",
+            "sometool@1.02.3",
+            "sometool@1.2.3-01",
+            "sometool@1.2.3-",
+            "sometool@1.2.3+",
+            "sometool@1.2.3-a..b",
+            "sometool@1.2.3-a_b",
+            "sometool@1.2.3+a b",
+            "Sometool@1.2.3",
+            "github:evil/tool@1.2.3",
+            "@scope@1.2.3",
+        ] {
+            assert!(npx(spec).is_err(), "{spec}");
+        }
+        for spec in [
+            "sometool@1.2.3",
+            "sometool@0.92.0",
+            "sometool@1.2.3-beta.1",
+            "sometool@1.2.3-0.x-y",
+            "sometool@1.2.3+build.5",
+            "sometool@1.2.3-rc.1+sha.0a1b",
+            "@scope/tool@10.0.0",
+        ] {
+            assert!(npx(spec).is_ok(), "{spec}");
+        }
+        let uvx = |spec: &str| check_pinned("uvx", &[spec.to_owned()]);
+        for spec in [
+            "git+https://evil.example/tool@1.2.3",
+            "tool[extra]==1.2.3",
+            "./tool==1.2.3",
+            "tool==1.2.3 ; python_version>'3'",
+            "-tool==1.2.3",
+        ] {
+            assert!(uvx(spec).is_err(), "{spec}");
+        }
+        assert!(uvx("acme-web==2.0.0").is_ok());
+        assert!(uvx("acme_web@2.0.0").is_ok());
     }
 }

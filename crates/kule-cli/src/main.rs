@@ -3471,7 +3471,7 @@ fn agents_cmd(home: &Path, action: AgentsCmd) -> Result<()> {
                 );
             }
             println!(
-                "added {id}, opening nothing yet; next: kule agents try {id} --apply, then kule agents approve {id}"
+                "added {id}, opening nothing yet; next: kule agents try {id} --apply (without your keys and variables until approved), then kule agents approve {id}"
             );
         }
         AgentsCmd::Try { name, apply } => {
@@ -3498,6 +3498,12 @@ fn agents_cmd(home: &Path, action: AgentsCmd) -> Result<()> {
             }
             for refused in &trial.refused {
                 println!("refused  {}", paint::plain_line(refused));
+            }
+            if !trial.withheld.is_empty() {
+                println!(
+                    "withheld until approved: {}",
+                    paint::plain_line(&trial.withheld.join("; "))
+                );
             }
             let joined = |items: &[String]| paint::plain_line(&items.join(", "));
             println!("suggested state: {}", joined(&trial.state));

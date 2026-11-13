@@ -667,6 +667,62 @@ fn a_link_in_the_layer_shows_where_it_leads() {
     );
 }
 
+/// A link applied to the real home leads only to the person's own files in
+/// it: never into Kule's home, where the task's later runs write (its tmp,
+/// its copy, the layer), nor out of the home; and a file that runs as a
+/// shell starts is never applied as a link, whose content no review shows.
+#[test]
+fn an_applied_link_never_leads_where_a_task_writes() {
+    let s = Setup::new();
+    let p = s.person.path();
+    let tmp = s.task.tmp().unwrap();
+    // A link of the person's that leads nowhere: what lies past it is
+    // where its target would be made.
+    std::os::unix::fs::symlink("/nonexistent-kule-test", p.join("dangle")).unwrap();
+    s.run(&format!(
+        r#"echo "echo v1" > "{tmp}/payload"
+ln -s "{tmp}/payload" "$HOME/.toolrc"
+ln -s "$HOME/Documents/notes.txt" "$HOME/.layerrc"
+ln -s /etc/hosts "$HOME/.hostsrc"
+ln -s ../outside "$HOME/.uprc"
+ln -s .config/../../outside "$HOME/.roundrc"
+ln -s Documents/notes.txt "$HOME/.zshenv"
+ln -s .kule/tasks/other/tmp/payload "$HOME/.kulerc"
+ln -s ".local/share/kule/agents/a/x" "$HOME/.agentrc"
+ln -s dangle/x "$HOME/.danglerc"
+ln -s Documents/notes.txt "$HOME/.notesrc""#,
+        tmp = tmp.display()
+    ));
+    for refused in [
+        ".toolrc",
+        ".layerrc",
+        ".hostsrc",
+        ".uprc",
+        ".roundrc",
+        ".zshenv",
+        ".kulerc",
+        ".agentrc",
+        ".danglerc",
+    ] {
+        let err = s
+            .task
+            .apply_reviewed(&[refused.into()])
+            .expect_err(refused)
+            .to_string();
+        assert!(err.contains(&format!("~/{refused} is a link")), "{err}");
+        assert!(
+            fs::symlink_metadata(p.join(refused)).is_err(),
+            "{refused} reached the home"
+        );
+    }
+    // Within the home, to the person's own file: applied as it is.
+    s.task.apply_reviewed(&[".notesrc".into()]).unwrap();
+    assert_eq!(
+        fs::read_link(p.join(".notesrc")).unwrap(),
+        Path::new("Documents/notes.txt")
+    );
+}
+
 /// What is applied lands where the review showed it: a folder on the way
 /// in the real home that is a link is not written through.
 #[test]

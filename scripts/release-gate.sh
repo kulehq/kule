@@ -403,6 +403,10 @@ probe() {
   # whole.
   printf 'API_TOKEN=KULECANARY%s\n' "$(random_hex)" >"$home/.env"
   printf 'API_TOKEN=KULECANARY%s\n' "$(random_hex)" >"$home/.config/tool/.env"
+  # An app's cache beside the toolchains' (a browser's pages): read only
+  # by the toolchains' own folders in it.
+  mkdir -p "$home/.cache/browser" "$home/.cache/pip"
+  printf 'decoy\n' >"$home/.cache/browser/decoy"
   printf 'decoy\n' >"$home/code/beside/decoy"
   printf 'probe workspace\n' >"$ws/README.md"
   cp "$(command -v sandbox-probe)" "$ws/sandbox-probe"
@@ -447,6 +451,7 @@ probe() {
   done <"$work/hidden.txt"
   block "$home/.env" "masked ~/.env"
   block "$home/.config/tool/.env" "an unlisted tool's settings"
+  block "$home/.cache/browser" "an app's cache" decoy
   block "$home/code/beside" "a project beside the workspace" decoy
   block "$KULE_HOME/tasks/$task/base" "the task's base" README.md
   block "$KULE_HOME/tasks/$task/secrets.json" "the task's sealed values"

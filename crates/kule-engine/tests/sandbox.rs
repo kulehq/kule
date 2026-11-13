@@ -2426,7 +2426,7 @@ fn the_persons_package_caches_are_read_only() {
         ".cargo/git",
         ".npm",
         ".nuget/packages",
-        ".cache",
+        ".cache/pip",
         "Library/Caches/pip",
     ];
     for cache in caches {

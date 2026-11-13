@@ -330,7 +330,24 @@ pub const HIDDEN_IN_HOME: &[&str] = &[
     ".yarnrc.yml",
     ".bunfig.toml",
     ".nuget/NuGet",
-    // What the person typed, in shells and other tools.
+    // uv's own store of logins (`uv auth login`), inside its granted folder.
+    ".local/share/uv/credentials",
+    // Develocity's (Gradle Enterprise's) access keys and Maven's master
+    // password, inside the granted `~/.gradle` and `~/.m2`.
+    ".gradle/develocity",
+    ".gradle/enterprise",
+    ".m2/.develocity",
+    ".m2/.gradle-enterprise",
+    ".m2/settings-security.xml",
+    // What the person typed, in shells and other tools; zsh's and
+    // nushell's where their settings folders are read.
+    ".config/zsh/.zsh_history",
+    ".config/zsh/.zhistory",
+    ".config/zsh/.zsh_sessions",
+    ".config/nushell/history.txt",
+    ".config/nushell/history.sqlite3",
+    ".config/nushell/history.sqlite3-wal",
+    ".config/nushell/history.sqlite3-shm",
     ".zsh_history",
     ".zsh_sessions",
     ".bash_sessions",
@@ -584,6 +601,7 @@ const SEATBELT_BASE: &str = r#"(allow process-exec process-fork)
   (literal "/dev/stdin") (literal "/dev/stdout") (literal "/dev/stderr") (regex #"^/dev/fd/"))
 (allow file-read-metadata file-read-data (literal "/dev") (literal "/dev/fd"))
 (allow file-read* (literal "/etc") (literal "/tmp") (literal "/var"))
+(allow file-read* (literal "/private/var/db/xcode_select_link"))
 (allow file-read-metadata (literal "/System/Volumes/Data"))
 (allow system-fsctl)
 (allow system-socket)

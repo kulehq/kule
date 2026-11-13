@@ -4625,6 +4625,7 @@ function formProfile() {
     reveal_on_macos: agentsView.editing.reveal_on_macos || [],
     keychain: agentsView.editing.keychain || {},
     login_file: agentsView.editing.login_file || {},
+    devices: agentsView.editing.devices || [],
     mode: value("agent-form-mode").trim() || null,
     env,
     pass_env: lines(value("agent-form-pass-env")),
@@ -4639,6 +4640,22 @@ function field(id, label, hint, value, rows) {
     ? h("textarea", { id, rows, spellcheck: "false" }, value)
     : h("input", { id, type: "text", value, spellcheck: "false" });
   return h("label", { class: "agent-field", for: id }, h("span", { class: "agent-field-label" }, label), input, hint ? h("span", { class: "agent-field-hint" }, hint) : null);
+}
+
+/**
+ * What a profile opens that the form has no field for, one line each:
+ * kept as saved, shown so that nothing it opens travels unseen.
+ */
+function savedOnly(p) {
+  const keysOf = (o) => Object.keys(o || {});
+  return [
+    ["Hidden from it, read by Kule", p.outside || []],
+    ["Carried into its home", Object.entries(p.carry || {}).map(([to, from]) => `~/${from} → ${to}`)],
+    ["Revealed on macOS", p.reveal_on_macos || []],
+    ["Keys from the keychain", keysOf(p.keychain)],
+    ["Keys from a login file", Object.entries(p.login_file || {}).map(([name, f]) => `${name} (~/${f.path})`)],
+    ["Devices", p.devices || []],
+  ].filter(([, items]) => items.length);
 }
 
 function agentEditor() {
@@ -4663,6 +4680,9 @@ function agentEditor() {
       field("agent-form-env", "Sets env", "NAME=value, one per line.", env, 2),
       field("agent-form-hosts", "Also connects to", "HTTPS hosts beyond what the policy lets through.", p.hosts.join("\n"), 3),
       field("agent-form-mode", "Session mode", "Optional: the ACP mode to start in.", p.mode || ""),
+      ...savedOnly(p).map(([label, items]) =>
+        h("div", { class: "agent-field" }, h("span", { class: "agent-field-label" }, label), h("pre", { class: "agent-saved-only" }, items.join("\n")), h("span", { class: "agent-field-hint" }, "As saved in agents.toml; edit it there."))
+      ),
       field(
         "agent-form-own-home",
         "Home of its own",
@@ -4681,7 +4701,7 @@ function agentEditor() {
       ),
       h("button", { class: "button ghost", type: "button", "data-key": "agent-cancel", onclick: () => { agentsView.editing = null; renderAgents(); } }, "Cancel")
     ),
-    h("p", { class: "agent-field-hint" }, "Try it runs the agent once in an empty folder, opened no wider than above, and suggests what it was refused. Saved, it runs only once you approve it."),
+    h("p", { class: "agent-field-hint" }, "Try it runs the agent once in an empty folder, opened no wider than above, and suggests what it was refused. Until you approve it as it stands, a trial gets none of your variables, keys or logins, and nothing hidden is revealed for it. Saved, it runs only once you approve it."),
     trial ? trialResult(trial) : null
   );
 }
@@ -4710,6 +4730,7 @@ function trialResult(trial) {
     "div",
     { class: "agent-trial" },
     h("p", { class: trial.error ? "agent-held" : "" }, trial.error ? `It did not answer: ${trial.error}` : `It answered: ${trial.reply}`),
+    (trial.withheld || []).length ? h("p", { class: "muted" }, `Withheld until you approve it: ${trial.withheld.join("; ")}`) : null,
     picks.length
       ? [h("p", {}, "It was refused these; add the ones it needs:"), ...boxes, h("button", { class: "button", type: "button", "data-key": "agent-add-picks", onclick: add }, "Add selected")]
       : h("p", { class: "muted" }, "Nothing to suggest."),

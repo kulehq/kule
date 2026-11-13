@@ -6,6 +6,9 @@
 //! The refusals are only suggestions: the person picks from them, and the
 //! profile is still checked and approved like any other. Only macOS reports
 //! the files the sandbox refused; on Linux the hosts alone are suggested.
+//!
+//! A profile not approved as it stands is tried without the person's
+//! values (see [`Profile::withheld_for_trial`]): trying is not approving.
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -15,7 +18,7 @@ use kule_engine::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::profile::{Agents, Profile};
+use crate::profile::{Agents, Origin, Profile};
 use crate::{Event, run};
 
 /// How long a trial may take; the agent is stopped after that.
@@ -96,6 +99,10 @@ pub struct Trial {
     /// The last lines the agent wrote to its error output.
     #[serde(default)]
     pub log: Vec<String>,
+    /// What the profile names that the trial did not give it, one line
+    /// each, as it is not approved as it stands.
+    #[serde(default)]
+    pub withheld: Vec<String>,
 }
 
 /// Runs `draft` once in an empty task and reads what it was refused.
@@ -108,6 +115,19 @@ pub fn trial(
     agents
         .check_draft(kule_home, draft)
         .map_err(Error::Invalid)?;
+    // The person's values go only to a profile approved as it stands.
+    let approved = agents.listed().iter().any(|l| {
+        l.origin != Origin::BuiltIn
+            && l.held.is_none()
+            && l.profile.name == draft.name
+            && l.digest == draft.digest()
+    });
+    let (draft, withheld) = if approved {
+        (draft.clone(), Vec::new())
+    } else {
+        draft.withheld_for_trial()
+    };
+    let draft = &draft;
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_nanos());
@@ -124,7 +144,7 @@ pub fn trial(
     let outcome =
         policy.and_then(|policy| try_in(kule_home, &folder, agents, draft, policy, person));
     let _ = std::fs::remove_dir_all(&folder);
-    outcome
+    outcome.map(|trial| Trial { withheld, ..trial })
 }
 
 fn try_in(

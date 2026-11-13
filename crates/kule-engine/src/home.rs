@@ -869,6 +869,27 @@ impl Task {
             }
         }
         let dir = self.home_layer();
+        // A link goes in only where it leads to the person's own files in
+        // the home, never to where a task writes, whose later runs would
+        // change what the link shows; and never as a file that runs as
+        // something starts, whose content a review of a link does not show.
+        for c in &wanted {
+            if c.kind != Kind::Symlink || c.change == Change::Deleted {
+                continue;
+            }
+            let fsops::Beneath::Link(target) =
+                fsops::beneath(&dir, &c.path).at(&dir.join(&c.path))?
+            else {
+                return Err(changed(&c.path));
+            };
+            if let Some(why) = self.link_refused(&layer.real, &c.path, &target)? {
+                return Err(Error::Invalid(format!(
+                    "~/{} is a link to {}, {why}: Kule does not apply it; nothing was applied. Discard it, or make the link yourself",
+                    c.path,
+                    target.display()
+                )));
+            }
+        }
         let mut moved = Vec::new();
         for c in &wanted {
             let now = Stamp::of(&layer.real.join(&c.path))?;
@@ -1187,6 +1208,72 @@ impl Task {
         write_json(&self.layer_path(), &layer)?;
         Ok(wanted.into_iter().map(|c| c.path).collect())
     }
+
+    /// Why a link at `rel` pointing to `target` may not go into the real
+    /// home `real`, if it may not: it would be a file that runs as
+    /// something starts, or lead outside the home, or to where Kule and its
+    /// tasks write (Kule's home, the agents' homes of their own), or
+    /// somewhere Kule cannot tell. Deny when it cannot decide.
+    fn link_refused(&self, real: &Path, rel: &str, target: &Path) -> Result<Option<&'static str>> {
+        if startup(rel) {
+            return Ok(Some(
+                "a file that runs as a shell or tool starts, whose content a review of a link does not show",
+            ));
+        }
+        let real = fs::canonicalize(real).at(real)?;
+        let from = real.join(rel);
+        let joined = from.parent().unwrap_or(&real).join(target);
+        let Some(leads) = where_it_leads(&joined) else {
+            return Ok(Some(
+                "which leads through a link that leads nowhere, or past what is there",
+            ));
+        };
+        if !leads.starts_with(&real) {
+            return Ok(Some("outside your home"));
+        }
+        let kule = fs::canonicalize(self.home()).unwrap_or_else(|_| self.home());
+        if leads.starts_with(&kule) || KULE_IN_HOME.iter().any(|k| leads.starts_with(real.join(k)))
+        {
+            return Ok(Some("where Kule and its tasks write"));
+        }
+        Ok(None)
+    }
+}
+
+/// Where Kule keeps what is its own in the home besides its home: its home
+/// where it is by default, and the agents' packages and homes of their own,
+/// which their runs write.
+const KULE_IN_HOME: &[&str] = &[
+    ".kule",
+    "Library/Application Support/Kule",
+    ".local/share/kule",
+];
+
+/// Where `path` leads, as the system would resolve it: what exists of it
+/// resolved through every link, with what does not exist yet after it.
+/// `None` where a part that does not exist is `..` or `.`, or is a link
+/// that leads nowhere: Kule cannot tell where that ends.
+fn where_it_leads(path: &Path) -> Option<PathBuf> {
+    use std::path::Component;
+    let parts: Vec<Component> = path.components().collect();
+    for split in (1..=parts.len()).rev() {
+        let head: PathBuf = parts[..split].iter().collect();
+        let Ok(mut at) = fs::canonicalize(&head) else {
+            continue;
+        };
+        for part in &parts[split..] {
+            let Component::Normal(name) = part else {
+                return None;
+            };
+            at.push(name);
+            // There, but not resolved: a link to what is not there.
+            if fs::symlink_metadata(&at).is_ok() {
+                return None;
+            }
+        }
+        return Some(at);
+    }
+    None
 }
 
 /// What one [`Task::apply_home`] did, for an undo: kept next to what it
