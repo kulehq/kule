@@ -23,7 +23,11 @@ policy: passes on its own
 
 - `+` oluşturuldu, `~` değiştirildi, `-` silindi. Taşımalar bir silme ve
   bir oluşturma olarak değil, taşıma olarak gösterilir
-  (`» photos/ → 2026/`).
+  (`» photos/ → 2026/`). Bir dosya yalnızca aynı baytları taşıdıkça
+  taşınmış sayılır: adı değişip yeniden yazılan bir dosya, boyutu ve
+  zamanı ne derse desin, silinmiş ve oluşturulmuş olarak gösterilir.
+- Bir komutun kopyada koyduğu dosya bayrakları (macOS'ta `hidden`, `uchg`)
+  klasörünüze ulaşmaz: commit dosyayı incelemenin gösterdiği gibi getirir.
 - Değişen bir dosyanın altında Kule, **içinde neyin değiştiğini** bir
   insanın kullandığı adlarla söyler:
   - Rust, C#, TypeScript, JavaScript, Python ve Go'da fonksiyonlar,

@@ -149,12 +149,17 @@ policy: passes on its own
 
 ## Output
 
+Everything named from the task (paths, names inside files, git hooks,
+branches, merged files) is printed with control characters and invisible
+marks written out, like `\u{1b}`: nothing a task writes moves the cursor,
+erases a line or sets the title of your terminal while you review.
+
 | Line | Meaning |
 | --- | --- |
 | `no changes` | The copy holds what the workspace holds. |
 | `N file changes: +a ~m -d »v` | Counts: created, modified, deleted, moved. |
 | `+ path`, `~ path`, `- path` | A file or folder (ending in `/`) created, modified or deleted. |
-| `» from → to` | A move or rename. A file moved with its folder is not listed again. |
+| `» from → to` | A move or rename, with the same bytes (a file renamed and rewritten is listed as `-` and `+`). A file moved with its folder is not listed again. |
 | indented `+`/`~`/`-` lines | What changed inside the file above: `function main`, `method Task::commit`, `section Plan › Later`, `key dependencies`. Every change in the file is listed under one of them, or under its top level. |
 | `(… not outlined)` | Kule could not look inside this file, and says why (for example, the workspace changed it too). |
 | `N ignored by the workspace, …` | Paths the workspace's `.gitignore` excludes. A plain commit leaves them in the copy. |

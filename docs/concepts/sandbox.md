@@ -280,6 +280,13 @@ it: `ptrace`, `process_vm_writev`, `keyctl`, `userfaultfd`,
 sysctls allow. A debugger or `strace` does not work inside the sandbox
 then.
 
+In every mode on Linux, full isolation included, a command starts in a
+session keyring of its own (a user namespace keeps the person's), and its
+seccomp filter refuses the kernel's key calls (`keyctl`, `add_key`,
+`request_key`) with `EPERM`, `io_uring` as not there, and a socket in any
+family but Unix, IPv4, IPv6 and netlink with `EAFNOSUPPORT`: no virtual
+machine's `vsock`, no raw packets.
+
 ## Related
 
 - [`kule exec`](../cli/exec.md), [`kule reveal`](../cli/reveal.md), [`kule isolation`](../cli/isolation.md)

@@ -295,6 +295,13 @@ reddeder: `ptrace`, `process_vm_writev`, `keyctl`, `userfaultfd`,
 ile başarısız olur. Bu durumda sandbox içinde bir debugger ya da `strace`
 çalışmaz.
 
+Linux'ta her modda, tam yalıtım dahil, bir komut kendi oturum anahtarlığında
+başlar (bir kullanıcı ad alanı kişininkini korur) ve seccomp filtresi
+çekirdeğin anahtar çağrılarını (`keyctl`, `add_key`, `request_key`) `EPERM`
+ile, `io_uring`'i yokmuş gibi, Unix, IPv4, IPv6 ve netlink dışındaki her
+ailede bir soketi `EAFNOSUPPORT` ile reddeder: bir sanal makinenin
+`vsock`'u da, ham paketler de yoktur.
+
 ## İlgili
 
 - [`kule exec`](../cli/exec.md), [`kule reveal`](../cli/reveal.md), [`kule isolation`](../cli/isolation.md)

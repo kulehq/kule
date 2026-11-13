@@ -59,7 +59,8 @@ Birini ilk açılış ekranında, *Settings → Policy* bölümünde ya da
   diğerleri;
 - kendi başına kod çalıştıran ya da bir ajanı yönlendirenler: CI
   (`.github`, `.gitlab-ci*`, …), editör ayarları (`.vscode`, `.idea`), dev
-  container'lar, hook yöneticileri (`.husky`, `lefthook.yml`), araç zinciri
+  container'lar, hook yöneticileri (`.husky`, `lefthook.yml`), editör eklentilerinin
+  çalıştırdığı JavaScript ayarları (`eslint.config.js`), araç zinciri
   ve paket yöneticisi ayarları (`.npmrc`, `rust-toolchain.toml`,
   `build.rs`), bir ajanın ayarları, talimatları ve MCP sunucuları
   (`.claude`, `CLAUDE.md`, `AGENTS.md`, `.mcp.json`, …) ve Kule'nin kendi

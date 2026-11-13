@@ -42,6 +42,23 @@
   own files in your home: not outside it, not to where Kule and its tasks
   write, not through a link that leads nowhere, and never as a file that
   runs as a shell or tool starts.
+- On Linux, in every isolation mode, a command starts in a session
+  keyring of its own, and its seccomp filter refuses the kernel's key
+  calls, `io_uring`, and sockets outside the Unix, IPv4, IPv6 and netlink
+  families.
+- The balanced policy holds more of what tools read or run on their own:
+  lefthook's and mise's other spellings and local files, simple-git-hooks'
+  settings, `uv.toml`, `pnpm-workspace.yaml`, Deno's, Gradle's
+  (`gradle.properties`, version catalogs, `buildSrc`), PHP's, Dart's,
+  Swift's, CocoaPods', Elixir's, sbt's, vcpkg's and Conan's manifests, and
+  the JavaScript configs editor extensions evaluate as a folder opens
+  (`*.config.js` and kin, `.eslintrc.js` and kin).
+- A file counts as moved only while it holds the same bytes; renamed and
+  rewritten, it is shown as deleted and created. On macOS, file flags set
+  in the copy (`hidden`, `uchg`, …) do not reach the workspace.
+- `kule status` and the commit listing write out control characters in
+  every name that comes from the task: names inside files, git hooks,
+  staged and changed git paths, branches and merged files.
 
 ### Fixed
 
