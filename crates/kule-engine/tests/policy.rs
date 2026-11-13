@@ -494,6 +494,39 @@ fn what_a_tool_reads_by_another_name_waits_too() {
     }
 }
 
+/// The built-in policy is judged within the stack a program's main thread
+/// has on Windows (1 MiB), as the command line judges it there: no rule is
+/// so deep that Cedar stops evaluating it.
+#[test]
+fn the_policy_is_judged_within_a_small_stack() {
+    let s = Setup::new(PROJECT, false);
+    for path in [
+        "eslint.config.js",
+        "mise.dev.toml",
+        "lefthook.yaml",
+        "Cargo.toml",
+        "src/a.rs",
+    ] {
+        write(&s.copy().join(path), "x\n");
+    }
+    let effects = s.task.effects().unwrap();
+    let ruling = std::thread::Builder::new()
+        .stack_size(1 << 20)
+        .spawn(move || Policy::builtin().judge(&effects))
+        .unwrap()
+        .join()
+        .unwrap();
+    for j in &ruling.judgements {
+        assert!(
+            !j.rules.iter().any(|r| r.starts_with("policy-error")),
+            "{}: {:?}",
+            j.subject,
+            j.rules
+        );
+    }
+    assert_eq!(on(&ruling, "src/a.rs").0, Verdict::Allow);
+}
+
 /// A repository without `.git` in its path (a bare one) is judged as a
 /// `.git` is: its config waits, its hooks never pass.
 #[test]
