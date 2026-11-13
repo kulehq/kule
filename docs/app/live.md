@@ -43,7 +43,9 @@ As they come:
 - **The agent's answer**, laid out as Markdown, with code blocks coloured as
   in an editor.
 - **Its thinking**, in a quieter style, when the agent shares it.
-- **Tool calls**, one line each: `·` while running, `✓` done, `✗` failed, and
+- **Kule's own notes** (what it ended, cut or could not record) carry
+  `◆ Kule:` before them, which no line an agent names gets.
+- **Tool calls**, one line each: `›` while running, `✓` done, `✗` failed, and
   after the arrow the files the call changed. Every call that changes
   something is a **step** you can look at and go back to (see
   [Timeline](timeline.md)).

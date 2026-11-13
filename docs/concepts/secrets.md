@@ -98,8 +98,9 @@ profile you write can do the same under `keys` (see [Agents](../using-agents.md)
 ## `.env` files are masked too
 
 Values in the copy's `.env` files (`.env`, `.env.local`, `*.env`, `.envrc`;
-not `.env.example`) that look like secrets, by their name or their shape,
-are replaced with placeholders. A switch (`true`, `off`), a short number
+not `.env.example`) and in its repository's own settings (`.git/config`)
+that look like secrets, by their name or their shape, are replaced with
+placeholders. A switch (`true`, `off`), a short number
 and a search path under a key that names one (`PATH`, `GOPATH`,
 `JAVA_HOME`) are settings and stay as they are, unless the key names a
 secret or a secret Kule keeps or masked is in the path.
@@ -118,6 +119,26 @@ secret or a secret Kule keeps or masked is in the path.
   way goes back only where it is unchanged, and no more times than the
   file held it.
 
+Kule reads a setting in each form the common shells and tools write one:
+
+| Form | Example |
+| --- | --- |
+| `sh`, `bash`, `zsh` | `export NAME=value`, `NAME=value`, every `NAME=value` on an `export`, `typeset`, `declare`, `readonly` or `local` line |
+| fish | `set -gx NAME value` |
+| csh, tcsh | `setenv NAME value` |
+| nushell, PowerShell | `$env.NAME = "value"`, `$env:NAME = "value"` |
+| A URL | the password in `https://user:password@host/`, or a token standing for the user (`https://token@host/`): the token alone is masked, the URL kept |
+| A header | the credential after `Authorization:` (git's `http.extraHeader`, a `curl -H`) |
+| A token | any word with a service's token prefix (`ghp_`, `github_pat_`, `glpat-`, `sk-`, `xoxb-`, `npm_`, `pypi-`, `AKIA`, …), wherever it is |
+
+A URL's token goes back into requests to **that URL's host alone**, in
+their credentials, as the file sent it: `git fetch` with a token in the
+remote's URL keeps working through the proxy, and Kule then looks inside
+TLS to that host (see the known limits under
+[Network and questions](network-and-questions.md#known-limits)). Any other
+value found this way stays a placeholder everywhere, unless it is also a
+secret you keep.
+
 A settings file Kule cannot mask, because it is not UTF-8 (a Latin-1
 byte, a UTF-16 file from a Windows editor) or is larger than 1 MB, would
 show its values as they are. So no agent run, `kule exec`, `kule shell`
@@ -126,7 +147,10 @@ file and why. Save it as UTF-8 under 1 MB, or move it out of the folder,
 and try again.
 
 The same masking applies to the [home layer](home-layer.md)'s clones of
-`.zshrc`, `.profile`, `~/.env` and the like. One there Kule cannot mask is
+`.zshrc`, `.profile`, `~/.env`, `~/.gitconfig`, the shells' own settings
+folders (`~/.config/fish`, `~/.config/zsh` for a `ZDOTDIR` there,
+`~/.config/nushell`) and the like; a masked file is hidden at its real
+path. One there Kule cannot mask is
 withheld instead: the commands see it neither in the layer nor at its real
 path, and Kule says so where they run (the run's notes in the app, the
 output of `kule run`, `exec` and `shell`, and the terminal).

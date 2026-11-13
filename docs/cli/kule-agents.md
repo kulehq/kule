@@ -157,7 +157,7 @@ approve it.
 
 ```console
 $ kule agents add qwen-code
-added qwen-code, opening nothing yet; next: kule agents try qwen-code --apply, then kule agents approve qwen-code
+added qwen-code, opening nothing yet; next: kule agents try qwen-code --apply (without your keys and variables until approved), then kule agents approve qwen-code
 ```
 
 For an agent the registry ships as a download, `add` says which archive to
@@ -176,7 +176,11 @@ kule agents try [OPTIONS] <NAME>
 Runs one of **your** profiles once, in an empty folder, opened no wider than
 the profile says (up to two minutes), then lists what the sandbox refused it:
 the folders it wanted to write and the hosts it wanted to reach. That is
-what its profile should open.
+what its profile should open. Until the profile is approved as it stands,
+the trial runs without your values: no `pass_env` variables, no keys
+(`keys`, `keychain`, `login_file`), no `carry`, `login`,
+`reveal_on_macos` or `devices`; a line `withheld until approved: …` says
+which it named.
 
 Its output has this shape (what is refused and suggested depends on the
 agent):

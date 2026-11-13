@@ -157,6 +157,7 @@ kule: a terminal is open on this task's copy (in Kule's app, or kule shell); clo
 | --- | --- |
 | `kule: in task <id>'s copy, in its sandbox; exit to come back` | Kabuk başlamadan önce stderr'e yazılır. |
 | `kule: in task <id>'s copy, outside the sandbox; exit to come back` | Aynısı, `--outside` ile. |
+| kabuğun kendi çıktısı | Terminalinize, panonuzu ayarlayacak (OSC 52), terminale bir dize iletecek (DCS, APC, tmux'un passthrough'u), pencereyi değiştirecek ya da bildirecek dizileri ve başlıklar, renkler, klasör, bağlantılar ve istem işaretleri dışındaki her OSC'yi çıkararak iletilir. |
 | `exit`'ten sonraki değişiklik listesi | Görevin şimdiye kadarki değişiklikleri, [kule status](status.md)'un gösterdiği gibi. |
 | `exit`'ten sonraki `net:`, ev ve `sandbox:` satırları | Kabuğun kurduğu bağlantılar, ev klasörüne yazdıkları ve sandbox'ın reddettikleri, [kule exec](exec.md)'in yazdırdığı gibi. `--outside` ile yazılmaz. |
 | `kule: Kule ended <names>, which the shell left running in its sandbox` | macOS: kabuğun çalışır bıraktığı ve Kule'nin kabuk çıkarken sonlandırdığı şey. |

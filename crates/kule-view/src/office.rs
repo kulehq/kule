@@ -42,11 +42,16 @@ impl<'a> Parts<'a> {
         if bytes.len() > MAX_FILE {
             return Err(unread("too large to preview"));
         }
-        let zip =
+        let mut zip =
             ZipArchive::new(Cursor::new(bytes)).map_err(|_| unread("not a file Kule can read"))?;
         if zip.len() > MAX_ENTRIES {
             return Err(unread("too many parts to preview"));
         }
+        // A part named twice, local headers that disagree with the central
+        // directory, or parts that overlap: Kule would read one copy, its
+        // app perhaps another.
+        zip.validate_header_consistency()
+            .map_err(|_| unread("its parts are listed inconsistently (a part named twice, or headers that disagree)"))?;
         Ok(Parts {
             zip,
             left: MAX_TOTAL,

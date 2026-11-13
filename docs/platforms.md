@@ -150,7 +150,10 @@ put-back replaces is moved to `~/.kule/kept/replaced`, never lost.
   `SSL_CERT_FILE` names.
 - **NuGet's and Maven's** tools on macOS trust the system's roots alone, so
   their registries pass through unseen, writes included, as Go's module
-  proxy does.
+  proxy does; so does `static.rust-lang.org` for `rustup`. Kule sees only
+  the name such a connection asks for, so which site a request inside it
+  names is left to the host's servers: `static.rust-lang.org`'s carry
+  other sites too (see [Network and questions](concepts/network-and-questions.md#known-limits)).
 - **Gemini** needs an API key from AI Studio, stored in a file:
   `GEMINI_FORCE_FILE_STORAGE=true gemini`, then `/auth`.
 

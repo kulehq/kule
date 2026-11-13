@@ -44,6 +44,19 @@ impl Setup {
         let ws = TempDir::new().unwrap();
         fs::write(ws.path().join("README.md"), "hello\n").unwrap();
         let task = Task::create(home.path(), ws.path()).unwrap();
+        // Run as root (a container's CI job), Kule asks for weaker isolation
+        // to be accepted; these tests are what it then gives.
+        #[cfg(target_os = "linux")]
+        // SAFETY: a plain system call.
+        if unsafe { libc::geteuid() } == 0 {
+            kule_engine::set_isolation(
+                home.path(),
+                &kule_engine::Isolation {
+                    accept_weaker: true,
+                },
+            )
+            .unwrap();
+        }
         let proxy = Proxy::start(&task, policy()).unwrap();
         let mut sandbox = Sandbox::new(&task).unwrap();
         sandbox.set_network(Network::Proxy(proxy.port()));
@@ -967,4 +980,179 @@ fn a_plain_request_for_another_host_never_reaches_it() {
     assert!(reply.starts_with("HTTP/1.1 400"), "{reply}");
     std::thread::sleep(Duration::from_millis(200));
     assert!(kept.lock().unwrap().is_empty());
+}
+
+/// Plain HTTP sent through a tunnel to a port other than 443 is read as a
+/// plain request is: one for another host behind the address is answered
+/// by Kule and never reaches it, one for the host goes through. What is
+/// not HTTP passes as it is sent, and a host that speaks first is heard.
+#[test]
+fn plain_http_in_a_tunnel_is_read_as_any_plain_request() {
+    use std::io::Read;
+    let (home, ws) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+    let task = Task::create(home.path(), ws.path()).unwrap();
+    let proxy = Proxy::start(&task, policy()).unwrap();
+    let answering = || {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let kept = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let into = std::sync::Arc::clone(&kept);
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let mut stream = stream.unwrap();
+                let mut reader = std::io::BufReader::new(stream.try_clone().unwrap());
+                loop {
+                    let mut line = String::new();
+                    if std::io::BufRead::read_line(&mut reader, &mut line).unwrap_or(0) == 0 {
+                        break;
+                    }
+                    if line.starts_with("GET") || line.starts_with("Host") {
+                        into.lock().unwrap().push(line.trim().to_owned());
+                    }
+                    if line == "\r\n" {
+                        let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok");
+                    }
+                }
+            }
+        });
+        (port, kept)
+    };
+
+    // Another host's name, also after a blank line: refused, unsent.
+    for lead in ["", "\r\n"] {
+        let (up, kept) = answering();
+        let reply = tunnel_with(
+            proxy.port(),
+            &format!("127.0.0.1:{up}"),
+            format!("{lead}GET /a HTTP/1.1\r\nHost: other.example\r\n\r\n").as_bytes(),
+        );
+        assert!(
+            reply.contains("400 Bad Request")
+                && (reply.contains("other.example") || !lead.is_empty()),
+            "{reply}"
+        );
+        std::thread::sleep(Duration::from_millis(200));
+        assert!(
+            kept.lock().unwrap().is_empty(),
+            "{:?}",
+            kept.lock().unwrap()
+        );
+    }
+
+    // Its own: through, and answered.
+    let (up, kept) = answering();
+    let reply = tunnel_with(
+        proxy.port(),
+        &format!("127.0.0.1:{up}"),
+        format!("GET /a HTTP/1.1\r\nHost: 127.0.0.1:{up}\r\n\r\n").as_bytes(),
+    );
+    assert!(
+        reply.contains("200 OK\r\nContent-Length: 2\r\n\r\nok"),
+        "{reply}"
+    );
+    assert_eq!(
+        *kept.lock().unwrap(),
+        [
+            "GET /a HTTP/1.1".to_owned(),
+            format!("Host: 127.0.0.1:{up}")
+        ]
+    );
+
+    // Not HTTP: as it was sent.
+    let (up, kept) = keeping_upstream();
+    tunnel_with(
+        proxy.port(),
+        &format!("127.0.0.1:{up}"),
+        b"SSH-2.0-Test\r\nmore",
+    );
+    assert_eq!(
+        kept_after(&kept, Duration::from_millis(300)),
+        b"SSH-2.0-Test\r\nmore"
+    );
+
+    // A host that speaks first is heard before the client says anything.
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let up = listener.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        stream.write_all(b"220 ready\r\n").unwrap();
+        let mut line = [0u8; 64];
+        let n = stream.read(&mut line).unwrap();
+        stream.write_all(&line[..n]).unwrap();
+    });
+    let mut s = TcpStream::connect(("127.0.0.1", proxy.port())).unwrap();
+    write!(
+        s,
+        "CONNECT 127.0.0.1:{up} HTTP/1.1\r\nHost: 127.0.0.1:{up}\r\n\r\n"
+    )
+    .unwrap();
+    s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    let mut got = Vec::new();
+    let mut buf = [0u8; 256];
+    while !String::from_utf8_lossy(&got).contains("220 ready") {
+        let n = s.read(&mut buf).unwrap();
+        assert!(n > 0, "{}", String::from_utf8_lossy(&got));
+        got.extend_from_slice(&buf[..n]);
+    }
+    s.write_all(b"EHLO x\r\n").unwrap();
+    let mut echo = Vec::new();
+    let _ = s.read_to_end(&mut echo);
+    assert_eq!(String::from_utf8_lossy(&echo), "EHLO x\r\n");
+}
+
+/// Linux: the proxy serves the task's own commands, which run as the
+/// person Kule runs as. Another user's program on this computer gets
+/// nothing through it, and nothing of it is logged in the task. Run as
+/// root (a container's CI job), the test is that other user.
+#[cfg(target_os = "linux")]
+#[test]
+fn another_users_program_gets_nothing_through_the_proxy() {
+    use std::os::unix::process::CommandExt;
+    // SAFETY: a plain system call.
+    if unsafe { libc::geteuid() } != 0 {
+        eprintln!("skipped: only root can run a program as another user here");
+        return;
+    }
+    let s = Setup::new();
+    let up = upstream();
+    let target = format!("127.0.0.1:{up}");
+    let script = format!(
+        r#"
+import socket, sys
+s = socket.create_connection(("127.0.0.1", int(sys.argv[1])), timeout=5)
+s.sendall(b"CONNECT {target} HTTP/1.1\r\nHost: {target}\r\n\r\n")
+data = b""
+try:
+    while True:
+        chunk = s.recv(4096)
+        if not chunk:
+            break
+        data += chunk
+except OSError:
+    pass
+print(data.decode(errors="replace"))
+"#
+    );
+    let port = s._proxy.port().to_string();
+    let out = std::process::Command::new("python3")
+        .args(["-c", &script, &port])
+        .uid(65534)
+        .gid(65534)
+        .output()
+        .unwrap();
+    let reply = String::from_utf8_lossy(&out.stdout);
+    assert!(!reply.contains("hello from upstream"), "{reply}");
+    assert!(!reply.contains("200"), "{reply}");
+    // The task's own command still gets through, and only it is logged.
+    let own = s.connect_via_proxy(&target);
+    assert!(own.contains("hello from upstream"), "{own}");
+    let log = s.logged("127.0.0.1", 1);
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    assert_eq!(
+        connections(&s.task).unwrap().len(),
+        log.len(),
+        "{:?}",
+        connections(&s.task).unwrap()
+    );
+    assert_eq!(log.len(), 1, "{log:?}");
 }

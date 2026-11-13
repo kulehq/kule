@@ -103,7 +103,7 @@ fn open_lets_through_documents_that_are_what_their_name_says() {
     );
     fs::write(ws.path().join("a.txt"), "a\n").unwrap();
     let (id, copy) = task(home.path(), ws.path());
-    fs::write(copy.join("summary.pdf"), b"%PDF-1.7\n").unwrap();
+    fs::write(copy.join("summary.pdf"), b"%PDF-1.7\n1 0 obj\n<< /Type /Catalog >>\nendobj\nxref\n0 2\n0000000000 65535 f \n0000000009 00000 n \ntrailer\n<< /Root 1 0 R /Size 2 >>\nstartxref\n45\n%%EOF\n").unwrap();
     fs::write(copy.join("march.csv"), "day,sum\n1,3\n").unwrap();
     for file in ["summary.pdf", "march.csv"] {
         // Kule's own copy of it, never the agent's file.
@@ -146,7 +146,7 @@ fn open_waits_while_an_agent_is_at_work() {
     let (home, ws) = (TempDir::new().unwrap(), TempDir::new().unwrap());
     fs::write(ws.path().join("a.txt"), "a\n").unwrap();
     let (id, copy) = task(home.path(), ws.path());
-    fs::write(copy.join("summary.pdf"), b"%PDF-1.7\n").unwrap();
+    fs::write(copy.join("summary.pdf"), b"%PDF-1.7\n1 0 obj\n<< /Type /Catalog >>\nendobj\nxref\n0 2\n0000000000 65535 f \n0000000009 00000 n \ntrailer\n<< /Root 1 0 R /Size 2 >>\nstartxref\n45\n%%EOF\n").unwrap();
     // As `kule run` or the app marks it: this test's process is alive.
     let marker = home.path().join("tasks").join(&id).join("agent");
     fs::write(&marker, format!("{}\n", std::process::id())).unwrap();

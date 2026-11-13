@@ -154,6 +154,7 @@ kule: a terminal is open on this task's copy (in Kule's app, or kule shell); clo
 | --- | --- |
 | `kule: in task <id>'s copy, in its sandbox; exit to come back` | On stderr, before the shell starts. |
 | `kule: in task <id>'s copy, outside the sandbox; exit to come back` | The same, with `--outside`. |
+| the shell's own output | Passed on to your terminal without the sequences that would set your clipboard (OSC 52), pass a string to the terminal (DCS, APC, tmux's passthrough), change or report the window, or any other OSC but titles, colours, the folder, links and prompt marks. |
 | the change list after `exit` | The task's changes so far, as [kule status](status.md) shows them. |
 | `net:`, home and `sandbox:` lines after `exit` | The connections the shell made, its home writes and what the sandbox refused, as [kule exec](exec.md) prints them. Not with `--outside`. |
 | `kule: Kule ended <names>, which the shell left running in its sandbox` | macOS: what the shell left running, which Kule ended as it exited. |

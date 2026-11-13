@@ -164,7 +164,7 @@ onaylayana kadar bekletilir.
 
 ```console
 $ kule agents add qwen-code
-added qwen-code, opening nothing yet; next: kule agents try qwen-code --apply, then kule agents approve qwen-code
+added qwen-code, opening nothing yet; next: kule agents try qwen-code --apply (without your keys and variables until approved), then kule agents approve qwen-code
 ```
 
 Kayıt defterinin indirme olarak sunduğu bir ajan için `add`, hangi arşivi
@@ -184,7 +184,11 @@ kule agents try [OPTIONS] <NAME>
 **Sizin** profillerinizden birini boş bir klasörde, profilin söylediğinden
 daha geniş açılmadan bir kez çalıştırır (en fazla iki dakika), ardından
 sandbox'ın ona neleri reddettiğini listeler: yazmak istediği klasörler ve
-ulaşmak istediği host'lar. Profilinin açması gereken şey budur.
+ulaşmak istediği host'lar. Profilinin açması gereken şey budur. Profil
+şimdiki haliyle onaylanana kadar deneme sizin değerleriniz olmadan çalışır:
+`pass_env` değişkenleri, anahtarlar (`keys`, `keychain`, `login_file`),
+`carry`, `login`, `reveal_on_macos` ya da `devices` verilmez; bir
+`withheld until approved: …` satırı adı geçenleri söyler.
 
 Çıktısı şu biçimdedir (neyin reddedilip önerildiği ajana bağlıdır):
 

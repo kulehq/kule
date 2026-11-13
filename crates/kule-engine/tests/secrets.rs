@@ -267,6 +267,104 @@ fn a_secret_typed_into_the_copy_is_masked_before_an_agent_starts() {
     );
 }
 
+/// A copy whose `sub/.env` holds a secret, with `sub` then swapped for a
+/// link to `outside`, as a command in the task can: what the link leads to
+/// is not the copy's.
+#[cfg(unix)]
+fn sub_swapped_for_a_link(outside: &std::path::Path) -> Setup {
+    let s = Setup::new();
+    fs::create_dir(s.ws.path().join("sub")).unwrap();
+    fs::write(s.ws.path().join("sub/.env"), ENV).unwrap();
+    let s = Setup {
+        task: Task::create(s.home.path(), s.ws.path()).unwrap(),
+        ..s
+    };
+    let sub = s.task.copy().join("sub");
+    let masked = fs::read_to_string(sub.join(".env")).unwrap();
+    assert!(!masked.contains("sk_live"), "{masked}");
+    fs::rename(&sub, s.task.copy().join("sub.old")).unwrap();
+    std::os::unix::fs::symlink(outside, &sub).unwrap();
+    s
+}
+
+/// Masking before a run reads and writes nothing through a folder of the
+/// copy the task swapped for a link: a file of the same name where it
+/// leads is left as it is.
+#[cfg(unix)]
+#[test]
+fn masking_never_follows_a_folder_swapped_for_a_link() {
+    let outside = TempDir::new().unwrap();
+    let theirs = "API_KEY=OUTSIDE-real-secret-abcdef123456\nOTHER=1\n";
+    fs::write(outside.path().join(".env"), theirs).unwrap();
+    let s = sub_swapped_for_a_link(outside.path());
+    drop(s.task.agent_at_work().unwrap());
+    assert_eq!(
+        fs::read_to_string(outside.path().join(".env")).unwrap(),
+        theirs
+    );
+}
+
+/// Nor does a commit put the real values back through it: a file there
+/// holding this task's placeholders never gets the values.
+#[cfg(unix)]
+#[test]
+fn a_commit_never_puts_values_back_through_a_folder_swapped_for_a_link() {
+    let outside = TempDir::new().unwrap();
+    let s = sub_swapped_for_a_link(outside.path());
+    let masked = fs::read_to_string(s.task.copy().join("sub.old/.env")).unwrap();
+    fs::write(outside.path().join(".env"), &masked).unwrap();
+    let _ = s.task.commit();
+    let there = fs::read_to_string(outside.path().join(".env")).unwrap();
+    assert!(
+        !there.contains("sk_live") && !there.contains("hunter2"),
+        "{there}"
+    );
+}
+
+/// A token in the repository's remote URL, as CI and setup scripts leave
+/// it: the copy's `.git/config` holds a placeholder in its place, masking
+/// is no change, and the folder's file keeps the token through a commit.
+#[test]
+fn a_token_in_the_repositorys_remote_url_is_masked_in_the_copy() {
+    let (home, ws) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+    let git = |args: &[&str]| {
+        let out = std::process::Command::new("git")
+            .args(args)
+            .current_dir(ws.path())
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{out:?}");
+    };
+    let token = "ghp_FAKEFAKEFAKEFAKE1234abcd";
+    git(&["init", "-q"]);
+    git(&[
+        "remote",
+        "add",
+        "origin",
+        &format!("https://kuleuser:{token}@github.com/x/y.git"),
+    ]);
+    fs::write(ws.path().join("app.txt"), "app\n").unwrap();
+    let folder = fs::read_to_string(ws.path().join(".git/config")).unwrap();
+    let task = Task::create(home.path(), ws.path()).unwrap();
+    drop(task.agent_at_work().unwrap());
+    let copy = fs::read_to_string(task.copy().join(".git/config")).unwrap();
+    assert!(!copy.contains(token), "{copy}");
+    assert!(
+        copy.contains("url = https://kuleuser:kule_secret_")
+            && copy.contains("@github.com/x/y.git"),
+        "{copy}"
+    );
+    assert!(task.effects().unwrap().is_empty());
+    fs::write(task.copy().join("app.txt"), "app 2\n").unwrap();
+    task.commit().unwrap().unwrap();
+    assert_eq!(
+        fs::read_to_string(ws.path().join(".git/config")).unwrap(),
+        folder
+    );
+}
+
 /// Switches and short numbers stay as they are, whatever their keys say:
 /// a tool reads them as settings, and a response that holds the same word
 /// would be blanked.

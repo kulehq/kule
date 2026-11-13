@@ -123,7 +123,7 @@ görmek için boş alana bakın (`df -h`).
 
 | Yol | Ne tutar |
 | --- | --- |
-| `~/Library/Application Support/Kule/packages` (macOS), `~/.local/share/kule/packages` (Linux ve Windows, profilinizin altında) | Kule'nin npm ile kurduğu ajanlar (Claude Code'un ve Codex'in ACP bağdaştırıcıları); her tam sürüm için bir klasör, kurulum betikleri çalıştırılmadan kurulur. Hiçbir sandbox buraya yazamaz. |
+| `~/Library/Application Support/Kule/packages` (macOS), `~/.local/share/kule/packages` (Linux ve Windows, profilinizin altında) | `npx`'in getirdiği, Kule'nin npm ile kurduğu ajanlar (Claude Code'un ve Codex'in ACP bağdaştırıcıları ve sizinkiler); her tam sürüm için bir klasör, yalnızca kayıt deposundan ve kurulum betikleri çalıştırılmadan kurulur. Hiçbir sandbox buraya yazamaz. |
 | `~/Library/Application Support/Kule/agents/<name>` (macOS), `~/.local/share/kule/agents/<name>` (Linux ve Windows) | Kule'nin kendi ajanları gibi profili `own_home` ayarlayan bir ajan için **ona ait bir ev dizini**: Kule'deki ayarları, geçmişi ve konuşma kayıtları, görevler boyunca. Kule ayarlarınızı ve talimatlarınızı her başlangıçta buraya kopyalar (`carry`). |
 | `%LOCALAPPDATA%\Kule` (Windows) | Kule'nin programları, kurucunun koyduğu yerde: uygulama, `kule.exe`, `kule-proxy.exe` ve `kule-pty-helper.exe`. Kule'nin ev dizini değildir ve asla ev dizini yapılmamalıdır. |
 | `<workspace>/.kule/policy.cedar` | Bir deponun kendi **forbid** kuralları. Politikayı yalnızca sıkılaştırabilir. Kule onu bir görevin kopyasından değil, her zaman gerçek klasörünüzden okur; `.kule/` altındaki herhangi bir şeye yapılan her değişiklik bir insanın onayını bekler. **Düzenleme: evet.** |

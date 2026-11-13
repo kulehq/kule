@@ -3450,7 +3450,7 @@ dependencies = [
 
 [[package]]
 name = "kule"
-version = "0.2.0-preview.22"
+version = "0.2.0-preview.23"
 dependencies = [
  "anyhow",
  "clap",
@@ -3469,7 +3469,7 @@ dependencies = [
 
 [[package]]
 name = "kule-acp"
-version = "0.2.0-preview.22"
+version = "0.2.0-preview.23"
 dependencies = [
  "agent-client-protocol",
  "async-process",
@@ -3490,7 +3490,7 @@ dependencies = [
 
 [[package]]
 name = "kule-daemon"
-version = "0.2.0-preview.22"
+version = "0.2.0-preview.23"
 dependencies = [
  "blake3",
  "futures",
@@ -3509,7 +3509,7 @@ dependencies = [
 
 [[package]]
 name = "kule-desktop"
-version = "0.2.0-preview.22"
+version = "0.2.0-preview.23"
 dependencies = [
  "base64 0.22.1",
  "kule-daemon",
@@ -3530,7 +3530,7 @@ dependencies = [
 
 [[package]]
 name = "kule-engine"
-version = "0.2.0-preview.22"
+version = "0.2.0-preview.23"
 dependencies = [
  "base64 0.22.1",
  "blake3",
@@ -3566,7 +3566,7 @@ dependencies = [
 
 [[package]]
 name = "kule-entities"
-version = "0.2.0-preview.22"
+version = "0.2.0-preview.23"
 dependencies = [
  "serde",
  "serde_json",
@@ -3583,7 +3583,7 @@ dependencies = [
 
 [[package]]
 name = "kule-ext"
-version = "0.2.0-preview.22"
+version = "0.2.0-preview.23"
 dependencies = [
  "blake3",
  "libc",
@@ -3597,7 +3597,7 @@ dependencies = [
 
 [[package]]
 name = "kule-proxy"
-version = "0.2.0-preview.22"
+version = "0.2.0-preview.23"
 dependencies = [
  "kule-engine",
  "serde_json",
@@ -3606,14 +3606,14 @@ dependencies = [
 
 [[package]]
 name = "kule-pty-helper"
-version = "0.2.0-preview.22"
+version = "0.2.0-preview.23"
 dependencies = [
  "windows 0.62.2",
 ]
 
 [[package]]
 name = "kule-view"
-version = "0.2.0-preview.22"
+version = "0.2.0-preview.23"
 dependencies = [
  "base64 0.22.1",
  "flate2",
@@ -5100,9 +5100,9 @@ dependencies = [
 
 [[package]]
 name = "rustix"
-version = "1.1.5"
+version = "1.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "891efababe418670775f199f0d233d84843c227a0949a883ce15b37c78d6629d"
+checksum = "e5e76742e5294153d4dde1207dbec5bdd81eef6fabdc0d2118babadabfd858aa"
 dependencies = [
  "bitflags 2.13.2",
  "errno",

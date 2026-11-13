@@ -58,7 +58,7 @@ Nothing is trusted by default:
 | Window ↔ daemon | A socket only your user can open, a token, size limits. |
 | Window ↔ untrusted text | Built with DOM calls and `textContent` only; a strict content security policy with no inline scripts; links open only as http(s). |
 | Extensions ↔ Kule | Sandboxed frames on their own origin; every call checked against the permissions you approved; network only to approved public hosts. |
-| Release ↔ you | Checksums, build provenance and a CycloneDX SBOM for every file, from a pinned toolchain (`rust-toolchain.toml`); on macOS signed ad hoc, never notarized, as its notes say. No job of the release workflow holds a secret, and publishing waits in an environment for a maintainer's approval: nothing is published before it. |
+| Release ↔ you | Checksums, build provenance and a CycloneDX SBOM for every file, from a pinned toolchain (`rust-toolchain.toml`); on macOS signed ad hoc, never notarized, as its notes say. No job of the release workflow holds a secret, and publishing waits in an environment for a maintainer's approval: nothing is published before it. The installer the site serves (`install.sh`) is checked against the reviewed file, byte for byte, by a job that runs none of the site's npm code, before the site is published. |
 
 ### What a task's commands can still read {#what-a-tasks-commands-can-still-read}
 
@@ -90,7 +90,9 @@ Kule does not support it, by design:
 
 - **Inside a task, it is refused.** The sandbox keeps commands, and the MCP
   servers the agent starts, away from the screen, the keyboard, the
-  clipboard and other apps, as far as the platform allows.
+  clipboard and other apps, as far as the platform allows; what they write
+  to your terminal reaches it without the sequences that set the clipboard
+  or make the terminal type.
 - **There is no gate on tool calls.** A tool call is the agent describing
   what it is about to do, and Kule does not trust that description. Trusting
   the tool's own report instead would hand that trust to third-party code.
@@ -117,7 +119,8 @@ Every change follows these rules:
 
 Before a release, besides CI, `scripts/release-gate.sh` runs on macOS and
 on Linux: the workflows through actionlint and zizmor, the lockfiles
-through osv-scanner (accepted advisories in `osv-scanner.toml`, as in
+through osv-scanner, the adapters' lockfiles Kule installs agents from
+included (accepted advisories in `osv-scanner.toml`, as in
 `deny.toml`), the kule binary through `cargo audit bin` (the release
 builds carry their dependency tree, with cargo-auditable, and a binary
 without one is refused, as cargo audit would read only part of it), and

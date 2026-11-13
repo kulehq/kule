@@ -128,6 +128,16 @@ struct Pending {
 
 impl lonca_net::Gate for Gate {
     fn decide(&self, request: &lonca_net::Request<'_>) -> lonca_net::Verdict {
+        // Only the task's own commands, which run as the person Kule runs
+        // as: a connection another user's program makes is refused, and
+        // neither judged, asked about nor logged in the task.
+        if !from_this_user(request.peer, request.local) {
+            return lonca_net::Verdict {
+                allow: false,
+                allow_private: false,
+                reason: "this proxy serves its task's own commands".to_owned(),
+            };
+        }
         // `Host.` and `HOST` are the host: judged, asked about and looked
         // into as one.
         let host = normal_host(request.host);
@@ -230,8 +240,10 @@ impl lonca_net::Gate for Gate {
         else {
             // Not looked into: its TLS hello must ask for the host it was
             // opened to (see `clienthello`).
-            if let Err(why) = pass_checked(&host, request.port, tunnel) {
-                self.note_cut(request, why);
+            match pass_checked(&host, request.port, tunnel) {
+                Ok(()) => {}
+                Err(crate::tls::Ended::Refused(why)) => self.note_cut(request, why),
+                Err(crate::tls::Ended::Failed(why)) => self.note_failed(request, why),
             }
             return None;
         };
@@ -268,7 +280,7 @@ impl lonca_net::Gate for Gate {
         // Every request on the connection is read, and each must be for
         // the host it was let through to.
         let git = crate::git_http::is_git_host(&host);
-        match crate::tls::serve_plain(&host, request.port, head, tunnel, git) {
+        match crate::tls::serve_plain(&host, request.port, Some(head), tunnel, git) {
             Ok(()) => {}
             Err(crate::tls::Ended::Refused(why)) => self.note_cut(request, why),
             Err(crate::tls::Ended::Failed(why)) => self.note_failed(request, why),
@@ -313,6 +325,59 @@ impl lonca_net::Gate for Gate {
         };
         self.log.record(record);
     }
+}
+
+/// Whether the connection from `peer` to the proxy at `local` is a socket
+/// of the user Kule runs as (Linux: as `/proc/net/tcp` and `tcp6` list it).
+/// One not found there, or another user's, is not.
+#[cfg(target_os = "linux")]
+fn from_this_user(peer: SocketAddr, local: SocketAddr) -> bool {
+    // SAFETY: a plain system call.
+    let me = unsafe { libc::geteuid() };
+    ["/proc/net/tcp", "/proc/net/tcp6"].iter().any(|table| {
+        std::fs::read_to_string(table)
+            .is_ok_and(|text| socket_owner(&text, peer, local) == Some(me))
+    })
+}
+
+/// Elsewhere every local connection is taken as the person's (see the
+/// network's known limits).
+#[cfg(not(target_os = "linux"))]
+fn from_this_user(_peer: SocketAddr, _local: SocketAddr) -> bool {
+    true
+}
+
+/// The owner of the socket at `from` connected to `to`, read from the text
+/// of `/proc/net/tcp` or `tcp6`: each address in hex, as the kernel keeps
+/// it (each 32-bit word in this machine's order), then its port.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn socket_owner(text: &str, from: SocketAddr, to: SocketAddr) -> Option<u32> {
+    let hex = |addr: SocketAddr| -> Vec<String> {
+        let words = |octets: &[u8]| -> String {
+            octets
+                .chunks(4)
+                .map(|w| format!("{:08X}", u32::from_ne_bytes([w[0], w[1], w[2], w[3]])))
+                .collect()
+        };
+        let port = addr.port();
+        match addr.ip() {
+            std::net::IpAddr::V4(v4) => vec![
+                format!("{}:{port:04X}", words(&v4.octets())),
+                // As a socket of both families lists it.
+                format!("{}:{port:04X}", words(&v4.to_ipv6_mapped().octets())),
+            ],
+            std::net::IpAddr::V6(v6) => vec![format!("{}:{port:04X}", words(&v6.octets()))],
+        }
+    };
+    let (from, to) = (hex(from), hex(to));
+    text.lines().skip(1).find_map(|line| {
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        let (local, remote, uid) = (fields.get(1)?, fields.get(2)?, fields.get(7)?);
+        (from.iter().any(|f| f.eq_ignore_ascii_case(local))
+            && to.iter().any(|t| t.eq_ignore_ascii_case(remote)))
+        .then(|| uid.parse().ok())
+        .flatten()
+    })
 }
 
 impl Gate {
@@ -415,17 +480,55 @@ fn judge_first(
     })
 }
 
+/// Whether what a client sent first through a tunnel starts an HTTP
+/// request: `Some(true)` when its first line (after any blanks) is a
+/// method and a target with an HTTP version, `Some(false)` when it cannot
+/// be one, `None` while that line is not whole.
+fn http_start(first: &[u8]) -> Option<bool> {
+    let tchar = |b: u8| b.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&b);
+    let start = first.iter().position(|b| !b.is_ascii_whitespace())?;
+    let rest = &first[start..];
+    let method = rest.iter().position(|b| !tchar(*b)).unwrap_or(rest.len());
+    if method == rest.len() {
+        return (rest.len() > 64).then_some(false);
+    }
+    if method == 0 || !matches!(rest[method], b' ' | b'\t') {
+        return Some(false);
+    }
+    match rest.iter().position(|b| *b == b'\n') {
+        Some(end) => Some(
+            rest[..end]
+                .windows(5)
+                .any(|w| w.eq_ignore_ascii_case(b"HTTP/")),
+        ),
+        // A line longer than any request line: read as one, and refused.
+        None => (rest.len() > 16 * 1024).then_some(true),
+    }
+}
+
+/// How a tunnel Kule does not look inside is relayed, once it is known.
+const UNDECIDED: u8 = 0;
+/// Its client sends HTTP, read request by request as plain HTTP is.
+const AS_HTTP: u8 = 1;
+/// Passed as it is: TLS, or a protocol whose host speaks first.
+const AS_IS: u8 = 2;
+
 /// Relays a tunnel to `host` Kule does not look inside, once what its
 /// client sends first passes [`judge_first`]: nothing of it reaches the
 /// host before. What the host sends goes back from the start, as some
-/// protocols speak first. Cut, and why, otherwise.
+/// protocols speak first. On a port other than 443, a client that sends
+/// HTTP gets it read as plain HTTP is ([`crate::tls::serve_plain`]): each
+/// request must be for `host`, and git's for reading alone. Cut, and why,
+/// otherwise.
 fn pass_checked(
     host: &str,
     port: u16,
     tunnel: lonca_net::Tunnel,
-) -> std::result::Result<(), String> {
+) -> std::result::Result<(), crate::tls::Ended> {
+    use crate::tls::Ended;
     use std::io::Read;
     use std::net::Shutdown;
+    use std::sync::atomic::{AtomicU8, Ordering::SeqCst};
     let lonca_net::Tunnel {
         client,
         upstream,
@@ -434,33 +537,88 @@ fn pass_checked(
     let cut = |why: String| {
         let _ = client.shutdown(Shutdown::Both);
         let _ = upstream.shutdown(Shutdown::Both);
-        Err(why)
+        Err(Ended::Refused(why))
     };
     let (Ok(mut from_host), Ok(mut to_client)) = (upstream.try_clone(), client.try_clone()) else {
         return cut(format!("the tunnel to {host} could not be relayed"));
     };
-    let back = std::thread::spawn(move || {
-        let _ = std::io::copy(&mut from_host, &mut to_client);
-        let _ = to_client.shutdown(Shutdown::Write);
-    });
+    let how = Arc::new(AtomicU8::new(UNDECIDED));
+    // What the host sends goes back from the start, unless the client's
+    // first bytes are HTTP: then nothing of it is taken here, and each
+    // answer goes back with its request.
+    let back = {
+        let how = Arc::clone(&how);
+        std::thread::spawn(move || {
+            let _ = from_host.set_read_timeout(Some(std::time::Duration::from_millis(50)));
+            loop {
+                if how.load(SeqCst) == AS_HTTP {
+                    return;
+                }
+                match from_host.peek(&mut [0u8; 1]) {
+                    Err(e)
+                        if matches!(
+                            e.kind(),
+                            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                        ) => {}
+                    // It spoke (or went away) first: no HTTP host does.
+                    _ => match how.compare_exchange(UNDECIDED, AS_IS, SeqCst, SeqCst) {
+                        Ok(_) | Err(AS_IS) => break,
+                        Err(_) => return,
+                    },
+                }
+            }
+            let _ = from_host.set_read_timeout(None);
+            let _ = std::io::copy(&mut from_host, &mut to_client);
+            let _ = to_client.shutdown(Shutdown::Write);
+        })
+    };
     let mut first = early;
     let judged = loop {
-        if let Some(judged) = judge_first(host, port, &crate::clienthello::read(&first)) {
-            break judged;
+        let read = crate::clienthello::read(&first);
+        let plain = matches!(read, crate::clienthello::Read::NotTls) && port != 443;
+        if let Some(judged) = judge_first(host, port, &read) {
+            match judged {
+                Err(why) => break Err(why),
+                Ok(()) if !plain || how.load(SeqCst) == AS_IS => break Ok(false),
+                Ok(()) => {
+                    if let Some(http) = http_start(&first) {
+                        break Ok(http);
+                    }
+                }
+            }
         }
         let mut chunk = [0u8; 4096];
         match (&client).read(&mut chunk) {
             Ok(n) if n > 0 => first.extend_from_slice(&chunk[..n]),
             // Gone before it said anything: nothing to pass on.
-            _ if first.is_empty() => break Ok(()),
+            _ if first.is_empty() => break Ok(false),
+            _ if plain => break Ok(http_start(&first).unwrap_or(false)),
             _ => break Err(format!("its TLS hello to {host} was cut short")),
         }
     };
-    if let Err(why) = judged {
-        let result = cut(why);
+    let http = match judged {
+        Ok(http) => http,
+        Err(why) => {
+            let result = cut(why);
+            let _ = back.join();
+            return result;
+        }
+    };
+    if http
+        && how
+            .compare_exchange(UNDECIDED, AS_HTTP, SeqCst, SeqCst)
+            .is_ok()
+    {
         let _ = back.join();
-        return result;
+        let tunnel = lonca_net::Tunnel {
+            client,
+            upstream,
+            early: first,
+        };
+        let git = crate::git_http::is_git_host(host);
+        return crate::tls::serve_plain(host, port, None, tunnel, git);
     }
+    let _ = how.compare_exchange(UNDECIDED, AS_IS, SeqCst, SeqCst);
     let mut to_host = &upstream;
     if !first.is_empty() && to_host.write_all(&first).is_ok() {
         let _ = std::io::copy(&mut &client, &mut to_host);
@@ -507,7 +665,67 @@ fn loopback_by_name(host: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The owner of a connection is read from the kernel's table as it
+    /// writes it, in either family: another user's connection has another
+    /// owner, one not listed none.
+    #[test]
+    fn a_connections_owner_is_read_from_the_kernels_table() {
+        let tcp = "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode
+   0: 0100007F:C350 0100007F:E1B4 01 00000000:00000000 00:00000000 00000000   501        0 1 1 0000000000000000 20 4 30 10 -1
+   1: 0100007F:D431 0100007F:C350 01 00000000:00000000 00:00000000 00000000  1001        0 2 1 0000000000000000 20 4 30 10 -1
+";
+        let addr = |port: u16| std::net::SocketAddr::from(([127, 0, 0, 1], port));
+        if cfg!(target_endian = "little") {
+            assert_eq!(
+                super::socket_owner(tcp, addr(0xD431), addr(0xC350)),
+                Some(1001)
+            );
+            assert_eq!(
+                super::socket_owner(tcp, addr(0xC350), addr(0xE1B4)),
+                Some(501)
+            );
+            assert_eq!(super::socket_owner(tcp, addr(0xD432), addr(0xC350)), None);
+            let tcp6 = "  sl  local_address                         remote_address                        st
+   0: 0000000000000000FFFF00000100007F:D431 0000000000000000FFFF00000100007F:C350 01 00000000:00000000 00:00000000 00000000  1002        0 3
+";
+            assert_eq!(
+                super::socket_owner(tcp6, addr(0xD431), addr(0xC350)),
+                Some(1002)
+            );
+        }
+    }
     use crate::Error;
+
+    /// An HTTP request is known by its first line, however it arrives;
+    /// what cannot start one is known at once.
+    #[test]
+    fn what_starts_an_http_request() {
+        for yes in [
+            &b"GET / HTTP/1.1\r\n"[..],
+            b"\r\n\r\nPOST /x HTTP/1.0\n",
+            b"GET\t/ http/1.1\r\n",
+            b"PRI * HTTP/2.0\r\n",
+            b" \tGET / HTTP/1.1\r\n",
+        ] {
+            assert_eq!(http_start(yes), Some(true), "{yes:?}");
+        }
+        for no in [
+            &b"SSH-2.0-OpenSSH_9.8\r\n"[..],
+            b"\x00\x00\x00\x08\x04\xd2\x16\x2f",
+            b"*1\r\n$4\r\nPING\r\n",
+            b"EHLO x\r\n",
+        ] {
+            assert_eq!(http_start(no), Some(false), "{no:?}");
+        }
+        for more in [&b""[..], b"\r\n", b"GE", b"GET", b"GET / HTTP/1."] {
+            assert_eq!(http_start(more), None, "{more:?}");
+        }
+        assert_eq!(http_start(&[b'G'; 65]), Some(false));
+        let mut long = b"GET /".to_vec();
+        long.extend(std::iter::repeat_n(b'a', 17 * 1024));
+        assert_eq!(http_start(&long), Some(true));
+    }
 
     /// A host, a port and the request held there, as asked.
     type Asked = (String, u16, Option<HeldRequest>);

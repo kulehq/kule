@@ -302,6 +302,22 @@ pub const ETC_HIDDEN: &[&str] = &[
     // tokens: the real files stay closed (see `sandbox::use_home`).
     "environment",
     "profile.d",
+    // Readable by root alone: closed by name all the same, for Kule run
+    // as root, whose commands own them (see `base_filter`).
+    "shadow",
+    "shadow-",
+    "gshadow",
+    "gshadow-",
+    "sudoers",
+    "sudoers.d",
+    "security/opasswd",
+    "krb5.keytab",
+    "ssl/private",
+    "ssh/ssh_host_rsa_key",
+    "ssh/ssh_host_ecdsa_key",
+    "ssh/ssh_host_ed25519_key",
+    "ssh/ssh_host_dsa_key",
+    "master.passwd",
 ];
 
 /// The folders a `PATH` entry stands for: its own root where it is a
@@ -373,7 +389,25 @@ pub const TOOL_DEFAULTS_IN_HOME: &[&str] = &[
     // pipx's home from before 1.5, which it keeps using where it exists
     ".local/pipx",
     ".local/share/mise",
-    ".cache",
+    // Toolchains' caches, each by name: `~/.cache` whole holds apps' too
+    // (a browser's pages, pictures of files). Commands write to caches of
+    // the task's own (`caches`), these are read where a tool looks anyway.
+    ".cache/pip",
+    ".cache/uv",
+    ".cache/go-build",
+    ".cache/pypoetry",
+    ".cache/pipenv",
+    ".cache/pre-commit",
+    ".cache/node-gyp",
+    ".cache/node/corepack",
+    ".cache/deno",
+    ".cache/yarn",
+    ".cache/pnpm",
+    ".cache/ms-playwright",
+    ".cache/puppeteer",
+    ".cache/Cypress",
+    ".cache/coursier",
+    ".cache/zig",
     ".local/bin",
     ".local/lib",
     ".local/share/man",
@@ -540,7 +574,13 @@ pub fn system_roots() -> Vec<PathBuf> {
         "/bin",
         "/sbin",
         "/private/etc",
-        "/private/var/db",
+        // The time zones `/etc/localtime` leads to; never the rest of
+        // `/private/var/db`, where the system keeps its own databases (the
+        // unified log's store among them, with other programs' lines). The
+        // developer folder link there (`xcode-select`) is read as a link by
+        // `xcrun` (`sandbox::SEATBELT_BASE`); what it leads to is among
+        // `xcode_apps`.
+        "/private/var/db/timezone",
         "/private/var/select",
         "/Library/Developer",
         "/Library/Apple",

@@ -21,7 +21,11 @@ policy: passes on its own
 ```
 
 - `+` created, `~` modified, `-` deleted. Moves are shown as moves
-  (`» photos/ → 2026/`), not as a delete and a create.
+  (`» photos/ → 2026/`), not as a delete and a create. A file counts as
+  moved only while it holds the same bytes: one renamed and rewritten is
+  shown as deleted and created, whatever its size and time say.
+- File flags a command sets in the copy (macOS `hidden`, `uchg`) do not
+  reach your folder: the commit brings the file as the review shows it.
 - Under a changed file, Kule names **what changed inside it**, by the names
   a person uses:
   - functions, methods, fields and types in Rust, C#, TypeScript,

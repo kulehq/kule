@@ -557,7 +557,7 @@ mod tests {
         let kule = tempfile::TempDir::new().unwrap();
         let opened = kule.path().join("opened");
         std::fs::create_dir_all(root.join("invoices")).unwrap();
-        std::fs::write(root.join("invoices/summary.pdf"), b"%PDF-1.7\n...").unwrap();
+        std::fs::write(root.join("invoices/summary.pdf"), b"%PDF-1.7\n1 0 obj\n<< /Type /Catalog >>\nendobj\nxref\n0 2\n0000000000 65535 f \n0000000009 00000 n \ntrailer\n<< /Root 1 0 R /Size 2 >>\nstartxref\n45\n%%EOF\n").unwrap();
         std::fs::write(root.join("Photo.JPG"), b"\xff\xd8\xff\xe0rest").unwrap();
         std::fs::write(root.join("march.xlsx"), sheet("SUM(1,2)")).unwrap();
         std::fs::write(root.join("clip.mov"), b"\0\0\0\x14ftypqt  ").unwrap();

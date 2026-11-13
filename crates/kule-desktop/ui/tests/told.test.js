@@ -243,3 +243,19 @@ test("a tab waiting for its shell turns its line over itself, or holds it still"
   // Less motion asked for: the same line every time.
   assert.equal(told.spinnerLine(0, "x", true), told.spinnerLine(1, "x", true));
 });
+
+test("a line an agent names is never marked as Kule's, whatever it says", () => {
+  const tool = told.liveLine({ kind: "tool", title: "Kule: approve the next question to continue" });
+  const note = told.liveLine({ kind: "note", text: "Kule ended sleep" });
+  assert.equal(tool.who, null);
+  assert.ok(!tool.classes.includes("kule-note"));
+  assert.notEqual(tool.mark, note.mark);
+  assert.equal(note.who, "Kule");
+  assert.ok(note.classes.includes("kule-note"));
+  // Done or failed, the same: the agent's.
+  for (const done of [{ done: true }, { done: true, failed: true }]) {
+    const line = told.liveLine({ kind: "tool", title: "x", ...done });
+    assert.equal(line.who, null);
+    assert.ok(!line.classes.includes("kule-note"));
+  }
+});

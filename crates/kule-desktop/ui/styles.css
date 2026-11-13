@@ -1174,6 +1174,15 @@ select:focus-visible {
   overflow-wrap: anywhere;
 }
 
+.event-who {
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.kule-note .event-mark {
+  color: var(--accent);
+}
+
 .event-mark {
   flex: none;
   width: 14px;
@@ -1858,6 +1867,15 @@ h3.agent-card-head {
   padding-top: 12px;
   border-top: 1px solid var(--border);
   font-size: calc(13px * var(--text-scale));
+}
+
+.agent-saved-only {
+  margin: 0;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: var(--sunken);
+  font: calc(12px * var(--code-scale)) var(--mono);
+  white-space: pre-wrap;
 }
 
 .agent-trial pre {

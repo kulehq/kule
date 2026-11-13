@@ -1,5 +1,125 @@
 # Changes
 
+## 0.2.0-preview.23
+
+A security release: the fixes for a review of the whole of Kule. What a
+task's commands read, run, keep and show is narrowed further on every
+platform (home layer, grants, the Linux sandbox, the proxy, PDF and
+office checks, the terminal), more of what tools run on their own waits
+for you, and a profile shows everything it opens before you approve it.
+Upgrade.
+
+### Security
+
+- Discarding a home change writes in the task's home only through folders
+  that are still folders, with what still runs in the task's sandbox
+  ended first, as applying does; a change under a folder the task
+  replaced with a link is refused until the folder's own change is
+  discarded with it.
+- Masking and unmasking the copy's settings files reads and writes them
+  only through folders of the copy that are still folders: one the task
+  replaced with a link is skipped.
+- Secrets are masked in more of the forms shells and tools write them: in
+  fish, csh, nushell and PowerShell settings, every assignment on an
+  `export`, `typeset` or `declare` line, URLs (the token alone, which then
+  goes only to that URL's host), `Authorization:` values, and words with
+  a known token prefix; in the shells' own settings folders and git's
+  settings in the home, and in the copy's `.git/config`.
+- Plain HTTP sent through a tunnel to a port other than 443 is read as a
+  plain request: each must name the host the tunnel goes to.
+- Commands read the toolchains' own caches in `~/.cache` by name instead
+  of `~/.cache` whole, and on macOS only the time zones and the developer
+  folder link under `/private/var/db`. uv's logins, Develocity's access
+  keys, Maven's `settings-security.xml` and zsh's and Nushell's history
+  in their settings folders are not read.
+- Trying an agent whose profile is not approved as it stands runs it
+  without your values: no variables from `pass_env`, no keys (`keys`,
+  `keychain`, `login_file`), no `carry`, `login`, `reveal_on_macos` or
+  `devices`; the trial says what it withheld. The app's agent form shows
+  what a profile opens beyond its fields, and keeps a profile's devices
+  when it is saved.
+- A package started with `npx`, `uvx` or `pipx` must name one release in
+  SemVer's grammar, its name as the registry or the index has it: a
+  version with anything else after it, or a name that is a URL or a
+  path, is refused in profiles, in what Kule installs itself and in an
+  extension's MCP servers. npm installs Kule makes take packages from the
+  registry only, and a package's folder is named only from the characters
+  a registry spec has.
+- A link the task made in its home is applied only where it leads to your
+  own files in your home: not outside it, not to where Kule and its tasks
+  write, not through a link that leads nowhere, and never as a file that
+  runs as a shell or tool starts.
+- On Linux, in every isolation mode, a command starts in a session
+  keyring of its own, and its seccomp filter refuses the kernel's key
+  calls, `io_uring`, and sockets outside the Unix, IPv4, IPv6 and netlink
+  families.
+- The balanced policy holds more of what tools read or run on their own:
+  lefthook's and mise's other spellings and local files, simple-git-hooks'
+  settings, `uv.toml`, `pnpm-workspace.yaml`, Deno's, Gradle's
+  (`gradle.properties`, version catalogs, `buildSrc`), PHP's, Dart's,
+  Swift's, CocoaPods', Elixir's, sbt's, vcpkg's and Conan's manifests, and
+  the JavaScript configs editor extensions evaluate as a folder opens
+  (`*.config.js` and kin, `.eslintrc.js` and kin).
+- A file counts as moved only while it holds the same bytes; renamed and
+  rewritten, it is shown as deleted and created. On macOS, file flags set
+  in the copy (`hidden`, `uchg`, …) do not reach the workspace.
+- `kule status` and the commit listing write out control characters in
+  every name that comes from the task: names inside files, git hooks,
+  staged and changed git paths, branches and merged files.
+- Before opening a PDF with its app, Kule follows its cross-reference
+  table as a reader does: a PDF whose table leads to an object Kule did
+  not read where it starts, or whose table cannot be followed, does not
+  open.
+- On Linux a command gives up every capability before it starts (its
+  sets and bounding set emptied, root's way back locked), and Kule run as
+  root is listed by `kule isolation` as a gap to accept. `/etc/shadow`,
+  `gshadow`, `sudoers`, the SSH host keys and the like are closed by name.
+- Outlining a source file costs about what its size does: code nested more
+  than 64 entities deep is not outlined, and a shown name keeps the last
+  512 characters of its parents' names and its own.
+- The docs site is published only after a job that runs none of its npm
+  code finds every `install.sh` in it to be the reviewed file, byte for
+  byte; Dependabot's version updates wait a week after a release.
+- What a task's commands write to your terminal (`kule exec`, `kule
+  shell`) reaches it without the sequences that set the clipboard, pass a
+  string to the terminal, change or report the window, or any OSC but the
+  few that only show. On a terminal, `kule exec` gives the command one of
+  its own and passes its output on through that filter.
+- A profile's devices are listed, each with a warning, where you approve
+  it (`kule agents show`, the app), as are keys from the keychain or a
+  login file; only sound, cameras, serial ports and GPUs may be named, and
+  a profile naming another device is held.
+- A git hook written under another case of the hooks folder
+  (`.git/HOOKS/`), a submodule's or a worktree's included, is denied as a
+  hook.
+- An office document whose parts are listed inconsistently (a part named
+  twice, local headers that disagree with the central directory) does not
+  open with its app.
+- On Linux, a task's proxy serves only programs running as you; another
+  user's connection is refused and logged nowhere in the task.
+- In Live, Kule's own notes carry Kule's name and mark, which no line an
+  agent names gets; a step Kule could not record is said as Kule's note.
+
+### Fixed
+
+- Applying a change to a package index's settings (`pip.conf`) puts its
+  URL's token back in your file, not the task's placeholder.
+
+### Dependencies
+
+- rustix 1.1.6, for RUSTSEC-2026-0486.
+- Claude Code's ACP adapter installs from a lockfile with hono 4.13.16,
+  @hono/node-server 2.1.6, body-parser 2.4.0 and fast-uri 3.1.9, each
+  with its known advisories fixed. The release gate's `deps` step scans
+  the adapters' lockfiles Kule ships, which it did not read before.
+
+### Documentation
+
+- The default policy's package registries that Kule does not look into
+  (`static.rust-lang.org`, NuGet's and Maven's), and what a connection
+  that is not looked into leaves to the host's servers, are described
+  under the network's known limits.
+
 ## 0.2.0-preview.22
 
 A push to a git host now waits for you on its own while fetches pass,

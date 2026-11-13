@@ -322,7 +322,7 @@ pub(crate) fn compute(copy: &Path, work: &Path, baseline: &Baseline) -> Result<E
     effects.sort_by(|a, b| a.path.cmp(&b.path));
     ignore::mark(work, &mut effects)?;
     let git = git::summarize(copy, work, baseline.git.as_ref(), &effects)?;
-    let moves = moves(&effects, baseline, &now);
+    let moves = confirmed(moves(&effects, baseline, &now), copy, work, baseline)?;
     let carried = git.iter().flat_map(|g| &g.refs).flat_map(|r| {
         r.paths
             .iter()
@@ -370,9 +370,9 @@ fn git_dirs(tree: &Tree) -> Vec<String> {
 /// same inode, made at the same time where an inode number is given again
 /// (see [`Stamp::same_entry`]), and for a file the same size and
 /// modification time, which a rename keeps and a write does not. Read
-/// from metadata alone, so sorting
-/// thousands of photos costs no reading; an agent that means to could pass
-/// a deletion off as a move, which is why a move is still shown as one.
+/// from metadata alone, so sorting thousands of photos costs no reading
+/// here: these are candidates, each file among them then compared by its
+/// bytes in [`confirmed`], since a command can set a time back.
 fn moves(effects: &[Effect], baseline: &Baseline, now: &Tree) -> Vec<Move> {
     let mut gone: HashMap<u64, (&str, &Stamp)> = HashMap::new();
     for effect in effects
@@ -396,6 +396,7 @@ fn moves(effects: &[Effect], baseline: &Baseline, now: &Tree) -> Vec<Move> {
         };
         let same = before.kind == stamp.kind
             && before.same_entry(stamp)
+            && before.link == stamp.link
             && (stamp.kind == Kind::Dir
                 || (before.size == stamp.size && before.mtime == stamp.mtime));
         if same {
@@ -408,6 +409,29 @@ fn moves(effects: &[Effect], baseline: &Baseline, now: &Tree) -> Vec<Move> {
     }
     moves.sort_by(|a, b| a.to.cmp(&b.to));
     moves
+}
+
+/// Of `moves`, found by metadata, the ones whose file still holds what it
+/// held: the copy's file at its new path has the bytes of the workspace's
+/// at the old one, which still holds the baseline. A file renamed and
+/// rewritten (its size and time set back) is a deletion and a creation,
+/// each shown as such; one whose old content cannot be read back is too.
+fn confirmed(moves: Vec<Move>, copy: &Path, work: &Path, baseline: &Baseline) -> Result<Vec<Move>> {
+    let mut kept = Vec::with_capacity(moves.len());
+    for m in moves {
+        let Some(entry) = baseline.entries.get(&m.from) else {
+            continue;
+        };
+        if entry.copy.kind == Kind::File {
+            let work_file = work.join(&m.from);
+            let unchanged = Stamp::of(&work_file)?.is_some_and(|w| entry.work.unchanged(&w));
+            if !unchanged || !same_bytes(&copy.join(&m.to), &work_file)? {
+                continue;
+            }
+        }
+        kept.push(m);
+    }
+    Ok(kept)
 }
 
 /// The copy's stamp moved; decides whether its type, mode or content did.

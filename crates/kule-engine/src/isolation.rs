@@ -44,7 +44,7 @@ pub fn isolation_gaps(network: Network, servers: bool) -> Vec<String> {
     #[cfg(target_os = "linux")]
     {
         let _ = servers;
-        gaps(
+        let mut found = gaps(
             network,
             crate::namespace::available(),
             crate::namespace::mounts_available(),
@@ -52,7 +52,10 @@ pub fn isolation_gaps(network: Network, servers: bool) -> Vec<String> {
             crate::namespace::ipc_available(),
             crate::sandbox::landlock_abi(),
             crate::bind_filter::available(),
-        )
+        );
+        // SAFETY: a plain system call.
+        found.extend(root_gap(unsafe { libc::geteuid() }));
+        found
     }
     #[cfg(target_os = "macos")]
     {
@@ -81,6 +84,18 @@ pub(crate) fn macos_gaps(network: Network, servers: bool) -> Vec<String> {
     } else {
         Vec::new()
     }
+}
+
+/// What a command goes without where Kule runs as `euid` 0 (`sudo kule`, a
+/// container or CI job as root): its commands are root too, without root's
+/// powers (see `base_filter`), but they own the system's own files, which
+/// only the grants and the names Kule closes keep them from.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub(crate) fn root_gap(euid: u32) -> Option<String> {
+    (euid == 0).then(|| {
+        "a user of its own: Kule runs as root, so its commands are root too, without root's powers, and own the system's files"
+            .to_owned()
+    })
 }
 
 /// [`isolation_gaps`] from what the system offers: a network namespace,
@@ -157,6 +172,12 @@ pub(crate) fn gaps(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn running_as_root_is_a_gap() {
+        assert!(root_gap(0).is_some());
+        assert!(root_gap(1000).is_none());
+    }
 
     #[test]
     fn every_missing_piece_is_a_gap_and_nothing_else_is() {
