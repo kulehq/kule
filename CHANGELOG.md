@@ -1,5 +1,38 @@
 # Changes
 
+## Unreleased
+
+### Security
+
+- Discarding a home change writes in the task's home only through folders
+  that are still folders, with what still runs in the task's sandbox
+  ended first, as applying does; a change under a folder the task
+  replaced with a link is refused until the folder's own change is
+  discarded with it.
+- Masking and unmasking the copy's settings files reads and writes them
+  only through folders of the copy that are still folders: one the task
+  replaced with a link is skipped.
+- Secrets are masked in more of the forms shells and tools write them: in
+  fish, csh, nushell and PowerShell settings, every assignment on an
+  `export`, `typeset` or `declare` line, URLs (the token alone, which then
+  goes only to that URL's host), `Authorization:` values, and words with
+  a known token prefix; in the shells' own settings folders and git's
+  settings in the home, and in the copy's `.git/config`.
+- Plain HTTP sent through a tunnel to a port other than 443 is read as a
+  plain request: each must name the host the tunnel goes to.
+
+### Fixed
+
+- Applying a change to a package index's settings (`pip.conf`) puts its
+  URL's token back in your file, not the task's placeholder.
+
+### Documentation
+
+- The default policy's package registries that Kule does not look into
+  (`static.rust-lang.org`, NuGet's and Maven's), and what a connection
+  that is not looked into leaves to the host's servers, are described
+  under the network's known limits.
+
 ## 0.2.0-preview.22
 
 A push to a git host now waits for you on its own while fetches pass,

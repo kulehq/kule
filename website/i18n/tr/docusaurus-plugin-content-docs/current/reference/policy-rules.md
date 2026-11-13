@@ -76,7 +76,7 @@ Varsayılan budur. Geçerliyken `kule policy` ile yazdırın.
 | `deletes-outside-git` | forbid `auto` | Git deposu olmayan bir klasörde 20'den fazla silme. | **Onay bekler.** Onları yalnızca görevin kendi undo'su geri getirebilir. |
 | `branch-forward` | permit `auto` | İleri taşınan (fast-forward) bir dal (`refs/heads/*`). | **Kendiliğinden geçer.** |
 | `branch-created` | permit `auto` | Yeni bir dal. | **Kendiliğinden geçer.** Yeni bir etiket (tag), not ya da replacement onay bekler. |
-| `package-registries` | permit `auto` | `registry.npmjs.org`, `registry.yarnpkg.com`, `crates.io`, `index.crates.io`, `static.crates.io`, `static.rust-lang.org`, `api.nuget.org`, `globalcdn.nuget.org`, `pypi.org`, `files.pythonhosted.org`, `rubygems.org`, `repo.maven.apache.org`, `repo1.maven.org` adreslerine HTTPS (443 numaralı port). | **Kendiliğinden geçer.** |
+| `package-registries` | permit `auto` | `registry.npmjs.org`, `registry.yarnpkg.com`, `crates.io`, `index.crates.io`, `static.crates.io`, `static.rust-lang.org`, `api.nuget.org`, `globalcdn.nuget.org`, `pypi.org`, `files.pythonhosted.org`, `rubygems.org`, `repo.maven.apache.org`, `repo1.maven.org` adreslerine HTTPS (443 numaralı port). Kule npm, crates.io, PyPI ve RubyGems host'larının içine bakar ve yalnızca okumaları geçirir; diğerleri görülmeden geçer (bkz. [Bilinen sınırlar](../concepts/network-and-questions.md#known-limits)). | **Kendiliğinden geçer.** |
 | `git-hooks` | forbid all | Oluşturulan ya da değiştirilen bir git hook'u. Hook'lar bir sonraki git komutunuzda, sizin yetkilerinizle çalışır. | **Reddedilir.** |
 
 Hiçbir `auto` permit ile eşleşmeyen ve bu yüzden **onay bekleyenler**

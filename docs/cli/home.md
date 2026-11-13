@@ -168,6 +168,12 @@ $ kule home 1046fb30 discard --all
 discarded 3 changes
 ```
 
+As for `apply`, what still runs in the task's sandbox is ended first, and
+Kule names it on stderr (`… to discard its home changes`). The task's home
+is where its commands write, so Kule writes there only through folders
+that are still folders: a change under one the task replaced with a link
+is refused until that folder's own change is discarded with it.
+
 ## kule home TASK undo
 
 ```sh
@@ -198,6 +204,7 @@ the changes wait for review again
 | `kule: ~/<path> would run as its owner or group (setuid or setgid), …` | Kule never brings that into your home. Discard the change. |
 | `kule: nothing applied from this task's home to undo` | There is no apply to take back. |
 | `kule: a terminal is open on this task's copy (in Kule's app, or kule shell); close it first, then apply its home changes` | Close the task's terminal (the app's tab, or `exit` in `kule shell`), then apply. |
+| `kule: ~/<folder> is no longer a folder in the task's home, so nothing under it is touched; discard ~/<folder> first` | The task replaced that folder with a link or a file. Discard the folder's change together with the one under it (or `--all`). |
 | `kule: a terminal is open on this task's copy (in Kule's app, or kule shell); close it first, then undo its home changes` | The same for `undo`. |
 
 ## In the app

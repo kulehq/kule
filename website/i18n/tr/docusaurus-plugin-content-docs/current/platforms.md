@@ -156,7 +156,11 @@ okunur olarak bağlanır (mount). Kullanıcı ad alanları yoksa ve bağlantı
   `SSL_CERT_FILE`'ın gösterdiği kök sertifikaları kullanması söylenir.
 - macOS'ta **NuGet'in ve Maven'ın** araçları yalnızca sistemin kök
   sertifikalarına güvenir; bu yüzden onların depoları, yazmalar dahil,
-  görülmeden geçer; Go'nun modül proxy'si de öyle.
+  görülmeden geçer; Go'nun modül proxy'si ve `rustup` için
+  `static.rust-lang.org` da öyle. Kule böyle bir bağlantının yalnızca
+  istediği adı görür, bu yüzden içindeki bir isteğin hangi siteyi
+  adlandırdığı host'un sunucularına kalır: `static.rust-lang.org`
+  sunucuları başka siteleri de taşır (bkz. [Ağ ve sorular](concepts/network-and-questions.md#known-limits)).
 - **Gemini**, AI Studio'dan alınmış ve bir dosyada saklanan bir API anahtarı
   ister: `GEMINI_FORCE_FILE_STORAGE=true gemini`, ardından `/auth`.
 

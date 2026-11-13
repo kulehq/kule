@@ -105,8 +105,9 @@ profil de aynısını `keys` altında yapabilir (bkz. [Ajanlar](../using-agents.
 ## `.env` dosyaları da maskelenir
 
 Kopyanın `.env` dosyalarındaki (`.env`, `.env.local`, `*.env`, `.envrc`;
-`.env.example` değil) adıyla ya da biçimiyle gizli değer gibi görünen
-değerler, yer tutucularla değiştirilir:
+`.env.example` değil) ve deposunun kendi ayarlarındaki (`.git/config`)
+adıyla ya da biçimiyle gizli değer gibi görünen değerler, yer tutucularla
+değiştirilir:
 
 - görev açıldığında, her commit, rollback ve undo'dan sonra ve her
   çalıştırmadan önce;
@@ -118,6 +119,26 @@ değerler, yer tutucularla değiştirilir:
   değerin yer tutucusunu alır ve böylece onun host'larına ulaşır. Diğerleri
   yer tutucu olarak kalır.
 
+Kule bir ayarı, yaygın kabukların ve araçların yazdığı her biçimde okur:
+
+| Biçim | Örnek |
+| --- | --- |
+| `sh`, `bash`, `zsh` | `export NAME=value`, `NAME=value`, bir `export`, `typeset`, `declare`, `readonly` ya da `local` satırındaki her `NAME=value` |
+| fish | `set -gx NAME value` |
+| csh, tcsh | `setenv NAME value` |
+| nushell, PowerShell | `$env.NAME = "value"`, `$env:NAME = "value"` |
+| Bir URL | `https://user:password@host/` içindeki parola ya da kullanıcı yerine duran bir jeton (`https://token@host/`): yalnızca jeton maskelenir, URL kalır |
+| Bir başlık | `Authorization:` sonrasındaki kimlik bilgisi (git'in `http.extraHeader` ayarı, bir `curl -H`) |
+| Bir jeton | Bir hizmetin jeton önekini taşıyan her sözcük (`ghp_`, `github_pat_`, `glpat-`, `sk-`, `xoxb-`, `npm_`, `pypi-`, `AKIA`, …), nerede olursa olsun |
+
+Bir URL'nin jetonu, dosyanın gönderdiği gibi, **yalnızca o URL'nin
+host'una** giden isteklerin kimlik bilgilerine geri konur: uzak deponun
+URL'sinde jeton olan bir `git fetch` proxy üzerinden çalışmayı sürdürür ve
+Kule o host'a giden TLS'in içine bakar (bkz.
+[Ağ ve sorular](network-and-questions.md#known-limits) altındaki bilinen
+sınırlar). Bu yolla bulunan başka her değer, sakladığınız bir gizli değer
+de değilse, her yerde yer tutucu olarak kalır.
+
 Kule'nin maskeleyemediği bir ayar dosyası, yani UTF-8 olmayan (bir
 Latin-1 baytı, Windows'taki bir editörden UTF-16 bir dosya) ya da 1 MB'tan
 büyük bir dosya, değerlerini olduğu gibi gösterirdi. Bu yüzden kopyada
@@ -127,7 +148,10 @@ Dosyayı 1 MB'ın altında, UTF-8 olarak kaydedin ya da klasörden çıkarın,
 sonra yeniden deneyin.
 
 Aynı maskeleme, [ev katmanının](home-layer.md) `.zshrc`, `.profile`,
-`~/.env` ve benzerlerinin klonlarına da uygulanır. Orada Kule'nin
+`~/.env`, `~/.gitconfig`, kabukların kendi ayar klasörleri
+(`~/.config/fish`, `ZDOTDIR` oradaysa `~/.config/zsh`, `~/.config/nushell`)
+ve benzerlerinin klonlarına da uygulanır; maskelenmiş bir dosya gerçek
+yolunda saklanır. Orada Kule'nin
 maskeleyemediği bir dosya ise saklanır: komutlar onu ne katmanda ne de
 gerçek yolunda görür; Kule de bunu komutların çalıştığı yerde söyler
 (uygulamada çalıştırmanın notları, `kule run`, `exec` ve `shell` çıktısı ve

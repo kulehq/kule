@@ -70,7 +70,13 @@ Kart, onaylamanın neyi geçireceğini de söyler:
   görür, bağlantının üzerinden geçeni görmez; TLS hello'sunun bu host'u
   istediğini denetler. Onay hello'dan önce gelir, bu yüzden kart yalnızca
   kuralı söyleyebilir: hello başka bir host isterse ya da adını gizlerse,
-  Kule bağlantıyı onayınızdan sonra keser.
+  Kule bağlantıyı onayınızdan sonra keser. TLS'in içinde her istek
+  sitesini yeniden adlandırır ve Kule bunu göremez: birçok siteye hizmet
+  veren sunucuları (bir CDN) olan bir host, bu bağlantı üzerinden
+  onlardan başka birini de sunabilir. Böyle bir host'u bilerek onaylayın,
+  **Approve and remember** ile daha da çok. 443 dışındaki bir portta
+  bağlantı üzerinden gönderilen düz HTTP, her düz istek gibi okunur: her
+  biri bu host'u adlandırmalıdır.
 - **İçine bakılır.** Host, Kule'nin bir gizli değer doldurduğu bir host'tur
   (kart gizli değerlerin adını verir: "fills STRIPE_KEY into its requests")
   ya da Kule'nin yalnızca okumaya izin verdiği bir paket kayıt deposudur
@@ -213,7 +219,7 @@ yazılır. Neden bunlardan biridir; isteğin değil, Kule'nin sözleriyle:
 Kule'nin reddettiği düz bir `http://` isteği de nedeniyle birlikte `cut`
 olarak yazılır.
 
-## Bilinen sınırlar
+## Bilinen sınırlar {#known-limits}
 
 Bunlar [Platformlar](../platforms.md) sayfasında da listelenir:
 
@@ -225,8 +231,18 @@ Bunlar [Platformlar](../platforms.md) sayfasında da listelenir:
   gösterdiği kök sertifikaları kullanması söylenir.
 - macOS'ta NuGet'nin ve Maven'ın araçları yalnızca sistemin kök
   sertifikalarına güvenir, bu yüzden kayıt depoları Go'nun modül
-  proxy'si gibi görülmeden geçer. Git sunucularının içine her araç için
-  bakılır: yalnızca sistemin kök sertifikalarına güvenen bir araç (macOS'ta
+  proxy'si gibi görülmeden geçer. macOS'ta `rustup`'ın aynı yolla ulaştığı
+  `static.rust-lang.org` da öyle. Bu host'lar varsayılan politikanın
+  `package-registries` kuralıyla sorulmadan geçer ve Kule yalnızca her
+  bağlantının istediği adı görür: içindeki bir isteğin hangi siteyi
+  adlandırdığı host'un sunucularına kalır. NuGet'in ve Maven'ın
+  sunucuları yalnızca kendi sitelerine yanıt verir; `static.rust-lang.org`
+  sunucuları başka siteleri de taşır ve bir komut onlara bu host
+  üzerinden ulaşabilir. Gizli değerlerinizden birini ya da Kule'nin bir
+  URL'de bulduğu bir jetonu tutan bir host'un ise içine bakılır (bkz.
+  [Gizli değerler](secrets.md)); yalnızca sistemin kök sertifikalarına
+  güvenen bir araç bir görevde ona HTTPS üzerinden ulaşamaz. Git
+  sunucularının içine her araç için bakılır: yalnızca sistemin kök sertifikalarına güvenen bir araç (macOS'ta
   .NET, bir JVM) bir görevde onlara HTTPS üzerinden ulaşamaz.
 - Linux'ta ağ kuralları Linux 6.7 veya sonrasını gerektirir.
 

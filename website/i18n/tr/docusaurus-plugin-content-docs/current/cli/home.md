@@ -175,6 +175,13 @@ $ kule home 1046fb30 discard --all
 discarded 3 changes
 ```
 
+`apply`'da olduğu gibi, görevin sandbox'ında hâlâ çalışan şey önce
+sonlandırılır ve Kule onu stderr'de adlandırır (`… to discard its home
+changes`). Görevin evi, komutlarının yazdığı yerdir; bu yüzden Kule oraya
+yalnızca hâlâ klasör olan klasörler üzerinden yazar: görevin bir
+bağlantıyla değiştirdiği bir klasörün altındaki bir değişiklik, o
+klasörün kendi değişikliği onunla birlikte atılana dek reddedilir.
+
 ## kule home TASK undo
 
 ```sh
@@ -206,6 +213,7 @@ the changes wait for review again
 | `kule: nothing applied from this task's home to undo` | Geri alınacak bir uygulama yok. |
 | `kule: a terminal is open on this task's copy (in Kule's app, or kule shell); close it first, then apply its home changes` | Görevin terminalini kapatın (uygulamadaki sekmeyi ya da `kule shell`'den `exit` ile çıkın), sonra uygulayın. |
 | `kule: a terminal is open on this task's copy (in Kule's app, or kule shell); close it first, then undo its home changes` | `undo` için de aynısı. |
+| `kule: ~/<folder> is no longer a folder in the task's home, so nothing under it is touched; discard ~/<folder> first` | Görev o klasörü bir bağlantıyla ya da bir dosyayla değiştirdi. Klasörün değişikliğini altındakiyle birlikte atın (ya da `--all`). |
 
 ## Uygulamada {#in-the-app}
 
