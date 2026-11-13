@@ -3556,7 +3556,8 @@ fn agents_cmd(home: &Path, action: AgentsCmd) -> Result<()> {
 fn print_profile(profile: &kule_acp::Profile) {
     println!("[[agent]]  {}", profile.name);
     for (label, value) in profile_rows(profile) {
-        println!("{label:<18}{value}");
+        // Its value a space past the label, however long that is.
+        println!("{label:<17} {value}");
     }
 }
 
